@@ -12,6 +12,96 @@ fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
 }
 
+fn display_len(rendered: &str) -> usize {
+    rendered.chars().count()
+}
+
+/// A shared acyclic subtree is not a cycle, but its exponential display must
+/// still stop at the global display budget without rendering closing syntax.
+#[test]
+fn type_display_bounds_an_acyclic_diamond() {
+    let mut interner = Interner::with_intrinsics();
+    let mut level = interner.well_known().number;
+    for _ in 0..10 {
+        level = interner.intern_object(ObjectType {
+            properties: vec![prop("left", level), prop("right", level)],
+            ..Default::default()
+        });
+    }
+
+    let rendered = render_type(interner.store(), level, false);
+    assert_eq!(display_len(&rendered), 320, "{rendered}");
+    assert!(rendered.ends_with("..."), "{rendered}");
+}
+
+/// Depth is bounded independently of output size. Nested arrays add their
+/// punctuation while unwinding, so an immediate depth stop leaves only `...`.
+#[test]
+fn type_display_bounds_a_deep_chain() {
+    let mut interner = Interner::with_intrinsics();
+    let mut level = interner.well_known().number;
+    for _ in 0..65 {
+        level = interner.intern_array(level);
+    }
+
+    assert_eq!(render_type(interner.store(), level, false), "...");
+}
+
+/// A single wide anonymous object hits the character budget before its late
+/// members and stops without appending the object's closing delimiter.
+#[test]
+fn type_display_bounds_a_wide_anonymous_object() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let wide = interner.intern_object(ObjectType {
+        properties: (0..100)
+            .map(|index| prop(&format!("p{index:03}"), number))
+            .collect(),
+        ..Default::default()
+    });
+
+    let rendered = render_type(interner.store(), wide, false);
+    assert_eq!(display_len(&rendered), 320, "{rendered}");
+    assert!(rendered.ends_with("..."), "{rendered}");
+    assert!(!rendered.contains("p099"), "{rendered}");
+}
+
+/// Existing corpus display stays byte-for-byte identical below both limits.
+#[test]
+fn type_display_preserves_shallow_output() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let shallow = interner.intern_object(ObjectType {
+        properties: vec![prop("answer", number)],
+        ..Default::default()
+    });
+
+    assert_eq!(
+        render_type(interner.store(), shallow, false),
+        "{ answer: number }"
+    );
+}
+
+/// Recursive objects retain the established cycle marker independently of the
+/// new size and depth limits.
+#[test]
+fn type_display_preserves_cycle_marker() {
+    let mut interner = Interner::with_intrinsics();
+    let recursive = interner.reserve_object();
+    interner.fill_object(
+        recursive,
+        ObjectType {
+            properties: vec![prop("next", recursive)],
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        render_type(interner.store(), recursive, false),
+        "{ next: ... }"
+    );
+}
+
 /// A single `Leaf` head — the M0–M5 scalar mismatch — renders **no**
 /// elaboration: the headline already states it, so there is no redundant
 /// "Types of …" wrapper and the rendered diagnostic stays exactly one line.
