@@ -34,3 +34,13 @@ tupleRestCall("x", 1, true);
 tupleRestCall(true); // error[TK2554]: Expected 3 arguments, but got 1
 tupleRestCall(["x", 1], true); // error[TK2554]: Expected 3 arguments, but got 2
 tupleRestCall("x", true, true); // error[TK2345]: Argument of type 'boolean' is not assignable to parameter of type 'number'
+
+interface DestructuredRestMethod<TNext> {
+  next(...[value]: [] | [TNext]): string;
+}
+declare const destructuredRestMethod: DestructuredRestMethod<number>;
+const destructuredRestEmpty: string = destructuredRestMethod.next();
+const destructuredRestValue: string = destructuredRestMethod.next(1);
+const wrongDestructuredRestReturn: number = destructuredRestMethod.next(); // error[TK2322]: Type 'string' is not assignable to type 'number'
+destructuredRestMethod.next("wrong"); // error[TK2345]
+destructuredRestMethod.next(1, 2); // error[TK2345]
