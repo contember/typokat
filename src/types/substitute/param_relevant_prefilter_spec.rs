@@ -292,7 +292,7 @@ fn layered_optional_binder_dag(
 }
 
 #[test]
-fn binder_relevance_is_polynomial_on_layered_optional_binder_dags() {
+fn binder_relevance_and_substitution_are_polynomial_on_layered_optional_binder_dags() {
     const LEVELS: usize = 16;
     const MAX_GRAPH_SCANS_PER_RUN: u64 = 20_000;
 
@@ -334,6 +334,11 @@ fn binder_relevance_is_polynomial_on_layered_optional_binder_dags() {
         positive_measure.prefilter_graph_scans <= MAX_GRAPH_SCANS_PER_RUN,
         "positive relevance must remain polynomial (saw {} graph scans)",
         positive_measure.prefilter_graph_scans
+    );
+    assert!(
+        positive_measure.apply_visits <= 1_000,
+        "irrelevant blocked binders must not multiply memo contexts (saw {} visits)",
+        positive_measure.apply_visits
     );
     drop(_positive_scope);
 
