@@ -1306,6 +1306,8 @@ fn snapshot_decode_strategy_probe_once() {
 #[test]
 #[ignore = "fresh-process coordinator runs this twice and byte-compares artifacts"]
 fn snapshot_regeneration_probe_once() {
+    std::env::var_os("TYPOKAT_WU0B_PROFILE_ROOT")
+        .expect("coordinator supplies the isolated profile root");
     let path = PathBuf::from(
         std::env::var_os("TYPOKAT_WU0B_SNAPSHOT_OUTPUT")
             .expect("coordinator supplies an exact fresh artifact path"),
