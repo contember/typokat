@@ -448,6 +448,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// out-of-scope error type** (no crash; the error type suppresses cascade), as
     /// does an error/`any` operand.
     pub(super) fn keyof_type(&mut self, operand: TypeId) -> TypeId {
+        // Reserved declaration objects are still empty during construction; demand
+        // evaluates the node after atomic publication has filled their stable ids.
+        if self.building_template && self.is_object_family(operand) {
+            return self.interner.intern_keyof(operand);
+        }
         if let Some(keys) = super::super::eval::keyof_of_type(self.interner, operand) {
             return keys;
         }
@@ -503,9 +508,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     | TypeTag::DeferredIndexedAccess
             )
         };
-        if self.building_template && (stays_open(object) || stays_open(index)) {
+        if self.building_template
+            && (stays_open(object) || stays_open(index) || self.is_object_family(object))
+        {
             return self.interner.intern_deferred_indexed_access(object, index);
         }
         super::super::indexed_access::resolve_indexed_access(self.interner, object, index)
+    }
+
+    /// Whether `ty` is an object-shaped operand whose declaration surface may still
+    /// be a reserved row while declaration templates are under construction.
+    fn is_object_family(&self, ty: TypeId) -> bool {
+        match self.interner.store().tag(ty) {
+            TypeTag::Object | TypeTag::ClassInstance => true,
+            TypeTag::Union => self
+                .interner
+                .store()
+                .union_members(ty)
+                .is_some_and(|members| {
+                    !members.is_empty()
+                        && members.iter().all(|member| self.is_object_family(*member))
+                }),
+            TypeTag::Intersection => {
+                self.interner
+                    .store()
+                    .intersection_members(ty)
+                    .is_some_and(|members| {
+                        !members.is_empty()
+                            && members.iter().all(|member| self.is_object_family(*member))
+                    })
+            }
+            _ => false,
+        }
     }
 }
