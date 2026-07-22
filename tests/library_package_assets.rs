@@ -12,7 +12,7 @@ const EXPECTED_RECORD: &str = concat!(
 );
 
 #[test]
-#[ignore = "WU2 coordinator runs two clean generations, cargo package, extraction, and cargo check"]
+#[ignore = "package verifier runs two clean generations, extraction, and cargo check"]
 fn clean_generation_and_cargo_package_are_reproducible_and_complete() {
     let tests = Command::new("python3")
         .args([
@@ -33,7 +33,7 @@ fn clean_generation_and_cargo_package_are_reproducible_and_complete() {
     let output = Command::new("python3")
         .arg("tooling/library-package/verify.py")
         .output()
-        .expect("run WU2 package verifier");
+        .expect("run package verifier");
     assert!(
         output.status.success(),
         "package verifier failed\nstdout:\n{}\nstderr:\n{}",
