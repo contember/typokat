@@ -111,7 +111,7 @@ class SnapshotCoordinatorTests(unittest.TestCase):
         builds = []
         for ordinal, binary in enumerate(binaries, 1):
             source_copy = {**source, "root": f"/tmp/typokat-wu0b-test/build-{ordinal}/source", "git_status": ""}
-            build_env = snapshot.sanitized_environment() | {"CARGO_HOME": f"/tmp/typokat-wu0b-test/build-{ordinal}/cargo-home", "CARGO_TARGET_DIR": f"/tmp/typokat-wu0b-test/build-{ordinal}/target", "CARGO_NET_OFFLINE": "true", "CARGO_TERM_COLOR": "never", "CARGO_ENCODED_RUSTFLAGS": encoded_rustflags, "CARGO_BUILD_RUSTFLAGS": "", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/bin/cc"}
+            build_env = snapshot.sanitized_environment() | {"PATH": f"{snapshot.executable('cargo').parent}:/usr/bin:/bin", "CARGO_HOME": f"/tmp/typokat-wu0b-test/build-{ordinal}/cargo-home", "CARGO_TARGET_DIR": f"/tmp/typokat-wu0b-test/build-{ordinal}/target", "CARGO_NET_OFFLINE": "true", "CARGO_TERM_COLOR": "never", "CARGO_ENCODED_RUSTFLAGS": encoded_rustflags, "CARGO_BUILD_RUSTFLAGS": "", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/bin/cc"}
             cargo_version = self.process(100 + ordinal, [str(snapshot.executable("cargo")), "--version", "--verbose"], build_env, "cargo 1\n", start=ordinal * 100_000_000)
             cargo_version["cwd"] = source_copy["root"]
             rustc_version = self.process(110 + ordinal, [str(snapshot.executable("rustc")), "--version", "--verbose"], build_env, "rustc 1\n", start=ordinal * 200_000_000)
