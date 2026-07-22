@@ -41,7 +41,7 @@ HARNESS_ZERO = re.compile(
 HARNESS_RECORD_SUFFIX = re.compile(
     r"^\r?\n(?:ok|test [^\r\n]+ \.\.\. ok)\r?\n\r?\n"
     r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
-    r"\d+ filtered out; finished in [0-9.]+s\r?\n?$"
+    r"\d+ filtered out; finished in [0-9.]+s(?:\r?\n){1,2}$"
 )
 STRATEGY = "eager-complete"
 RECORD_KIND = "eager-fast-clean"
