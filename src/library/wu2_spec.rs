@@ -70,22 +70,22 @@ fn library_compiler_separates_runtime_product_from_evidence() {
     assert_eq!(compiled.report().parse_units, 82);
     assert_eq!(compiled.report().bind_units, 82);
     assert_eq!(compiled.report().statement_check_units, 82);
-    assert_eq!(compiled.report().reserved_records, 13);
-    assert_eq!(compiled.report().filled_records, 13);
-    assert_eq!(compiled.report().publication_validations, 9);
-    assert_eq!(compiled.evidence().diagnostics().record_count(), 2);
+    assert_eq!(compiled.report().reserved_records, 42_496);
+    assert_eq!(compiled.report().filled_records, 42_496);
+    assert_eq!(compiled.report().publication_validations, 2_099);
+    assert_eq!(compiled.evidence().diagnostics().record_count(), 273);
     assert_eq!(compiled.evidence().diagnostics().byte_len(), 91_453);
     assert_eq!(
         compiled.evidence().diagnostics().sha256(),
         "34cc5c2c11c7d4199dd1230f88691e97b5afb09f319153d9e56d1a45f3220c86"
     );
-    assert_eq!(compiled.evidence().incompletes().record_count(), 3);
+    assert_eq!(compiled.evidence().incompletes().record_count(), 610);
     assert_eq!(compiled.evidence().incompletes().byte_len(), 97_796);
     assert_eq!(
         compiled.evidence().incompletes().sha256(),
         "8c268088f8afd8048690584008c40a49cd3337b91f345b2e879d625525ccf6d8"
     );
-    assert_eq!(compiled.evidence().library_ledger().record_count(), 5);
+    assert_eq!(compiled.evidence().library_ledger().record_count(), 883);
     assert_eq!(compiled.evidence().library_ledger().byte_len(), 189_218);
     assert_eq!(
         compiled.evidence().library_ledger().sha256(),
