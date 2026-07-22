@@ -30,8 +30,73 @@ pub(super) struct RelationMeasure {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RelationSourceColdMeasure {
+    pub(crate) durable_true_cache_hits: u64,
+    pub(crate) durable_false_reason_rebuilds: u64,
+    pub(crate) uncached_relation_frames: u64,
+}
+
+#[cfg(test)]
 thread_local! {
     static RELATION_MEASURE: std::cell::RefCell<RelationMeasure> = std::cell::RefCell::new(RelationMeasure::default());
+    static RELATION_SOURCE_COLD_MEASURE: std::cell::RefCell<RelationSourceColdMeasure> =
+        std::cell::RefCell::new(RelationSourceColdMeasure::default());
+    static RELATION_SOURCE_COLD_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) struct RelationSourceColdMeasureGuard {
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for RelationSourceColdMeasureGuard {
+    fn drop(&mut self) {
+        RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
+            assert!(
+                enabled.get(),
+                "relation source-cold measurement scope is not active"
+            );
+            enabled.set(false);
+        });
+        RELATION_SOURCE_COLD_MEASURE
+            .with(|measure| *measure.borrow_mut() = RelationSourceColdMeasure::default());
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn start_relation_source_cold_measure() -> RelationSourceColdMeasureGuard {
+    RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
+        assert!(
+            !enabled.get(),
+            "relation source-cold measurement scope is already active"
+        );
+        enabled.set(true);
+    });
+    RELATION_SOURCE_COLD_MEASURE
+        .with(|measure| *measure.borrow_mut() = RelationSourceColdMeasure::default());
+    RelationSourceColdMeasureGuard {
+        _not_send: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn relation_source_cold_measure() -> Option<RelationSourceColdMeasure> {
+    RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
+        enabled
+            .get()
+            .then(|| RELATION_SOURCE_COLD_MEASURE.with(|measure| *measure.borrow()))
+    })
+}
+
+#[cfg(test)]
+fn measure_relation_source_cold(update: impl FnOnce(&mut RelationSourceColdMeasure)) {
+    RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
+        if enabled.get() {
+            RELATION_SOURCE_COLD_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+        }
+    });
 }
 
 #[cfg(test)]
@@ -560,17 +625,44 @@ impl<'a> Relater<'a> {
         // stack-guarded recompute so the checker still sees the precise
         // missing-vs-mismatch reason (the cache stores only the bool verdict —
         // architecture §6.1 — not the reason).
+        #[cfg(test)]
+        let (cached, durable_cached) = {
+            let pending_cached = cacheable.then(|| self.pending_cache.get(key)).flatten();
+            let durable_cached = cacheable
+                .then(|| {
+                    pending_cached
+                        .is_none()
+                        .then(|| self.cache.get(key))
+                        .flatten()
+                })
+                .flatten();
+            (pending_cached.or(durable_cached), durable_cached)
+        };
+        #[cfg(not(test))]
         let cached = cacheable
             .then(|| self.pending_cache.get(key).or_else(|| self.cache.get(key)))
             .flatten();
         if cached == Some(true) {
+            #[cfg(test)]
+            if durable_cached == Some(true) {
+                measure_relation_source_cold(|measure| measure.durable_true_cache_hits += 1);
+            }
             return Relation::Yes;
+        }
+
+        #[cfg(test)]
+        if durable_cached == Some(false) {
+            measure_relation_source_cold(|measure| {
+                measure.durable_false_reason_rebuilds += 1;
+            });
         }
 
         self.stack.insert(stack_key.clone());
         // This frame's own assumption accumulator. Children record the ancestor
         // keys (including, possibly, this frame's own key) they assumed true.
         let mut frame_assumed: AssumedSet = FxHashSet::default();
+        #[cfg(test)]
+        measure_relation_source_cold(|measure| measure.uncached_relation_frames += 1);
         let result = self.relate_uncached(src, tgt, kind, &mut frame_assumed);
         self.stack.remove(&stack_key);
 

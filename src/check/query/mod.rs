@@ -58,6 +58,10 @@ pub(crate) struct QuerySourceColdMeasure {
     pub publication_edge_visits: u64,
     pub publication_unique_edges: u64,
     pub planner_transactions: u64,
+    pub planner_clean_finishes: u64,
+    pub planner_tainted_finishes: u64,
+    pub planner_zero_write_finishes: u64,
+    pub planner_commits: u64,
     pub durable_memo_seed_copy_entries: u64,
     pub exhaustion_frontiers: u64,
 }
@@ -76,6 +80,7 @@ thread_local! {
 #[cfg(test)]
 pub(crate) struct QuerySourceColdMeasureGuard {
     _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+    _relation_guard: crate::relate::relation::RelationSourceColdMeasureGuard,
 }
 
 #[cfg(test)]
@@ -108,8 +113,10 @@ pub(crate) fn start_query_source_cold_measure() -> QuerySourceColdMeasureGuard {
     QUERY_SOURCE_COLD_MEASURE
         .with(|measure| *measure.borrow_mut() = QuerySourceColdMeasure::default());
     PUBLICATION_UNIQUE_EDGES.with(|edges| edges.borrow_mut().clear());
+    let relation_guard = crate::relate::relation::start_relation_source_cold_measure();
     QuerySourceColdMeasureGuard {
         _not_send: std::marker::PhantomData,
+        _relation_guard: relation_guard,
     }
 }
 
@@ -1141,6 +1148,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     fn commit_plan(&mut self, transaction: PendingQueryCommit) {
         #[cfg(test)]
+        measure_query_source_cold(|measure| measure.planner_commits += 1);
+        #[cfg(test)]
         measure_query_demand(|measure| {
             measure.durable_evaluation_inserts +=
                 u64::try_from(transaction.pending_evaluator_writes.len()).unwrap();
@@ -1363,13 +1372,24 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn finish(self) -> PlannedQuery<'memo> {
-        let pending_evaluator_writes = self
+        let pending_evaluator_writes: FxHashMap<TypeId, TypeId> = self
             .working_evaluation_memo
             .iter()
             .filter_map(|(&key, &value)| {
                 (self.durable_evaluation_memo.get(&key) != Some(&value)).then_some((key, value))
             })
             .collect();
+        #[cfg(test)]
+        measure_query_source_cold(|measure| {
+            if self.planning_tainted {
+                measure.planner_tainted_finishes += 1;
+            } else {
+                measure.planner_clean_finishes += 1;
+            }
+            if self.pending_projection_writes.is_empty() && pending_evaluator_writes.is_empty() {
+                measure.planner_zero_write_finishes += 1;
+            }
+        });
         PlannedQuery {
             plan: self.plan,
             pending_projection_writes: self.pending_projection_writes,
