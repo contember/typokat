@@ -29,7 +29,8 @@ decisions → reference → archive.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, independent of backlog `14` and future loader work.
+  planned behavior-preserving cleanup, not started; gated on the full-lib performance sprint
+  closing, refs re-verified 2026-07-22.
 
 ## What's hot
 

@@ -1,56 +1,93 @@
 # Sprint — namespace binder refactor: split & dedup (2026-07-16)
 
-**Goal.** Mechanically restructure `src/binder/namespace.rs` (7 954 lines) into a
+**Goal.** Mechanically restructure `src/binder/namespace.rs` (8 480 lines) into a
 `src/binder/namespace/` submodule tree and remove measured duplication, with bit-identical
 checker behavior.
 
-**Theme.** The shipped namespace sprint left one 4.6k-line implementation file (plus 3.3k lines of in-file
-tests) mixing six concerns, four parallel AST walkers with mirrored `Statement`/`Declaration`
+**Theme.** The shipped namespace sprint left one 5.1k-line implementation file (plus 3.3k lines of in-file
+tests) mixing seven concerns, four parallel AST walkers with mirrored `Statement`/`Declaration`
 match arms, and three copies of `declaration_owner_scope` across binder and checker. This
 sprint is a pure refactor: no semantics, no diagnostics, no new capability. Success is
 `cargo test` + focused conformance + official-suite `run --check` all green with zero
 scoreboard movement, and the duplication findings below gone.
 
-## Refs re-verified at HEAD (2026-07-16)
+**Status: planned, not started.** No WU has landed. The plan was written on 2026-07-16 and the
+file has since absorbed the full-library/snapshot work (`+1 040` lines in `namespace.rs`,
+`+1 467` in `bind.rs`, `+757` in `namespace_values.rs` between `547a433` and HEAD), so every
+line ref below was re-measured on 2026-07-22.
 
-`✔` = confirmed live · `⚠` = drift/nuance caught.
+## Refs re-verified at HEAD (2026-07-22, `36c3695`)
 
-- ✔ `src/binder/namespace.rs` is 7 954 lines; `mod tests` starts at
-  `src/binder/namespace.rs:4638` (~3 316 test lines, ~4 640 implementation lines).
-- ✔ `walk_statement`'s `Declaration`-carrying arms (`src/binder/namespace.rs:2794-2907`)
-  are token-identical to `walk_declaration` (`src/binder/namespace.rs:3006-3130`).
-- ✔ `record_deferred_statement` (`src/binder/namespace.rs:3846-4027`) mirrors
-  `record_deferred_declaration` (`src/binder/namespace.rs:4029-4134`) the same way.
-- ✔ `reserve_statement_header` (`src/binder/namespace.rs:3566-3619`) mirrors
-  `reserve_declaration_header` (`src/binder/namespace.rs:3621-3661`).
-- ✔ `bind_selected_namespace_value_statements` (`src/binder/namespace.rs:2527-2578`) mirrors
-  `bind_selected_namespace_value_declaration` (`src/binder/namespace.rs:2580-2614`).
+`✔` = confirmed live · `⚠` = drift/nuance caught. (Line numbers from the 2026-07-16 plan are
+all stale; the values below supersede them.)
+
+- ⚠ `src/binder/namespace.rs` is now 8 480 lines (was 7 954); `mod tests` starts at
+  `src/binder/namespace.rs:5153` (~3 327 test lines, ~5 152 implementation lines). The growth is
+  the snapshot round-trip layer (below), not new duplication.
+- ✔ `walk_statement`'s `Declaration`-carrying arms (`src/binder/namespace.rs:3311-3424`)
+  are token-identical to `walk_declaration` (`src/binder/namespace.rs:3532-3645`) — re-diffed
+  at HEAD with the variant prefix normalized; the only difference is the trailing brace.
+- ✔ `record_deferred_statement` (`src/binder/namespace.rs:4368-4549`) mirrors
+  `record_deferred_declaration` (`src/binder/namespace.rs:4551-4656`) the same way.
+- ✔ `reserve_statement_header` (`src/binder/namespace.rs:4088-4141`) mirrors
+  `reserve_declaration_header` (`src/binder/namespace.rs:4143-4183`).
+- ✔ `bind_selected_namespace_value_statements` (`src/binder/namespace.rs:3044-3095`) mirrors
+  `bind_selected_namespace_value_declaration` (`src/binder/namespace.rs:3097-3131`).
 - ✔ The same statement/declaration mirroring exists in the ordinary binder:
-  `bind_type_declaration_statement` (`src/binder/bind.rs:600-642`) vs `bind_type_declaration`
-  (`src/binder/bind.rs:644-680`), and in the checker's namespace body walk
-  (`src/check/checker/namespace_values.rs:1848-1866`).
-- ✔ `oxc_ast` 0.137 generates `Statement::as_declaration()` via `inherit_variants!`
-  (`oxc_ast-0.137.0/src/ast/macros.rs:790`); the codebase does not use it yet.
-- ✔ `declaration_owner_scope` exists three times with identical match logic:
-  `src/binder/namespace.rs:1845` (on `Binder`), `src/binder/namespace.rs:3271`
-  (on `BindState`), `src/check/checker/namespace_values.rs:2488` (on `Pass`).
-  ⚠ The `Binder`/`Pass` copies read `compilation_global` from the binder while the
-  `BindState` copy reads `state.namespaces.compilation_global` — confirm these are the same
-  scope before unifying.
-- ✔ `NamespaceTable::classify` (`src/binder/namespace.rs:1029-1144`) contains six
-  near-identical canonical-ordering blocks keyed on `(source, span/start, tiebreak)`.
-- ✔ `module_export_name` is duplicated verbatim in `src/driver.rs:391-397` and
-  `src/check/checker/mod.rs:1250-1256`; `metadata_name` (`src/binder/namespace.rs:4623`)
+  `bind_type_declaration_statement` (`src/binder/bind.rs:936-978`) vs `bind_type_declaration`
+  (`src/binder/bind.rs:980-1016`), and in the checker's namespace body walk
+  (`src/check/checker/namespace_values.rs:2133-2150`).
+- ✔ `oxc_ast` 0.137.0 (pinned in `Cargo.toml:24`) generates `Statement::as_declaration()` via
+  `inherit_variants!` (`oxc_ast-0.137.0/src/ast/macros.rs:790`); the codebase still does not use
+  it anywhere (`grep as_declaration() src/` is empty).
+- ⚠ `declaration_owner_scope` still exists three times with identical match logic:
+  `src/binder/namespace.rs:2304` (on `Binder`), `src/binder/namespace.rs:3793`
+  (free fn over `&BindState`), `src/check/checker/namespace_values.rs:2812` (free fn over
+  `&Pass`, **now generic over `Ticket: Copy + PartialEq`** — new since the plan).
+  The 2026-07-16 ⚠ is **resolved**: `Binder::compilation_global` is `ScopeId`
+  (`src/binder/bind.rs:51`), `NamespaceTable::compilation_global` is `Option<ScopeId>`
+  (`src/binder/namespace.rs:858`) and is set to `Some(compilation_global)` at
+  `src/binder/namespace.rs:2847` at the start of metadata binding — same scope; the `Option`
+  only encodes "not yet bound". A unified host must therefore still return `Option`.
+- ⚠ `NamespaceTable::classify` (`src/binder/namespace.rs:1326-1534`) has grown: **seven**
+  canonical-ordering blocks (`canonical_namespaces`, `canonical_globals`,
+  `canonical_deferred_modules`, `canonical_source_units`, `canonical_deferred_children`,
+  `canonical_umd_exports`, `canonical_export_contexts`), and each is now **doubled** by a
+  `library_order` branch (`src/binder/namespace.rs:1328`, from `uses_library_shared_globals()`)
+  whose key flips component order — `(origin, start, source)` vs `(source, start, origin)`.
+  That is 14 sort sites, plus two more `library_order`-branched in-place sorts
+  (`namespace.fragments` at `:1331`/`:1343`, merge `declarations` at `:1394`/`:1402`).
+- ⚠ **New concern in the file since the plan:** the namespace snapshot round-trip —
+  `snapshot_primary` (`:1101`), `from_snapshot_primary` (`:1125`),
+  `validate_snapshot_primary_for_classification` (`:1229`), `validate_snapshot_canonical`
+  (`:1318`). This makes `classify`'s ordering load-bearing for snapshot canonicality and adds
+  its own slice to the WU5 split.
+- ✔ `module_export_name` is still duplicated verbatim in `src/driver.rs:389-395` and
+  `src/check/checker/mod.rs:1646-1652`; `metadata_name` (`src/binder/namespace.rs:5138`)
   covers the same match with a richer return type.
 - ✔ The 12-variant "plain runtime statement" guard list is duplicated between
-  `src/binder/namespace.rs:2986-2997` and `src/check/checker/namespace_values.rs:1867-1878`.
-- ✔ jscpd 5.0.12 (`-k 60 -l 8 --skip-comments`) over `src/`: 203 clones repo-wide, 9 touching
-  `binder/namespace.rs`; the only production cross-file clone involving it is the guard list
-  above. The dominant duplication is intra-file (the mirrored walkers).
-- ✔ External production consumers of the namespace module are only
-  `src/binder/bind.rs`, `src/check/checker/mod.rs`, `src/check/checker/namespace_values.rs`
-  (plus tests in `src/driver.rs`); ~28 of 56 public types are consumed only by in-file tests —
-  deliberate dormant substrate owned by backlog `15`/`82` per the 2026-07-15 sprint (WU1b).
+  `src/binder/namespace.rs:3502-3514` and `src/check/checker/namespace_values.rs:2151-2163`
+  (re-diffed at HEAD: same 12 variants, same order).
+- ⚠ jscpd 5.0.12 (`-k 60 -l 8 --skip-comments`, `--ignore '**/*.d.ts'` — `src/library/` now
+  vendors TypeScript 6.0.3 `.d.ts`) over `src/`: **295** rust clones repo-wide (was 203), still
+  **9** touching `binder/namespace.rs`, and still exactly **one** production cross-file clone —
+  the guard list above (`namespace.rs:3502-3514` ↔ `namespace_values.rs:2151-2163`). The
+  dominant duplication remains intra-file (four of the nine clones are the mirrored walkers).
+- ⚠ External consumers of the namespace module have expanded well past the plan's three files:
+  ~20 files now name `binder::namespace::…`, including `src/binder/symbol.rs`,
+  `src/binder/declaration.rs`, `src/diagnostics/mod.rs`, `src/check/checker/library_reporting.rs`,
+  `src/check/checker/wu0b_library.rs`, `src/check/checker/function_groups.rs`,
+  `src/check/checker/decls/*`, `src/check/checker/classes/*`. **`src/binder/snapshot.rs` (test-only)
+  does `use super::namespace::*`** — a glob, so WU5's `mod.rs` re-export must be exhaustive or
+  that module breaks.
+- ⚠ The dormant-substrate count has shrunk as the full-library work started consuming the
+  metadata layer: at HEAD, **17 of 39** top-level `pub` items in `namespace.rs` have no
+  production consumer outside the file (`AliasContext`, `AliasSpaceIntent`, `DeclarationSpaces`,
+  `DeclarationSyntaxFacts`, `DeferredChildKind`, `DeferredModuleKind`, `ImportBindingForm`,
+  `ImportSyntaxFacts`, `Merge{Classification,Composition,CompositionKind,Record}`,
+  `MergeSlot{Disposition,State,Summary}`, `MetadataName`, `has_external_module_indicator`) —
+  down from the plan's "~28 of 56" (different counting method; treat both as order-of-magnitude).
+  Still deliberate substrate owned by backlog `15`/`82` per the 2026-07-15 sprint (WU1b).
 - ✔ The namespace sprint is archived after WU7 PASS: WU6A implementation landed (`23bad42`,
   `16cda3f`, `52cea92`) and the official ratchet closed at `30cd7cf`.
 
@@ -59,15 +96,15 @@ scoreboard movement, and the duplication findings below gone.
 ### WU1 — collapse Statement/Declaration mirrored walkers (effort M)
 
 - **Problem.** Five walker pairs re-list every `Declaration`-carrying variant twice
-  (~430 duplicated production lines): `walk_statement`/`walk_declaration`,
-  `record_deferred_statement`/`record_deferred_declaration`,
-  `reserve_statement_header`/`reserve_declaration_header`,
-  `bind_selected_namespace_value_statements`/`bind_selected_namespace_value_declaration`
+  (~335 removable production lines, measured at HEAD): `walk_statement`/`walk_declaration`
+  (114), `record_deferred_statement`/`record_deferred_declaration` (106),
+  `reserve_statement_header`/`reserve_declaration_header` (41),
+  `bind_selected_namespace_value_statements`/`bind_selected_namespace_value_declaration` (35)
   (all `src/binder/namespace.rs`), and `bind_type_declaration_statement`/
-  `bind_type_declaration` (`src/binder/bind.rs`). Any new declaration form must be added in
+  `bind_type_declaration` (`src/binder/bind.rs`, 37). Any new declaration form must be added in
   two places per walker — a drift trap.
 - **Verify first.** Diff each pair arm-by-arm to confirm exact behavioral equality
-  (done at HEAD for all five — the only statement-side extras are statement-only forms:
+  (re-done at HEAD for all five — the only statement-side extras are statement-only forms:
   imports, export wrappers, UMD export, runtime statements). Confirm
   `Statement::as_declaration()` covers all mirrored variants including
   `TSModuleDeclaration`/`TSGlobalDeclaration`/`TSImportEqualsDeclaration`.
@@ -76,11 +113,12 @@ scoreboard movement, and the duplication findings below gone.
   walker and delete the mirrored arms. Keep statement-only arms exactly as they are. One
   nuance: `record_deferred_statement` must pass `exported: false` when delegating (its
   current inline arms all use `OrdinaryDeclaration`). Also collapse the mirrored export arm
-  in `src/check/checker/namespace_values.rs:1848-1866` by delegating to the same per-kind
+  in `src/check/checker/namespace_values.rs:2133-2150` by delegating to the same per-kind
   helpers.
 - **Acceptance / witness.** `cargo test` (unit + conformance) and
   `tooling/official-suite` `run --check` pass with zero change; `git diff --stat` shows
-  namespace.rs shrinking by roughly 400+ lines with no test file edits.
+  namespace.rs shrinking by roughly 300 lines with no test file edits; the four mirrored-walker
+  clones drop out of the jscpd report (9 → 5 clones touching `binder/namespace.rs`).
 - **Touch points.** `src/binder/namespace.rs`, `src/binder/bind.rs`,
   `src/check/checker/namespace_values.rs`.
 
@@ -88,41 +126,60 @@ scoreboard movement, and the duplication findings below gone.
 
 - **Problem.** Three identical implementations (binder ×2, checker ×1) of owner→scope
   projection; a future `DeclarationOwner` variant must be handled three times.
-- **Verify first.** Prove `Binder::compilation_global` and
-  `NamespaceTable::compilation_global` denote the same scope (or document why the
-  `BindState` copy reads the table's field); check the `Option` shape at
-  `src/binder/namespace.rs:3282`.
+- **Verify first.** *Done at HEAD* — `Binder::compilation_global: ScopeId`
+  (`src/binder/bind.rs:51`) and `NamespaceTable::compilation_global: Option<ScopeId>`
+  (`src/binder/namespace.rs:858`) denote the same scope; the table's field is filled at
+  `src/binder/namespace.rs:2847` and the `Option` only encodes "not yet bound". So the unified
+  method returns `Option<ScopeId>` and the two `Some(binder.compilation_global)` call sites
+  keep working unchanged.
 - **Scope.** One method on `NamespaceTable` (it owns namespaces, fragments, and the
-  compilation-global field); the `Binder` method and the checker free function become
-  delegating one-liners or are inlined away.
+  compilation-global field); the `Binder` method (`src/binder/namespace.rs:2304`), the
+  `BindState` free fn (`:3793`), and the checker free fn
+  (`src/check/checker/namespace_values.rs:2812`, generic over `Ticket`) become delegating
+  one-liners or are inlined away. The checker's `Ticket` generic is incidental — it only reaches
+  `pass.binder`, so delegation drops the generic entirely.
 - **Acceptance / witness.** Same gates as WU1; exactly one match over `DeclarationOwner`
   variants remains in the tree (grep witness).
 - **Touch points.** `src/binder/namespace.rs`, `src/check/checker/namespace_values.rs`.
 
 ### WU3 — canonical-ordering helper in `classify` (effort S)
 
-- **Problem.** `NamespaceTable::classify` repeats the "build 0..n id vector, sort by
-  `(source, start, tiebreak)`" block six times (`src/binder/namespace.rs:1045-1143`).
-- **Verify first.** Confirm all six keys are strict total orders with the same shape and
-  that no block sorts a foreign index type.
+- **Problem.** `NamespaceTable::classify` (`src/binder/namespace.rs:1326-1534`) repeats the
+  "build 0..n id vector, then sort under a `library_order` branch" block **seven** times
+  (`:1357`, `:1454`, `:1468`, `:1482`, `:1494`, `:1506`, `:1518`) — 14 sort sites in all.
+- **Verify first.** Confirm all fourteen keys are strict total orders and that the two branches
+  differ only by component order (`(origin, start, source)` under `library_order`,
+  `(source, start, origin)` otherwise); confirm no block sorts a foreign index type. ⚠ Note the
+  `canonical_namespaces` pair is *not* uniform with the rest — the library branch `expect`s a
+  fragment while the else branch falls back to `SourceUnitKey(u32::MAX)`; keep both bodies
+  verbatim.
 - **Scope.** One generic helper, e.g.
-  `fn canonical_order<I: Copy, K: Ord>(len: usize, make: impl Fn(usize) -> I, key: impl Fn(&I) -> K) -> Vec<I>`;
-  the six blocks become single calls. Do not change any sort key.
+  `fn canonical_order<I: Copy, K: Ord>(len: usize, make: impl Fn(usize) -> I, key: impl Fn(&I) -> K) -> Vec<I>`,
+  called once per block with the branch-selected key closure; the seven blocks become single
+  calls. Do not change any sort key. The two in-place sorts (`namespace.fragments`, merge
+  `declarations`) sort owned vectors, not id vectors — leave them alone unless a second helper
+  falls out for free.
 - **Acceptance / witness.** Same gates; the in-file ordering tests
   (`standalone_namespace_storage_order_uses_stable_source_keys`,
   `namespace_public_type_groups_are_source_ordered_across_global_reopenings`) stay untouched
-  and green.
+  and green. Since the snapshot layer landed, `NamespaceTable::validate_snapshot_canonical`
+  (`src/binder/namespace.rs:1318`) is an additional, sharper witness: it re-derives ordering
+  from a decoded snapshot and fails closed on any drift — run the snapshot round-trip tests
+  explicitly, not just the ordering ones.
 - **Touch points.** `src/binder/namespace.rs`.
 
 ### WU4 — shared small helpers across binder/checker/driver (effort S)
 
 - **Problem.** Two verbatim cross-file duplications: `module_export_name`
-  (`src/driver.rs:391`, `src/check/checker/mod.rs:1250`) and the 12-variant plain-runtime-
-  statement guard (`src/binder/namespace.rs:2986`, `src/check/checker/namespace_values.rs:1867`).
+  (`src/driver.rs:389`, `src/check/checker/mod.rs:1646`) and the 12-variant plain-runtime-
+  statement guard (`src/binder/namespace.rs:3502`, `src/check/checker/namespace_values.rs:2151`).
 - **Verify first.** Confirm both guard lists are the same 12 variants and both
-  `module_export_name` bodies are identical (done at HEAD); pick the host module (no
+  `module_export_name` bodies are identical (re-done at HEAD); pick the host module (no
   `src/util` exists — a small `src/ast_util.rs` or a `pub(crate)` home in `src/binder/` —
-  decide in review, do not add a grab-bag module beyond these two functions).
+  decide in review, do not add a grab-bag module beyond these two functions). ⚠ `src/source.rs`
+  now exists as a small shared-primitives module (`CompilationOrigin`, `OriginalModuleOrdinal`);
+  it is a *source-identity* module, not an AST-helper one — do not widen it into the grab-bag
+  this WU is trying to avoid.
 - **Scope.** One `module_export_name` (the namespace-local `metadata_name` may stay — it
   returns `MetadataName`, a different contract) and one
   `is_plain_runtime_statement(&Statement) -> bool` predicate used by both call sites.
@@ -133,12 +190,14 @@ scoreboard movement, and the duplication findings below gone.
 
 ### WU5 — split `binder/namespace.rs` into a submodule directory (effort M)
 
-- **Problem.** One file hosts six concerns plus 3.3k lines of tests; navigation and
+- **Problem.** One file hosts seven concerns plus 3.3k lines of tests; navigation and
   review-scoping suffer (the checker side is already split into `check/checker/` submodules).
 - **Verify first.** Confirm all external consumers import via `crate::binder::namespace::…`
   so a `mod.rs` with `pub use` re-exports keeps every consumer path unchanged; confirm
   in-file tests only need `super::` access (they do — they exercise private items, so tests
-  must stay inside the module tree).
+  must stay inside the module tree). ⚠ `src/binder/snapshot.rs` glob-imports
+  (`use super::namespace::*`), so the re-export list must be exhaustive — a missing `pub use`
+  fails only under `cfg(test)`; build with `cargo test --no-run` before trusting `cargo build`.
 - **Scope.** Move-only split into `src/binder/namespace/`:
   - `mod.rs` — id newtypes, `SourceFileKind`/`ModuleBindingContext`/`CompilationUnit`,
     `has_external_module_indicator`, and `pub use` re-exports (public API unchanged);
@@ -146,6 +205,9 @@ scoreboard movement, and the duplication findings below gone.
     `NamespaceMember`, `Merge*`, `Global*`, `Deferred*`, `ExportContext`, `Umd*`, …);
   - `table.rs` — `NamespaceTable` storage, accessors, `classify`, instance states,
     dormant-storage candidates;
+  - `snapshot.rs` — the snapshot round-trip layer (`snapshot_primary`,
+    `from_snapshot_primary`, `validate_snapshot_primary_for_classification`,
+    `validate_snapshot_canonical`), new since the plan and cleanly separable from `table.rs`;
   - `classify.rs` — `classify_group`, `placement_issues`,
     `namespace_value_attachment_disposition`;
   - `lookup.rs` — the `impl Binder` qualified-view/lookup block
@@ -161,29 +223,35 @@ scoreboard movement, and the duplication findings below gone.
   visibility adjustments (`pub(super)`/`pub(crate)`) only — no logic edits in this WU.
 - **Acceptance / witness.** Same gates; `git diff` outside `src/binder/namespace*` is empty
   except `src/binder/mod.rs`; no file in the new directory exceeds ~1 500 lines
-  (tests excluded).
+  (tests excluded — ~4 800 post-WU1 implementation lines over nine files leaves comfortable
+  headroom).
 - **Touch points.** `src/binder/namespace.rs` → `src/binder/namespace/*`,
-  `src/binder/mod.rs`.
+  `src/binder/mod.rs`. ⚠ `src/binder/snapshot.rs` may need its glob import narrowed.
 
 ## Out of scope (explicit)
 
-- **Dormant substrate removal.** The ~28 externally-unconsumed metadata types
-  (`ExportContext`, `DeferredAmbient*`, `UmdNamespaceExport`, `MergeClassification`
-  internals, …) are reserved by the 2026-07-15 sprint for backlog `15`/`82`/`14` and are
-  pinned by direct tests. Deleting or trimming them is a scope decision for those backlogs,
-  not a refactor.
-- **`OriginalModuleOrdinal`** stays a deliberate binder-layer copy
-  (`src/binder/namespace.rs:89` documents it) — not duplication.
-- **Perf cleanups** (linear fragment `find` inside the instance-state fixpoint at
-  `src/binder/namespace.rs:1192-1196`, linear scans in `standalone_merge_record` /
-  `root_merge_record`): O(n²) patterns that are harmless at current sizes; index them only
-  with profiling evidence, per the ADR-0001 profiling-gate spirit.
+- **Dormant substrate removal.** The 17 externally-unconsumed metadata types
+  (`MergeClassification`/`MergeSlot*` internals, `AliasContext`, `Declaration*Facts`,
+  `Import*`, `Deferred*Kind`, …) are reserved by the 2026-07-15 sprint for backlog `15`/`82`/`14`
+  and are pinned by direct tests. Deleting or trimming them is a scope decision for those
+  backlogs, not a refactor.
+- **The snapshot round-trip layer.** It lands in its own file under WU5 and is otherwise
+  untouched — no re-encoding, no schema change, no ordering change. It belongs to the active
+  full-library sprint; this refactor only moves it.
+- **Perf cleanups** (linear scans in `standalone_merge_record` at
+  `src/binder/namespace.rs:1666` and `root_merge_record` at `:2320`, and the linear `.find`
+  cluster at `:1585`/`:1678`/`:1779`/`:1896`/`:1994`): O(n²) patterns that are harmless at
+  current sizes; index them only with profiling evidence, per the ADR-0001 profiling-gate
+  spirit. ⚠ The full-library work has raised the input sizes these scans see — if profiling
+  under the full `lib.d.ts` base flags one, that is a backlog item for the perf sprint, not a
+  scope expansion here.
 - **Repo-wide id-newtype `index()` macro**: 13+ occurrences across `binder`/`types`/`check`
   follow the same idiom; a macro is a repo-wide convention change with churn beyond this
   sprint's theme.
-- **Other cross-file clones** found by jscpd outside the namespace theme (largest:
-  `check/checker/eval/instantiation.rs:50` ↔ `check/checker/eval/mapped.rs:94` and the
-  `calls.rs` ↔ `relate/` cluster) — candidates for a separate cleanup sprint if wanted.
+- **Other cross-file clones** found by jscpd outside the namespace theme — the repo-wide count
+  has grown from 203 to 295 rust clones as the full-library work landed, and the new
+  `check/checker/wu0b_*` / `*_spec.rs` modules carry much of it. Cleaning those up is a separate
+  sprint; this one is scoped to the nine clones touching `binder/namespace.rs`.
 
 ## Decisions
 
@@ -199,9 +267,15 @@ scoreboard movement, and the duplication findings below gone.
 
 1. **Gate satisfied:** the namespace sprint's WU7 adversarial review and closure landed before
    this refactor starts.
-2. WU1 → WU2 → WU3 → WU4 (independent of each other after WU1; may be one subagent run,
+2. ⚠ **New blocking gate:** do not start while
+   [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprint-2026-07-21-full-lib-performance-cutover.md)
+   is active. It is rewriting the exact three files this refactor touches (`namespace.rs`,
+   `bind.rs`, `namespace_values.rs` took `+2 852/-412` lines between the plan and HEAD), and a
+   whole-file split landing mid-flight turns every one of its edits into a conflict. This sprint
+   waits for that one to close, then re-verifies the ref block again before WU1.
+3. WU1 → WU2 → WU3 → WU4 (independent of each other after WU1; may be one subagent run,
    separate commits) → WU5 last.
-3. Per dev-method: implementation via a subagent; the leader verifies gates and commits.
+4. Per dev-method: implementation via a subagent; the leader verifies gates and commits.
    A second read-only agent re-runs jscpd and spot-diffs the moved code as the review step
    (full adversarial review is not required for a behavior-preserving refactor, but the
    move-only claim of WU5 must be independently checked).
@@ -209,3 +283,17 @@ scoreboard movement, and the duplication findings below gone.
 ## Run log
 
 <!-- Append as you work. -->
+
+- **2026-07-22 — refs re-verified at `36c3695`, no WU started.** Every line reference in the
+  original plan was stale after the full-library/snapshot work; the ref block above is
+  re-measured. Substantive drift, beyond line numbers: `classify` grew from six ordering blocks
+  to seven, each doubled by a `library_order` branch (WU3 is bigger and now has
+  `validate_snapshot_canonical` as a witness); a snapshot round-trip layer appeared in
+  `NamespaceTable` (WU5 gains a `snapshot.rs` slice); the checker's `declaration_owner_scope`
+  became generic over `Ticket`; the `compilation_global` ⚠ from 2026-07-16 is resolved (same
+  scope, `Option` only means "not yet bound"); the namespace module's consumer set expanded from
+  three files to ~20, one of them (`src/binder/snapshot.rs`) glob-importing it; and the
+  `OriginalModuleOrdinal` out-of-scope note is obsolete — that copy was consolidated into
+  `src/source.rs`, so the bullet is dropped. Measured removable duplication in WU1 is ~335 lines
+  (the plan's ~430 was an over-estimate). Added a blocking sequencing gate on the active
+  full-lib performance sprint.

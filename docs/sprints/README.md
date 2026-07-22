@@ -26,4 +26,5 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, independent of backlog `14` and any future loader sprint.
+  planned behavior-preserving cleanup, not started; refs re-verified 2026-07-22 and now gated on
+  the full-lib performance sprint closing (it rewrites the same three files).
