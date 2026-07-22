@@ -1208,6 +1208,17 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
             "decoded user route depends on source compiler symbol {forbidden}"
         );
     }
+    let decode_start = compiler_source
+        .find("pub(in crate::check::checker) fn decode_snapshot_for_test(")
+        .expect("snapshot decoder entrypoint");
+    let decode_end = compiler_source[decode_start..]
+        .find("pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(")
+        .map(|offset| decode_start + offset)
+        .expect("snapshot decoder boundary");
+    assert!(
+        !compiler_source[decode_start..decode_end].contains("projection_subtables("),
+        "timed decode eagerly reconstructs the generation-only projection witness"
+    );
 }
 
 #[test]
