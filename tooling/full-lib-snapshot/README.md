@@ -73,6 +73,14 @@ The coordinator itself parses both archives. It requires the exact magic,
 version, profile and schema digests, ten ordered tags with zero reserved bits,
 nonempty contiguous sections, exact body length, no trailing bytes, and valid
 body/section SHA-256 values. An archive must be between 1 MiB and 32 MiB.
+The regenerated archive must additionally match the contract's exact canonical
+10,003,957-byte identity
+`af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0`.
+The timed route authenticates that complete identity while taking ownership of
+the input bytes. It still compares every decoded reference with the canonical
+wire manifest, but does so as a stream instead of allocating, globally sorting,
+and serializing a second complete manifest. Generic/adversarial decoders retain
+their independent section and reference reconstruction.
 
 The 31 projection-subtable witnesses are computed once during untimed snapshot
 generation and stored as a versioned, fixed-order row-count/digest inventory in
@@ -100,7 +108,8 @@ monotonic interval is the timing authority. Peak RSS is captured externally from
 
 GO requires all of the following:
 
-- two byte-identical archives, each no larger than 32 MiB;
+- two byte-identical archives matching the exact pinned canonical identity and
+  no larger than 32 MiB;
 - two independent clean builds and two complete release preflights;
 - exact profile and archive identities in every probe record;
 - exact untimed `fast-clean` and `fast-errors` calibration outcomes from WU0A's

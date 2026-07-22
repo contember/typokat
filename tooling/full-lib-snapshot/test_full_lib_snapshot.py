@@ -94,7 +94,11 @@ class SnapshotCoordinatorTests(unittest.TestCase):
         ]
         encoded_rustflags = "\x1f".join(canonical_rustflags)
         binaries = [self.identity(f"/tmp/typokat-wu0b-test/build-{ordinal}/libtest", "b" * 64, 4096) for ordinal in (1, 2)]
-        artifact_file = self.identity("/tmp/typokat-wu0b-test/regeneration-1/library.snapshot", "c" * 64, 1024 * 1024)
+        artifact_file = self.identity(
+            "/tmp/typokat-wu0b-test/regeneration-1/library.snapshot",
+            self.contract["artifact"]["canonical_sha256"],
+            self.contract["artifact"]["canonical_bytes"],
+        )
         header_bytes = len(self.contract["wire"]["magic"].encode("ascii")) + 4 + 32 + 32 + 4 + 8 + 32 + 520
         body_bytes = artifact_file["bytes"] - header_bytes
         base = body_bytes // 10
@@ -486,6 +490,10 @@ class SnapshotCoordinatorTests(unittest.TestCase):
     def test_artifact_size_limit_is_external(self) -> None:
         oversized = 32 * 1024 * 1024 + 1
         self.evidence["artifact"]["bytes"] = oversized
+        self.assert_invalid(self.evidence)
+
+    def test_artifact_must_match_canonical_identity(self) -> None:
+        self.evidence["artifact"]["sha256"] = "0" * 64
         self.assert_invalid(self.evidence)
 
     def test_structural_inspection_never_prints_go(self) -> None:

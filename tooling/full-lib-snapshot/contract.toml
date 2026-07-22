@@ -25,6 +25,8 @@ maximum_bytes = 33554432
 minimum_bytes = 1048576
 regenerations = 2
 schema = 1
+canonical_bytes = 10003957
+canonical_sha256 = "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0"
 
 [wire]
 magic = "typokat-semantic-snapshot"

@@ -100,6 +100,9 @@ const FAST_ERRORS: &str =
 // WU0B freezes a simple independently parseable wire header. The integration spec
 // mutates these bytes itself; the implementation cannot choose convenient corruptions.
 const SNAPSHOT_MAGIC: &[u8] = b"typokat-semantic-snapshot";
+const CANONICAL_ARCHIVE_BYTES: usize = 10_003_957;
+const CANONICAL_ARCHIVE_SHA256: &str =
+    "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
 const VERSION_OFFSET: usize = SNAPSHOT_MAGIC.len();
 const PROFILE_DIGEST_LEN: usize = 32;
 const SCHEMA_DIGEST_LEN: usize = 32;
@@ -419,6 +422,16 @@ fn decode_exact_profile(strategy: SnapshotDecodeStrategy) -> DecodedLibraryBaseF
     let validated =
         validate_snapshot_for_test(compiled.archive().as_bytes()).expect("snapshot validates");
     decode_snapshot_for_test(validated, strategy).expect("snapshot decodes")
+}
+
+#[test]
+fn exact_profile_archive_identity_is_pinned() {
+    let archive = compile_exact_profile().archive().as_bytes();
+    assert_eq!(archive.len(), CANONICAL_ARCHIVE_BYTES);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(archive)),
+        CANONICAL_ARCHIVE_SHA256
+    );
 }
 
 #[test]
@@ -1231,14 +1244,47 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         .expect("fast-clean probe boundary");
     let probe_source = &compiler_source[probe_start..probe_end];
     assert_eq!(
-        probe_source.matches("decode_snapshot_for_test(").count(),
+        probe_source
+            .matches("decode_canonical_snapshot_for_test(")
+            .count(),
         1,
-        "timed fast-clean route must decode exactly one complete base"
+        "timed fast-clean route must decode exactly one canonical base"
+    );
+    assert!(
+        probe_source.contains("validate_canonical_snapshot_for_test(bytes)"),
+        "timed route must authenticate and transfer ownership of the canonical archive"
+    );
+    assert!(
+        !probe_source.contains("validate_snapshot_for_test(&bytes)")
+            && !probe_source.contains("decode_snapshot_for_test("),
+        "timed route must not copy or decode through the generic adversarial path"
     );
     assert!(
         !probe_source.contains("fast_errors") && !probe_source.contains("error_base"),
         "timed fast-clean route must not execute semantic calibration"
     );
+    let canonical_start = compiler_source
+        .find("pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(")
+        .expect("canonical decoder entrypoint");
+    let canonical_end = compiler_source[canonical_start..]
+        .find("pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(")
+        .map(|offset| canonical_start + offset)
+        .expect("canonical decoder boundary");
+    let canonical_source = &compiler_source[canonical_start..canonical_end];
+    assert!(
+        canonical_source.contains("verify_reference_manifest_streaming("),
+        "canonical decoder must compare every decoded reference to the wire stream"
+    );
+    for redundant in [
+        "build_manifest_references(",
+        "write_manifest(",
+        "sort_unstable(",
+    ] {
+        assert!(
+            !canonical_source.contains(redundant),
+            "canonical decoder rebuilds reference evidence via {redundant}"
+        );
+    }
 }
 
 #[test]
