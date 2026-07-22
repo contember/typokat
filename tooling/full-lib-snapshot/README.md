@@ -58,8 +58,11 @@ tracked source immediately before and after it.
 
 It then launches two distinct regeneration children with distinct nonexistent
 output paths. Both must create exactly one regular file, terminate cleanly, and
-produce byte-identical archives. Generation is never timed. Every warmup and
-recorded timing child gets only the canonical first artifact through
+produce byte-identical archives. Each regeneration also decodes its artifact
+outside timing, checks both WU0A semantic workloads, and emits a strict semantic
+calibration record that the coordinator verifies from raw output. Generation
+and this full calibration are never timed. Every warmup and recorded timing
+child gets only the canonical first artifact through
 `TYPOKAT_WU0B_SNAPSHOT_INPUT`; the output variable is absent, and the artifact's
 identity is checked before and after each launch. Regeneration uses the matching
 isolated source root in both its working directory and
@@ -83,7 +86,10 @@ Each timing record must identify the route as `decoded-base-user-check`, carry a
 nonempty runtime-projection SHA-256, and report the exact compiler measurement
 object with zero source loads, parse units, bind units, semantic units, and
 snapshot generations. Those route counters are cross-checked for every raw
-launch; aggregate timing/RSS claims from the child remain non-authoritative.
+launch. The timed child performs exactly one complete eager decode and one
+`fast-clean` user check; it neither decodes a second base nor runs the
+`fast-errors` calibration. Aggregate timing/RSS claims from the child remain
+non-authoritative.
 
 There are three named windows. Each has five fresh-process warmups followed by
 ten recorded eager launches, with at least 60 seconds between authoritative
@@ -97,7 +103,8 @@ GO requires all of the following:
 - two byte-identical archives, each no larger than 32 MiB;
 - two independent clean builds and two complete release preflights;
 - exact profile and archive identities in every probe record;
-- exact `fast-clean` and `fast-errors` outcomes from WU0A's committed oracles;
+- exact untimed `fast-clean` and `fast-errors` calibration outcomes from WU0A's
+  committed oracles, plus the same exact `fast-clean` outcome in every timing child;
 - ten complete recorded launches in each of three windows, all with unique PIDs;
 - externally calculated nearest-rank p95 at or below 120 ms, both overall and in
   every window;

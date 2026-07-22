@@ -80,7 +80,7 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             "validated_bytes": artifact["bytes"],
             "runtime_projection_sha256": "9" * 64,
             "input_path": artifact["path"],
-            "semantics": snapshot.expected_semantics(),
+            "semantics": {"fast-clean": copy.deepcopy(snapshot.expected_semantics()["fast-clean"])},
             "compiler_measure": {"source_loads": 0, "parse_units": 0, "bind_units": 0, "semantic_units": 0, "snapshot_generations": 0},
             "internal": {"validation_us": 10, "decode_us": 20, "user_check_us": 30, "wall_us": 60, "peak_rss_bytes": 1},
         }
@@ -131,10 +131,24 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             process["cwd"] = source_copy["root"]
             preflights.append({"filter": self.contract["libtest"]["preflight_filter"], "binary_before": binary, "binary_after": binary, "source_before": copy.deepcopy(source_copy), "source_after": copy.deepcopy(source_copy), "process": process})
         generations = []
-        generation_stdout = "\nrunning 1 test\ntest regeneration ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 857 filtered out; finished in 0.01s\n"
         for ordinal in (1, 2):
             output = copy.deepcopy(artifact)
             output["path"] = f"/tmp/typokat-wu0b-test/regeneration-{ordinal}/library.snapshot"
+            semantic_calibration = {
+                "schema": 1,
+                "kind": "decoded-semantic-calibration",
+                "profile_sha256": self.contract["profile_sha256"],
+                "artifact_sha256": output["sha256"],
+                "artifact_bytes": output["bytes"],
+                "semantics": copy.deepcopy(snapshot.expected_semantics()),
+            }
+            generation_stdout = (
+                "\nrunning 1 test\n"
+                + self.contract["libtest"]["semantic_record_prefix"]
+                + json.dumps(semantic_calibration, separators=(",", ":"))
+                + "\ntest regeneration ... ok\n\n"
+                + "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 857 filtered out; finished in 0.01s\n"
+            )
             source_copy = copy.deepcopy(builds[ordinal - 1]["source_after"])
             env = snapshot.sanitized_environment() | {"TYPOKAT_WU0B_SNAPSHOT_OUTPUT": output["path"], "TYPOKAT_WU0B_PROFILE_ROOT": source_copy["root"]}
             process = self.process(ordinal + 1, snapshot.test_command(Path(binaries[ordinal - 1]["path"]), self.contract["libtest"]["regeneration_filter"], self.contract), env, generation_stdout, start=5_000_000_000 + ordinal * 1_000_000_000)
@@ -151,6 +165,7 @@ class SnapshotCoordinatorTests(unittest.TestCase):
                 "process": process,
                 "output": {key: output[key] for key in ("path", "bytes", "sha256")},
                 "wire": wire,
+                "semantic_calibration": semantic_calibration,
             })
         windows = []
         pid = 10
@@ -203,6 +218,15 @@ class SnapshotCoordinatorTests(unittest.TestCase):
 
     def rewrite_probe_stdout(self, sample: dict[str, object]) -> None:
         sample["process"]["stdout"] = self.harness(sample["probe"])
+
+    def rewrite_generation_stdout(self, generation: dict[str, object]) -> None:
+        generation["process"]["stdout"] = (
+            "\nrunning 1 test\n"
+            + self.contract["libtest"]["semantic_record_prefix"]
+            + json.dumps(generation["semantic_calibration"], separators=(",", ":"))
+            + "\ntest regeneration ... ok\n\n"
+            + "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 857 filtered out; finished in 0.01s\n"
+        )
 
     def assert_invalid(self, evidence: dict[str, object]) -> None:
         with self.assertRaises(snapshot.ContractError):
@@ -400,7 +424,28 @@ class SnapshotCoordinatorTests(unittest.TestCase):
 
     def test_child_self_reported_parity_is_checked_against_wu0a(self) -> None:
         sample = self.evidence["windows"][0]["recorded"][0]
-        sample["probe"]["semantics"]["fast-errors"]["diagnostics"] = []
+        sample["probe"]["semantics"]["fast-clean"]["diagnostics"] = ["invented"]
+        self.rewrite_probe_stdout(sample)
+        self.assert_invalid(self.evidence)
+
+    def test_generation_semantic_calibration_is_required(self) -> None:
+        generation = self.evidence["generations"][0]
+        generation["process"]["stdout"] = generation["process"]["stdout"].replace(
+            self.contract["libtest"]["semantic_record_prefix"], "REMOVED=", 1
+        )
+        self.assert_invalid(self.evidence)
+
+    def test_generation_semantic_calibration_matches_wu0a(self) -> None:
+        generation = self.evidence["generations"][1]
+        generation["semantic_calibration"]["semantics"]["fast-errors"]["diagnostics"] = []
+        self.rewrite_generation_stdout(generation)
+        self.assert_invalid(self.evidence)
+
+    def test_timing_probe_contains_only_fast_clean_semantics(self) -> None:
+        sample = self.evidence["windows"][0]["recorded"][0]
+        sample["probe"]["semantics"]["fast-errors"] = copy.deepcopy(
+            snapshot.expected_semantics()["fast-errors"]
+        )
         self.rewrite_probe_stdout(sample)
         self.assert_invalid(self.evidence)
 

@@ -18,6 +18,7 @@ strategy_filter = "check::checker::wu0b_snapshot_spec::snapshot_decode_strategy_
 scaling_filter = "check::checker::wu0b_snapshot_spec::snapshot_scaling_probe_once"
 test_args = ["--ignored", "--exact", "{filter}", "--nocapture", "--test-threads=1"]
 record_prefix = "TYPOKAT_WU0B_PROBE="
+semantic_record_prefix = "TYPOKAT_WU0B_SEMANTICS="
 
 [artifact]
 maximum_bytes = 33554432

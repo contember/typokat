@@ -1222,6 +1222,23 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         !compiler_source[decode_start..decode_end].contains("projection_subtables("),
         "timed decode eagerly reconstructs the generation-only projection witness"
     );
+    let probe_start = compiler_source
+        .find("pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(")
+        .expect("fast-clean probe entrypoint");
+    let probe_end = compiler_source[probe_start..]
+        .find("#[derive(Clone, Debug, PartialEq, Eq)]")
+        .map(|offset| probe_start + offset)
+        .expect("fast-clean probe boundary");
+    let probe_source = &compiler_source[probe_start..probe_end];
+    assert_eq!(
+        probe_source.matches("decode_snapshot_for_test(").count(),
+        1,
+        "timed fast-clean route must decode exactly one complete base"
+    );
+    assert!(
+        !probe_source.contains("fast_errors") && !probe_source.contains("error_base"),
+        "timed fast-clean route must not execute semantic calibration"
+    );
 }
 
 #[test]
@@ -1246,7 +1263,7 @@ fn snapshot_fast_clean_probe_once() {
     .expect("artifact length fits usize");
     let compiler_measure = start_library_compiler_measure_for_test();
     let route_measure = start_decoded_base_route_measure_for_test();
-    let record = snapshot_fast_clean_probe_for_test(&input, FAST_CLEAN, FAST_ERRORS)
+    let record = snapshot_fast_clean_probe_for_test(&input, FAST_CLEAN)
         .expect("complete snapshot fast-clean probe");
     let route_measure = route_measure.finish();
     let compiler_measure = compiler_measure.finish();
@@ -1261,27 +1278,15 @@ fn snapshot_fast_clean_probe_once() {
     assert_eq!(compiler_measure.bind_units, 0);
     assert_eq!(compiler_measure.semantic_units, 0);
     assert_eq!(compiler_measure.snapshot_generations, 0);
-    assert_eq!(route_measure.user_checks, 2);
+    assert_eq!(route_measure.user_checks, 1);
     assert_eq!(
         route_measure.runtime_projection_sha256,
         record.runtime_projection_sha256
     );
     assert_eq!(record.runtime_projection_sha256.len(), 64);
     assert_ne!(record.runtime_projection_sha256, "0".repeat(64));
-    assert_eq!(record.semantics.fast_clean.exit, 0);
-    assert!(record.semantics.fast_clean.diagnostics.is_empty());
-    assert_eq!(record.semantics.fast_errors.exit, 1);
-    assert_eq!(
-        record.semantics.fast_errors.diagnostics,
-        [
-            "fast-errors/main.ts:4:7:2322",
-            "fast-errors/main.ts:5:7:2322",
-            "fast-errors/main.ts:6:7:2322",
-            "fast-errors/main.ts:7:7:2322",
-            "fast-errors/main.ts:8:7:2322",
-            "fast-errors/main.ts:9:7:2322",
-        ]
-    );
+    assert_eq!(record.semantics.exit, 0);
+    assert!(record.semantics.diagnostics.is_empty());
     assert!(record.validation_us > 0);
     assert!(record.decode_us > 0);
     assert!(record.user_check_us > 0);
