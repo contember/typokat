@@ -1,0 +1,20 @@
+schema = 1
+clean_roots = 2
+generations = 2
+typescript_version = "6.0.3"
+profile_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+artifact_bytes = 10003957
+artifact_sha256 = "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0"
+dts_sources = 82
+licenses = ["LICENSE.txt", "ThirdPartyNoticeText.txt"]
+required_package_assets = [
+  "src/library/typescript-6.0.3/canonical.snapshot",
+  "src/library/typescript-6.0.3/profile.toml",
+  "src/library/typescript-6.0.3/LICENSE.txt",
+  "src/library/typescript-6.0.3/ThirdPartyNoticeText.txt",
+  "src/library/typescript-6.0.3/THIRD_PARTY_NOTICE.md",
+]
+cargo_checks = 2
+build_scripts = 0
+build_generations = 0
+source_mutations = 0
