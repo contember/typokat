@@ -32,3 +32,15 @@ mod user_delta_spec;
 
 #[cfg(test)]
 mod user_delta_project_scale_spec;
+
+// Activate after the WU5 collision preflight implementation lands.
+// #[cfg(test)]
+// mod collision_preflight_spec;
+
+// Activate after the WU5 private combined-universe implementation lands.
+// #[cfg(test)]
+// mod private_combined_universe_spec;
+
+// Activate after the WU5 replay index and work receipts land.
+// #[cfg(test)]
+// mod private_replay_scale_spec;
