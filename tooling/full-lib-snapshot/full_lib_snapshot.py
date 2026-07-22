@@ -196,7 +196,7 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         raise ContractError("libtest package/target differs")
     if data["libtest"]["build_args"] != expected_build or data["libtest"]["test_args"] != expected_args:
         raise ContractError("canonical release libtest commands differ")
-    if data["libtest"]["preflight_filter"] != "check::checker::wu0b_snapshot_spec::" or data["libtest"]["preflight_args"] != ["{filter}", "--nocapture", "--test-threads=1"] or data["libtest"]["preflight_passed"] != 16 or data["libtest"]["preflight_ignored"] != 4:
+    if data["libtest"]["preflight_filter"] != "check::checker::wu0b_snapshot_spec::" or data["libtest"]["preflight_args"] != ["{filter}", "--nocapture", "--test-threads=1"] or data["libtest"]["preflight_passed"] != 17 or data["libtest"]["preflight_ignored"] != 4:
         raise ContractError("canonical full WU0B preflight differs")
     expected_filters = {
         "regeneration_filter": "check::checker::wu0b_snapshot_spec::snapshot_regeneration_probe_once",
