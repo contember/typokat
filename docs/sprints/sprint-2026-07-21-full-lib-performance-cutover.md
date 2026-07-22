@@ -26,15 +26,15 @@ performance GO before production work proceeds.
 - ✔ Production still parses and checks `src/prelude.ts` inside every run through
   `PRELUDE_SOURCE` and `bootstrap_trusted_prelude`; there is no production `FrozenLibraryBase` —
   `src/check/checker/mod.rs:139-149`, `src/check/checker/mod.rs:210-224`.
-- ✔ The full-library compiler, profile loader, library reporting, and snapshot feasibility gate are
-  all `#[cfg(test)]`; ordinary `check_source` creates `Interner::with_intrinsics()` and calls the
-  prelude-backed checker. The superseded WU0D candidate runner was removed after ADR-0012 accepted
-  the canonical snapshot — `src/check/checker/mod.rs`, `src/driver.rs`.
-- ✔ The test-only injected pipeline parses all 82 units and returns both evidence and an owned
-  runtime state. Its follow-up route is valid only for a caller-certified non-colliding source; it
-  is neither the production base/provider nor WU5's private collision route —
-  `src/check/checker/wu0b_library.rs:1165-1175`,
-  `src/check/checker/wu0b_library.rs:1496-1518`.
+- ⚠ The exact profile and source-backed `LibraryCompiler` are now production modules, and the
+  canonical archive is packaged. The decoder/user-route feasibility oracle remains `#[cfg(test)]`;
+  ordinary `check_source` still creates `Interner::with_intrinsics()` and calls the prelude-backed
+  checker. There is no production base/provider yet — `src/library/`,
+  `src/check/checker/library_snapshot_feasibility/`, `src/driver.rs`.
+- ✔ The production compiler parses all 82 units and returns an AST-free owned runtime product plus
+  exact evidence. Its feasibility follow-up route remains valid only for a caller-certified
+  non-colliding source; it is neither the production base/provider nor WU5's private collision
+  route — `src/check/checker/library_compiler.rs`.
 - ✔ The obsolete 8.45 MB WU0D evidence projection and its release coordinator were removed after
   the canonical ten-section snapshot superseded them. ADR-0012 records the accepted snapshot
   artifact identity; the archived predecessor sprint retains the historical WU0D measurements.
@@ -57,10 +57,9 @@ performance GO before production work proceeds.
   work with a shipped snapshot requires a superseding decision before implementation —
   `docs/decisions/0011-freeze-pinned-default-library-base.md:286-315`,
   `docs/decisions/0011-freeze-pinned-default-library-base.md:317-339`.
-- ✔ The full-profile readiness, warm-sharing, private-route, and freeze manifests are still
-  `PENDING`; input provenance is proven, production readiness is not —
-  `tests/fixtures/lib-es2025-full-6.0.3/readiness.toml:1-15`,
-  `tests/fixtures/lib-es2025-full-6.0.3/readiness.toml:36-77`.
+- ⚠ The superseded ignored WU0 readiness bundle was removed when WU2 introduced its exact
+  production artifact spec and fail-closed package gate. Production runtime readiness is still
+  unproven until WU3–WU8 — `src/library/wu2_spec.rs`, `tests/library_package_assets.rs`.
 
 ## Binding performance claim
 
@@ -510,5 +509,24 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   section evidence projection from the WU0B source compiler. Removed the disconnected WU0B
   reporting RED fixtures; active reporting and provenance tests remain.
 - Renamed the active binder provenance test by behavior. The five active WU0B compiler/profile/
-  snapshot files retain their evidence-bound names until WU2/WU3 production replacements satisfy
-  the existing parity and preflight contracts.
+  snapshot files retained their evidence-bound names pending the WU2 replacement.
+
+### 2026-07-22 — WU2 production compiler and canonical package
+
+- RED commits `99fa60d` and `9a09563` pin the source-backed compiler/product boundary, exact
+  10,003,957-byte artifact, semantic evidence counts, and explicit product-to-archive generation.
+  Implementation commit `d533848` promotes `ExactLibraryProfile` and `LibraryCompiler`, packages
+  the canonical archive, and groups the remaining test-only oracle under the descriptive
+  `library_snapshot_feasibility` namespace. The stale ignored WU0 readiness bundle was retired.
+- `263f9ab` adds the fail-closed package verifier and a required CI job. The final clean-tree gate
+  regenerated the archive in two isolated clones, required byte identity and the pinned digest,
+  validated both package inventories and upstream notices, and ran two offline extracted-package
+  checks: 1 PASS / 0 fail in 210.97 seconds. The adversarial Python contract suite passed 11/11.
+- Independent WU2 re-review found no unresolved HIGH issue. It confirmed one source compilation per
+  generation, zero source/compiler activity inside product-to-archive conversion, strict no-follow
+  tree and archive handling, exact profile/notice inventory, and mutation/custom-build rejection.
+  Its sole MEDIUM finding—package verification absent from CI—was fixed by `263f9ab` before the
+  clean-tree gate.
+- WU2 does not change the ordinary user route: `src/prelude.ts` remains production and the decoded
+  snapshot is not published. WU3 must now replace the test oracle with a typed, fail-closed,
+  pointer-identical `FrozenLibraryBase` provider before any CLI cutover.
