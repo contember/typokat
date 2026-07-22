@@ -587,10 +587,36 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   outcomes use second-touch admission: 128 unique failures retain zero reason chains. Final
   independent review is PASS with no unresolved HIGH or MEDIUM findings; the semantic/full gate
   passes **991 / 0 / 18**.
+- The first five-run diagnostic source-cold checkpoint after `831c0c3` had medians of **3.499665 s**
+  total and **2.996934 s** statement-check. RED commit `c052e93` isolated repeated effective
+  binder-environment construction, and `a2cd299` interns those environments behind semantic
+  identities. The five totals were **2.850369 / 2.755217 / 2.855423 / 2.801402 / 2.809538 s**
+  (median **2.809538 s**); statement-check times were **2.391928 / 2.345213 / 2.442220 /
+  2.393001 / 2.398403 s** (median **2.393001 s**). Attribution confirms the intended repair:
+  binder frames scanned fell from **2,215,499 to 11,549**, flattened environment entries from
+  **12,793,760 to 86,992**, and environment sort items from **6,716,994 to 52,001**.
+- RED commit `c9d0777` then specified repeated contextual relations and implementation commit
+  `96970ff` reused completed contextual `Yes` outcomes. Both this iteration and the binder-
+  environment iteration completed independent adversarial review and the required semantic/full,
+  format, and clippy gates without an unresolved HIGH or MEDIUM finding. The binder iteration's
+  library gate passed **998 / 0 / 18**; the final contextual-memo gate passed **1004 / 0 / 18**.
+  The five post-`96970ff` totals were **2.812432 / 2.710030 / 2.748137 /
+  2.773897 / 2.736670 s** (median **2.748137 s**); statement-check times were **2.406788 /
+  2.315922 / 2.339626 / 2.355644 / 2.331062 s** (median **2.339626 s**). Every run preserved
+  exactly **273 diagnostics / 610 incompletes**.
+- The contextual memo reduced uncached frames from **1,106,680 to 681,094** and stack-key builds
+  from **1,107,894 to 682,545**, but produced only **237** high-level hits from **8,814**
+  admissions. Object-property work remained unchanged at **188,486 target / 202,630 source**
+  counters, which explains the comparatively small **~2.2%** wall-time improvement after binder
+  interning. Across the source-cold repair series, the original **4.8278 s** total is now
+  **2.748137 s**, about **43.1% lower**.
 - Lazy standard-library semantics is not the next fix: the measured parse/bind share is below one
   percent, while the accepted product is one complete immutable 82-file ambient universe.
   Parallelism remains valuable after the frozen base and identity-preserving private deltas allow
   independent user files to share it, but it cannot substitute for removing the redundant
   serialized semantic work exposed here.
-- Absolute source-cold timing after `831c0c3` is **pending**. The available host was ineligible due
-  to unrelated heavy load, so no post-fix wall-time or TypeScript 7 speedup claim is recorded yet.
+- The exploratory pinned native TypeScript runs remain **0.32-0.33 s**, so source compilation is
+  still roughly **8.3-8.6x slower**. That comparison is non-authoritative: the ordinary CLI has not
+  yet cut over to the provider, and WU8 still owns the official cross-tool collector and claim.
+  Snapshot-provider startup remains roughly **96-97 ms**; the next implementation step is WU4's
+  identity-preserving user delta, not further source-cold tuning.
