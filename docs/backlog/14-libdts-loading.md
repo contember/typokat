@@ -13,7 +13,10 @@ the minimal ambient/prelude slice (`38`) is allowed before this item when it buy
 feedback.
 
 **Active delivery contract.** The in-memory and collision semantics are accepted in
-[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md). The new
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the narrow startup
+supersession in [`ADR-0012`](../decisions/0012-ship-the-canonical-default-library-snapshot.md)
+accepts the exact canonical snapshot after WU0B's authoritative 110.409 ms p95 feasibility GO. The
+new
 [`2026-07-21 performance-cutover sprint`](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md)
 owns the deterministic semantic-snapshot feasibility decision, production base/delta and collision
 paths, atomic driver cutover, and a fail-closed fresh-process target of at least 2× pinned native

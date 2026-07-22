@@ -499,3 +499,12 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   representation may be profiled only over the same complete authenticated base. Parallel mutable
   cross-file identity remains backlog 16 Stage 2; WU0B only established measured parallel decode
   of one immutable base.
+
+### 2026-07-22 — WU1 canonical snapshot decision
+
+- [ADR-0012](../decisions/0012-ship-the-canonical-default-library-snapshot.md) is Accepted. It
+  narrowly supersedes ADR-0011's runtime-source initialization choice while retaining the one
+  `LibraryCompiler`, base/delta identities, preflight, and private combined collision compilation.
+- V1 binds the exact eager archive and bounded initialization parallelism. Semantic lazy loading
+  remains rejected. Production must replace prototype panics with typed initialization errors, and
+  the WU0B non-collision continuation must not be promoted as WU5's private combined universe.
