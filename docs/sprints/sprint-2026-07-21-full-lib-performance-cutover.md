@@ -530,3 +530,31 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
 - WU2 does not change the ordinary user route: `src/prelude.ts` remains production and the decoded
   snapshot is not published. WU3 must now replace the test oracle with a typed, fail-closed,
   pointer-identical `FrozenLibraryBase` provider before any CLI cutover.
+
+### 2026-07-22 — WU3 immutable base and source-cold checkpoint
+
+- RED commits `87d2b56`, `c02576b`, and `075b397` pin strict admission, complete typed
+  reconstruction, pointer-identical success and failure for 1/2/32 callers, dense identity
+  prefixes, AST-free ownership, and the external release gate. `3808a37` publishes the production
+  `FrozenLibraryBase` and instance-scoped provider; `4f9f306` adds the fail-closed fresh-process
+  coordinator. The promoted codec and artifact tests now use semantic names rather than WU0/WU2
+  implementation labels.
+- Independent review found and closed four HIGH issues before implementation acceptance: the timed
+  probe re-encoded the full archive, type-parameter/class terminal prefixes admitted gaps, one
+  generic decoder fixture bypassed the canonical publication contract, and infallible/partially
+  joined worker spawning could escape the typed cached-failure boundary. Final re-review is PASS
+  with zero unresolved HIGH or MEDIUM findings. The complete suite passes: 962 library tests,
+  17 ignored release probes, and every integration/conformance test; clippy and format are clean.
+- The authoritative clean-tree gate at `4f9f306` built two isolated offline release libtests with
+  identical SHA-256 `663bc74d1c64d3a7d80fcdac708c9d6f4c264763275309904d1c123cc98c194e`,
+  then ran three windows of five warmups plus ten samples. Window medians were **96.434 / 97.198 /
+  96.677 ms**, nearest-rank p95s were **102.076 / 103.919 / 101.825 ms**, and maximum RSS was
+  **41,156,608 bytes**. The 120 ms / 512 MiB WU3 gate passes with no source reads, compiler calls,
+  generator calls, retained archive, or retained projection witnesses.
+- WU3 proves a valid product cache, not a generally faster checker. A separate source-cold profile
+  therefore becomes a mandatory checkpoint before WU4: preliminary release attribution puts
+  parse and bind below one percent each and roughly 90% in semantic/evidence work. The first RED
+  core benchmark must reproduce the DOM listener-map pattern (`K extends keyof EventMap`,
+  `EventMap[K]`, recursive receivers, overloads, heritage, and a wide shared hub) and pin traversal,
+  exhaustion, memo-copy, semantic-order, and scaling bounds. Snapshot-backed and source-cold
+  results remain separate claims throughout the sprint.
