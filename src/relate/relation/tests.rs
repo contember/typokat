@@ -115,37 +115,37 @@ fn measure_relation_counts_actual_empty_context_key_and_property_scans() {
     );
 }
 
+fn wide_generic_signature(interner: &mut Interner, parameter: TypeParamId, width: usize) -> TypeId {
+    use crate::types::repr::GenericTypeParam;
+
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    let payload = interner.intern_object(ObjectType {
+        properties: vec![prop("value", parameter_type)],
+        ..Default::default()
+    });
+    let input = interner.intern_object(ObjectType {
+        properties: (0..width)
+            .map(|index| prop(&format!("event{index:04}"), payload))
+            .collect(),
+        ..Default::default()
+    });
+    interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: parameter,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("events", input)],
+        ret: interner.well_known().void,
+    })
+}
+
 fn measure_wide_generic_signature_environment(width: usize) -> RelationMeasure {
-    use crate::types::repr::{GenericTypeParam, TypeParamId};
-
-    fn signature(interner: &mut Interner, parameter: TypeParamId, width: usize) -> TypeId {
-        let parameter_type = interner.intern_type_param(parameter, "T");
-        let payload = interner.intern_object(ObjectType {
-            properties: vec![prop("value", parameter_type)],
-            ..Default::default()
-        });
-        let input = interner.intern_object(ObjectType {
-            properties: (0..width)
-                .map(|index| prop(&format!("event{index:04}"), payload))
-                .collect(),
-            ..Default::default()
-        });
-        interner.intern_function(FunctionType {
-            type_params: vec![GenericTypeParam {
-                id: parameter,
-                constraint: None,
-                default: None,
-            }],
-            receiver: None,
-            params: vec![ParameterType::required("events", input)],
-            ret: interner.well_known().void,
-        })
-    }
-
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
-    let source = signature(&mut interner, TypeParamId(91_001), width);
-    let target = signature(&mut interner, TypeParamId(91_002), width);
+    let source = wide_generic_signature(&mut interner, TypeParamId(91_001), width);
+    let target = wide_generic_signature(&mut interner, TypeParamId(91_002), width);
     reset_relation_measure();
     let mut relater = Relater::new(interner.store(), wk);
     assert!(relater.is_assignable(source, target).is_yes());
@@ -172,6 +172,48 @@ fn wide_generic_signature_reuses_its_effective_binder_environment() {
         large.environment_sort_items <= small.environment_sort_items + 8,
         "binder environments were re-sorted per relation frame: small={small:?}, large={large:?}"
     );
+    assert!(small.binder_environment_materializations <= 2);
+    assert!(
+        large.binder_environment_materializations <= small.binder_environment_materializations + 1
+    );
+}
+
+#[test]
+fn planned_and_unplanned_relations_reuse_binder_environment_identity() {
+    struct IdentityNormalization;
+
+    impl RelationNormalization for IdentityNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            Ok(ty)
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = wide_generic_signature(&mut interner, TypeParamId(91_011), 64);
+    let target = wide_generic_signature(&mut interner, TypeParamId(91_012), 64);
+
+    reset_relation_measure();
+    assert!(Relater::new(interner.store(), wk)
+        .is_assignable(source, target)
+        .is_yes());
+    let unplanned = relation_measure();
+
+    reset_relation_measure();
+    let normalization = IdentityNormalization;
+    let mut planned = Relater::planned(interner.store(), wk, RelationCache::new(), &normalization);
+    assert!(matches!(
+        planned.is_assignable_outcome(source, target),
+        RelationOutcome::Yes
+    ));
+    let planned = relation_measure();
+
+    assert_eq!(unplanned.binder_environment_materializations, 1);
+    assert_eq!(planned.binder_environment_materializations, 1);
+    assert_eq!(unplanned.flattened_environment_entries, 8);
+    assert_eq!(planned.flattened_environment_entries, 8);
+    assert!(unplanned.binder_environment_identity_hits >= 64);
+    assert!(planned.binder_environment_identity_hits >= 64);
 }
 
 #[test]
@@ -1772,6 +1814,227 @@ fn cycle_stack_keys_are_semantic_not_frame_allocations() {
 
     assert!(single == repeated);
     assert!(single != reversed);
+}
+
+#[test]
+fn empty_binder_frame_shares_the_context_free_cycle_identity() {
+    let interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let raw = RelationKey::new(wk.number, wk.string, RelationKind::Assignable);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    let context_free = relater.stack_relation_key(raw);
+    let empty_frame = relater.with_binder_context(BinderRelationContext::default(), |relater| {
+        relater.stack_relation_key(raw)
+    });
+
+    assert!(context_free == empty_frame);
+}
+
+#[test]
+fn binder_environment_identity_distinguishes_semantic_variants() {
+    fn binder(id: TypeParamId, constraint: Option<TypeId>) -> GenericTypeParam {
+        GenericTypeParam {
+            id,
+            constraint,
+            default: None,
+        }
+    }
+
+    let interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_id = TypeParamId(10_381);
+    let target_id = TypeParamId(10_382);
+    let other_target_id = TypeParamId(10_383);
+    let source = vec![binder(source_id, None)];
+    let target = vec![binder(target_id, None)];
+    let constrained_target = vec![binder(target_id, Some(wk.number))];
+    let other_target = vec![binder(other_target_id, None)];
+    let raw = RelationKey::new(wk.number, wk.string, RelationKind::Assignable);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    let aligned = relater.with_binder_context(
+        BinderRelationContext::aligned(&source, &target),
+        |relater| relater.stack_relation_key(raw),
+    );
+    let reversed = relater.with_binder_context(
+        BinderRelationContext::aligned(&target, &source),
+        |relater| relater.stack_relation_key(raw),
+    );
+    let constrained = relater.with_binder_context(
+        BinderRelationContext::aligned(&source, &constrained_target),
+        |relater| relater.stack_relation_key(raw),
+    );
+    let shadowed = relater.with_binder_context(
+        BinderRelationContext::aligned(&source, &target),
+        |relater| {
+            relater.with_binder_context(
+                BinderRelationContext::aligned(&source, &other_target),
+                |relater| relater.stack_relation_key(raw),
+            )
+        },
+    );
+    let mut number_specialization = BinderRelationContext::source_specialization(&source);
+    number_specialization
+        .source_instantiations
+        .insert(source_id, wk.number);
+    let number_specialization = relater.with_binder_context(number_specialization, |relater| {
+        relater.stack_relation_key(raw)
+    });
+    let mut string_specialization = BinderRelationContext::source_specialization(&source);
+    string_specialization
+        .source_instantiations
+        .insert(source_id, wk.string);
+    let string_specialization = relater.with_binder_context(string_specialization, |relater| {
+        relater.stack_relation_key(raw)
+    });
+
+    assert!(aligned != reversed);
+    assert!(aligned != constrained);
+    assert!(aligned != shadowed);
+    assert!(number_specialization != string_specialization);
+}
+
+#[test]
+fn binder_environment_identity_preserves_shadow_order() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_id = TypeParamId(10_386);
+    let target_id = TypeParamId(10_387);
+    let source_ty = interner.intern_type_param(source_id, "S");
+    let target_ty = interner.intern_type_param(target_id, "T");
+    let source = vec![GenericTypeParam {
+        id: source_id,
+        constraint: None,
+        default: None,
+    }];
+    let target = vec![GenericTypeParam {
+        id: target_id,
+        constraint: None,
+        default: None,
+    }];
+    let raw = RelationKey::new(wk.number, wk.string, RelationKind::Assignable);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    let (hidden_key, hidden_alignment) = relater.with_binder_context(
+        BinderRelationContext::aligned(&source, &target),
+        |relater| {
+            relater.with_binder_context(
+                BinderRelationContext::source_specialization(&source),
+                |relater| {
+                    (
+                        relater.stack_relation_key(raw),
+                        relater.contextual_params_are_aligned(source_ty, target_ty),
+                    )
+                },
+            )
+        },
+    );
+    let (visible_key, visible_alignment) = relater.with_binder_context(
+        BinderRelationContext::source_specialization(&source),
+        |relater| {
+            relater.with_binder_context(
+                BinderRelationContext::aligned(&source, &target),
+                |relater| {
+                    (
+                        relater.stack_relation_key(raw),
+                        relater.contextual_params_are_aligned(source_ty, target_ty),
+                    )
+                },
+            )
+        },
+    );
+
+    assert!(!hidden_alignment);
+    assert!(visible_alignment);
+    assert!(hidden_key != visible_key);
+}
+
+#[test]
+fn nested_specialization_invalidates_the_outer_environment_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_id = TypeParamId(10_391);
+    let source_ty = interner.intern_type_param(source_id, "T");
+    let source = vec![GenericTypeParam {
+        id: source_id,
+        constraint: None,
+        default: None,
+    }];
+    let raw = RelationKey::new(wk.string, wk.number, RelationKind::Assignable);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    let (before, nested_after) = relater.with_binder_context(
+        BinderRelationContext::source_specialization(&source),
+        |relater| {
+            let before = relater.stack_relation_key(raw);
+            relater.stack.insert(before.clone());
+            let nested_after =
+                relater.with_binder_context(BinderRelationContext::default(), |relater| {
+                    assert!(relater.is_assignable(source_ty, wk.number).is_yes());
+                    let after = relater.stack_relation_key(raw);
+                    assert!(!relater.stack.contains(&after));
+                    after
+                });
+            let outer_after = relater.stack_relation_key(raw);
+            assert!(nested_after == outer_after);
+            relater.stack.remove(&before);
+            (before, nested_after)
+        },
+    );
+
+    assert!(before != nested_after);
+}
+
+#[test]
+fn binder_roles_cannot_collide_with_an_in_flight_specialization() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(10_401);
+    let parameter_ty = interner.intern_type_param(parameter_id, "T");
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("value", parameter_ty)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.string)],
+        ..Default::default()
+    });
+    let binders = vec![GenericTypeParam {
+        id: parameter_id,
+        constraint: None,
+        default: None,
+    }];
+    let raw = RelationKey::new(source, target, RelationKind::Assignable);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    let specialization_key = relater.with_binder_context(
+        BinderRelationContext::source_specialization(&binders),
+        |relater| relater.stack_relation_key(raw),
+    );
+    relater.stack.insert(specialization_key.clone());
+
+    let target_role = BinderRelationContext::construct_arity_specialization(&[], &binders)
+        .expect("one target binder produces a context");
+    let (target_key, nested_result) = relater.with_binder_context(target_role, |relater| {
+        let target_key = relater.stack_relation_key(raw);
+        let result = relater.is_assignable(source, target).is_yes();
+        (target_key, result)
+    });
+    relater.stack.remove(&specialization_key);
+
+    let standalone = {
+        let mut standalone = Relater::new(interner.store(), wk);
+        let target_role = BinderRelationContext::construct_arity_specialization(&[], &binders)
+            .expect("one target binder produces a context");
+        standalone.with_binder_context(target_role, |relater| {
+            relater.is_assignable(source, target).is_yes()
+        })
+    };
+
+    assert!(specialization_key != target_key);
+    assert!(!nested_result);
+    assert_eq!(nested_result, standalone);
 }
 
 /// Alpha-aligned method binders give deferred indexed accesses the same local

@@ -22,6 +22,8 @@ pub(super) struct RelationMeasure {
     pub stack_key_builds: u64,
     pub empty_context_stack_keys: u64,
     pub contextual_stack_keys: u64,
+    pub binder_environment_identity_hits: u64,
+    pub binder_environment_materializations: u64,
     pub binder_frames_scanned: u64,
     pub flattened_environment_entries: u64,
     pub environment_sort_items: u64,
@@ -332,6 +334,10 @@ pub(crate) struct Relater<'a> {
     /// Every relation below one of these frames bypasses the durable three-word
     /// cache because its verdict depends on this local environment.
     binder_contexts: Vec<BinderRelationContext>,
+    /// Relater-local semantic identities for effective binder environments.
+    binder_environments: FxHashMap<StackBinderEnvironment, BinderEnvironmentId>,
+    /// Every mutation of an active binder context must invalidate this identity.
+    active_binder_environment: Option<BinderEnvironmentId>,
 }
 
 /// The in-flight cycle identity. The durable cache intentionally remains the
@@ -341,18 +347,34 @@ pub(crate) struct Relater<'a> {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct StackRelationKey {
     relation: RelationKey,
-    environment: StackBinderEnvironment,
+    environment: BinderEnvironmentId,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct BinderEnvironmentId(usize);
+
+const EMPTY_BINDER_ENVIRONMENT: BinderEnvironmentId = BinderEnvironmentId(0);
 
 /// The semantic part of an in-flight key. Context frames are lexical machinery;
 /// repeated recursion through alpha-equivalent frames must see the same key, while
 /// different alignments, constraints, or specializations must remain distinct.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct StackBinderEnvironment {
-    source_to_target: Vec<(TypeParamId, TypeParamId)>,
-    target_to_source: Vec<(TypeParamId, TypeParamId)>,
+    source_to_target_alignments: Vec<(TypeParamId, TypeParamId)>,
+    target_to_source_alignments: Vec<(TypeParamId, TypeParamId)>,
+    deferred_alignments: Vec<(TypeParamId, TypeParamId)>,
     constraints: Vec<(TypeParamId, Option<TypeId>)>,
-    source_instantiations: Vec<(TypeParamId, TypeId)>,
+    source_specializations: Vec<(TypeParamId, Option<TypeId>, Option<TypeId>)>,
+}
+
+impl StackBinderEnvironment {
+    fn is_empty(&self) -> bool {
+        self.source_to_target_alignments.is_empty()
+            && self.target_to_source_alignments.is_empty()
+            && self.deferred_alignments.is_empty()
+            && self.constraints.is_empty()
+            && self.source_specializations.is_empty()
+    }
 }
 
 type AssumedSet = FxHashSet<StackRelationKey>;
@@ -453,6 +475,8 @@ impl<'a> Relater<'a> {
             query_demand_observed: false,
             stack: FxHashSet::default(),
             binder_contexts: Vec::new(),
+            binder_environments: FxHashMap::default(),
+            active_binder_environment: Some(EMPTY_BINDER_ENVIRONMENT),
         }
     }
 
@@ -476,6 +500,8 @@ impl<'a> Relater<'a> {
             query_demand_observed: false,
             stack: FxHashSet::default(),
             binder_contexts: Vec::new(),
+            binder_environments: FxHashMap::default(),
+            active_binder_environment: Some(EMPTY_BINDER_ENVIRONMENT),
         }
     }
 
@@ -709,8 +735,11 @@ impl<'a> Relater<'a> {
         body: impl FnOnce(&mut Self) -> R,
     ) -> R {
         self.binder_contexts.push(context);
+        self.active_binder_environment = None;
         let result = body(self);
         self.binder_contexts.pop();
+        // Nested work can specialize an outer frame, so the pre-push identity is stale.
+        self.active_binder_environment = None;
         result
     }
 
@@ -721,6 +750,14 @@ impl<'a> Relater<'a> {
         let Some(tgt_param) = self.store.type_param(tgt).map(|param| param.id) else {
             return false;
         };
+        self.contextual_param_ids_are_aligned(src_param, tgt_param)
+    }
+
+    fn contextual_param_ids_are_aligned(
+        &self,
+        src_param: TypeParamId,
+        tgt_param: TypeParamId,
+    ) -> bool {
         let mut direct_visible = true;
         let mut reverse_visible = true;
         for context in self.binder_contexts.iter().rev() {
@@ -753,7 +790,7 @@ impl<'a> Relater<'a> {
                 || self.contextual_params_are_aligned(src_access.index, tgt_access.index))
     }
 
-    fn stack_relation_key(&self, relation: RelationKey) -> StackRelationKey {
+    fn stack_relation_key(&mut self, relation: RelationKey) -> StackRelationKey {
         #[cfg(test)]
         measure_relation(|measure| {
             measure.stack_key_builds += 1;
@@ -761,34 +798,61 @@ impl<'a> Relater<'a> {
                 measure.empty_context_stack_keys += 1;
             } else {
                 measure.contextual_stack_keys += 1;
-                measure.binder_frames_scanned += self.binder_contexts.len() as u64;
             }
         });
-        let mut source_to_target = FxHashMap::default();
-        let mut target_to_source = FxHashMap::default();
-        let mut constraints = FxHashMap::default();
-        let mut source_instantiations = FxHashMap::default();
 
-        // Flatten lexical frames outer-to-inner. The innermost binding is the
-        // effective meaning of a persistent parameter id, so it deliberately
-        // overrides an outer binding with the same id.
+        let environment = self.binder_environment_id();
+        StackRelationKey {
+            relation,
+            environment,
+        }
+    }
+
+    fn binder_environment_id(&mut self) -> BinderEnvironmentId {
+        if let Some(environment) = self.active_binder_environment {
+            #[cfg(test)]
+            if !self.binder_contexts.is_empty() {
+                measure_relation(|measure| measure.binder_environment_identity_hits += 1);
+            }
+            return environment;
+        }
+        if self.binder_contexts.is_empty() {
+            self.active_binder_environment = Some(EMPTY_BINDER_ENVIRONMENT);
+            return EMPTY_BINDER_ENVIRONMENT;
+        }
+
+        #[cfg(test)]
+        measure_relation(|measure| {
+            measure.binder_environment_materializations += 1;
+            measure.binder_frames_scanned += self.binder_contexts.len() as u64;
+        });
+        let mut source_to_target_alignments = FxHashSet::default();
+        let mut target_to_source_alignments = FxHashSet::default();
+        let mut constraints = FxHashMap::default();
+        let mut source_specializations = FxHashMap::default();
+
+        // Direct alignments remain conservative unions; effective constraints and
+        // source specializations deliberately use the innermost matching frame.
         for context in &self.binder_contexts {
             #[cfg(test)]
             measure_relation(|measure| {
                 measure.flattened_environment_entries += (context.source_to_target.len()
                     + context.target_to_source.len()
                     + context.parameters.len()
+                    + context.source_parameters.len()
+                    + context.target_parameters.len()
+                    + context.instantiable_source.len()
                     + context.constraints.len()
                     + context.source_instantiations.len())
                     as u64;
             });
-            source_to_target.extend(
+            source_to_target_alignments.extend(
                 context
                     .source_to_target
                     .iter()
                     .map(|(&source, &target)| (source, target)),
             );
-            target_to_source.extend(
+            target_to_source_alignments.extend(
                 context
                     .target_to_source
                     .iter()
@@ -800,45 +864,83 @@ impl<'a> Relater<'a> {
                     context.constraints.get(&parameter).copied().flatten(),
                 );
             }
-            constraints.extend(
-                context
-                    .constraints
-                    .iter()
-                    .map(|(&parameter, &constraint)| (parameter, constraint)),
-            );
-            source_instantiations.extend(
-                context
-                    .source_instantiations
-                    .iter()
-                    .map(|(&parameter, &ty)| (parameter, ty)),
-            );
+            for &parameter in &context.instantiable_source {
+                source_specializations.insert(
+                    parameter,
+                    (
+                        context.constraints.get(&parameter).copied().flatten(),
+                        context.source_instantiations.get(&parameter).copied(),
+                    ),
+                );
+            }
         }
 
-        let mut source_to_target: Vec<_> = source_to_target.into_iter().collect();
-        let mut target_to_source: Vec<_> = target_to_source.into_iter().collect();
+        let mut deferred_candidates = source_to_target_alignments.clone();
+        deferred_candidates.extend(target_to_source_alignments.iter().copied());
+        let mut source_to_target_alignments: Vec<_> =
+            source_to_target_alignments.into_iter().collect();
+        let mut target_to_source_alignments: Vec<_> =
+            target_to_source_alignments.into_iter().collect();
+        let mut deferred_alignments: Vec<_> = deferred_candidates
+            .iter()
+            .copied()
+            .filter(|&(source, target)| self.contextual_param_ids_are_aligned(source, target))
+            .collect();
         let mut constraints: Vec<_> = constraints.into_iter().collect();
-        let mut source_instantiations: Vec<_> = source_instantiations.into_iter().collect();
-        source_to_target.sort_by_key(|(parameter, _)| *parameter);
-        target_to_source.sort_by_key(|(parameter, _)| *parameter);
+        let mut source_specializations: Vec<_> = source_specializations
+            .into_iter()
+            .map(|(parameter, (constraint, instantiation))| (parameter, constraint, instantiation))
+            .collect();
+        source_to_target_alignments.sort_unstable();
+        target_to_source_alignments.sort_unstable();
+        deferred_alignments.sort_unstable();
         constraints.sort_by_key(|(parameter, _)| *parameter);
-        source_instantiations.sort_by_key(|(parameter, _)| *parameter);
+        source_specializations.sort_by_key(|(parameter, _, _)| *parameter);
 
         #[cfg(test)]
         measure_relation(|measure| {
-            measure.environment_sort_items += (source_to_target.len()
-                + target_to_source.len()
+            measure.environment_sort_items += (source_to_target_alignments.len()
+                + target_to_source_alignments.len()
+                + deferred_alignments.len()
                 + constraints.len()
-                + source_instantiations.len()) as u64;
+                + source_specializations.len())
+                as u64;
         });
 
-        StackRelationKey {
-            relation,
-            environment: StackBinderEnvironment {
-                source_to_target,
-                target_to_source,
-                constraints,
-                source_instantiations,
-            },
+        let environment = StackBinderEnvironment {
+            source_to_target_alignments,
+            target_to_source_alignments,
+            deferred_alignments,
+            constraints,
+            source_specializations,
+        };
+        if environment.is_empty() {
+            self.active_binder_environment = Some(EMPTY_BINDER_ENVIRONMENT);
+            return EMPTY_BINDER_ENVIRONMENT;
+        }
+        let environment_id =
+            if let Some(&environment_id) = self.binder_environments.get(&environment) {
+                environment_id
+            } else {
+                let next = self.binder_environments.len() + 1;
+                let environment_id = BinderEnvironmentId(next);
+                self.binder_environments.insert(environment, environment_id);
+                environment_id
+            };
+        self.active_binder_environment = Some(environment_id);
+        environment_id
+    }
+
+    /// Every active-frame mutation must invalidate the memoized semantic identity.
+    fn specialize_source_parameter(
+        &mut self,
+        context_index: usize,
+        parameter: TypeParamId,
+        ty: TypeId,
+    ) {
+        if let Some(context) = self.binder_contexts.get_mut(context_index) {
+            context.source_instantiations.insert(parameter, ty);
+            self.active_binder_environment = None;
         }
     }
 
@@ -909,9 +1011,7 @@ impl<'a> Relater<'a> {
             .get(context_index)
             .and_then(|context| context.constraints.get(&param).copied())
             .flatten();
-        if let Some(context) = self.binder_contexts.get_mut(context_index) {
-            context.source_instantiations.insert(param, other);
-        }
+        self.specialize_source_parameter(context_index, param, other);
         if let Some(constraint) = constraint {
             if !self.relate(other, constraint, kind, assumed).is_yes() {
                 return Some(Relation::No(ReasonChain::leaf(src, tgt)));
