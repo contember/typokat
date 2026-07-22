@@ -3540,7 +3540,7 @@ fn binder_projection_subtables(
     binder_references: &[(u8, u8, u8, u32, u32)],
 ) -> Vec<(u64, Vec<u8>)> {
     let mut scopes = Vec::new();
-    for (index, scope) in binder.graph.snapshot_scopes().iter().enumerate() {
+    for (index, scope) in binder.graph.snapshot_scopes().enumerate() {
         let mut symbols = scope.symbols.iter().collect::<Vec<_>>();
         symbols.sort_by(|left, right| left.0.cmp(right.0));
         scopes.extend_from_slice(
@@ -3552,7 +3552,7 @@ fn binder_projection_subtables(
         );
         scopes.push(0xff);
     }
-    let symbols = binder.symbols.snapshot_symbols();
+    let symbols = binder.symbols.snapshot_symbols().collect::<Vec<_>>();
     let declarations = binder.declarations.iter().collect::<Vec<_>>();
     let mut declaration_sites = declarations
         .iter()
@@ -3601,7 +3601,7 @@ fn binder_projection_subtables(
     module_sources.sort_unstable();
     vec![
         (count64(binder.graph.snapshot_len()), scopes),
-        (count64(symbols.len()), debug_rows(symbols)),
+        (count64(symbols.len()), debug_rows(&symbols)),
         (count64(declarations.len()), debug_rows(&declarations)),
         (
             count64(declaration_sites.len()),
@@ -4054,7 +4054,7 @@ fn encode_snapshot_inputs(
         type_params: usize::try_from(parts.next_type_param).expect("type-param prefix fits usize"),
         classes: usize::try_from(parts.next_class_id).expect("class prefix fits usize"),
         scopes: parts.binder.graph.snapshot_len(),
-        symbols: parts.binder.symbols.snapshot_symbols().len(),
+        symbols: parts.binder.symbols.len(),
         declarations: parts.binder.declarations.len(),
         type_groups: parts.binder.type_groups.len(),
         namespaces: parts.binder.namespaces.len(),
@@ -4566,7 +4566,7 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     if interner.store().len() != next.types
         || binder.graph.snapshot_len() != next.scopes
-        || binder.symbols.snapshot_symbols().len() != next.symbols
+        || binder.symbols.len() != next.symbols
         || binder.declarations.len() != next.declarations
         || binder.type_groups.len() != next.type_groups
         || binder.namespaces.len() != next.namespaces
@@ -4744,7 +4744,7 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     if interner.store().len() != next.types
         || binder.graph.snapshot_len() != next.scopes
-        || binder.symbols.snapshot_symbols().len() != next.symbols
+        || binder.symbols.len() != next.symbols
         || binder.declarations.len() != next.declarations
         || binder.type_groups.len() != next.type_groups
         || binder.namespaces.len() != next.namespaces
@@ -5052,7 +5052,7 @@ fn next_ids_from_borrowed_parts(
             )
         })?,
         scopes: parts.binder.graph.snapshot_len(),
-        symbols: parts.binder.symbols.snapshot_symbols().len(),
+        symbols: parts.binder.symbols.len(),
         declarations: parts.binder.declarations.len(),
         type_groups: parts.binder.type_groups.len(),
         namespaces: parts.binder.namespaces.len(),

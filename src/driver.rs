@@ -324,6 +324,20 @@ where
         .collect()
 }
 
+#[cfg(test)]
+pub(crate) fn check_project_with_owned_checker_for_test<F>(
+    inputs: Vec<FileInput>,
+    check_project: F,
+) -> Vec<FileReport>
+where
+    F: for<'ast> FnOnce(&[ProjectProgram<'ast>]) -> Vec<CheckResult>,
+{
+    check_project_inner_with_checker(inputs, |_, units| {
+        crate::check::checker::library_compiler::record_user_source_parses_for_test(units.len());
+        check_project(units)
+    })
+}
+
 #[derive(Clone)]
 struct RawImport {
     local: String,

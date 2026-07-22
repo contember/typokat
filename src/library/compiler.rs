@@ -15,11 +15,53 @@ use std::fmt;
 thread_local! {
     static COMPILER_INVOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static COMPILER_SOURCE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static COMPILER_PARSE_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static COMPILER_BIND_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static COMPILER_CHECK_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(crate) fn compiler_measurement_for_test() -> (u64, u64) {
     (COMPILER_INVOCATIONS.get(), COMPILER_SOURCE_BYTES.get())
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LibraryCompilerWorkForTest {
+    pub(crate) compiles: u64,
+    pub(crate) parses: u64,
+    pub(crate) binds: u64,
+    pub(crate) checks: u64,
+}
+
+#[cfg(test)]
+fn compiler_work_for_test() -> LibraryCompilerWorkForTest {
+    LibraryCompilerWorkForTest {
+        compiles: COMPILER_INVOCATIONS.get(),
+        parses: COMPILER_PARSE_UNITS.get(),
+        binds: COMPILER_BIND_UNITS.get(),
+        checks: COMPILER_CHECK_UNITS.get(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct LibraryCompilerWorkScopeForTest(LibraryCompilerWorkForTest);
+
+#[cfg(test)]
+impl LibraryCompilerWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(compiler_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> LibraryCompilerWorkForTest {
+        let end = compiler_work_for_test();
+        LibraryCompilerWorkForTest {
+            compiles: end.compiles.saturating_sub(self.0.compiles),
+            parses: end.parses.saturating_sub(self.0.parses),
+            binds: end.binds.saturating_sub(self.0.binds),
+            checks: end.checks.saturating_sub(self.0.checks),
+        }
+    }
 }
 
 pub const COMPILER_SCHEMA_SHA256: &str =
@@ -281,6 +323,22 @@ impl LibraryCompiler {
                 message: format!("{error:?}"),
             }
         })?;
+        #[cfg(test)]
+        {
+            COMPILER_PARSE_UNITS.set(
+                COMPILER_PARSE_UNITS.get().saturating_add(
+                    u64::try_from(run.phase_counts.parse_units).unwrap_or(u64::MAX),
+                ),
+            );
+            COMPILER_BIND_UNITS.set(
+                COMPILER_BIND_UNITS
+                    .get()
+                    .saturating_add(u64::try_from(run.phase_counts.bind_units).unwrap_or(u64::MAX)),
+            );
+            COMPILER_CHECK_UNITS.set(COMPILER_CHECK_UNITS.get().saturating_add(
+                u64::try_from(run.phase_counts.statement_check_units).unwrap_or(u64::MAX),
+            ));
+        }
         let runtime = freeze_library_runtime_product(runtime).map_err(|message| {
             LibraryCompilerError::RuntimeProduct {
                 message: message.to_owned(),

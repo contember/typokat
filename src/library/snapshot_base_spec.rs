@@ -37,7 +37,7 @@ const EXPECTED_COMPONENTS: [&str; 10] = [
 
 fn assert_send_sync_static<T: Send + Sync + 'static>() {}
 
-fn exact_struct_fields(source: &str, declaration: &str) -> Vec<String> {
+fn exact_production_struct_fields(source: &str, declaration: &str) -> Vec<String> {
     let declaration_offset = source.find(declaration).expect("struct declaration");
     let body_offset = source[declaration_offset..]
         .find('{')
@@ -48,11 +48,21 @@ fn exact_struct_fields(source: &str, declaration: &str) -> Vec<String> {
         .map(|offset| body_offset + offset)
         .expect("simple private field block");
 
+    let mut test_only = false;
     source[body_offset..body_end]
         .lines()
         .filter_map(|line| {
+            if line.trim() == "#[cfg(test)]" {
+                test_only = true;
+                return None;
+            }
             let field = line.strip_prefix("    ")?.strip_suffix(',')?;
-            field.contains(':').then(|| field.to_owned())
+            if !field.contains(':') {
+                return None;
+            }
+            let retained = (!test_only).then(|| field.to_owned());
+            test_only = false;
+            retained
         })
         .collect()
 }
@@ -447,8 +457,11 @@ fn frozen_library_base_retains_only_ast_free_semantic_state() {
         source.contains("use crate::check::checker::library_compiler::OwnedLibraryRuntimeState;")
     );
     assert!(!source.contains("type OwnedLibraryRuntimeState"));
+    assert!(source.contains(
+        "#[cfg(test)]\n    structural_probe: Option<NonterminalStructuralTypeProbeForTest>"
+    ));
     assert_eq!(
-        exact_struct_fields(source, "pub struct FrozenLibraryBase"),
+        exact_production_struct_fields(source, "pub struct FrozenLibraryBase"),
         [
             "runtime: OwnedLibraryRuntimeState",
             "root_names: BTreeSet<String>",
@@ -456,7 +469,7 @@ fn frozen_library_base_retains_only_ast_free_semantic_state() {
             "identity: FrozenLibraryIdentity",
         ]
     );
-    let body = exact_struct_fields(source, "pub struct FrozenLibraryBase").join("\n");
+    let body = exact_production_struct_fields(source, "pub struct FrozenLibraryBase").join("\n");
     for forbidden in [
         "Allocator",
         "Program",

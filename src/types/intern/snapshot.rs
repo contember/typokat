@@ -99,10 +99,22 @@ impl Interner {
         &self,
     ) -> Result<(Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>), SnapshotCodecError>
     {
+        if self.has_nonempty_delta() {
+            return Err(validation(
+                "snapshot cannot encode an interner with a non-empty delta",
+            ));
+        }
+        self.reference_records_for_complete_state()
+    }
+
+    fn reference_records_for_complete_state(
+        &self,
+    ) -> Result<(Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>), SnapshotCodecError>
+    {
         let store_references = self.store_snapshot_reference_records()?;
         let mut interner_references = Vec::new();
 
-        let mut buckets = self.dedup.iter().collect::<Vec<_>>();
+        let mut buckets = self.dedup_buckets().collect::<Vec<_>>();
         buckets.sort_unstable_by_key(|(hash, _)| **hash);
         for (bucket_index, (_, candidates)) in buckets.into_iter().enumerate() {
             let owner = u32::try_from(bucket_index)
@@ -120,7 +132,7 @@ impl Interner {
             }));
         }
 
-        let mut reserved = self.reserved_types.keys().copied().collect::<Vec<_>>();
+        let mut reserved = self.reserved_types().map(|(&id, _)| id).collect::<Vec<_>>();
         reserved.sort_unstable();
         for (index, id) in reserved.into_iter().enumerate() {
             interner_references.push(reference(
@@ -155,12 +167,49 @@ impl Interner {
             .expect("typed interner references enumerate")
     }
 
+    #[cfg(test)]
+    pub(crate) fn local_type_reference_records_for_test(&self) -> Vec<SnapshotReferenceRecord> {
+        let mut records = self
+            .store_snapshot_reference_records_from(self.store.frozen_prefix_len_for_test(), true)
+            .expect("typed local store references enumerate");
+        for (&hash, candidates) in &self.dedup {
+            let owner = u32::try_from(hash).unwrap_or(u32::MAX);
+            records.extend(candidates.iter().map(|candidate| {
+                reference(
+                    INTERNER_BUCKET_DOMAIN,
+                    TYPE_DOMAIN,
+                    BUCKET_CANDIDATE_FIELD,
+                    owner,
+                    candidate.0,
+                )
+            }));
+        }
+        records.extend(self.reserved_types.keys().map(|id| {
+            reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                RESERVED_TYPE_FIELD,
+                id.0,
+                id.0,
+            )
+        }));
+        records
+    }
+
     fn store_snapshot_reference_records(
         &self,
     ) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
+        self.store_snapshot_reference_records_from(0, false)
+    }
+
+    fn store_snapshot_reference_records_from(
+        &self,
+        start: usize,
+        local_side_columns: bool,
+    ) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
         let store = &self.store;
         let mut references = Vec::new();
-        for raw_owner in 0..store.len() {
+        for raw_owner in start..store.len() {
             let owner = TypeId(
                 u32::try_from(raw_owner).map_err(|_| validation("snapshot TypeId exceeds u32"))?,
             );
@@ -364,11 +413,14 @@ impl Interner {
             }
         }
 
-        for (index, (parameter, constraint)) in store
-            .snapshot_type_param_constraints()
-            .into_iter()
-            .enumerate()
-        {
+        let constraints = if local_side_columns {
+            store
+                .local_type_param_constraints_for_test()
+                .collect::<Vec<_>>()
+        } else {
+            store.snapshot_type_param_constraints()
+        };
+        for (index, (parameter, constraint)) in constraints.into_iter().enumerate() {
             let owner =
                 u32::try_from(index).map_err(|_| validation("constraint row index exceeds u32"))?;
             references.push(reference(
@@ -386,7 +438,14 @@ impl Interner {
                 constraint.0,
             ));
         }
-        for (index, parameter) in store.snapshot_frozen_type_params().into_iter().enumerate() {
+        let frozen_parameters = if local_side_columns {
+            store
+                .local_frozen_type_params_for_test()
+                .collect::<Vec<_>>()
+        } else {
+            store.snapshot_frozen_type_params()
+        };
+        for (index, parameter) in frozen_parameters.into_iter().enumerate() {
             references.push(reference(
                 CONTAINER_DOMAIN,
                 TYPE_PARAM_DOMAIN,
@@ -396,7 +455,11 @@ impl Interner {
                 parameter.0,
             ));
         }
-        let mut template_names = store.snapshot_template_name_ids().collect::<Vec<_>>();
+        let mut template_names = if local_side_columns {
+            store.local_template_name_ids_for_test().collect::<Vec<_>>()
+        } else {
+            store.snapshot_template_name_ids().collect::<Vec<_>>()
+        };
         template_names.sort_unstable();
         for (index, id) in template_names.into_iter().enumerate() {
             references.push(reference(
@@ -419,7 +482,7 @@ impl Interner {
         writer: &mut SnapshotWriter,
     ) -> Result<(), SnapshotCodecError> {
         writer.u32(VERSION);
-        let mut buckets = self.dedup.iter().collect::<Vec<_>>();
+        let mut buckets = self.dedup_buckets().collect::<Vec<_>>();
         buckets.sort_by_key(|(hash, _)| **hash);
         writer.usize(buckets.len())?;
         for (hash, candidates) in buckets {
@@ -435,7 +498,7 @@ impl Interner {
             }
         }
 
-        let mut reserved = self.reserved_types.iter().collect::<Vec<_>>();
+        let mut reserved = self.reserved_types().collect::<Vec<_>>();
         reserved.sort_by_key(|(id, _)| id.0);
         writer.usize(reserved.len())?;
         for (id, terminal) in reserved {
@@ -572,9 +635,13 @@ impl Interner {
 
         let interner = Interner {
             store,
+            dedup_base: Arc::new(FxHashMap::default()),
             dedup,
+            reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types,
             well_known,
+            #[cfg(test)]
+            user_delta_drop_witness: None,
         };
         interner.validate_snapshot()?;
         Ok(interner)
@@ -660,9 +727,13 @@ impl Interner {
         }
         let interner = Interner {
             store,
+            dedup_base: Arc::new(FxHashMap::default()),
             dedup,
+            reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types,
             well_known: well_known_from_ids(ids),
+            #[cfg(test)]
+            user_delta_drop_witness: None,
         };
         interner.validate_snapshot()?;
         Ok(interner)
@@ -709,7 +780,7 @@ impl Interner {
             }
         }
 
-        for (id, reserved) in &self.reserved_types {
+        for (id, reserved) in self.reserved_types() {
             if id.index() >= len || reserved.state != ReservedTypeState::Frozen {
                 return Err(validation("reserved terminal is invalid"));
             }
@@ -723,7 +794,7 @@ impl Interner {
             }
         }
         for id in self.store.snapshot_template_name_ids() {
-            if !self.reserved_types.contains_key(&id) {
+            if !self.contains_reserved_type(id) {
                 return Err(validation(
                     "template display name is not attached to a reservation",
                 ));
@@ -731,13 +802,13 @@ impl Interner {
         }
 
         let mut seen = vec![false; len];
-        for (hash, candidates) in &self.dedup {
+        for (hash, candidates) in self.dedup_buckets() {
             if candidates.is_empty() {
                 return Err(validation("dedup bucket is empty"));
             }
             for (position, candidate) in candidates.iter().copied().enumerate() {
                 if candidate.index() >= len
-                    || self.reserved_types.contains_key(&candidate)
+                    || self.contains_reserved_type(candidate)
                     || std::mem::replace(&mut seen[candidate.index()], true)
                 {
                     return Err(validation("dedup candidate coverage is invalid"));
@@ -757,7 +828,7 @@ impl Interner {
                 u32::try_from(index)
                     .map_err(|_| validation("store length exceeds the TypeId range"))?,
             );
-            if covered == self.reserved_types.contains_key(&id) {
+            if covered == self.contains_reserved_type(id) {
                 return Err(validation("dedup does not exactly cover structural rows"));
             }
         }

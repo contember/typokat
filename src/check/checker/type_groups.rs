@@ -1,7 +1,10 @@
-use super::context::{ConstructionDrafts, Pass, TypeDecl};
+use super::context::{
+    ConstructionDrafts, Pass, PublishedTypeDecl, TypeDecl, TypeDeclTable, TypeResolvedTable,
+};
 use crate::binder::declaration::TypeGroupId;
 use crate::class_semantics::PublishedClassSnapshotTerminal;
 use crate::class_semantics::PublishedClasses;
+use crate::types::layered::LayeredVec;
 use crate::types::repr::{ClassId, TypeParamId};
 use crate::types::store::TypeId;
 
@@ -59,9 +62,11 @@ pub(in crate::check::checker) enum PublishedTypeGroupTerminal {
     Unavailable(PublishedTypeGroupUnavailable),
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Default)]
 pub(in crate::check::checker) struct PublishedTypeGroups {
-    entries: Vec<PublishedTypeGroupTerminal>,
+    entries: LayeredVec<PublishedTypeGroupTerminal>,
+    declarations: LayeredVec<PublishedTypeDecl>,
+    resolved: LayeredVec<Option<TypeId>>,
 }
 
 impl PublishedTypeGroups {
@@ -83,7 +88,6 @@ impl PublishedTypeGroups {
 
 /// The only query-visible type environment. Class and named-type registries become
 /// visible together through one assignment after both private builders are frozen.
-#[derive(Clone)]
 pub(in crate::check::checker) struct PublishedTypeEnvironment {
     classes: PublishedClasses,
     groups: PublishedTypeGroups,
@@ -98,7 +102,7 @@ pub(in crate::check::checker) struct PublishedTypeEnvironmentSnapshotParts {
 pub(in crate::check::checker) enum TypeEnvironmentState<'ast> {
     Constructing {
         inherited: Option<PublishedTypeEnvironment>,
-        drafts: Option<ConstructionDrafts<'ast>>,
+        drafts: Option<Box<ConstructionDrafts<'ast>>>,
     },
     Published(PublishedTypeEnvironment),
 }
@@ -107,7 +111,7 @@ impl<'ast> TypeEnvironmentState<'ast> {
     pub(in crate::check::checker) fn constructing(drafts: ConstructionDrafts<'ast>) -> Self {
         Self::Constructing {
             inherited: Some(PublishedTypeEnvironment::empty()),
-            drafts: Some(drafts),
+            drafts: Some(Box::new(drafts)),
         }
     }
 
@@ -210,7 +214,7 @@ impl PublishedTypeEnvironment {
     ) -> Self {
         Self {
             classes: PublishedClasses::empty(),
-            groups: PublishedTypeGroups { entries },
+            groups: published_type_groups_from_terminals(entries),
         }
     }
 
@@ -224,27 +228,11 @@ impl PublishedTypeEnvironment {
 
     pub(in crate::check::checker) fn construction_prefix<'ast>(
         &self,
-    ) -> (Vec<TypeDecl<'ast>>, Vec<Option<TypeId>>) {
-        let mut declarations = Vec::with_capacity(self.groups.entries.len());
-        let mut resolved = Vec::with_capacity(self.groups.entries.len());
-        for terminal in &self.groups.entries {
-            match terminal {
-                PublishedTypeGroupTerminal::Ready(group) => {
-                    declarations.push(TypeDecl::Resolved {
-                        params: group.parameters.clone(),
-                    });
-                    resolved.push(match group.surface {
-                        PublishedTypeGroupSurface::Template(template) => Some(template),
-                        PublishedTypeGroupSurface::Class(_) => None,
-                    });
-                }
-                PublishedTypeGroupTerminal::Unavailable(_) => {
-                    declarations.push(TypeDecl::Resolved { params: Vec::new() });
-                    resolved.push(None);
-                }
-            }
-        }
-        (declarations, resolved)
+    ) -> (TypeDeclTable<'ast>, TypeResolvedTable) {
+        (
+            TypeDeclTable::with_published(self.groups.declarations.clone()),
+            TypeResolvedTable::with_published(self.groups.resolved.clone()),
+        )
     }
 
     pub(in crate::check::checker) fn snapshot_parts(
@@ -255,7 +243,7 @@ impl PublishedTypeEnvironment {
                 .classes
                 .snapshot_terminals()
                 .ok_or("snapshot class publication contains a non-terminal state")?,
-            groups: self.groups.entries.clone(),
+            groups: self.groups.entries.iter().cloned().collect(),
         })
     }
 
@@ -282,10 +270,124 @@ impl PublishedTypeEnvironment {
         }
         Ok(Self {
             classes: PublishedClasses::from_snapshot_terminals(parts.classes)?,
+            groups: published_type_groups_from_terminals(parts.groups),
+        })
+    }
+
+    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.classes.freeze_as_base()?;
+        self.groups.entries.freeze_as_base()?;
+        self.groups.declarations.freeze_as_base()?;
+        self.groups.resolved.freeze_as_base()
+    }
+
+    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            classes: self.classes.fork_delta()?,
             groups: PublishedTypeGroups {
-                entries: parts.groups,
+                entries: self.groups.entries.fork_delta()?,
+                declarations: self.groups.declarations.fork_delta()?,
+                resolved: self.groups.resolved.fork_delta()?,
             },
         })
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
+        self.classes.shares_base_with(&other.classes)
+            && self.groups.entries.shares_base_with(&other.groups.entries)
+            && self
+                .groups
+                .declarations
+                .shares_base_with(&other.groups.declarations)
+            && self
+                .groups
+                .resolved
+                .shares_base_with(&other.groups.resolved)
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
+        [
+            self.groups.entries.shares_base_with(&other.groups.entries)
+                && self
+                    .groups
+                    .declarations
+                    .shares_base_with(&other.groups.declarations)
+                && self
+                    .groups
+                    .resolved
+                    .shares_base_with(&other.groups.resolved),
+            self.classes.shares_base_with(&other.classes),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
+        [
+            self.groups.entries.local_len()
+                + self.groups.declarations.local_len()
+                + self.groups.resolved.local_len(),
+            self.classes.local_row_count_for_test(),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_group_terminals(
+        &self,
+    ) -> impl Iterator<Item = (TypeGroupId, &PublishedTypeGroupTerminal)> {
+        let base_len = self.groups.entries.base_len();
+        self.groups
+            .entries
+            .local_iter()
+            .enumerate()
+            .map(move |(index, terminal)| {
+                let id = u32::try_from(base_len + index).expect("type group id fits u32");
+                (TypeGroupId(id), terminal)
+            })
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_class_terminals(
+        &self,
+    ) -> Vec<(ClassId, PublishedClassSnapshotTerminal)> {
+        self.classes.local_snapshot_terminals()
+    }
+}
+
+fn published_type_groups_from_terminals(
+    terminals: Vec<PublishedTypeGroupTerminal>,
+) -> PublishedTypeGroups {
+    let mut declarations = Vec::with_capacity(terminals.len());
+    let mut resolved = Vec::with_capacity(terminals.len());
+    for terminal in &terminals {
+        let (declaration, resolution) = construction_terminal(terminal);
+        declarations.push(declaration);
+        resolved.push(resolution);
+    }
+    PublishedTypeGroups {
+        entries: terminals.into(),
+        declarations: declarations.into(),
+        resolved: resolved.into(),
+    }
+}
+
+fn construction_terminal(
+    terminal: &PublishedTypeGroupTerminal,
+) -> (PublishedTypeDecl, Option<TypeId>) {
+    match terminal {
+        PublishedTypeGroupTerminal::Ready(group) => (
+            PublishedTypeDecl {
+                params: group.parameters.clone(),
+            },
+            match group.surface {
+                PublishedTypeGroupSurface::Template(template) => Some(template),
+                PublishedTypeGroupSurface::Class(_) => None,
+            },
+        ),
+        PublishedTypeGroupTerminal::Unavailable(_) => {
+            (PublishedTypeDecl { params: Vec::new() }, None)
+        }
     }
 }
 
@@ -298,28 +400,90 @@ enum TypeGroupConstructionSlot {
 
 /// Private, single-use construction authority for one exact type-group epoch.
 pub(in crate::check::checker) struct TypeGroupConstruction {
+    expected: usize,
+    base: Option<PublishedTypeGroups>,
+    base_len: usize,
     slots: Vec<TypeGroupConstructionSlot>,
 }
 
 impl TypeGroupConstruction {
     pub(in crate::check::checker) fn new(group_count: usize) -> Self {
         Self {
-            slots: vec![TypeGroupConstructionSlot::Pending; group_count],
+            expected: group_count,
+            base: None,
+            base_len: 0,
+            slots: Vec::new(),
         }
     }
 
     fn install_base(&mut self, base: &PublishedTypeGroups) {
-        assert!(base.len() <= self.slots.len());
-        for (slot, terminal) in self.slots.iter_mut().zip(&base.entries) {
-            assert_eq!(*slot, TypeGroupConstructionSlot::Pending);
-            *slot = TypeGroupConstructionSlot::Frozen(terminal.clone());
+        assert!(self.base.is_none());
+        assert!(base.len() <= self.expected);
+        self.base_len = base.len();
+        let entries = if base.entries.is_sealed() {
+            base.entries
+                .fork_delta()
+                .expect("installed type-group base has no suffix")
+        } else {
+            let mut entries: LayeredVec<PublishedTypeGroupTerminal> =
+                base.entries.iter().cloned().collect::<Vec<_>>().into();
+            entries
+                .freeze_as_base()
+                .expect("source-compiled type-group prefix seals once");
+            entries
+        };
+        let (declarations, resolved) = if base.entries.is_sealed() {
+            (
+                base.declarations
+                    .fork_delta()
+                    .expect("installed type declaration base has no suffix"),
+                base.resolved
+                    .fork_delta()
+                    .expect("installed type resolution base has no suffix"),
+            )
+        } else {
+            let mut declarations: LayeredVec<PublishedTypeDecl> =
+                base.declarations.iter().cloned().collect::<Vec<_>>().into();
+            declarations
+                .freeze_as_base()
+                .expect("source-compiled declaration prefix seals once");
+            let mut resolved: LayeredVec<Option<TypeId>> =
+                base.resolved.iter().copied().collect::<Vec<_>>().into();
+            resolved
+                .freeze_as_base()
+                .expect("source-compiled resolution prefix seals once");
+            (declarations, resolved)
+        };
+        self.base = Some(PublishedTypeGroups {
+            entries,
+            declarations,
+            resolved,
+        });
+        if self.slots.is_empty() {
+            self.slots = vec![TypeGroupConstructionSlot::Pending; self.expected - self.base_len];
+        } else {
+            assert_eq!(self.slots.len(), self.expected);
+            let suffix = self.slots.split_off(self.base_len);
+            assert!(self
+                .slots
+                .iter()
+                .all(|slot| *slot == TypeGroupConstructionSlot::Pending));
+            self.slots = suffix;
         }
     }
 
     fn begin(&mut self, group: TypeGroupId) {
+        if self.base.is_none() && self.slots.is_empty() {
+            self.slots = vec![TypeGroupConstructionSlot::Pending; self.expected];
+        }
         let slot = self
             .slots
-            .get_mut(group.index())
+            .get_mut(
+                group
+                    .index()
+                    .checked_sub(self.base_len)
+                    .expect("installed base type groups cannot be reconstructed"),
+            )
             .expect("type group construction id must be dense");
         assert_eq!(
             *slot,
@@ -332,41 +496,74 @@ impl TypeGroupConstruction {
     fn freeze(&mut self, group: TypeGroupId, terminal: PublishedTypeGroupTerminal) {
         let slot = self
             .slots
-            .get_mut(group.index())
+            .get_mut(
+                group
+                    .index()
+                    .checked_sub(self.base_len)
+                    .expect("installed base type groups cannot be reconstructed"),
+            )
             .expect("type group construction id must be dense");
         assert_eq!(*slot, TypeGroupConstructionSlot::Building);
         *slot = TypeGroupConstructionSlot::Frozen(terminal);
     }
 
     fn is_pending(&self, group: TypeGroupId) -> bool {
+        if group.index() < self.base_len {
+            return false;
+        }
+        if self.slots.is_empty() {
+            return group.index() < self.expected;
+        }
         self.slots
-            .get(group.index())
+            .get(group.index() - self.base_len)
             .is_some_and(|slot| *slot == TypeGroupConstructionSlot::Pending)
     }
 
     fn is_frozen(&self, group: TypeGroupId) -> bool {
+        if group.index() < self.base_len {
+            return true;
+        }
         self.slots
-            .get(group.index())
+            .get(group.index() - self.base_len)
             .is_some_and(|slot| matches!(slot, TypeGroupConstructionSlot::Frozen(_)))
     }
 
     fn consume(self, expected: usize) -> Option<(PublishedTypeGroups, usize)> {
-        if self.slots.len() != expected {
+        if self.expected != expected || self.base_len + self.slots.len() != expected {
             return None;
         }
-        let mut publication_validations = 0;
-        let entries = self
-            .slots
-            .into_iter()
-            .map(|slot| match slot {
+        let mut publication_validations = self.base_len;
+        let (mut entries, mut declarations, mut resolved) = match self.base {
+            Some(base) => (base.entries, base.declarations, base.resolved),
+            None => (
+                LayeredVec::default(),
+                LayeredVec::default(),
+                LayeredVec::default(),
+            ),
+        };
+        for slot in self.slots {
+            let terminal = match slot {
                 TypeGroupConstructionSlot::Frozen(terminal) => {
                     publication_validations += 1;
-                    Some(terminal)
+                    terminal
                 }
-                TypeGroupConstructionSlot::Pending | TypeGroupConstructionSlot::Building => None,
-            })
-            .collect::<Option<Vec<_>>>()?;
-        Some((PublishedTypeGroups { entries }, publication_validations))
+                TypeGroupConstructionSlot::Pending | TypeGroupConstructionSlot::Building => {
+                    return None
+                }
+            };
+            let (declaration, resolution) = construction_terminal(&terminal);
+            entries.push_local(terminal);
+            declarations.push_local(declaration);
+            resolved.push_local(resolution);
+        }
+        Some((
+            PublishedTypeGroups {
+                entries,
+                declarations,
+                resolved,
+            },
+            publication_validations,
+        ))
     }
 
     fn unfinished_groups(&self) -> Vec<(usize, &'static str)> {
@@ -374,37 +571,11 @@ impl TypeGroupConstruction {
             .iter()
             .enumerate()
             .filter_map(|(index, slot)| match slot {
-                TypeGroupConstructionSlot::Pending => Some((index, "pending")),
-                TypeGroupConstructionSlot::Building => Some((index, "building")),
+                TypeGroupConstructionSlot::Pending => Some((self.base_len + index, "pending")),
+                TypeGroupConstructionSlot::Building => Some((self.base_len + index, "building")),
                 TypeGroupConstructionSlot::Frozen(_) => None,
             })
             .collect()
-    }
-
-    pub(in crate::check::checker) fn for_each_frozen_type_reference(
-        &self,
-        mut visit: impl FnMut(TypeGroupId, TypeId),
-    ) {
-        for (index, slot) in self.slots.iter().enumerate() {
-            let TypeGroupConstructionSlot::Frozen(PublishedTypeGroupTerminal::Ready(group)) = slot
-            else {
-                continue;
-            };
-            let owner = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
-            if let PublishedTypeGroupSurface::Template(template) = group.surface {
-                visit(owner, template);
-            }
-            for default in &group.parameter_defaults {
-                if let PublishedTypeParameterDefault::Ready(default) = default {
-                    visit(owner, *default);
-                }
-            }
-            for alternative in &group.conflict_alternatives {
-                for ty in &alternative.types {
-                    visit(owner, *ty);
-                }
-            }
-        }
     }
 }
 
@@ -627,6 +798,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_decls
             .iter()
             .enumerate()
+            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
             .filter(|(_, declaration)| matches!(declaration, TypeDecl::Resolved { .. }))
             .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
             .collect();
@@ -637,11 +809,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     pub(in crate::check::checker) fn publish_type_groups(&mut self) -> usize {
-        let base_len = self.type_environment.inherited().groups().len();
         let owned_parameters: Vec<TypeParamId> = self
             .type_decls
             .iter()
-            .skip(base_len)
             .flat_map(|declaration| match declaration {
                 TypeDecl::Interface {
                     recovery_params, ..
@@ -654,7 +824,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.interner
             .freeze_type_param_metadata(&owned_parameters)
             .expect("type-group binders freeze once as one validated epoch batch");
-        for declaration in self.type_decls.iter().skip(base_len) {
+        for declaration in self.type_decls.iter() {
             if let TypeDecl::Class { params, .. } = declaration {
                 assert!(params
                     .iter()
@@ -703,9 +873,9 @@ mod tests {
         ConstructionDrafts {
             staged_published_classes: None,
             type_group_construction: None,
-            type_decls: Vec::new(),
-            type_resolved: Vec::new(),
-            template_fill: Vec::new(),
+            type_decls: Vec::new().into(),
+            type_resolved: Vec::new().into(),
+            template_fill: super::super::context::TemplateFillTable::new(0, Vec::new()),
         }
     }
 
@@ -746,9 +916,16 @@ mod tests {
             parameter_defaults: vec![PublishedTypeParameterDefault::Absent],
             conflict_alternatives: Vec::new(),
         });
-        let base = PublishedTypeGroups {
-            entries: vec![terminal.clone()],
-        };
+        let mut base = published_type_groups_from_terminals(vec![terminal.clone()]);
+        base.entries
+            .freeze_as_base()
+            .expect("test base entries seal");
+        base.declarations
+            .freeze_as_base()
+            .expect("test base declarations seal");
+        base.resolved
+            .freeze_as_base()
+            .expect("test base resolutions seal");
         let mut construction = TypeGroupConstruction::new(1);
         construction.install_base(&base);
 
@@ -756,5 +933,33 @@ mod tests {
             construction.consume(1).expect("installed base is terminal");
         assert_eq!(publication_validations, 1);
         assert_eq!(inherited.get(TypeGroupId(0)), Some(&terminal));
+    }
+
+    #[test]
+    fn published_environment_shares_base_and_constructs_only_a_dense_suffix() {
+        let base_terminal =
+            PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
+                cause: TypeGroupUnavailableCause::UnsupportedComposition,
+            });
+        let mut base =
+            PublishedTypeEnvironment::from_explicit_terminals_for_test(vec![base_terminal.clone()]);
+        base.freeze_as_base().expect("published base seals");
+        let first = base.fork_delta().expect("first published suffix");
+        let second = base.fork_delta().expect("second published suffix");
+        assert!(first.shares_base_with(&second));
+
+        let mut construction = TypeGroupConstruction::new(3);
+        construction.install_base(first.groups());
+        for index in 1..3 {
+            let group = TypeGroupId(index);
+            construction.begin(group);
+            construction.freeze(group, base_terminal.clone());
+        }
+        let (published, validations) = construction.consume(3).expect("dense suffix publishes");
+        assert_eq!(validations, 3);
+        assert_eq!(published.entries.base_len(), 1);
+        assert_eq!(published.entries.local_len(), 2);
+        assert_eq!(published.get(TypeGroupId(0)), Some(&base_terminal));
+        assert_eq!(second.groups().len(), 1);
     }
 }

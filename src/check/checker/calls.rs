@@ -11,7 +11,8 @@ use super::decls::value_decl_id;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use super::expr::contextual_literal_target;
 use super::function_groups::FunctionGroupDemand;
-use crate::binder::declaration::ValueStorageId;
+use super::type_groups::{PublishedTypeGroupSurface, PublishedTypeGroupTerminal};
+use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
 use crate::check::infer;
 use crate::check::query::SemanticQueryCoordinator;
@@ -33,6 +34,29 @@ use oxc_ast::ast::{
 };
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
+
+fn flatten_static_class_value_path<'a>(
+    expression: &'a Expression<'_>,
+    segments: &mut Vec<&'a str>,
+) -> bool {
+    match expression {
+        Expression::Identifier(identifier) => {
+            segments.push(identifier.name.as_str());
+            true
+        }
+        Expression::ParenthesizedExpression(parenthesized) => {
+            flatten_static_class_value_path(&parenthesized.expression, segments)
+        }
+        Expression::StaticMemberExpression(member) => {
+            if !flatten_static_class_value_path(&member.object, segments) {
+                return false;
+            }
+            segments.push(member.property.name.as_str());
+            true
+        }
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1969,7 +1993,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // Not a known class: WU3 falls through to a single object construct
         // signature. If the callee is not constructable in the represented subset,
         // preserve the previous no-diagnostic/error-type behavior.
-        let Some((decl_id, info)) = class_resolved else {
+        let Some(info) = class_resolved else {
             if let Some((callee_ty, _)) = inferred_callee {
                 let signatures = match self.construct_signatures(callee_ty) {
                     DemandOutcome::Ready(signatures) => signatures,
@@ -2046,7 +2070,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // arguments infer the parameters from the constructor argument types (M10 engine).
         let (ctor, instance) = self.new_class_substitution(
             scope,
-            decl_id,
             &info,
             new_expr,
             (&arg_types, &arg_fresh, &arg_exprs),
@@ -2114,29 +2137,66 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         callee: &Expression<'_>,
-    ) -> DemandOutcome<Option<(ValueStorageId, ClassInfo)>> {
-        let callee = match callee {
+    ) -> DemandOutcome<Option<ClassInfo>> {
+        let class_id = match callee {
             Expression::ParenthesizedExpression(paren) => {
                 return self.class_new_target(scope, &paren.expression)
             }
-            Expression::Identifier(ident) => ident,
+            Expression::Identifier(ident) => {
+                let Some(value_decl) = value_decl_id(self.binder, scope, ident.name.as_str())
+                else {
+                    return DemandOutcome::Ready(None);
+                };
+                let class_decl = self
+                    .class_value_aliases
+                    .get(&value_decl)
+                    .copied()
+                    .unwrap_or(value_decl);
+                let Some(binding) = self.class_value_bindings.get(&class_decl).copied() else {
+                    return DemandOutcome::Ready(None);
+                };
+                if value_decl != class_decl && binding.has_header_type_params {
+                    return DemandOutcome::Ready(None);
+                }
+                binding.class_id
+            }
+            Expression::StaticMemberExpression(_) => {
+                let mut segments = Vec::new();
+                if !flatten_static_class_value_path(callee, &mut segments) {
+                    return DemandOutcome::Ready(None);
+                }
+                let root_is_namespace_value = self
+                    .binder
+                    .resolve_value(scope, segments[0])
+                    .and_then(|symbol| self.binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.value)
+                    .is_some_and(|storage| {
+                        self.binder
+                            .standalone_namespace_for_storage(storage)
+                            .is_some()
+                    });
+                if !root_is_namespace_value {
+                    return DemandOutcome::Ready(None);
+                }
+                let QualifiedTypePathResolution::TypeGroup(group) =
+                    self.binder.resolve_qualified_type_path(scope, &segments)
+                else {
+                    return DemandOutcome::Ready(None);
+                };
+                match self.type_environment.published().groups().get(group) {
+                    Some(PublishedTypeGroupTerminal::Ready(group)) => match group.surface {
+                        PublishedTypeGroupSurface::Class(class_id) => class_id,
+                        PublishedTypeGroupSurface::Template(_) => {
+                            return DemandOutcome::Ready(None)
+                        }
+                    },
+                    Some(PublishedTypeGroupTerminal::Unavailable(_)) | None => {
+                        return DemandOutcome::Ready(None)
+                    }
+                }
+            }
             _ => return DemandOutcome::Ready(None),
         };
-        let Some(value_decl) = value_decl_id(self.binder, scope, callee.name.as_str()) else {
-            return DemandOutcome::Ready(None);
-        };
-        let class_decl = self
-            .class_value_aliases
-            .get(&value_decl)
-            .copied()
-            .unwrap_or(value_decl);
-        let Some(binding) = self.class_value_bindings.get(&class_decl).copied() else {
-            return DemandOutcome::Ready(None);
-        };
-        if value_decl != class_decl && binding.has_header_type_params {
-            return DemandOutcome::Ready(None);
-        }
-        let class_id = binding.class_id;
         let surface = match self
             .type_environment
             .published()
@@ -2154,16 +2214,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(&class_id)
             .copied()
             .expect("every published source class freezes its new metadata");
-        DemandOutcome::Ready(Some((
-            class_decl,
-            ClassInfo {
-                ctor,
-                class_id,
-                is_abstract: metadata.is_abstract,
-                ctor_visibility: metadata.ctor_visibility,
-                ctor_declaring_class: metadata.ctor_declaring_class,
-            },
-        )))
+        DemandOutcome::Ready(Some(ClassInfo {
+            ctor,
+            class_id,
+            is_abstract: metadata.is_abstract,
+            ctor_visibility: metadata.ctor_visibility,
+            ctor_declaring_class: metadata.ctor_declaring_class,
+        }))
     }
 
     fn direct_class_construct_overloads(
@@ -2255,7 +2312,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn new_class_substitution(
         &mut self,
         scope: ScopeId,
-        _decl_id: ValueStorageId,
         info: &ClassInfo,
         new_expr: &NewExpression<'_>,
         args: (&[(TypeId, Span)], &[bool], &[&Expression<'_>]),

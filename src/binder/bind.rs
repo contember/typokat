@@ -20,6 +20,7 @@ use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
+use crate::types::layered::LayeredMap;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
     Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
@@ -136,7 +137,8 @@ pub struct Binder {
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// Stable source ownership retained across the frozen-library continuation seam.
     #[cfg_attr(not(test), allow(dead_code))]
-    module_sources: FxHashMap<ScopeId, SourceUnitKey>,
+    module_sources: LayeredMap<ScopeId, SourceUnitKey>,
+    next_source_key: SourceUnitKey,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -161,16 +163,115 @@ pub(crate) enum ValueResolution {
 }
 
 impl Binder {
-    #[cfg(test)]
-    pub(crate) fn max_source_key(&self) -> SourceUnitKey {
-        self.module_sources
-            .values()
-            .copied()
-            .max()
-            .expect("binder retains at least the prelude source key")
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.graph.freeze_as_base()?;
+        self.symbols.freeze_as_base()?;
+        self.declarations.freeze_as_base()?;
+        self.type_groups.freeze_as_base()?;
+        self.namespaces.freeze_as_base()?;
+        self.module_sources.freeze_as_base()?;
+        Ok(())
     }
 
-    pub(crate) fn snapshot_module_sources(&self) -> &FxHashMap<ScopeId, SourceUnitKey> {
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            graph: self.graph.fork_delta()?,
+            symbols: self.symbols.fork_delta()?,
+            declarations: self.declarations.fork_delta()?,
+            type_groups: self.type_groups.fork_delta()?,
+            namespaces: self.namespaces.fork_delta()?,
+            module: self.module,
+            prelude_module: self.prelude_module,
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            decl_count: self.decl_count,
+            prelude_type_group_count: self.prelude_type_group_count,
+            fn_scopes: FxHashMap::default(),
+            fn_decl_ids: FxHashMap::default(),
+            block_scopes: FxHashMap::default(),
+            module_sources: self.module_sources.fork_delta()?,
+            next_source_key: self.next_source_key,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+        self.graph.scopes_share_base_with(&other.graph)
+            && self.symbols.symbols_share_base_with(&other.symbols)
+            && self
+                .declarations
+                .shares_base_storage_with(&other.declarations)
+            && self
+                .type_groups
+                .shares_base_storage_with(&other.type_groups)
+            && self.namespaces.shares_base_storage_with(&other.namespaces)
+            && self.module_sources.shares_base_with(&other.module_sources)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 8] {
+        let declarations = self
+            .declarations
+            .base_family_sharing_with(&other.declarations);
+        let namespaces = self.namespaces.base_family_sharing_with(&other.namespaces);
+        [
+            self.graph.scopes_share_base_with(&other.graph),
+            self.symbols.symbols_share_base_with(&other.symbols),
+            declarations[0],
+            declarations[1],
+            self.type_groups
+                .shares_base_storage_with(&other.type_groups),
+            namespaces[0],
+            namespaces[1],
+            self.module_sources.shares_base_with(&other.module_sources),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 8] {
+        let declarations = self.declarations.local_family_row_counts_for_test();
+        let namespaces = self.namespaces.local_family_row_counts_for_test();
+        [
+            self.graph.local_scopes().count(),
+            self.symbols.local_symbols().count(),
+            declarations[0],
+            declarations[1],
+            self.type_groups.local_row_count_for_test(),
+            namespaces[0],
+            namespaces[1],
+            self.module_sources.local_len(),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn max_source_key(&self) -> SourceUnitKey {
+        SourceUnitKey(
+            self.next_source_key
+                .0
+                .checked_sub(1)
+                .expect("binder retains at least the prelude source key"),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_names_for_test(&self) -> std::collections::BTreeSet<String> {
+        self.graph
+            .local_scopes()
+            .flat_map(|(_, scope)| scope.symbols.keys().cloned())
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_reference_records_for_test(&self) -> Vec<(u8, u32, u8, u32)> {
+        super::snapshot::local_snapshot_reference_records_for_test(self)
+            .into_iter()
+            .map(|(owner_domain, target_domain, _, owner, target)| {
+                (owner_domain, owner, target_domain, target)
+            })
+            .collect()
+    }
+
+    pub(crate) fn snapshot_module_sources(&self) -> &LayeredMap<ScopeId, SourceUnitKey> {
         &self.module_sources
     }
 
@@ -189,6 +290,14 @@ impl Binder {
         prelude_type_group_count: u32,
         module_sources: FxHashMap<ScopeId, SourceUnitKey>,
     ) -> Self {
+        let next_source_key = SourceUnitKey(
+            module_sources
+                .values()
+                .map(|source| source.0)
+                .max()
+                .and_then(|source| source.checked_add(1))
+                .unwrap_or(1),
+        );
         Self {
             graph,
             symbols,
@@ -204,7 +313,14 @@ impl Binder {
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
-            module_sources,
+            module_sources: {
+                let mut layered = LayeredMap::default();
+                for (scope, source) in module_sources {
+                    let _ = layered.insert_local(scope, source);
+                }
+                layered
+            },
+            next_source_key,
         }
     }
 
@@ -396,7 +512,8 @@ pub(crate) struct BindState {
     pub(crate) type_groups: TypeGroupTable,
     pub(crate) namespaces: NamespaceTable,
     /// Stable source ownership for every module scope, including the prelude.
-    module_sources: FxHashMap<ScopeId, SourceUnitKey>,
+    module_sources: LayeredMap<ScopeId, SourceUnitKey>,
+    next_source_key: SourceUnitKey,
     library_module_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
@@ -410,6 +527,16 @@ pub(crate) struct BindState {
 }
 
 impl BindState {
+    fn record_module_source(&mut self, module: ScopeId, source: SourceUnitKey) {
+        self.module_sources
+            .insert_local(module, source)
+            .expect("module source ownership is unique");
+        if source.0 >= self.next_source_key.0 {
+            self.next_source_key =
+                SourceUnitKey(source.0.checked_add(1).expect("source key suffix fits u32"));
+        }
+    }
+
     fn record_source_declarations(&mut self, program: &Program<'_>) {
         for occurrence in source_declaration_occurrences(program) {
             let site = DeclarationSite {
@@ -560,20 +687,19 @@ impl ProjectBinderBuilder {
             declarations: DeclarationTable::default(),
             type_groups: TypeGroupTable::default(),
             namespaces: NamespaceTable::default(),
-            module_sources: FxHashMap::default(),
+            module_sources: LayeredMap::default(),
             library_module_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             current_module: ScopeId(0),
             next_value_storage: 0,
+            next_source_key: SourceUnitKey(1),
         };
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
-        state
-            .module_sources
-            .insert(prelude_module, SourceUnitKey::PRELUDE);
+        state.record_module_source(prelude_module, SourceUnitKey::PRELUDE);
         state.record_source_declarations(prelude);
         bind_statements(&mut state, prelude_module, &prelude.body);
         let prelude_type_group_count =
@@ -696,7 +822,7 @@ impl ProjectBinderBuilder {
             .graph
             .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
         self.state.current_module = module;
-        self.state.module_sources.insert(module, unit.source);
+        self.state.record_module_source(module, unit.source);
         self.state.record_source_declarations(program);
         let mut placeholders = Vec::new();
         for import in imports {
@@ -760,7 +886,7 @@ impl ProjectBinderBuilder {
                 .graph
                 .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
             self.state.current_module = module;
-            self.state.module_sources.insert(module, unit.source);
+            self.state.record_module_source(module, unit.source);
             self.state
                 .library_module_ordinals
                 .insert(module, file_ordinal);
@@ -830,22 +956,16 @@ impl ProjectBinderBuilder {
             fn_decl_ids: self.state.fn_decl_ids,
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
+            next_source_key: self.state.next_source_key,
         }
     }
 
     /// Resume one AST-free library binder for a single user suffix.
     #[cfg(test)]
     pub(crate) fn resume_frozen_library(binder: Binder) -> (Self, SourceUnitKey) {
-        let next_source = binder
-            .module_sources
-            .values()
-            .map(|source| source.0)
-            .max()
-            .and_then(|source| source.checked_add(1))
-            .map(SourceUnitKey)
-            .expect("frozen library source key suffix fits u32");
+        let next_source = binder.next_source_key;
         let Binder {
-            graph,
+            mut graph,
             symbols,
             declarations,
             type_groups,
@@ -860,7 +980,12 @@ impl ProjectBinderBuilder {
             fn_decl_ids: _,
             block_scopes: _,
             module_sources,
+            next_source_key,
         } = binder;
+        let delta_script_namespace_root = graph.push(Scope::new(
+            ScopeKind::ScriptNamespaceRoot,
+            Some(script_namespace_root),
+        ));
         let prelude_type_group_count =
             u32::try_from(type_groups.len()).expect("frozen type group count fits u32");
         let frozen_global_augmentation_count = namespaces.global_augmentation_count();
@@ -879,10 +1004,11 @@ impl ProjectBinderBuilder {
                     block_scopes: FxHashMap::default(),
                     current_module: module,
                     next_value_storage: decl_count,
+                    next_source_key,
                 },
                 prelude_module,
                 compilation_global,
-                script_namespace_root,
+                script_namespace_root: delta_script_namespace_root,
                 prelude_type_group_count,
                 use_mode: BuilderUseMode::Continuation,
                 empty_prelude: true,
@@ -928,6 +1054,7 @@ impl ProjectBinderBuilder {
             fn_decl_ids: self.state.fn_decl_ids,
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
+            next_source_key: self.state.next_source_key,
         })
     }
 
@@ -1819,12 +1946,14 @@ fn binding_name_and_start<'a>(pattern: &'a BindingPattern<'a>) -> Option<(&'a st
 mod tests {
     use super::*;
     use crate::binder::namespace::{
-        GlobalIssue, MergeDisposition, NamespaceValueAttachmentDisposition,
+        GlobalIssue, MergeDisposition, NamespaceContinuationWorkForTest,
+        NamespaceContinuationWorkScopeForTest, NamespaceOwner, NamespaceValueAttachmentDisposition,
     };
     use crate::source::{CompilationOrigin, LibraryFileOrdinal};
+    use crate::types::layered::{BaseWorkLedgerForTest, BaseWorkScopeForTest};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
-    use oxc_span::SourceType;
+    use oxc_span::{GetSpan, SourceType};
 
     fn bind(src: &str) -> Binder {
         let prelude_alloc = Allocator::default();
@@ -1875,6 +2004,423 @@ mod tests {
                     .expect("canonical declaration module has source ownership")
             })
             .collect()
+    }
+
+    #[test]
+    fn frozen_binder_forks_share_prefix_and_classify_isolated_namespace_suffixes() {
+        let library_allocator = Allocator::default();
+        let library = Parser::new(
+            &library_allocator,
+            "declare namespace BaseSpace { interface Shape {} } declare const baseValue: string;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(library.diagnostics.is_empty());
+        let (mut base, _) = bind_libraries(&[(
+            &library.program,
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+        )]);
+        let base_scopes = base.graph.snapshot_len();
+        let base_symbols = base.symbols.len();
+        let base_declarations = base.declarations.len();
+        let base_groups = base.type_groups.len();
+        let base_namespaces = base.namespaces.len();
+        base.freeze_as_base().expect("binder base freezes once");
+
+        let user_allocator = Allocator::default();
+        let user = Parser::new(
+            &user_allocator,
+            "export namespace LocalSpace { export interface Shape {} export const value = 1; }",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(user.diagnostics.is_empty());
+
+        let first_seed = base.fork_delta().expect("first private binder delta");
+        let second_seed = base.fork_delta().expect("second private binder delta");
+        assert!(base.shares_base_storage_with(&first_seed));
+        assert!(first_seed.shares_base_storage_with(&second_seed));
+
+        let (mut first_builder, first_source) =
+            ProjectBinderBuilder::resume_frozen_library(first_seed);
+        let first_unit = CompilationUnit::implementation(first_source, &user.program);
+        let (first_module, _) = first_builder.add_module(&user.program, &[], first_unit);
+        let first = first_builder
+            .finish_frozen_library_continuation(first_module)
+            .expect("first namespace suffix freezes");
+
+        assert!(first.graph.snapshot_len() > base_scopes);
+        assert!(first.symbols.len() > base_symbols);
+        assert!(first.declarations.len() > base_declarations);
+        assert!(first.type_groups.len() > base_groups);
+        assert!(first.namespaces.len() > base_namespaces);
+        assert!(first
+            .graph
+            .get(first.module)
+            .and_then(|scope| scope.lookup_local("LocalSpace"))
+            .is_some());
+        assert!(first
+            .graph
+            .get(first.script_namespace_root)
+            .and_then(|scope| scope.lookup_local("LocalSpace"))
+            .is_none());
+        assert!(first.namespaces.namespaces().any(|namespace| {
+            namespace.name == "LocalSpace"
+                && namespace.id.index() >= base_namespaces
+                && namespace.owner == NamespaceOwner::Lexical(first.module)
+        }));
+        assert!(base.shares_base_storage_with(&first));
+
+        assert!(second_seed
+            .graph
+            .snapshot_scopes()
+            .all(|scope| scope.lookup_local("LocalSpace").is_none()));
+        assert!(!second_seed
+            .namespaces
+            .namespaces()
+            .any(|namespace| namespace.name == "LocalSpace"));
+        assert_eq!(base.graph.snapshot_len(), base_scopes);
+        assert_eq!(base.symbols.len(), base_symbols);
+        assert_eq!(base.declarations.len(), base_declarations);
+        assert_eq!(base.type_groups.len(), base_groups);
+        assert_eq!(base.namespaces.len(), base_namespaces);
+    }
+
+    #[test]
+    fn frozen_binder_plain_script_namespace_uses_a_reachable_delta_root() {
+        let library_allocator = Allocator::default();
+        let library = Parser::new(
+            &library_allocator,
+            "declare namespace BaseSpace { interface Shape {} }",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(library.diagnostics.is_empty());
+        let (mut base, _) = bind_libraries(&[(
+            &library.program,
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+        )]);
+        let frozen_script_root = base.script_namespace_root;
+        let frozen_scope_count = base.graph.snapshot_len();
+        base.freeze_as_base().expect("binder base freezes once");
+
+        let user_allocator = Allocator::default();
+        let user = Parser::new(
+            &user_allocator,
+            "namespace Local { export const x = 1; } const witness = Local.x;",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(user.diagnostics.is_empty());
+        let delta = base.fork_delta().expect("private binder delta");
+        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(delta);
+        let unit = CompilationUnit::implementation(source, &user.program);
+        let (module, _) = builder.add_module(&user.program, &[], unit);
+        let binder = builder
+            .finish_frozen_library_continuation(module)
+            .expect("plain-script namespace suffix freezes");
+
+        assert!(binder.script_namespace_root.index() >= frozen_scope_count);
+        assert_eq!(
+            binder
+                .graph
+                .get(binder.script_namespace_root)
+                .and_then(|scope| scope.parent),
+            Some(frozen_script_root)
+        );
+        let local = binder
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == "Local")
+            .expect("local script namespace");
+        assert_eq!(
+            local.owner,
+            NamespaceOwner::Lexical(binder.script_namespace_root)
+        );
+        let storage = binder
+            .namespaces
+            .standalone_value_storage(local.id)
+            .expect("instantiated local namespace storage");
+        assert_eq!(
+            binder.resolve_value_binding(binder.module, "Local"),
+            ValueResolution::Resolved {
+                symbol: local.symbol,
+                kind: ResolvedValueKind::StandaloneNamespace {
+                    namespace: local.id,
+                    storage,
+                },
+            }
+        );
+        let attachment = binder
+            .local_standalone_namespace_value_attachments()
+            .into_iter()
+            .find(|attachment| attachment.namespace == local.id)
+            .expect("local namespace value attachment");
+        assert!(attachment
+            .members
+            .iter()
+            .any(|member| { member.name == Some("x") && member.value_storage.is_some() }));
+        assert!(base
+            .graph
+            .get(frozen_script_root)
+            .and_then(|scope| scope.lookup_local("Local"))
+            .is_none());
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ContinuationNamespaceWorkShape {
+        local_namespaces: usize,
+        local_merges: usize,
+        local_standalone_attachments: usize,
+        placement_issues: usize,
+        globals: usize,
+        umd_exports: usize,
+        ambient_alias_failures: usize,
+        value_storage_delta: u32,
+        symbol_delta: usize,
+        work: NamespaceContinuationWorkForTest,
+    }
+
+    const CONTINUATION_PROJECTION_SUBTABLES: [&str; 31] = [
+        "store.rows",
+        "store.payload-tables",
+        "store.type-param-constraints",
+        "store.frozen-type-params",
+        "store.template-names",
+        "interner.dedup-buckets",
+        "interner.reserved-terminals",
+        "interner.well-known",
+        "binder.scopes",
+        "binder.symbols",
+        "binder.declarations",
+        "binder.declaration-site-index",
+        "binder.type-groups",
+        "binder.namespaces",
+        "binder.namespace-indexes",
+        "binder.module-sources",
+        "decl-types.slots",
+        "published-types.groups",
+        "published-types.classes",
+        "namespace-terminals",
+        "function-groups.symbols",
+        "class.application-parameters",
+        "class.parameter-defaults",
+        "class.parents",
+        "class.names",
+        "class.new-metadata",
+        "class.value-identities",
+        "class.aliases",
+        "semantic-identities",
+        "root-name-index.entries",
+        "next-ids",
+    ];
+
+    fn assert_no_unattributed_continuation_base_work(ledger: &BaseWorkLedgerForTest) {
+        for operation in [
+            &ledger.sequential_scans,
+            &ledger.materializations,
+            &ledger.clones,
+            &ledger.remaps,
+        ] {
+            assert_eq!(operation.len(), CONTINUATION_PROJECTION_SUBTABLES.len());
+            assert!(CONTINUATION_PROJECTION_SUBTABLES
+                .iter()
+                .all(|family| operation.contains_key(family)));
+            assert!(!operation.contains_key("unattributed"));
+        }
+    }
+
+    fn continuation_namespace_work_shape(
+        frozen_namespace_count: usize,
+    ) -> ContinuationNamespaceWorkShape {
+        let library_source = (0..frozen_namespace_count)
+            .map(|index| {
+                format!(
+                    "export as namespace FrozenUmd{index}; \
+                     declare global {{ interface FrozenGlobal{index} {{}} }} \
+                     declare namespace Frozen{index} {{ \
+                         export const value: number; \
+                         export {{ Missing as Alias }}; \
+                     }}"
+                )
+            })
+            .collect::<String>();
+        let library_allocator = Allocator::default();
+        let library = Parser::new(&library_allocator, &library_source, SourceType::d_ts()).parse();
+        assert!(library.diagnostics.is_empty());
+        let (mut base, _) = bind_libraries(&[(
+            &library.program,
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+        )]);
+        let frozen_name = format!("Frozen{}", frozen_namespace_count - 1);
+        let frozen_namespace = base
+            .namespaces
+            .namespaces()
+            .find(|namespace| namespace.name == frozen_name)
+            .map(|namespace| namespace.id)
+            .expect("scaled frozen namespace exists");
+        let frozen_storage = base
+            .namespaces
+            .standalone_value_storage(frozen_namespace)
+            .expect("scaled frozen namespace has a value slot");
+        let base_decl_count = base.decl_count;
+        let base_symbol_count = base.symbols.len();
+        base.freeze_as_base().expect("scaled binder base freezes");
+
+        let user_allocator = Allocator::default();
+        let user = Parser::new(
+            &user_allocator,
+            r#"
+                export namespace LocalSpace {
+                    export const value = 1;
+                    export namespace Child { export const nested = 2; }
+                }
+                export function Attached(value: number): number { return value; }
+                export namespace Attached { export const extra = 1; }
+                export namespace Late { export const before = 1; }
+                export function Late(): void {}
+                export as namespace UserUmd;
+                export declare namespace AmbientAlias {
+                    export { Missing as Alias };
+                }
+                export default 1;
+            "#,
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(user.diagnostics.is_empty());
+        let delta = base.fork_delta().expect("scaled private binder delta");
+        let base_work_scope = BaseWorkScopeForTest::start(CONTINUATION_PROJECTION_SUBTABLES);
+        let work_scope = NamespaceContinuationWorkScopeForTest::start();
+        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(delta);
+        assert_eq!(source, SourceUnitKey(2));
+        let unit = CompilationUnit::implementation(source, &user.program);
+        let (module, _) = builder.add_module(&user.program, &[], unit);
+        let binder = builder
+            .finish_frozen_library_continuation(module)
+            .expect("scaled namespace suffix freezes");
+
+        assert_eq!(
+            binder.standalone_namespace_for_storage(frozen_storage),
+            Some(frozen_namespace),
+            "the frozen storage index remains queryable without a prefix scan"
+        );
+        let local = binder
+            .namespaces
+            .local_namespaces()
+            .find(|(_, namespace)| namespace.name == "LocalSpace")
+            .map(|(id, _)| id)
+            .expect("local standalone namespace exists");
+        let local_storage = binder
+            .namespaces
+            .standalone_value_storage(local)
+            .expect("local standalone namespace has a value slot");
+        assert_eq!(
+            binder.standalone_namespace_for_storage(local_storage),
+            Some(local)
+        );
+        assert_eq!(
+            binder.standalone_namespace_for_storage(ValueStorageId(u32::MAX)),
+            None
+        );
+        let local_fragment = binder
+            .namespaces
+            .get(local)
+            .and_then(|namespace| namespace.fragments.first())
+            .and_then(|fragment| binder.namespaces.fragment(*fragment))
+            .expect("local namespace fragment exists");
+        assert_eq!(
+            binder.namespace_fragment_private_scope(module, local_fragment.source_start),
+            Some(local_fragment.private_scope)
+        );
+        let attached = binder
+            .namespace_value_attachment(module, "Attached")
+            .expect("indexed attached merge resolves");
+        assert_eq!(
+            attached.disposition,
+            NamespaceValueAttachmentDisposition::AdmittedFunction
+        );
+        assert!(attached.members.iter().any(|member| member.name == "extra"));
+
+        let local_merges = binder.namespaces.local_merges().count();
+        let local_standalone_attachments =
+            binder.local_standalone_namespace_value_attachments().len();
+        let placement_issues = binder.namespaces.local_placement_issues().count();
+        let globals = binder.namespaces.local_globals().count();
+        let local_umd_exports = binder.namespaces.local_umd_exports().collect::<Vec<_>>();
+        let umd_exports = local_umd_exports.len();
+        let umd = local_umd_exports.first().expect("local UMD export exists");
+        assert!(!binder.umd_export_requires_incomplete(module, umd.span.start));
+        assert_eq!(binder.global_augmentation_scope(module, u32::MAX), None);
+        assert!(!binder.global_augmentation_requires_incomplete(module, u32::MAX));
+        let export_default_start = user
+            .program
+            .body
+            .iter()
+            .find_map(|statement| {
+                matches!(statement, Statement::ExportDefaultDeclaration(_))
+                    .then_some(statement.span().start)
+            })
+            .expect("user export default exists");
+        assert!(!binder.library_export_default_reporting_owns(module, export_default_start));
+        assert!(!binder.library_module_reporting_owns(module, local_fragment.source_start));
+        let ambient_alias_failures = binder.local_ambient_export_alias_failures().len();
+        let work = work_scope.finish();
+        let base_work = base_work_scope.finish();
+        assert_no_unattributed_continuation_base_work(&base_work);
+
+        ContinuationNamespaceWorkShape {
+            local_namespaces: binder.namespaces.local_namespaces().count(),
+            local_merges,
+            local_standalone_attachments,
+            placement_issues,
+            globals,
+            umd_exports,
+            ambient_alias_failures,
+            value_storage_delta: binder.decl_count - base_decl_count,
+            symbol_delta: binder.symbols.len() - base_symbol_count,
+            work,
+        }
+    }
+
+    #[test]
+    fn frozen_namespace_continuation_work_shape_is_independent_of_base_size() {
+        let small = continuation_namespace_work_shape(2);
+        let scaled = continuation_namespace_work_shape(1_024);
+        assert_eq!(scaled, small);
+        assert_eq!(
+            scaled,
+            ContinuationNamespaceWorkShape {
+                local_namespaces: 5,
+                local_merges: 9,
+                local_standalone_attachments: 2,
+                placement_issues: 1,
+                globals: 0,
+                umd_exports: 1,
+                ambient_alias_failures: 1,
+                value_storage_delta: 9,
+                symbol_delta: 15,
+                work: NamespaceContinuationWorkForTest {
+                    merge_rows: 18,
+                    instance_fragment_rows: 10,
+                    child_fragment_lookups: 1,
+                    allocation_namespace_rows: 10,
+                    attachment_namespace_rows: 5,
+                    fragment_scope_lookups: 1,
+                    placement_merge_rows: 9,
+                    global_rows: 0,
+                    umd_rows: 1,
+                    ambient_alias_member_rows: 6,
+                    umd_statement_queries: 1,
+                    global_statement_queries: 2,
+                    library_source_lookups: 1,
+                    library_reporting_lookups: 2,
+                },
+            }
+        );
     }
 
     #[test]
@@ -2620,7 +3166,7 @@ mod tests {
                 .expect("canonical standalone root");
             assert_eq!(root.value, Some(storage));
             let attachment = binder
-                .standalone_namespace_value_attachments()
+                .local_standalone_namespace_value_attachments()
                 .into_iter()
                 .find(|attachment| attachment.namespace == namespace.id)
                 .expect("canonical standalone attachment");

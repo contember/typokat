@@ -161,7 +161,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
         }
 
         let mut standalone_members = binder
-            .standalone_namespace_value_attachments()
+            .local_standalone_namespace_value_attachments()
             .into_iter()
             .flat_map(|attachment| attachment.members)
             .collect::<Vec<_>>();

@@ -4,6 +4,7 @@ use crate::binder::namespace::NamespaceId;
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::scope::ScopeId;
 use crate::span::Span;
+use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{Program, TSModuleDeclarationName};
 use oxc_ast::AstKind;
 use oxc_ast_visit::Visit;
@@ -219,8 +220,8 @@ pub struct LexicalDeclaration {
 /// Dense canonical declaration rows with exact-site lookup into unified lexical [`DeclId`].
 #[derive(Default)]
 pub struct DeclarationTable {
-    declarations: Vec<LexicalDeclaration>,
-    declarations_by_site: FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>,
+    declarations: LayeredVec<LexicalDeclaration>,
+    declarations_by_site: LayeredMap<(ScopeId, u32, DeclarationKind), DeclId>,
 }
 
 impl DeclarationTable {
@@ -228,7 +229,7 @@ impl DeclarationTable {
         let id = DeclId(
             u32::try_from(self.declarations.len()).expect("declaration table length fits u32"),
         );
-        self.declarations.push(LexicalDeclaration {
+        self.declarations.push_local(LexicalDeclaration {
             id,
             kind,
             site,
@@ -238,8 +239,11 @@ impl DeclarationTable {
         });
         let previous = self
             .declarations_by_site
-            .insert((site.module, site.binding_span.start, kind), id);
-        debug_assert!(previous.is_none(), "one declaration per binding leaf");
+            .insert_local((site.module, site.binding_span.start, kind), id);
+        debug_assert!(
+            matches!(previous, Ok(None)),
+            "one declaration per binding leaf"
+        );
         id
     }
 
@@ -260,11 +264,15 @@ impl DeclarationTable {
     }
 
     pub(crate) fn get_mut(&mut self, id: DeclId) -> Option<&mut LexicalDeclaration> {
-        self.declarations.get_mut(id.index())
+        self.declarations.get_mut_local(id.index())
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &LexicalDeclaration> {
         self.declarations.iter()
+    }
+
+    pub(crate) fn local_declarations(&self) -> impl Iterator<Item = &LexicalDeclaration> {
+        self.declarations.local_iter()
     }
 
     pub fn len(&self) -> usize {
@@ -292,10 +300,51 @@ impl DeclarationTable {
                 return Err("snapshot declaration-site index contains a duplicate");
             }
         }
+        let mut table = Self::default();
+        for declaration in declarations {
+            table.declarations.push_local(declaration);
+        }
+        for (key, declaration) in declarations_by_site {
+            table.declarations_by_site.insert_local(key, declaration)?;
+        }
+        Ok(table)
+    }
+
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.declarations.freeze_as_base()?;
+        self.declarations_by_site.freeze_as_base()
+    }
+
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
-            declarations,
-            declarations_by_site,
+            declarations: self.declarations.fork_delta()?,
+            declarations_by_site: self.declarations_by_site.fork_delta()?,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+        self.declarations.shares_base_with(&other.declarations)
+            && self
+                .declarations_by_site
+                .shares_base_with(&other.declarations_by_site)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
+        [
+            self.declarations.shares_base_with(&other.declarations),
+            self.declarations_by_site
+                .shares_base_with(&other.declarations_by_site),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
+        [
+            self.declarations.local_len(),
+            self.declarations_by_site.local_len(),
+        ]
     }
 }
 
@@ -328,7 +377,7 @@ pub struct TypeGroup {
 /// Dense stable group table indexed by [`TypeGroupId`].
 #[derive(Default)]
 pub struct TypeGroupTable {
-    groups: Vec<TypeGroup>,
+    groups: LayeredVec<TypeGroup>,
 }
 
 impl TypeGroupTable {
@@ -336,7 +385,7 @@ impl TypeGroupTable {
         let id = TypeGroupId(
             u32::try_from(self.groups.len()).expect("type group table length fits u32"),
         );
-        self.groups.push(TypeGroup {
+        self.groups.push_local(TypeGroup {
             id,
             name: name.into(),
             fragments: Vec::new(),
@@ -349,7 +398,7 @@ impl TypeGroupTable {
     }
 
     pub(crate) fn get_mut(&mut self, id: TypeGroupId) -> Option<&mut TypeGroup> {
-        self.groups.get_mut(id.index())
+        self.groups.get_mut_local(id.index())
     }
 
     pub fn len(&self) -> usize {
@@ -364,6 +413,16 @@ impl TypeGroupTable {
         self.groups.iter()
     }
 
+    #[cfg(test)]
+    pub(crate) fn local_groups(&self) -> impl Iterator<Item = &TypeGroup> {
+        self.groups.local_iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_row_count_for_test(&self) -> usize {
+        self.groups.local_len()
+    }
+
     pub(crate) fn from_snapshot(groups: Vec<TypeGroup>) -> Result<Self, &'static str> {
         if groups
             .iter()
@@ -372,7 +431,26 @@ impl TypeGroupTable {
         {
             return Err("snapshot type-group ids are not dense");
         }
-        Ok(Self { groups })
+        let mut table = Self::default();
+        for group in groups {
+            table.groups.push_local(group);
+        }
+        Ok(table)
+    }
+
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.groups.freeze_as_base()
+    }
+
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            groups: self.groups.fork_delta()?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+        self.groups.shares_base_with(&other.groups)
     }
 }
 

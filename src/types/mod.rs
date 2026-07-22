@@ -3,6 +3,7 @@
 
 pub mod hash;
 pub mod intern;
+pub(crate) mod layered;
 pub mod repr;
 pub mod store;
 pub mod substitute;

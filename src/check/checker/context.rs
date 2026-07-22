@@ -11,13 +11,15 @@ use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
 use crate::source::SourceUnit;
 use crate::span::Span;
+use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{ClassId, PropertyType, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Index, IndexMut};
+use std::sync::Arc;
 
 use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
@@ -301,41 +303,55 @@ impl PendingEffectSlots {
 /// it resolves to the error type defensively.
 #[derive(Clone)]
 pub(in crate::check::checker) struct DeclTypes {
-    types: Vec<Option<TypeId>>,
+    base: Arc<[Option<TypeId>]>,
+    local: Vec<Option<TypeId>>,
+    sealed: bool,
 }
 
 impl DeclTypes {
     pub(in crate::check::checker) fn new(count: u32) -> Self {
         DeclTypes {
-            types: vec![None; count as usize],
+            base: Arc::from([]),
+            local: vec![None; count as usize],
+            sealed: false,
         }
     }
 
     pub(in crate::check::checker) fn set(&mut self, id: ValueStorageId, ty: TypeId) {
-        if let Some(slot) = self.types.get_mut(id.index()) {
+        if let Some(slot) = id
+            .index()
+            .checked_sub(self.base.len())
+            .and_then(|index| self.local.get_mut(index))
+        {
             *slot = Some(ty);
         }
     }
 
     pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
-        self.types.get(id.index()).copied().flatten()
+        let index = id.index();
+        self.base
+            .get(index)
+            .or_else(|| self.local.get(index - self.base.len()))
+            .copied()
+            .flatten()
     }
 
     pub(in crate::check::checker) fn resize(&mut self, count: u32) {
         assert!(
-            count as usize >= self.types.len(),
+            count as usize >= self.len(),
             "declaration type storage grows only by suffix"
         );
-        self.types.resize(count as usize, None);
+        while self.len() < count as usize {
+            self.local.push(None);
+        }
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn len(&self) -> usize {
-        self.types.len()
+        self.base.len() + self.local.len()
     }
 
     pub(in crate::check::checker) fn snapshot_slots(&self) -> Vec<Option<TypeId>> {
-        self.types.clone()
+        self.base.iter().chain(&self.local).copied().collect()
     }
 
     pub(in crate::check::checker) fn from_snapshot_slots(
@@ -348,7 +364,56 @@ impl DeclTypes {
         {
             return Err("snapshot declaration type slots do not match binder storage count");
         }
-        Ok(Self { types: slots })
+        Ok(Self {
+            base: Arc::from([]),
+            local: slots,
+            sealed: false,
+        })
+    }
+
+    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        if self.sealed || !self.base.is_empty() {
+            return Err("declaration types are already sealed");
+        }
+        self.base = Arc::from(std::mem::take(&mut self.local));
+        self.sealed = true;
+        Ok(())
+    }
+
+    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
+        if !self.sealed || !self.local.is_empty() {
+            return Err("declaration type base is not sealed");
+        }
+        Ok(Self {
+            base: Arc::clone(&self.base),
+            local: Vec::new(),
+            sealed: true,
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.base, &other.base)
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_len(&self) -> usize {
+        self.local.len()
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_slots(
+        &self,
+    ) -> impl Iterator<Item = (ValueStorageId, Option<TypeId>)> + '_ {
+        let base_len = self.base.len();
+        self.local
+            .iter()
+            .copied()
+            .enumerate()
+            .map(move |(index, ty)| {
+                let id = u32::try_from(base_len + index).expect("value storage id fits u32");
+                (ValueStorageId(id), ty)
+            })
     }
 }
 
@@ -508,6 +573,204 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     Resolved { params: Vec<TypeParamId> },
 }
 
+#[derive(Clone)]
+pub(in crate::check::checker) struct PublishedTypeDecl {
+    pub(in crate::check::checker) params: Vec<TypeParamId>,
+}
+
+pub(in crate::check::checker) enum TypeDeclView<'table, 'ast> {
+    Published(&'table PublishedTypeDecl),
+    Local(&'table TypeDecl<'ast>),
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct TypeDeclTable<'ast> {
+    published: LayeredVec<PublishedTypeDecl>,
+    local: Vec<TypeDecl<'ast>>,
+}
+
+impl<'ast> TypeDeclTable<'ast> {
+    pub(in crate::check::checker) fn with_published(
+        published: LayeredVec<PublishedTypeDecl>,
+    ) -> Self {
+        Self {
+            published,
+            local: Vec::new(),
+        }
+    }
+
+    pub(in crate::check::checker) fn len(&self) -> usize {
+        self.published.len() + self.local.len()
+    }
+
+    pub(in crate::check::checker) fn get(&self, index: usize) -> Option<&TypeDecl<'ast>> {
+        self.local.get(index.checked_sub(self.published.len())?)
+    }
+
+    pub(in crate::check::checker) fn view(&self, index: usize) -> Option<TypeDeclView<'_, 'ast>> {
+        if let Some(published) = self.published.get(index) {
+            Some(TypeDeclView::Published(published))
+        } else {
+            self.get(index).map(TypeDeclView::Local)
+        }
+    }
+
+    pub(in crate::check::checker) fn get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut TypeDecl<'ast>> {
+        self.local.get_mut(index.checked_sub(self.published.len())?)
+    }
+
+    pub(in crate::check::checker) fn push(&mut self, declaration: TypeDecl<'ast>) {
+        self.local.push(declaration);
+    }
+
+    pub(in crate::check::checker) fn iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &TypeDecl<'ast>> + ExactSizeIterator + Clone {
+        self.local.iter()
+    }
+
+    pub(in crate::check::checker) fn published_len(&self) -> usize {
+        self.published.len()
+    }
+
+    pub(in crate::check::checker) fn published_params(
+        &self,
+        index: usize,
+    ) -> Option<&[TypeParamId]> {
+        Some(self.published.get(index)?.params.as_slice())
+    }
+}
+
+impl<'ast> From<Vec<TypeDecl<'ast>>> for TypeDeclTable<'ast> {
+    fn from(local: Vec<TypeDecl<'ast>>) -> Self {
+        Self {
+            published: LayeredVec::default(),
+            local,
+        }
+    }
+}
+
+impl<'ast> Index<usize> for TypeDeclTable<'ast> {
+    type Output = TypeDecl<'ast>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).expect("type declaration index in range")
+    }
+}
+
+impl<'ast> IndexMut<usize> for TypeDeclTable<'ast> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index)
+            .expect("published type declarations are immutable")
+    }
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct TypeResolvedTable {
+    published: LayeredVec<Option<TypeId>>,
+    local: Vec<Option<TypeId>>,
+}
+
+impl TypeResolvedTable {
+    pub(in crate::check::checker) fn with_published(published: LayeredVec<Option<TypeId>>) -> Self {
+        Self {
+            published,
+            local: Vec::new(),
+        }
+    }
+
+    pub(in crate::check::checker) fn resize(&mut self, len: usize, value: Option<TypeId>) {
+        assert!(len >= self.published.len());
+        self.local.resize(len - self.published.len(), value);
+    }
+
+    pub(in crate::check::checker) fn get(&self, index: usize) -> Option<&Option<TypeId>> {
+        self.published
+            .get(index)
+            .or_else(|| self.local.get(index.checked_sub(self.published.len())?))
+    }
+
+    pub(in crate::check::checker) fn get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut Option<TypeId>> {
+        self.local.get_mut(index.checked_sub(self.published.len())?)
+    }
+}
+
+impl From<Vec<Option<TypeId>>> for TypeResolvedTable {
+    fn from(local: Vec<Option<TypeId>>) -> Self {
+        Self {
+            published: LayeredVec::default(),
+            local,
+        }
+    }
+}
+
+impl Index<usize> for TypeResolvedTable {
+    type Output = Option<TypeId>;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).expect("resolved type index in range")
+    }
+}
+
+impl IndexMut<usize> for TypeResolvedTable {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index)
+            .expect("published resolved types are immutable")
+    }
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct TemplateFillTable {
+    published_len: usize,
+    local: Vec<ClassFillState>,
+}
+
+impl TemplateFillTable {
+    pub(in crate::check::checker) fn new(published_len: usize, local: Vec<ClassFillState>) -> Self {
+        Self {
+            published_len,
+            local,
+        }
+    }
+
+    pub(in crate::check::checker) fn get(&self, index: usize) -> Option<&ClassFillState> {
+        static DONE: ClassFillState = ClassFillState::Done;
+        if index < self.published_len {
+            Some(&DONE)
+        } else {
+            self.local.get(index - self.published_len)
+        }
+    }
+
+    pub(in crate::check::checker) fn get_mut(
+        &mut self,
+        index: usize,
+    ) -> Option<&mut ClassFillState> {
+        self.local.get_mut(index.checked_sub(self.published_len)?)
+    }
+}
+
+impl Index<usize> for TemplateFillTable {
+    type Output = ClassFillState;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).expect("template fill index in range")
+    }
+}
+
+impl IndexMut<usize> for TemplateFillTable {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index)
+            .expect("published template fill state is immutable")
+    }
+}
+
 /// A class's copyable `new` metadata, keyed by [`ValueStorageId`].
 #[derive(Copy, Clone)]
 pub(in crate::check::checker) struct ClassInfo {
@@ -573,9 +836,9 @@ pub(in crate::check::checker) struct ConstructionDrafts<'ast> {
     pub(in crate::check::checker) staged_published_classes:
         Option<crate::class_semantics::PublishedClasses>,
     pub(in crate::check::checker) type_group_construction: Option<TypeGroupConstruction>,
-    pub(in crate::check::checker) type_decls: Vec<TypeDecl<'ast>>,
-    pub(in crate::check::checker) type_resolved: Vec<Option<TypeId>>,
-    pub(in crate::check::checker) template_fill: Vec<ClassFillState>,
+    pub(in crate::check::checker) type_decls: TypeDeclTable<'ast>,
+    pub(in crate::check::checker) type_resolved: TypeResolvedTable,
+    pub(in crate::check::checker) template_fill: TemplateFillTable,
 }
 
 #[cfg(test)]
@@ -894,7 +1157,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) lexical_array_alias: Option<TypeGroupId>,
     /// Frozen class parameter descriptors retained from the atomic publication.
     pub(in crate::check::checker) class_application_parameters:
-        BTreeMap<ClassId, Vec<DraftClassTypeParameter<()>>>,
+        LayeredMap<ClassId, Vec<DraftClassTypeParameter<()>>>,
     /// Query-bearing class validation is held until type groups publish atomically.
     pub(in crate::check::checker) staged_class_validation: Option<StagedClassValidation<Ticket>>,
     /// Exact class callables retained by the one surface-lowering pass.
@@ -907,7 +1170,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// Exact substituted base constructor for each published derived class.
     pub(in crate::check::checker) class_super_constructors: BTreeMap<ClassId, TypeId>,
     /// Owner-free `new` facts frozen before construction ASTs are dropped.
-    pub(in crate::check::checker) class_new_metadata: BTreeMap<ClassId, PublishedClassNewMetadata>,
+    pub(in crate::check::checker) class_new_metadata:
+        LayeredMap<ClassId, PublishedClassNewMetadata>,
     /// Type-parameter scope stack.
     /// Frames are pushed only around their generic declaration, and innermost
     /// frames shadow binder type slots so `T` does not leak.
@@ -921,25 +1185,25 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) next_type_param: u32,
     /// Parent class by stable [`ClassId`], built from resolvable `extends`.
     /// Used by `protected` access and independent of interned type identity.
-    pub(in crate::check::checker) class_parents: FxHashMap<ClassId, ClassId>,
+    pub(in crate::check::checker) class_parents: LayeredMap<ClassId, ClassId>,
     /// One-step `const Alias = Class` origins. `infer_new` uses this only to retain
     /// the direct class's abstract and constructor-accessibility facts.
-    pub(in crate::check::checker) class_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
+    pub(in crate::check::checker) class_value_aliases: LayeredMap<ValueStorageId, ValueStorageId>,
     /// Direct value-space roots for published classes, independent of lexical tickets.
     pub(in crate::check::checker) class_value_bindings:
-        FxHashMap<ValueStorageId, PublishedClassValueBinding>,
+        LayeredMap<ValueStorageId, PublishedClassValueBinding>,
     /// Const aliases that retain a standalone namespace root's completeness provenance.
     pub(in crate::check::checker) standalone_namespace_value_aliases:
-        FxHashMap<ValueStorageId, ValueStorageId>,
+        LayeredMap<ValueStorageId, ValueStorageId>,
     /// Display name by stable [`ClassId`].
     /// Lets constructor-access diagnostics name the declaring class, which may be
     /// an inherited base, while keeping [`ClassInfo`] `Copy`.
-    pub(in crate::check::checker) class_names: FxHashMap<ClassId, String>,
+    pub(in crate::check::checker) class_names: LayeredMap<ClassId, String>,
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Construction and single-publication state for admitted function/namespace groups.
     pub(in crate::check::checker) function_groups: FunctionGroupRegistry<Ticket>,
     /// Published function-group names inherited without construction drafts or tickets.
-    pub(in crate::check::checker) named_function_symbols: FxHashSet<SymbolId>,
+    pub(in crate::check::checker) named_function_symbols: LayeredSet<SymbolId>,
     /// Immutable namespace value surfaces awaiting their exact class-owned draft.
     pub(in crate::check::checker) class_namespace_payloads:
         BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload<Ticket>>>,
@@ -1116,6 +1380,8 @@ pub(in crate::check::checker) struct CondFrame {
 
 #[cfg(test)]
 mod tests {
+    use super::DeclTypes;
+    use crate::binder::declaration::ValueStorageId;
     use crate::check::checker::events::{user_record_ticket_key, EventStore, UserRecordTicket};
     use crate::check::checker::events_library::{LibraryEventLedger, LibraryRecordTicket};
     use crate::check::checker::lexical_events::LexicalReservations;
@@ -1123,11 +1389,35 @@ mod tests {
     use crate::diagnostics::{Diagnostic, DiagnosticCode, IncompleteSurface};
     use crate::source::{LibraryFileOrdinal, ModuleOrdinal, SourceUnit};
     use crate::span::Span;
+    use crate::types::store::TypeId;
     use crate::types::Interner;
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
     use rustc_hash::FxHashMap;
+
+    #[test]
+    fn declaration_types_share_a_frozen_prefix_and_isolate_dense_suffixes() {
+        let mut base = DeclTypes::new(3);
+        base.set(ValueStorageId(0), TypeId(10));
+        base.set(ValueStorageId(2), TypeId(12));
+        base.freeze_as_base().expect("declaration prefix seals");
+
+        let mut first = base.fork_delta().expect("first declaration suffix");
+        let second = base.fork_delta().expect("second declaration suffix");
+        assert!(first.shares_base_with(&second));
+        first.resize(5);
+        first.set(ValueStorageId(3), TypeId(13));
+        first.set(ValueStorageId(4), TypeId(14));
+
+        assert_eq!(first.local_len(), 2);
+        assert_eq!(first.get(ValueStorageId(0)), Some(TypeId(10)));
+        assert_eq!(first.get(ValueStorageId(3)), Some(TypeId(13)));
+        assert_eq!(first.get(ValueStorageId(4)), Some(TypeId(14)));
+        assert_eq!(second.len(), 3);
+        assert_eq!(second.get(ValueStorageId(3)), None);
+        assert_eq!(base.len(), 3);
+    }
 
     #[test]
     fn library_pass_finishes_ordered_record_batches_without_reporting_authority() {
@@ -1151,8 +1441,8 @@ mod tests {
         let mut pass = super::super::build_pass_with_tickets(
             &mut interner,
             &binder,
-            Vec::new(),
-            vec![None; binder.type_groups.len()],
+            Vec::new().into(),
+            vec![None; binder.type_groups.len()].into(),
             super::DeclTypes::new(binder.decl_count),
             0,
             super::super::PassReportingPlan {
@@ -1284,8 +1574,8 @@ mod tests {
         let mut pass = super::super::build_pass_with_tickets(
             &mut interner,
             &binder,
-            Vec::new(),
-            vec![None; binder.type_groups.len()],
+            Vec::new().into(),
+            vec![None; binder.type_groups.len()].into(),
             super::DeclTypes::new(binder.decl_count),
             0,
             super::super::PassReportingPlan {

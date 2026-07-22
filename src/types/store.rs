@@ -7,6 +7,7 @@
 use crate::snapshot_codec::SnapshotWriter;
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::hash::StableHash;
+use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{
     ArrayType, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, FunctionType,
     InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType, TemplateType,
@@ -42,59 +43,61 @@ pub struct Store {
     /// Identity of the current outgoing-edge graph. Append-only rows preserve it;
     /// filling a reserved row or changing a side-column edge replaces it.
     semantic_graph_identity: Arc<()>,
+    /// Exact declaration identities owned by the sealed type-parameter prefix.
+    sealed_type_param_ids: Arc<FxHashSet<TypeParamId>>,
 
     // --- hot, parallel, indexed by TypeId ---
-    tag: Vec<TypeTag>,
-    flags: Vec<TypeFlags>,
+    tag: LayeredVec<TypeTag>,
+    flags: LayeredVec<TypeFlags>,
     /// For `Intrinsic`: the `IntrinsicKind` discriminant. Otherwise: an index
     /// into the cold side-table selected by `tag`.
-    payload: Vec<u32>,
+    payload: LayeredVec<u32>,
 
     // --- cold side-tables ---
-    literals: Vec<LiteralValue>,
+    literals: LayeredVec<LiteralValue>,
     /// Object types (M2). Addressed by the `payload` of an `Object`-tagged row.
-    objects: Vec<ObjectType>,
+    objects: LayeredVec<ObjectType>,
     /// Union members (M4), already canonicalized: flattened, sorted by `TypeId`,
     /// deduped, with `never` dropped (mvp-plan §3.3). Addressed by the `payload`
     /// of a `Union`-tagged row. A union row always has at least two members — the
     /// 0- and 1-member cases collapse in the interner and never reach the store.
-    unions: Vec<Box<[TypeId]>>,
+    unions: LayeredVec<Box<[TypeId]>>,
     /// Intersection members (M31), already canonicalized by the interner. Like a
     /// union row, always at least two members.
-    intersections: Vec<Box<[TypeId]>>,
+    intersections: LayeredVec<Box<[TypeId]>>,
     /// Function types (M3). Addressed by the `payload` of a `Function`-tagged row.
-    functions: Vec<FunctionType>,
+    functions: LayeredVec<FunctionType>,
     /// Type-parameter types (M9). Addressed by the `payload` of a
     /// `TypeParam`-tagged row. Each entry's identity is its `TypeParamId`.
-    type_params: Vec<TypeParamType>,
+    type_params: LayeredVec<TypeParamType>,
     /// Array types (M17). Addressed by the `payload` of an `Array`-tagged row. Each
     /// entry's identity is its element `TypeId` (so `number[]` hash-conses to one id
     /// and `number[]` ≠ `string[]`).
-    arrays: Vec<ArrayType>,
+    arrays: LayeredVec<ArrayType>,
     /// Tuple types (M18, rest-shape expanded in M32/WU2). Addressed by the
     /// `payload` of a `Tuple`-tagged row. Each entry's identity is its ordered
     /// fixed element list plus any rest position/type.
-    tuples: Vec<TupleType>,
+    tuples: LayeredVec<TupleType>,
     /// Conditional types (M25). Addressed by the `payload` of a `Conditional`-tagged
     /// row. Field order is significant (position is meaning); a recursive alias
     /// template row is reserved empty and filled in place (`fill_conditional`), like a
     /// nominal object.
-    conditionals: Vec<ConditionalType>,
+    conditionals: LayeredVec<ConditionalType>,
     /// Lazy alias instantiations (M25). Addressed by the `payload` of an
     /// `Instantiation`-tagged row. Identity is `(base, sorted args)`.
-    instantiations: Vec<InstantiationType>,
+    instantiations: LayeredVec<InstantiationType>,
     /// Immutable class applications, distinct from lazy alias instantiations.
-    class_instances: Vec<ClassInstanceType>,
+    class_instances: LayeredVec<ClassInstanceType>,
     /// Immutable deferred indexed-access operand pairs.
-    deferred_indexed_accesses: Vec<DeferredIndexedAccessType>,
+    deferred_indexed_accesses: LayeredVec<DeferredIndexedAccessType>,
     /// Mapped types (M26). Addressed by the `payload` of a `Mapped`-tagged row. The
     /// whole [`MappedType`] is its structural identity. A `MappedValue` placeholder row
     /// carries no side-table entry (payload `0`), like an intrinsic.
-    mapped: Vec<MappedType>,
+    mapped: LayeredVec<MappedType>,
     /// Template literal types (M27). Addressed by the `payload` of a `Template`-tagged
     /// row. The whole [`TemplateType`] (its text segments + hole ids) is its structural
     /// identity.
-    templates: Vec<TemplateType>,
+    templates: LayeredVec<TemplateType>,
 
     /// **Type-parameter constraint column** (M24): a type parameter's `extends`
     /// bound, keyed by its [`TypeParamId`]. A **side column**, NOT part of the
@@ -106,21 +109,21 @@ pub struct Store {
     /// read by both the checker (apparent type + `TK2344`) and the relation engine
     /// (`TypeParam(T) → X` via its constraint). A parameter with no `extends`, or an
     /// unlowerable one, simply has no entry (no constraint — the safe direction).
-    type_param_constraints: FxHashMap<TypeParamId, TypeId>,
+    type_param_constraints: LayeredMap<TypeParamId, TypeId>,
 
     /// Declaration binders whose side-column metadata is immutable. Class
     /// publication freezes the complete SCC batch before any surface is exposed.
-    frozen_type_params: FxHashSet<TypeParamId>,
+    frozen_type_params: LayeredSet<TypeParamId>,
 
     /// Template display names (M28 round 3), keyed by reserved template id.
     /// Rendering-only: deferred instantiations print as alias names, not raw bodies.
-    template_names: FxHashMap<TypeId, String>,
+    template_names: LayeredMap<TypeId, String>,
 
     /// Reserved cross-run identity column (architecture §3.2). NOT populated in
     /// the MVP (mvp-plan §7.1) — kept so Phase 4 can fill it at intern time
     /// without changing the arena shape.
     #[allow(dead_code)] // TODO(Phase 4): populate alongside each push.
-    stable_hash: Vec<StableHash>,
+    stable_hash: LayeredVec<StableHash>,
 }
 
 impl Store {
@@ -133,6 +136,28 @@ impl Store {
         self.tag.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn frozen_prefix_len_for_test(&self) -> usize {
+        self.tag.base_len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_type_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
+        let base_len = self.tag.base_len();
+        self.tag.local_iter().enumerate().map(move |(index, _)| {
+            TypeId(u32::try_from(base_len + index).expect("type id fits u32"))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_type_param_ids_for_test(&self) -> impl Iterator<Item = TypeParamId> + '_ {
+        self.type_params.local_iter().map(|parameter| parameter.id)
+    }
+
+    pub(crate) fn base_len(&self) -> usize {
+        self.tag.base_len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tag.is_empty()
     }
@@ -143,6 +168,195 @@ impl Store {
 
     pub(crate) fn mark_semantic_graph_mutation(&mut self) {
         self.semantic_graph_identity = Arc::new(());
+    }
+
+    /// Seal this standalone store as an immutable prefix.
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        if self.tag.is_sealed() {
+            return Err("store is already sealed");
+        }
+        self.sealed_type_param_ids = Arc::new(
+            self.type_params
+                .iter()
+                .map(|parameter| parameter.id)
+                .collect(),
+        );
+        self.tag.freeze_as_base()?;
+        self.flags.freeze_as_base()?;
+        self.payload.freeze_as_base()?;
+        self.literals.freeze_as_base()?;
+        self.objects.freeze_as_base()?;
+        self.unions.freeze_as_base()?;
+        self.intersections.freeze_as_base()?;
+        self.functions.freeze_as_base()?;
+        self.type_params.freeze_as_base()?;
+        self.arrays.freeze_as_base()?;
+        self.tuples.freeze_as_base()?;
+        self.conditionals.freeze_as_base()?;
+        self.instantiations.freeze_as_base()?;
+        self.class_instances.freeze_as_base()?;
+        self.deferred_indexed_accesses.freeze_as_base()?;
+        self.mapped.freeze_as_base()?;
+        self.templates.freeze_as_base()?;
+        self.type_param_constraints.freeze_as_base()?;
+        self.frozen_type_params.freeze_as_base()?;
+        self.template_names.freeze_as_base()?;
+        self.stable_hash.freeze_as_base()?;
+        Ok(())
+    }
+
+    /// Create a private empty suffix over a sealed immutable prefix.
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            semantic_graph_identity: Arc::new(()),
+            sealed_type_param_ids: Arc::clone(&self.sealed_type_param_ids),
+            tag: self.tag.fork_delta()?,
+            flags: self.flags.fork_delta()?,
+            payload: self.payload.fork_delta()?,
+            literals: self.literals.fork_delta()?,
+            objects: self.objects.fork_delta()?,
+            unions: self.unions.fork_delta()?,
+            intersections: self.intersections.fork_delta()?,
+            functions: self.functions.fork_delta()?,
+            type_params: self.type_params.fork_delta()?,
+            arrays: self.arrays.fork_delta()?,
+            tuples: self.tuples.fork_delta()?,
+            conditionals: self.conditionals.fork_delta()?,
+            instantiations: self.instantiations.fork_delta()?,
+            class_instances: self.class_instances.fork_delta()?,
+            deferred_indexed_accesses: self.deferred_indexed_accesses.fork_delta()?,
+            mapped: self.mapped.fork_delta()?,
+            templates: self.templates.fork_delta()?,
+            type_param_constraints: self.type_param_constraints.fork_delta()?,
+            frozen_type_params: self.frozen_type_params.fork_delta()?,
+            template_names: self.template_names.fork_delta()?,
+            stable_hash: self.stable_hash.fork_delta()?,
+        })
+    }
+
+    pub(crate) fn has_nonempty_delta(&self) -> bool {
+        self.tag.is_sealed()
+            && (self.tag.local_len() != 0
+                || self.flags.local_len() != 0
+                || self.payload.local_len() != 0
+                || self.literals.local_len() != 0
+                || self.objects.local_len() != 0
+                || self.unions.local_len() != 0
+                || self.intersections.local_len() != 0
+                || self.functions.local_len() != 0
+                || self.type_params.local_len() != 0
+                || self.arrays.local_len() != 0
+                || self.tuples.local_len() != 0
+                || self.conditionals.local_len() != 0
+                || self.instantiations.local_len() != 0
+                || self.class_instances.local_len() != 0
+                || self.deferred_indexed_accesses.local_len() != 0
+                || self.mapped.local_len() != 0
+                || self.templates.local_len() != 0
+                || self.type_param_constraints.local_len() != 0
+                || self.frozen_type_params.local_len() != 0
+                || self.template_names.local_len() != 0
+                || self.stable_hash.local_len() != 0)
+    }
+
+    pub(crate) fn is_sealed_base(&self) -> bool {
+        self.tag.is_sealed()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_rows_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.sealed_type_param_ids, &other.sealed_type_param_ids)
+            && self.tag.shares_base_with(&other.tag)
+            && self.flags.shares_base_with(&other.flags)
+            && self.payload.shares_base_with(&other.payload)
+            && self.literals.shares_base_with(&other.literals)
+            && self.objects.shares_base_with(&other.objects)
+            && self.unions.shares_base_with(&other.unions)
+            && self.intersections.shares_base_with(&other.intersections)
+            && self.functions.shares_base_with(&other.functions)
+            && self.type_params.shares_base_with(&other.type_params)
+            && self.arrays.shares_base_with(&other.arrays)
+            && self.tuples.shares_base_with(&other.tuples)
+            && self.conditionals.shares_base_with(&other.conditionals)
+            && self.instantiations.shares_base_with(&other.instantiations)
+            && self
+                .class_instances
+                .shares_base_with(&other.class_instances)
+            && self
+                .deferred_indexed_accesses
+                .shares_base_with(&other.deferred_indexed_accesses)
+            && self.mapped.shares_base_with(&other.mapped)
+            && self.templates.shares_base_with(&other.templates)
+            && self
+                .type_param_constraints
+                .shares_base_with(&other.type_param_constraints)
+            && self
+                .frozen_type_params
+                .shares_base_with(&other.frozen_type_params)
+            && self.template_names.shares_base_with(&other.template_names)
+            && self.stable_hash.shares_base_with(&other.stable_hash)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 5] {
+        let rows = self.tag.shares_base_with(&other.tag)
+            && self.flags.shares_base_with(&other.flags)
+            && self.payload.shares_base_with(&other.payload);
+        let payload_tables = self.literals.shares_base_with(&other.literals)
+            && self.objects.shares_base_with(&other.objects)
+            && self.unions.shares_base_with(&other.unions)
+            && self.intersections.shares_base_with(&other.intersections)
+            && self.functions.shares_base_with(&other.functions)
+            && self.type_params.shares_base_with(&other.type_params)
+            && self.arrays.shares_base_with(&other.arrays)
+            && self.tuples.shares_base_with(&other.tuples)
+            && self.conditionals.shares_base_with(&other.conditionals)
+            && self.instantiations.shares_base_with(&other.instantiations)
+            && self
+                .class_instances
+                .shares_base_with(&other.class_instances)
+            && self
+                .deferred_indexed_accesses
+                .shares_base_with(&other.deferred_indexed_accesses)
+            && self.mapped.shares_base_with(&other.mapped)
+            && self.templates.shares_base_with(&other.templates)
+            && self.stable_hash.shares_base_with(&other.stable_hash);
+        [
+            rows,
+            payload_tables,
+            self.type_param_constraints
+                .shares_base_with(&other.type_param_constraints),
+            Arc::ptr_eq(&self.sealed_type_param_ids, &other.sealed_type_param_ids)
+                && self
+                    .frozen_type_params
+                    .shares_base_with(&other.frozen_type_params),
+            self.template_names.shares_base_with(&other.template_names),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 5] {
+        [
+            self.tag.local_len(),
+            self.literals.local_len()
+                + self.objects.local_len()
+                + self.unions.local_len()
+                + self.intersections.local_len()
+                + self.functions.local_len()
+                + self.type_params.local_len()
+                + self.arrays.local_len()
+                + self.tuples.local_len()
+                + self.conditionals.local_len()
+                + self.instantiations.local_len()
+                + self.class_instances.local_len()
+                + self.deferred_indexed_accesses.local_len()
+                + self.mapped.local_len()
+                + self.templates.local_len()
+                + self.stable_hash.local_len(),
+            self.type_param_constraints.local_len(),
+            self.frozen_type_params.local_len(),
+            self.template_names.local_len(),
+        ]
     }
 
     #[inline]
@@ -322,6 +536,10 @@ impl Store {
         self.type_param_constraints.get(&id).copied()
     }
 
+    fn type_param_belongs_to_base(&self, id: TypeParamId) -> bool {
+        self.sealed_type_param_ids.contains(&id)
+    }
+
     /// Record a type parameter's `extends` constraint (M24). Internal — the checker
     /// calls it through `Interner::set_type_param_constraint` once, when the
     /// declaration's parameter list is lowered with the frame active.
@@ -330,10 +548,13 @@ impl Store {
         id: TypeParamId,
         constraint: TypeId,
     ) -> bool {
-        if self.frozen_type_params.contains(&id) {
+        if self.type_param_belongs_to_base(id) || self.frozen_type_params.contains(&id) {
             return false;
         }
-        let changed = self.type_param_constraints.insert(id, constraint) != Some(constraint);
+        let Ok(previous) = self.type_param_constraints.insert_local(id, constraint) else {
+            return false;
+        };
+        let changed = previous != Some(constraint);
         if changed {
             self.mark_semantic_graph_mutation();
         }
@@ -343,10 +564,13 @@ impl Store {
     /// Erase a circular type-parameter constraint so the degenerate cycle never
     /// reaches the relation engine's assume-true stack.
     pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) -> bool {
-        if self.frozen_type_params.contains(&id) {
+        if self.type_param_belongs_to_base(id) || self.frozen_type_params.contains(&id) {
             return false;
         }
-        if self.type_param_constraints.remove(&id).is_some() {
+        let Ok(removed) = self.type_param_constraints.remove_local(&id) else {
+            return false;
+        };
+        if removed.is_some() {
             self.mark_semantic_graph_mutation();
         }
         true
@@ -369,7 +593,14 @@ impl Store {
         if let Some(&id) = ids.iter().find(|id| self.frozen_type_params.contains(id)) {
             return Err(TypeParamFreezeError::AlreadyFrozen(id));
         }
-        self.frozen_type_params.extend(ids.iter().copied());
+        if let Some(&id) = ids.iter().find(|id| self.type_param_belongs_to_base(**id)) {
+            return Err(TypeParamFreezeError::AlreadyFrozen(id));
+        }
+        for &id in ids {
+            if self.frozen_type_params.insert_local(id).is_err() {
+                return Err(TypeParamFreezeError::AlreadyFrozen(id));
+            }
+        }
         Ok(())
     }
 
@@ -382,7 +613,13 @@ impl Store {
     /// Record a reserved template row's display name (M28 round 3). Internal — the
     /// checker calls it through `Interner::set_template_name` at reserve time.
     pub(crate) fn set_template_name(&mut self, id: TypeId, name: String) {
-        self.template_names.insert(id, name);
+        if id.index() < self.tag.base_len()
+            || id.index() >= self.len()
+            || !matches!(self.tag(id), TypeTag::Conditional | TypeTag::Mapped)
+        {
+            return;
+        }
+        let _ = self.template_names.insert_local(id, name);
     }
 
     /// The members of a union type (canonical: flattened, sorted by `TypeId`,
@@ -412,11 +649,11 @@ impl Store {
     /// callers go through `Interner` so hash-consing is never bypassed.
     fn push(&mut self, tag: TypeTag, flags: TypeFlags, payload: u32) -> TypeId {
         let id = TypeId(self.tag.len() as u32);
-        self.tag.push(tag);
-        self.flags.push(flags);
-        self.payload.push(payload);
+        self.tag.push_local(tag);
+        self.flags.push_local(flags);
+        self.payload.push_local(payload);
         // Keep the reserved column length-aligned even though it is unread.
-        self.stable_hash.push(StableHash::default());
+        self.stable_hash.push_local(StableHash::default());
         id
     }
 
@@ -429,7 +666,7 @@ impl Store {
     /// Internal — `Interner` owns dedup.
     pub(crate) fn push_literal(&mut self, value: LiteralValue, flags: TypeFlags) -> TypeId {
         let payload = self.literals.len() as u32;
-        self.literals.push(value);
+        self.literals.push_local(value);
         self.push(TypeTag::Literal, flags, payload)
     }
 
@@ -438,7 +675,7 @@ impl Store {
     /// owns dedup.
     pub(crate) fn push_object(&mut self, object: ObjectType, flags: TypeFlags) -> TypeId {
         let payload = self.objects.len() as u32;
-        self.objects.push(object);
+        self.objects.push_local(object);
         self.push(TypeTag::Object, flags, payload)
     }
 
@@ -448,7 +685,7 @@ impl Store {
         let payload = self.payload(id) as usize;
         let slot = self
             .objects
-            .get_mut(payload)
+            .get_mut_local(payload)
             .expect("validated object row must have a side-table entry");
         *slot = object;
     }
@@ -458,7 +695,7 @@ impl Store {
     /// caller does not sort them).
     pub(crate) fn push_function(&mut self, function: FunctionType, flags: TypeFlags) -> TypeId {
         let payload = self.functions.len() as u32;
-        self.functions.push(function);
+        self.functions.push_local(function);
         self.push(TypeTag::Function, flags, payload)
     }
 
@@ -468,7 +705,7 @@ impl Store {
     /// slice of length ≥ 2.
     pub(crate) fn push_union(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
         let payload = self.unions.len() as u32;
-        self.unions.push(members);
+        self.unions.push_local(members);
         self.push(TypeTag::Union, flags, payload)
     }
 
@@ -478,7 +715,7 @@ impl Store {
     /// member slice of length ≥ 2 (M31).
     pub(crate) fn push_intersection(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
         let payload = self.intersections.len() as u32;
-        self.intersections.push(members);
+        self.intersections.push_local(members);
         self.push(TypeTag::Intersection, flags, payload)
     }
 
@@ -486,14 +723,14 @@ impl Store {
     /// `TypeParamId`).
     pub(crate) fn push_type_param(&mut self, param: TypeParamType, flags: TypeFlags) -> TypeId {
         let payload = self.type_params.len() as u32;
-        self.type_params.push(param);
+        self.type_params.push_local(param);
         self.push(TypeTag::TypeParam, flags, payload)
     }
 
     /// Append an array row (M17). Internal — `Interner` owns dedup (by element id).
     pub(crate) fn push_array(&mut self, array: ArrayType, flags: TypeFlags) -> TypeId {
         let payload = self.arrays.len() as u32;
-        self.arrays.push(array);
+        self.arrays.push_local(array);
         self.push(TypeTag::Array, flags, payload)
     }
 
@@ -501,7 +738,7 @@ impl Store {
     /// element list). The caller passes elements in source order (never sorted).
     pub(crate) fn push_tuple(&mut self, tuple: TupleType, flags: TypeFlags) -> TypeId {
         let payload = self.tuples.len() as u32;
-        self.tuples.push(tuple);
+        self.tuples.push_local(tuple);
         self.push(TypeTag::Tuple, flags, payload)
     }
 
@@ -519,7 +756,7 @@ impl Store {
         flags: TypeFlags,
     ) -> TypeId {
         let payload = self.conditionals.len() as u32;
-        self.conditionals.push(conditional);
+        self.conditionals.push_local(conditional);
         self.push(TypeTag::Conditional, flags, payload)
     }
 
@@ -529,7 +766,7 @@ impl Store {
         let payload = self.payload(id) as usize;
         let slot = self
             .conditionals
-            .get_mut(payload)
+            .get_mut_local(payload)
             .expect("validated conditional row must have a side-table entry");
         *slot = conditional;
     }
@@ -541,7 +778,7 @@ impl Store {
         flags: TypeFlags,
     ) -> TypeId {
         let payload = self.instantiations.len() as u32;
-        self.instantiations.push(instantiation);
+        self.instantiations.push_local(instantiation);
         self.push(TypeTag::Instantiation, flags, payload)
     }
 
@@ -553,7 +790,7 @@ impl Store {
     ) -> TypeId {
         let payload = u32::try_from(self.class_instances.len())
             .expect("class-instance side table exceeds the u32 payload range");
-        self.class_instances.push(instance);
+        self.class_instances.push_local(instance);
         self.push(TypeTag::ClassInstance, flags, payload)
     }
 
@@ -565,7 +802,7 @@ impl Store {
     ) -> TypeId {
         let payload = u32::try_from(self.deferred_indexed_accesses.len())
             .expect("deferred-indexed-access side table exceeds the u32 payload range");
-        self.deferred_indexed_accesses.push(access);
+        self.deferred_indexed_accesses.push_local(access);
         self.push(TypeTag::DeferredIndexedAccess, flags, payload)
     }
 
@@ -579,7 +816,7 @@ impl Store {
     /// [`MappedType`]).
     pub(crate) fn push_mapped(&mut self, mapped: MappedType, flags: TypeFlags) -> TypeId {
         let payload = self.mapped.len() as u32;
-        self.mapped.push(mapped);
+        self.mapped.push_local(mapped);
         self.push(TypeTag::Mapped, flags, payload)
     }
 
@@ -589,7 +826,7 @@ impl Store {
         let payload = self.payload(id) as usize;
         let slot = self
             .mapped
-            .get_mut(payload)
+            .get_mut_local(payload)
             .expect("validated mapped row must have a side-table entry");
         *slot = mapped;
     }
@@ -610,7 +847,7 @@ impl Store {
     /// whole [`TemplateType`]).
     pub(crate) fn push_template(&mut self, template: TemplateType, flags: TypeFlags) -> TypeId {
         let payload = self.templates.len() as u32;
-        self.templates.push(template);
+        self.templates.push_local(template);
         self.push(TypeTag::Template, flags, payload)
     }
 }
@@ -630,14 +867,32 @@ impl Store {
         constraints
     }
 
+    pub(crate) fn local_type_param_constraints_for_test(
+        &self,
+    ) -> impl Iterator<Item = (TypeParamId, TypeId)> + '_ {
+        self.type_param_constraints
+            .local_iter()
+            .map(|(&parameter, &constraint)| (parameter, constraint))
+    }
+
     pub(crate) fn snapshot_frozen_type_params(&self) -> Vec<TypeParamId> {
         let mut parameters = self.frozen_type_params.iter().copied().collect::<Vec<_>>();
         parameters.sort_unstable();
         parameters
     }
 
+    pub(crate) fn local_frozen_type_params_for_test(
+        &self,
+    ) -> impl Iterator<Item = TypeParamId> + '_ {
+        self.frozen_type_params.local_iter().copied()
+    }
+
     pub(crate) fn snapshot_template_name_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
         self.template_names.keys().copied()
+    }
+
+    pub(crate) fn local_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
+        self.template_names.local_iter().map(|(&id, _)| id)
     }
 
     #[cfg(test)]
@@ -645,6 +900,11 @@ impl Store {
         &self,
         writer: &mut SnapshotWriter,
     ) -> Result<(), SnapshotCodecError> {
+        if self.has_nonempty_delta() {
+            return Err(snapshot_validation(
+                "snapshot cannot encode a store with a non-empty delta",
+            ));
+        }
         writer.u32(1);
         writer.usize(self.tag.len())?;
         for index in 0..self.tag.len() {
@@ -1004,27 +1264,28 @@ impl Store {
 
         let store = Store {
             semantic_graph_identity: Arc::new(()),
-            tag,
-            flags,
-            payload,
-            literals,
-            objects,
-            unions,
-            intersections,
-            functions,
-            type_params,
-            arrays,
-            tuples,
-            conditionals,
-            instantiations,
-            class_instances,
-            deferred_indexed_accesses,
-            mapped,
-            templates,
-            type_param_constraints,
-            frozen_type_params,
-            template_names,
-            stable_hash,
+            sealed_type_param_ids: Arc::new(FxHashSet::default()),
+            tag: tag.into(),
+            flags: flags.into(),
+            payload: payload.into(),
+            literals: literals.into(),
+            objects: objects.into(),
+            unions: unions.into(),
+            intersections: intersections.into(),
+            functions: functions.into(),
+            type_params: type_params.into(),
+            arrays: arrays.into(),
+            tuples: tuples.into(),
+            conditionals: conditionals.into(),
+            instantiations: instantiations.into(),
+            class_instances: class_instances.into(),
+            deferred_indexed_accesses: deferred_indexed_accesses.into(),
+            mapped: mapped.into(),
+            templates: templates.into(),
+            type_param_constraints: type_param_constraints.into(),
+            frozen_type_params: frozen_type_params.into(),
+            template_names: template_names.into(),
+            stable_hash: stable_hash.into(),
         };
         store.validate_snapshot_layout()?;
         Ok(store)
@@ -1194,7 +1455,7 @@ impl Store {
         if parameter_ids.len() != self.type_params.len() {
             return Err(snapshot_validation("duplicate TypeParamId rows"));
         }
-        for (parameter, constraint) in &self.type_param_constraints {
+        for (parameter, constraint) in self.type_param_constraints.iter() {
             if !parameter_ids.contains(parameter) {
                 return Err(snapshot_validation(
                     "constraint owner has no type parameter row",
@@ -1253,7 +1514,7 @@ fn validate_canonical_set(
     members: &[TypeId],
     len: usize,
     nested_tag: TypeTag,
-    tags: &[TypeTag],
+    tags: &LayeredVec<TypeTag>,
 ) -> Result<(), SnapshotCodecError> {
     if members.len() < 2 || !members.windows(2).all(|pair| pair[0] < pair[1]) {
         return Err(snapshot_validation(
@@ -1317,7 +1578,7 @@ fn read_type_ids(reader: &mut SnapshotReader<'_>) -> Result<Vec<TypeId>, Snapsho
 #[cfg(test)]
 fn write_type_id_slices(
     writer: &mut SnapshotWriter,
-    rows: &[Box<[TypeId]>],
+    rows: &LayeredVec<Box<[TypeId]>>,
 ) -> Result<(), SnapshotCodecError> {
     writer.usize(rows.len())?;
     for row in rows {

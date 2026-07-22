@@ -85,7 +85,10 @@ impl Interner {
         &mut self,
         id: TypeId,
     ) -> Result<TypeId, super::ReservedObjectPromotionError> {
-        let Some(reserved) = self.reserved_types.get(&id).copied() else {
+        if self.reserved_types_base.contains_key(&id) {
+            return Err(super::ReservedObjectPromotionError::NotReserved(id));
+        }
+        let Some(reserved) = self.reserved_type(id) else {
             return Err(super::ReservedObjectPromotionError::NotReserved(id));
         };
         if reserved.kind != super::ReservedTypeKind::Object {

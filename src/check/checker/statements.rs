@@ -30,6 +30,25 @@ use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
+#[cfg(test)]
+thread_local! {
+    static NAMESPACE_ALIAS_SITE_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+struct NamespaceAliasLookupScope(u64);
+
+#[cfg(test)]
+impl NamespaceAliasLookupScope {
+    fn start() -> Self {
+        Self(NAMESPACE_ALIAS_SITE_LOOKUPS.get())
+    }
+
+    fn finish(self) -> u64 {
+        NAMESPACE_ALIAS_SITE_LOOKUPS.get().saturating_sub(self.0)
+    }
+}
+
 fn parenthesized_identifier<'expr, 'ast>(
     expression: &'expr Expression<'ast>,
 ) -> Option<&'expr oxc_ast::ast::IdentifierReference<'ast>> {
@@ -102,11 +121,13 @@ impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
                 else {
                     continue;
                 };
-                let Some(alias_declaration) = self.binder.declarations.iter().find(|candidate| {
-                    candidate.kind == DeclarationKind::Variable
-                        && candidate.site.module == self.module
-                        && candidate.site.binding_span.start == alias.span.start
-                }) else {
+                #[cfg(test)]
+                NAMESPACE_ALIAS_SITE_LOOKUPS.set(NAMESPACE_ALIAS_SITE_LOOKUPS.get() + 1);
+                let Some(alias_declaration) = self.binder.declarations.declaration_at_site(
+                    self.module,
+                    alias.span.start,
+                    DeclarationKind::Variable,
+                ) else {
                     continue;
                 };
                 let (Some(alias_storage), Some(scope)) = (
@@ -176,7 +197,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         ..
                     }) if storage == root
                 ) {
-                    self.standalone_namespace_value_aliases.insert(alias, root);
+                    self.standalone_namespace_value_aliases
+                        .insert_local(alias, root)
+                        .expect("namespace aliases cannot replace a frozen base row");
                     progressed = true;
                 }
             }
@@ -1010,7 +1033,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 )
             });
         if published {
-            self.class_value_aliases.insert(alias_decl, class_decl);
+            self.class_value_aliases
+                .insert_local(alias_decl, class_decl)
+                .expect("class aliases cannot replace a frozen base row");
         }
     }
 
@@ -2224,4 +2249,45 @@ fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
 /// `string`) against a non-literal target.
 fn is_literal_target(store: &Store, tgt: TypeId) -> bool {
     store.literal_value(tgt).is_some()
+}
+
+#[cfg(test)]
+mod namespace_alias_tests {
+    use super::NamespaceAliasLookupScope;
+    use crate::types::Interner;
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    fn check_alias_with_unrelated_declarations(count: usize) -> u64 {
+        let unrelated = (0..count)
+            .map(|index| format!("const unrelated{index} = {index};"))
+            .collect::<String>();
+        let source = format!(
+            r#"
+                namespace AliasRoot {{ export const value: number = 1; }}
+                {unrelated}
+                const FirstAlias = AliasRoot;
+                const SecondAlias = FirstAlias;
+                const observed: number = SecondAlias.value;
+            "#
+        );
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, &source, SourceType::ts()).parse();
+        assert!(!parsed.panicked);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let mut interner = Interner::with_intrinsics();
+        let scope = NamespaceAliasLookupScope::start();
+        let output = super::super::check_program(&mut interner, &parsed.program);
+        let lookups = scope.finish();
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        lookups
+    }
+
+    #[test]
+    fn namespace_alias_declaration_lookup_is_indexed_and_table_size_independent() {
+        assert_eq!(check_alias_with_unrelated_declarations(2), 2);
+        assert_eq!(check_alias_with_unrelated_declarations(1_024), 2);
+    }
 }

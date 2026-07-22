@@ -196,7 +196,14 @@ impl LibraryBaseProvider {
                 },
             )));
         }
-        let base = Arc::new(FrozenLibraryBase::from_decoded(decoded));
+        let base = Arc::new(FrozenLibraryBase::from_decoded(decoded).map_err(|_| {
+            Arc::new(LibraryInitError::new(
+                LibraryInitStage::Publication,
+                LibraryInitCause::SnapshotRejected {
+                    violation: LibrarySnapshotViolation::IncompletePublication,
+                },
+            ))
+        })?);
         self.publication_us
             .store(elapsed_us(publication), Ordering::Relaxed);
         self.publications.fetch_add(1, Ordering::Relaxed);

@@ -135,7 +135,8 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
                 && !line.starts_with("///")
                 && !line.starts_with("#[")
                 && !line.starts_with("pub ")
-                && *line != "module_sources: FxHashMap<ScopeId, SourceUnitKey>,"
+                && *line != "module_sources: LayeredMap<ScopeId, SourceUnitKey>,"
+                && *line != "next_source_key: SourceUnitKey,"
         })
         .collect::<Vec<_>>();
     assert!(
@@ -144,10 +145,17 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
     );
     assert_eq!(
         binder_fields
-            .matches("module_sources: FxHashMap<ScopeId, SourceUnitKey>,")
+            .matches("module_sources: LayeredMap<ScopeId, SourceUnitKey>,")
             .count(),
         1,
         "Binder owns one durable source-key index for frozen continuation"
+    );
+    assert_eq!(
+        binder_fields
+            .matches("next_source_key: SourceUnitKey,")
+            .count(),
+        1,
+        "Binder maintains the next frozen continuation source key"
     );
     let expected_binder_fields = [
         "pubgraph:ScopeGraph,",
@@ -212,7 +220,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(
-        declaration_table_fields.contains("FxHashMap<(ScopeId,u32,DeclarationKind),DeclId>"),
+        declaration_table_fields.contains("LayeredMap<(ScopeId,u32,DeclarationKind),DeclId>"),
         "DeclarationTable privately owns the sole exact-site index"
     );
 
@@ -222,10 +230,10 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
         .collect::<String>();
     assert_eq!(
         declaration_compact
-            .matches(".declarations_by_site.insert(")
+            .matches(".declarations_by_site.insert_local(")
             .count(),
-        1,
-        "DeclarationTable::push is the sole index mutation boundary"
+        2,
+        "only push and validated snapshot reconstruction mutate the local site index"
     );
     let table_push = declaration_production
         .split_once("pub(crate) fn push(")
@@ -236,13 +244,14 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    assert!(table_push.contains("self.declarations.push("));
+    assert!(table_push.contains("self.declarations.push_local("));
     assert!(table_push.contains(
-        "letprevious=self.declarations_by_site.insert((site.module,site.binding_span.start,kind),id)"
+        "letprevious=self.declarations_by_site.insert_local((site.module,site.binding_span.start,kind),id)"
     ));
     assert!(
-        table_push.contains("debug_assert!(previous.is_none(),\"onedeclarationperbindingleaf\")")
-            || table_push.contains("assert!(previous.is_none(),\"onedeclarationperbindingleaf\")"),
+        table_push.contains(
+            "debug_assert!(matches!(previous,Ok(None)),\"onedeclarationperbindingleaf\")"
+        ),
         "duplicate source keys retain the binding-leaf collision guard"
     );
 

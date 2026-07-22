@@ -54,8 +54,9 @@ fn reserve_class_interface_headers(source: &str) -> ReservedClassInterfaceHeader
         .map(|fragment| (fragment.declaration, fragment.kind))
         .collect();
     let mut interner = Interner::with_intrinsics();
-    let mut declarations = Vec::new();
-    let mut resolved = vec![None; binder.type_groups.len()];
+    let mut declarations: crate::check::checker::context::TypeDeclTable<'_> = Vec::new().into();
+    let mut resolved: crate::check::checker::context::TypeResolvedTable =
+        vec![None; binder.type_groups.len()].into();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
     crate::check::checker::decls::reserve_type_decls(

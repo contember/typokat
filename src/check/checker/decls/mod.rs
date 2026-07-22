@@ -28,6 +28,33 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
+thread_local! {
+    static CLASS_ALLOCATION_EVENTS: std::cell::RefCell<Vec<ClassId>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
+}
+
+fn reserve_class_id(next_class_id: &mut u32) -> ClassId {
+    let class = ClassId(*next_class_id);
+    *next_class_id = next_class_id
+        .checked_add(1)
+        .expect("class identity domain exhausted");
+    #[cfg(test)]
+    CLASS_ALLOCATION_EVENTS.with(|events| events.borrow_mut().push(class));
+    class
+}
+
+#[cfg(test)]
+pub(super) fn reset_class_allocation_events_for_test() {
+    CLASS_ALLOCATION_EVENTS.with(|events| events.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(super) fn class_allocation_events_for_test() -> Vec<ClassId> {
+    CLASS_ALLOCATION_EVENTS.with(|events| events.borrow().clone())
+}
+
+#[cfg(test)]
 mod cycle_tainted_application_cache_spec;
 #[cfg(test)]
 mod eager_application_cache_spec;
@@ -42,44 +69,66 @@ struct InterfaceOwnMemberOwners<Ticket: Copy> {
 }
 
 struct ObjectAliasCanonicalizationGraph {
+    local_start: usize,
     reverse: Vec<Vec<TypeId>>,
     reaches_active_reservation: Vec<bool>,
+    #[cfg(test)]
+    scanned_owners: usize,
 }
 
 impl ObjectAliasCanonicalizationGraph {
     fn build(store: &Store, active: &FxHashSet<TypeId>) -> Self {
-        let mut reverse = vec![Vec::new(); store.len()];
-        for raw_owner in 0..store.len() {
+        let local_start = store.base_len();
+        let local_len = store.len() - local_start;
+        let mut reverse = vec![Vec::new(); local_len];
+        for raw_owner in local_start..store.len() {
             let owner = TypeId(u32::try_from(raw_owner).expect("type store length fits TypeId"));
             for_each_object_alias_type_operand(store, owner, |target| {
-                reverse[target.index()].push(owner);
+                if let Some(target) = target.index().checked_sub(local_start) {
+                    reverse[target].push(owner);
+                }
             });
         }
 
-        let mut reaches_active_reservation = vec![false; store.len()];
+        let mut reaches_active_reservation = vec![false; local_len];
         let mut pending = active.iter().copied().collect::<Vec<_>>();
         while let Some(target) = pending.pop() {
-            if std::mem::replace(&mut reaches_active_reservation[target.index()], true) {
+            let target = target
+                .index()
+                .checked_sub(local_start)
+                .expect("active object reservations belong to the local type suffix");
+            if std::mem::replace(&mut reaches_active_reservation[target], true) {
                 continue;
             }
-            pending.extend(reverse[target.index()].iter().copied());
+            pending.extend(reverse[target].iter().copied());
         }
         Self {
+            local_start,
             reverse,
             reaches_active_reservation,
+            #[cfg(test)]
+            scanned_owners: local_len,
         }
+    }
+
+    fn local_index(&self, ty: TypeId) -> Option<usize> {
+        ty.index().checked_sub(self.local_start)
     }
 
     fn body_reaches_active_reservation(&self, store: &Store, root: TypeId) -> bool {
         let mut reaches = false;
         for_each_object_alias_type_operand(store, root, |target| {
-            reaches |= self.reaches_active_reservation[target.index()];
+            reaches |= self
+                .local_index(target)
+                .is_some_and(|target| self.reaches_active_reservation[target]);
         });
         reaches
     }
 
     fn has_external_store_inbound(&self, root: TypeId) -> bool {
-        self.reverse[root.index()]
+        self.local_index(root)
+            .and_then(|local_root| self.reverse.get(local_root))
+            .expect("active object reservation belongs to the local type suffix")
             .iter()
             .any(|owner| *owner != root)
     }
@@ -91,10 +140,13 @@ impl ObjectAliasCanonicalizationGraph {
         active: &FxHashSet<TypeId>,
     ) -> FxHashSet<TypeId> {
         let mut reached = FxHashSet::default();
-        let mut visited = vec![false; store.len()];
+        let mut visited = vec![false; self.reverse.len()];
         let mut pending = roots.into_iter().collect::<Vec<_>>();
         while let Some(ty) = pending.pop() {
-            if std::mem::replace(&mut visited[ty.index()], true) {
+            let Some(local) = self.local_index(ty) else {
+                continue;
+            };
+            if std::mem::replace(&mut visited[local], true) {
                 continue;
             }
             if active.contains(&ty) {
@@ -670,7 +722,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Interfaces fill before aliases because alias instantiation must substitute over
     /// an already-filled generic interface template; reverse dependencies stay lazy.
     pub(in crate::check::checker) fn fill_type_decls(&mut self, scope: ScopeId) {
-        self.fill_type_decls_range(scope, 0, self.type_decls.len());
+        self.fill_type_decls_range(
+            scope,
+            self.type_decls.published_len(),
+            self.type_decls.len(),
+        );
     }
 
     pub(in crate::check::checker) fn fill_type_decls_range(
@@ -987,6 +1043,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_decls
             .iter()
             .enumerate()
+            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
             .filter_map(|(index, declaration)| match declaration {
                 TypeDecl::Class { interfaces, .. } if !interfaces.is_empty() => Some(index),
                 _ => None,
@@ -2953,16 +3010,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn object_alias_semantic_roots(&self, active_owners: &FxHashMap<TypeId, usize>) -> Vec<TypeId> {
         let mut roots = Vec::new();
-        for (index, resolved) in self.type_resolved.iter().enumerate() {
-            let Some(resolved) = resolved else {
+        for index in self.type_decls.published_len()..self.type_decls.len() {
+            let Some(resolved) = self.type_resolved.get(index).and_then(|resolved| *resolved)
+            else {
                 continue;
             };
-            if active_owners.get(resolved).copied() != Some(index) {
-                roots.push(*resolved);
+            if active_owners.get(&resolved).copied() != Some(index) {
+                roots.push(resolved);
             }
         }
 
-        for declaration in &self.type_decls {
+        for declaration in self.type_decls.iter() {
             match declaration {
                 TypeDecl::Interface {
                     defaults,
@@ -2993,13 +3051,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
 
-        if let Some(construction) = self.type_group_construction.as_ref() {
-            construction.for_each_frozen_type_reference(|owner, ty| {
-                if active_owners.get(&ty).copied() != Some(owner.index()) {
-                    roots.push(ty);
-                }
-            });
-        }
         for effects in &self.pending_effects {
             push_pending_effect_type_roots(&mut roots, effects);
         }
@@ -3043,6 +3094,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_decls
             .iter()
             .enumerate()
+            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
             .filter_map(|(index, declaration)| match declaration {
                 TypeDecl::Alias {
                     object_template: Some(reserved),
@@ -3137,14 +3189,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Fill the reserved-template declaration owned by a resolved base `TypeId`, if any.
     /// Transparent alias chains then compose the filled target in any declaration order.
     fn ensure_reserved_template_filled(&mut self, scope: ScopeId, ty: TypeId) {
-        let target = self.type_decls.iter().position(|decl| match decl {
-            TypeDecl::Interface { reserved, .. } => *reserved == ty,
-            TypeDecl::Alias {
-                object_template: Some(reserved),
-                ..
-            } => *reserved == ty,
-            _ => false,
-        });
+        let target = self
+            .type_decls
+            .iter()
+            .position(|decl| match decl {
+                TypeDecl::Interface { reserved, .. } => *reserved == ty,
+                TypeDecl::Alias {
+                    object_template: Some(reserved),
+                    ..
+                } => *reserved == ty,
+                _ => false,
+            })
+            .map(|index| self.type_decls.published_len() + index);
         let Some(index) = target else {
             return;
         };
@@ -3158,10 +3214,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
 fn interface_heritage_topology(
     binder: &Binder,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
 ) -> InterfaceHeritageTopology {
     let mut topology = InterfaceHeritageTopology::default();
-    for declaration in declarations {
+    for declaration in declarations.iter() {
         let fragments = match declaration {
             TypeDecl::Interface { fragments, .. } => fragments,
             TypeDecl::Class { interfaces, .. } => interfaces,
@@ -3200,7 +3256,7 @@ fn interface_heritage_topology(
 
 fn plan_heritage_occurrence(
     binder: &Binder,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     scope: ScopeId,
     heritage: &TSInterfaceHeritage<'_>,
     symbols: &BTreeMap<String, HeritageTypePlan>,
@@ -3232,7 +3288,7 @@ fn plan_heritage_occurrence(
 
 fn plan_heritage_type(
     binder: &Binder,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     scope: ScopeId,
     ty: &TSType<'_>,
     symbols: &BTreeMap<String, HeritageTypePlan>,
@@ -3332,15 +3388,26 @@ fn plan_heritage_type(
 
 fn plan_heritage_group_application(
     binder: &Binder,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     scope: ScopeId,
     group: TypeGroupId,
     arguments: Option<&TSTypeParameterInstantiation<'_>>,
     symbols: &BTreeMap<String, HeritageTypePlan>,
     aliases: &mut BTreeSet<TypeGroupId>,
 ) -> HeritageTypePlan {
-    let Some(declaration) = declarations.get(group.index()) else {
+    let Some(declaration) = declarations.view(group.index()) else {
         return HeritageTypePlan::Opaque(BTreeSet::new());
+    };
+    let declaration = match declaration {
+        TypeDeclView::Published(published) => {
+            let actual_count = arguments.map_or(0, |arguments| arguments.params.len());
+            return if actual_count == published.params.len() {
+                HeritageTypePlan::complete(BTreeSet::new())
+            } else {
+                HeritageTypePlan::Poisoned
+            };
+        }
+        TypeDeclView::Local(declaration) => declaration,
     };
     let (parameter_count, required_count) = match declaration {
         TypeDecl::Interface {
@@ -3547,7 +3614,7 @@ fn flatten_topology_type_name<'name>(
 }
 
 fn interface_sccs(
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     start: usize,
     end: usize,
     topology: &InterfaceHeritageTopology,
@@ -3587,12 +3654,13 @@ fn interface_sccs(
 
 fn class_interface_heritage_sccs(
     binder: &Binder,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     topology: &InterfaceHeritageTopology,
 ) -> Vec<Vec<usize>> {
     let nodes: BTreeSet<TypeGroupId> = declarations
         .iter()
         .enumerate()
+        .map(|(index, declaration)| (declarations.published_len() + index, declaration))
         .filter(|(_, declaration)| matches!(declaration, TypeDecl::Class { .. }))
         .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
         .collect();
@@ -3636,7 +3704,7 @@ fn class_interface_heritage_sccs(
 
 fn class_heritage_topology_terminals(
     binder: &Binder,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     group: TypeGroupId,
 ) -> Option<BTreeSet<TypeGroupId>> {
     let TypeDecl::Class {
@@ -3679,7 +3747,7 @@ fn class_heritage_topology_terminals(
 }
 
 fn class_interface_component_has_cycle(
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     component: &[usize],
     topology: &InterfaceHeritageTopology,
 ) -> bool {
@@ -3704,7 +3772,7 @@ fn class_interface_component_has_cycle(
 }
 
 fn class_interface_component_has_soft_edge(
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     component: &[usize],
     topology: &InterfaceHeritageTopology,
 ) -> bool {
@@ -3729,7 +3797,7 @@ fn class_interface_component_has_soft_edge(
 }
 
 fn interface_component_has_cycle(
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     component: &[usize],
     topology: &InterfaceHeritageTopology,
 ) -> bool {
@@ -3794,8 +3862,8 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     program: &'ast Program<'ast>,
     next_type_param: &mut u32,
     next_class_id: &mut u32,
-    decls: &mut Vec<TypeDecl<'ast>>,
-    resolved: &mut [Option<TypeId>],
+    decls: &mut TypeDeclTable<'ast>,
+    resolved: &mut TypeResolvedTable,
 ) {
     // The AST walk is joined to the binder through the exact lexical declaration,
     // never by selecting a first/last declaration from a same-name group.
@@ -4020,8 +4088,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                 TopTypeDecl::Class(class) if class.id.is_some() => {
                     // M13: a fresh stable `ClassId` for this declaration (source order),
                     // stamped onto its members during class publication.
-                    let class_id = ClassId(*next_class_id);
-                    *next_class_id += 1;
+                    let class_id = reserve_class_id(next_class_id);
                     if let Some(id) = &class.id {
                         let exact = binder.exact_declaration_at(
                             module,
@@ -4178,7 +4245,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     );
 }
 
-fn ensure_type_group_slot<'ast>(decls: &mut Vec<TypeDecl<'ast>>, index: usize) {
+fn ensure_type_group_slot<'ast>(decls: &mut TypeDeclTable<'ast>, index: usize) {
     while decls.len() < index {
         decls.push(TypeDecl::Resolved { params: Vec::new() });
     }
@@ -4854,6 +4921,7 @@ pub(in crate::check::checker) fn value_decl_id(
 #[cfg(test)]
 mod topology_tests {
     use super::*;
+    use crate::types::repr::{IntrinsicKind, ObjectType, PropertyType, TypeFlags};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -4889,5 +4957,98 @@ mod topology_tests {
             topology_segments_group(&builtin, builtin.module, &["Array"]),
             Err(HeritageTypePlan::Opaque(BTreeSet::new()))
         );
+    }
+
+    #[test]
+    fn local_interface_heritage_keeps_frozen_html_element_endpoint_complete() {
+        let binder = bind(
+            "interface HTMLElement { elementMarker: string }",
+            "interface Local extends HTMLElement { localMarker: number }",
+        );
+        let html_element = type_decl_id(&binder, binder.module, "HTMLElement")
+            .expect("frozen HTMLElement group remains visible");
+        assert!(html_element.0 < binder.prelude_type_group_count);
+        let published = (0..binder.prelude_type_group_count)
+            .map(|_| PublishedTypeDecl { params: Vec::new() })
+            .collect::<Vec<_>>()
+            .into();
+        let declarations = TypeDeclTable::with_published(published);
+
+        assert_eq!(
+            plan_heritage_group_application(
+                &binder,
+                &declarations,
+                binder.module,
+                html_element,
+                None,
+                &BTreeMap::new(),
+                &mut BTreeSet::new(),
+            ),
+            HeritageTypePlan::complete(BTreeSet::new()),
+        );
+    }
+
+    #[test]
+    fn object_alias_graph_scales_with_local_suffix_and_preserves_reachability() {
+        const FROZEN_ROWS: usize = 4096;
+
+        let mut base = Store::new();
+        for _ in 0..FROZEN_ROWS {
+            base.push_intrinsic(IntrinsicKind::Any, TypeFlags::EMPTY);
+        }
+        base.freeze_as_base().expect("scaled type base seals");
+        let mut delta = base.fork_delta().expect("local type suffix");
+
+        let active = delta.push_object(ObjectType::default(), TypeFlags::EMPTY);
+        let holder = delta.push_object(
+            ObjectType {
+                properties: vec![PropertyType::public("active", active)],
+                ..Default::default()
+            },
+            TypeFlags::EMPTY,
+        );
+        let root = delta.push_object(
+            ObjectType {
+                properties: vec![PropertyType::public("holder", holder)],
+                ..Default::default()
+            },
+            TypeFlags::EMPTY,
+        );
+        let active_set = FxHashSet::from_iter([active]);
+        let graph = ObjectAliasCanonicalizationGraph::build(&delta, &active_set);
+
+        assert_eq!(graph.local_start, FROZEN_ROWS);
+        assert_eq!(graph.reverse.len(), 3);
+        assert_eq!(graph.reaches_active_reservation.len(), 3);
+        assert_eq!(graph.scanned_owners, 3);
+        assert!(graph.has_external_store_inbound(active));
+        assert!(graph.body_reaches_active_reservation(&delta, root));
+        assert_eq!(
+            graph.active_reservations_reachable_from_semantic_roots(
+                &delta,
+                [TypeId(0), root],
+                &active_set,
+            ),
+            active_set,
+        );
+        assert!(graph
+            .active_reservations_reachable_from_semantic_roots(
+                &delta,
+                [TypeId(0)],
+                &FxHashSet::from_iter([active]),
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn class_allocation_manifest_records_identity_before_publication() {
+        reset_class_allocation_events_for_test();
+        let mut next_class_id = 41;
+
+        let class = reserve_class_id(&mut next_class_id);
+
+        assert_eq!(class, ClassId(41));
+        assert_eq!(next_class_id, 42);
+        assert_eq!(class_allocation_events_for_test(), vec![ClassId(41)]);
     }
 }

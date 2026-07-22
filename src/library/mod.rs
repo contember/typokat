@@ -19,12 +19,16 @@ pub use provider::{
     LibrarySnapshotViolation,
 };
 
+pub(crate) struct CollisionFreeUserDeltaCapability(());
+
 #[cfg(test)]
 mod artifact_spec;
 
 #[cfg(test)]
 mod snapshot_base_spec;
 
-// Activate after the WU4 layered user-delta implementation lands.
-// #[cfg(test)]
-// mod user_delta_spec;
+#[cfg(test)]
+mod user_delta_spec;
+
+#[cfg(test)]
+mod user_delta_project_scale_spec;

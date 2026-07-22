@@ -235,7 +235,7 @@ fn inventoried_binder_outcomes_retain_exact_library_owner_for_downstream_reporti
         SourceUnitKey(116),
         standalone_origin,
     );
-    let attachments = standalone_binder.standalone_namespace_value_attachments();
+    let attachments = standalone_binder.local_standalone_namespace_value_attachments();
     assert_eq!(attachments.len(), 1);
     let Some(attachment) = attachments.first() else {
         return;

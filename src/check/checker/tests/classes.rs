@@ -25,6 +25,29 @@ fn diags(source: &str) -> Vec<(u32, String)> {
     v
 }
 
+#[test]
+fn frozen_generic_templates_resolve_in_class_and_namespace_callable_surfaces() {
+    let src = r#"class ArrayConsumer {
+  accept(values: Array<string>): void {}
+}
+namespace Api {
+  export function accept(values: Array<string>): void {}
+}
+new ArrayConsumer().accept(["ok"]);
+Api.accept(["ok"]);
+new ArrayConsumer().accept([1]);
+Api.accept([1]);
+"#;
+    let checked = check_source(src);
+    assert!(checked.parse_errors.is_empty());
+    assert!(checked.incomplete.is_empty(), "{:#?}", checked.incomplete);
+
+    assert_eq!(
+        diags(src),
+        vec![(9, "TK2345".to_string()), (10, "TK2345".to_string()),]
+    );
+}
+
 /// Instance-type construction: a field is accessible on an instance with its
 /// declared type (member access + assignability), and a missing member is
 /// `TK2339`. This is the `basic.ts` headline as a unit pin.

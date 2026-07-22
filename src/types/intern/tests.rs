@@ -2,12 +2,120 @@ use super::*;
 use crate::diagnostics::render_type;
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
-    ObjectType, ParameterType, PropertyType, TupleRestType, TupleType, TypeParamId, TypeTag,
+    ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId,
+    TypeTag,
 };
 
 /// Build a required public property `name: ty`.
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+struct ColdFamilyRows {
+    rows: Vec<(TypeId, TypeTag)>,
+    literal: TypeId,
+    array: TypeId,
+    template: TypeId,
+    type_parameter: TypeId,
+    type_parameter_id: TypeParamId,
+}
+
+fn populate_every_cold_family(
+    interner: &mut Interner,
+    label: &str,
+    identity: u32,
+) -> ColdFamilyRows {
+    let wk = interner.well_known();
+    let literal = interner.intern_literal(LiteralValue::String(label.to_owned()));
+    let object = interner.intern_object(ObjectType {
+        properties: vec![prop(label, literal)],
+        ..Default::default()
+    });
+    let union = interner.union(vec![literal, wk.number]);
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required(label, literal)],
+        ret: object,
+    });
+    let type_parameter_id = TypeParamId(identity);
+    let type_parameter = interner.intern_type_param(type_parameter_id, label);
+    let array = interner.intern_array(literal);
+    let tuple = interner.intern_tuple(vec![literal, array]);
+    let intersection = interner.intersection(vec![object, array]);
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: type_parameter,
+        extends_ty: wk.string,
+        true_branch: object,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let instantiation =
+        interner.intern_instantiation(conditional, vec![(type_parameter_id, literal)]);
+    let class_instance = interner.intern_class_instance(ClassId(identity), vec![literal, object]);
+    let deferred = interner.intern_deferred_indexed_access(class_instance, literal);
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: false,
+        key_source: literal,
+        value_template: object,
+        modifiers_source: Some(array),
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Add,
+    });
+    let template = interner.intern_template(TemplateType {
+        texts: vec![label.to_owned(), String::new()],
+        holes: vec![literal],
+    });
+
+    ColdFamilyRows {
+        rows: vec![
+            (literal, TypeTag::Literal),
+            (object, TypeTag::Object),
+            (union, TypeTag::Union),
+            (function, TypeTag::Function),
+            (type_parameter, TypeTag::TypeParam),
+            (array, TypeTag::Array),
+            (tuple, TypeTag::Tuple),
+            (intersection, TypeTag::Intersection),
+            (conditional, TypeTag::Conditional),
+            (instantiation, TypeTag::Instantiation),
+            (class_instance, TypeTag::ClassInstance),
+            (deferred, TypeTag::DeferredIndexedAccess),
+            (mapped, TypeTag::Mapped),
+            (template, TypeTag::Template),
+        ],
+        literal,
+        array,
+        template,
+        type_parameter,
+        type_parameter_id,
+    }
+}
+
+fn assert_every_cold_family_is_readable(store: &Store, rows: &[(TypeId, TypeTag)]) {
+    for &(id, expected_tag) in rows {
+        assert_eq!(store.tag(id), expected_tag);
+        let present = match expected_tag {
+            TypeTag::Literal => store.literal_value(id).is_some(),
+            TypeTag::Object => store.object_type(id).is_some(),
+            TypeTag::Union => store.union_members(id).is_some(),
+            TypeTag::Intersection => store.intersection_members(id).is_some(),
+            TypeTag::Function => store.function_type(id).is_some(),
+            TypeTag::TypeParam => store.type_param(id).is_some(),
+            TypeTag::Array => store.array_type(id).is_some(),
+            TypeTag::Tuple => store.tuple_type(id).is_some(),
+            TypeTag::Conditional => store.conditional_type(id).is_some(),
+            TypeTag::Instantiation => store.instantiation_type(id).is_some(),
+            TypeTag::ClassInstance => store.class_instance_type(id).is_some(),
+            TypeTag::DeferredIndexedAccess => store.deferred_indexed_access_type(id).is_some(),
+            TypeTag::Mapped => store.mapped_type(id).is_some(),
+            TypeTag::Template => store.template_type(id).is_some(),
+            _ => false,
+        };
+        assert!(present, "{expected_tag:?} cold payload is readable");
+    }
 }
 
 /// Hash-consing: structurally identical types share one `TypeId`
@@ -40,6 +148,275 @@ fn hash_consing_dedups_intrinsics_and_literals() {
     let f1 = interner.intern_literal(LiteralValue::Boolean(false));
     assert_eq!(t1, t2);
     assert_ne!(t1, f1);
+}
+
+#[test]
+fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
+    let mut base = Interner::with_intrinsics();
+    let wk = base.well_known();
+    let base_array = base.intern_array(wk.string);
+    let base_literal = base.intern_literal(LiteralValue::String("base".to_owned()));
+    let base_parameter_id = TypeParamId(90_001);
+    let _base_parameter = base.intern_type_param(base_parameter_id, "T");
+    assert!(base.set_type_param_constraint(base_parameter_id, wk.string));
+
+    let base_reserved = base.reserve_object();
+    base.fill_reserved_type_batch(vec![ReservedTypeFill::Object(
+        base_reserved,
+        ObjectType::default(),
+    )])
+    .expect("base reservation fills before sealing");
+
+    let standalone_snapshot = base
+        .encode_snapshot_bytes_for_test()
+        .expect("standalone interner snapshots");
+    let prefix_len = base.store().len();
+    let prefix_id = u32::try_from(prefix_len).expect("test prefix fits TypeId");
+    let old_graph = Arc::clone(base.store().semantic_graph_identity());
+    base.freeze_as_base().expect("complete interner seals");
+    assert_eq!(
+        base.encode_snapshot_bytes_for_test()
+            .expect("sealed empty-delta interner snapshots"),
+        standalone_snapshot
+    );
+
+    let mut first = base.fork_delta().expect("first private suffix forks");
+    let mut second = base.fork_delta().expect("second private suffix forks");
+    assert!(first.store().shares_base_rows_with(second.store()));
+    assert!(first.shares_base_indexes_with(&second));
+    assert!(!Arc::ptr_eq(
+        first.store().semantic_graph_identity(),
+        &old_graph
+    ));
+    assert!(!Arc::ptr_eq(
+        first.store().semantic_graph_identity(),
+        second.store().semantic_graph_identity()
+    ));
+
+    assert_eq!(first.intern_array(wk.string), base_array);
+    assert_eq!(
+        first.intern_literal(LiteralValue::String("base".to_owned())),
+        base_literal
+    );
+    assert_eq!(
+        first
+            .store()
+            .array_type(base_array)
+            .map(|array| array.element),
+        Some(wk.string)
+    );
+
+    let first_local = first.intern_literal(LiteralValue::String("first".to_owned()));
+    assert_eq!(first_local, TypeId(prefix_id));
+    assert_eq!(
+        first.intern_literal(LiteralValue::String("first".to_owned())),
+        first_local,
+        "equal suffix identities deduplicate locally"
+    );
+    let next_local = first.intern_array(first_local);
+    assert_eq!(next_local, TypeId(prefix_id + 1));
+    assert_eq!(
+        second.store().len(),
+        prefix_len,
+        "forks cannot observe siblings"
+    );
+
+    let second_local = second.intern_literal(LiteralValue::String("second".to_owned()));
+    assert_eq!(second_local, TypeId(prefix_id));
+    assert_eq!(
+        second.store().literal_value(second_local),
+        Some(&LiteralValue::String("second".to_owned()))
+    );
+    assert_eq!(
+        first.store().literal_value(first_local),
+        Some(&LiteralValue::String("first".to_owned()))
+    );
+
+    assert!(matches!(
+        first.fill_reserved_type_batch(vec![ReservedTypeFill::Object(
+            base_reserved,
+            ObjectType::default(),
+        )]),
+        Err(ReservedTypeFillError::AlreadyFrozen(id)) if id == base_reserved
+    ));
+    assert!(!first.set_type_param_constraint(base_parameter_id, wk.number));
+    assert_eq!(
+        first.store().type_param_constraint(base_parameter_id),
+        Some(wk.string)
+    );
+    assert!(first.encode_snapshot_bytes_for_test().is_err());
+}
+
+#[test]
+fn sealing_rejects_pending_reservations_and_nonempty_suffix_reforks() {
+    let mut unfinished = Interner::with_intrinsics();
+    let _pending = unfinished.reserve_object();
+    assert!(unfinished.freeze_as_base().is_err());
+
+    let mut base = Interner::with_intrinsics();
+    base.freeze_as_base().expect("intrinsic-only base seals");
+    let mut delta = base.fork_delta().expect("empty delta forks");
+    let _ = delta.intern_literal(LiteralValue::String("local".to_owned()));
+    assert!(delta.fork_delta().is_err());
+}
+
+#[test]
+fn side_column_only_deltas_fail_closed_and_invalid_template_owners_are_rejected() {
+    let mut base = Interner::with_intrinsics();
+    base.freeze_as_base().expect("intrinsic-only base seals");
+
+    let mut invalid_template = base.fork_delta().expect("empty delta forks");
+    let missing_row = TypeId(u32::try_from(base.store().len()).expect("test base fits TypeId"));
+    invalid_template.set_template_name(missing_row, "not-a-row");
+    invalid_template
+        .encode_snapshot_bytes_for_test()
+        .expect("invalid template metadata owner is rejected before mutation");
+
+    let mut constraint_only = base.fork_delta().expect("constraint delta forks");
+    assert!(
+        constraint_only.set_type_param_constraint(TypeParamId(900_010), base.well_known().string)
+    );
+    assert_eq!(constraint_only.store().len(), base.store().len());
+    assert!(constraint_only.encode_snapshot_bytes_for_test().is_err());
+
+    let mut frozen_only = base.fork_delta().expect("freeze delta forks");
+    frozen_only
+        .freeze_type_param_metadata(&[TypeParamId(900_011)])
+        .expect("declaration metadata may exist without a TypeParam row");
+    assert_eq!(frozen_only.store().len(), base.store().len());
+    assert!(frozen_only.encode_snapshot_bytes_for_test().is_err());
+}
+
+#[test]
+fn every_cold_payload_family_routes_across_nonzero_base_offsets() {
+    let mut base = Interner::with_intrinsics();
+    let base_rows = populate_every_cold_family(&mut base, "base-cold", 910_000);
+    assert_every_cold_family_is_readable(base.store(), &base_rows.rows);
+
+    let base_reserved_object = base.reserve_object();
+    let base_reserved_conditional = base.reserve_conditional();
+    let base_reserved_mapped = base.reserve_mapped();
+    base.fill_reserved_type_batch(vec![
+        ReservedTypeFill::Object(base_reserved_object, ObjectType::default()),
+        ReservedTypeFill::Conditional(
+            base_reserved_conditional,
+            ConditionalType {
+                check: base_rows.type_parameter,
+                extends_ty: base.well_known().string,
+                true_branch: base_reserved_object,
+                false_branch: base.well_known().never,
+                infer_count: 0,
+                distributive: true,
+                poisoned: false,
+            },
+        ),
+        ReservedTypeFill::Mapped(
+            base_reserved_mapped,
+            MappedType {
+                homomorphic: false,
+                key_source: base_rows.literal,
+                value_template: base_reserved_object,
+                modifiers_source: None,
+                optional_modifier: ModifierOp::Keep,
+                readonly_modifier: ModifierOp::Keep,
+            },
+        ),
+    ])
+    .expect("base reserve batch fills");
+    base.freeze_as_base().expect("complete cold base seals");
+
+    let prefix_len = base.store().len();
+    let prefix_id = u32::try_from(prefix_len).expect("cold base fits TypeId");
+    let mut delta = base.fork_delta().expect("cold delta forks");
+    let local_rows = populate_every_cold_family(&mut delta, "local-cold", 920_000);
+    assert_every_cold_family_is_readable(delta.store(), &base_rows.rows);
+    assert_every_cold_family_is_readable(delta.store(), &local_rows.rows);
+
+    for (offset, &(id, _)) in local_rows.rows.iter().enumerate() {
+        let offset = u32::try_from(offset).expect("cold-family table fits TypeId");
+        assert_eq!(id, TypeId(prefix_id + offset), "local ids stay dense");
+    }
+    assert_eq!(delta.intern_array(base_rows.literal), base_rows.array);
+    assert_eq!(
+        delta.intern_template(TemplateType {
+            texts: vec!["local-cold".to_owned(), String::new()],
+            holes: vec![local_rows.literal],
+        }),
+        local_rows.template,
+        "equal local cold payload deduplicates"
+    );
+
+    assert!(delta.set_type_param_constraint(local_rows.type_parameter_id, base.well_known().number));
+    assert_eq!(
+        delta
+            .store()
+            .type_param_constraint(local_rows.type_parameter_id),
+        Some(base.well_known().number)
+    );
+
+    let reserved_object = delta.reserve_object();
+    let reserved_conditional = delta.reserve_conditional();
+    let reserved_mapped = delta.reserve_mapped();
+    delta.set_template_name(reserved_conditional, "LocalConditional");
+    delta.set_template_name(reserved_mapped, "LocalMapped");
+    delta
+        .fill_reserved_type_batch(vec![
+            ReservedTypeFill::Object(
+                reserved_object,
+                ObjectType {
+                    properties: vec![prop("local-reserved", local_rows.literal)],
+                    ..Default::default()
+                },
+            ),
+            ReservedTypeFill::Conditional(
+                reserved_conditional,
+                ConditionalType {
+                    check: local_rows.type_parameter,
+                    extends_ty: base.well_known().string,
+                    true_branch: reserved_object,
+                    false_branch: base.well_known().never,
+                    infer_count: 0,
+                    distributive: true,
+                    poisoned: false,
+                },
+            ),
+            ReservedTypeFill::Mapped(
+                reserved_mapped,
+                MappedType {
+                    homomorphic: true,
+                    key_source: local_rows.literal,
+                    value_template: reserved_object,
+                    modifiers_source: Some(local_rows.array),
+                    optional_modifier: ModifierOp::Add,
+                    readonly_modifier: ModifierOp::Remove,
+                },
+            ),
+        ])
+        .expect("nonzero-base local reserve batch fills local side-table offsets");
+
+    assert_eq!(
+        delta
+            .store()
+            .object_type(reserved_object)
+            .expect("reserved local object is readable")
+            .properties[0]
+            .name,
+        "local-reserved"
+    );
+    assert!(delta
+        .store()
+        .conditional_type(reserved_conditional)
+        .is_some());
+    assert!(delta.store().mapped_type(reserved_mapped).is_some());
+    assert_eq!(
+        delta.store().template_name(reserved_conditional),
+        Some("LocalConditional")
+    );
+    assert_eq!(
+        delta.store().template_name(reserved_mapped),
+        Some("LocalMapped")
+    );
+    assert!(delta.encode_snapshot_bytes_for_test().is_err());
 }
 
 #[test]

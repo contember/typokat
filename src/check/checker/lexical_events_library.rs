@@ -4,7 +4,7 @@ use super::events_library::{
     LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket, LibraryReservedEvent,
 };
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations, SourceSite};
-use super::{attach_class_bindings, attach_type_decl_owners, context::TypeDecl};
+use super::{attach_class_bindings, attach_type_decl_owners};
 use crate::binder::{scope::ScopeId, Binder};
 use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
 use oxc_ast::ast::Program;
@@ -110,7 +110,7 @@ impl LexicalReservations<LibraryRecordTicket> {
         binder: &Binder,
         scope: ScopeId,
         program: &Program<'_>,
-        declarations: &[TypeDecl<'_>],
+        declarations: &super::context::TypeDeclTable<'_>,
     ) {
         attach_class_bindings(
             self,

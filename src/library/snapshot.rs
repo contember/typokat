@@ -15,6 +15,45 @@ use crate::check::checker::library_snapshot_codec::{
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
+#[cfg(test)]
+thread_local! {
+    static SNAPSHOT_VALIDATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static SNAPSHOT_DECODES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SnapshotWorkForTest {
+    pub(super) validations: u64,
+    pub(super) decodes: u64,
+}
+
+#[cfg(test)]
+fn snapshot_work_for_test() -> SnapshotWorkForTest {
+    SnapshotWorkForTest {
+        validations: SNAPSHOT_VALIDATIONS.get(),
+        decodes: SNAPSHOT_DECODES.get(),
+    }
+}
+
+#[cfg(test)]
+pub(super) struct SnapshotWorkScopeForTest(SnapshotWorkForTest);
+
+#[cfg(test)]
+impl SnapshotWorkScopeForTest {
+    pub(super) fn start() -> Self {
+        Self(snapshot_work_for_test())
+    }
+
+    pub(super) fn finish(self) -> SnapshotWorkForTest {
+        let end = snapshot_work_for_test();
+        SnapshotWorkForTest {
+            validations: end.validations.saturating_sub(self.0.validations),
+            decodes: end.decodes.saturating_sub(self.0.decodes),
+        }
+    }
+}
+
 pub(super) const PROFILE_SHA256: &str =
     "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 pub(super) const SCHEMA_SHA256: &str =
@@ -29,6 +68,8 @@ pub(super) struct DecodedCanonicalLibrary {
 }
 
 pub(super) fn admit_packaged_canonical() -> Result<Cow<'static, [u8]>, LibraryInitError> {
+    #[cfg(test)]
+    SNAPSHOT_VALIDATIONS.set(SNAPSHOT_VALIDATIONS.get().saturating_add(1));
     let bytes = packaged_canonical_snapshot().bytes();
     verify_canonical_snapshot(bytes, packaged_canonical_snapshot().binding())
         .map_err(map_admission_error)?;
@@ -38,6 +79,8 @@ pub(super) fn admit_packaged_canonical() -> Result<Cow<'static, [u8]>, LibraryIn
 pub(super) fn decode_admitted_canonical(
     bytes: Cow<'static, [u8]>,
 ) -> Result<DecodedCanonicalLibrary, LibraryInitError> {
+    #[cfg(test)]
+    SNAPSHOT_DECODES.set(SNAPSHOT_DECODES.get().saturating_add(1));
     decode_canonical_library_snapshot(bytes)
         .map(|decoded| DecodedCanonicalLibrary {
             runtime: decoded.runtime,
@@ -53,6 +96,7 @@ pub(super) fn decode_admitted_canonical(
 pub(super) fn admit_canonical_for_test(
     bytes: Vec<u8>,
 ) -> Result<Cow<'static, [u8]>, LibraryInitError> {
+    SNAPSHOT_VALIDATIONS.set(SNAPSHOT_VALIDATIONS.get().saturating_add(1));
     verify_canonical_snapshot(&bytes, packaged_canonical_snapshot().binding())
         .map_err(map_admission_error)?;
     Ok(Cow::Owned(bytes))
@@ -146,6 +190,7 @@ pub(super) fn map_snapshot_error(error: SnapshotError) -> LibraryInitError {
 pub(super) fn decode_pre_admitted(
     snapshot: &test_support::PreAdmittedSnapshot,
 ) -> Result<DecodedCanonicalLibrary, LibraryInitError> {
+    SNAPSHOT_DECODES.set(SNAPSHOT_DECODES.get().saturating_add(1));
     crate::check::checker::library_snapshot_codec::decode_pre_admitted_library_snapshot(
         &snapshot.bytes,
     )

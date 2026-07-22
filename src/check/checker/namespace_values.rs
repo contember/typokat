@@ -22,6 +22,7 @@ use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
 use crate::source::SourceOrdinal;
 use crate::span::Span;
+use crate::types::layered::LayeredMap;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
@@ -42,16 +43,16 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     ambient_fragments: FxHashSet<(ScopeId, u32)>,
     prepared_owners: FxHashSet<(ScopeId, String)>,
     standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan<Ticket>>,
-    standalone_terminals: FxHashMap<NamespaceId, StandaloneNamespaceTerminal>,
+    standalone_terminals: LayeredMap<NamespaceId, StandaloneNamespaceTerminal>,
     #[cfg(test)]
     namespace_function_reservations: FxHashMap<DeclId, SourceSite>,
     #[cfg(test)]
     standalone_query_root_calls: u64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(in crate::check::checker) struct FrozenNamespaceValueTerminals {
-    standalone: FxHashMap<NamespaceId, StandaloneNamespaceTerminal>,
+    standalone: LayeredMap<NamespaceId, StandaloneNamespaceTerminal>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -326,7 +327,7 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
             ambient_fragments: FxHashSet::default(),
             prepared_owners: FxHashSet::default(),
             standalone_plans: FxHashMap::default(),
-            standalone_terminals: FxHashMap::default(),
+            standalone_terminals: LayeredMap::default(),
             #[cfg(test)]
             namespace_function_reservations: FxHashMap::default(),
             #[cfg(test)]
@@ -355,14 +356,32 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         &mut self,
         frozen: FrozenNamespaceValueTerminals,
     ) {
-        for (namespace, terminal) in frozen.standalone {
-            assert!(
-                self.standalone_terminals
-                    .insert(namespace, terminal)
-                    .is_none(),
-                "frozen namespace terminals install into an empty prefix"
-            );
+        assert_eq!(self.standalone_terminals.len(), 0);
+        self.standalone_terminals = frozen.standalone;
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn terminals_share_base_with(
+        &self,
+        frozen: &FrozenNamespaceValueTerminals,
+    ) -> bool {
+        self.standalone_terminals
+            .shares_base_with(&frozen.standalone)
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_terminal_row_count_for_test(&self) -> usize {
+        self.standalone_terminals.local_len()
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_terminal_snapshot_parts_for_test(
+        &self,
+    ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
+        FrozenNamespaceValueTerminals {
+            standalone: self.standalone_terminals.clone(),
         }
+        .local_snapshot_parts()
     }
 
     pub(in crate::check::checker) fn standalone_terminal(
@@ -408,7 +427,8 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         );
         assert!(
             self.standalone_terminals
-                .insert(namespace, StandaloneNamespaceTerminal::Planned)
+                .insert_local(namespace, StandaloneNamespaceTerminal::Planned)
+                .expect("namespace plans cannot replace a frozen base row")
                 .is_none(),
             "standalone namespace terminal reserved once"
         );
@@ -558,6 +578,35 @@ impl FrozenNamespaceValueTerminals {
         Ok(rows)
     }
 
+    #[cfg(test)]
+    pub(in crate::check::checker) fn local_snapshot_parts(
+        &self,
+    ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
+        let mut rows = self
+            .standalone
+            .local_iter()
+            .map(|(&namespace, &terminal)| {
+                let terminal = match terminal {
+                    StandaloneNamespaceTerminal::Planned => {
+                        return Err("local namespace terminal is still planned")
+                    }
+                    StandaloneNamespaceTerminal::Ready { storage, ty } => {
+                        FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty }
+                    }
+                    StandaloneNamespaceTerminal::Unavailable { cause } => {
+                        FrozenNamespaceValueTerminalSnapshot::Unavailable(cause)
+                    }
+                };
+                Ok(FrozenNamespaceValueTerminalSnapshotRow {
+                    namespace,
+                    terminal,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.sort_by_key(|row| row.namespace.0);
+        Ok(rows)
+    }
+
     pub(in crate::check::checker) fn from_snapshot_parts(
         rows: FrozenNamespaceValueTerminalsSnapshotParts,
     ) -> Result<Self, &'static str> {
@@ -580,8 +629,24 @@ impl FrozenNamespaceValueTerminals {
                 };
                 (row.namespace, terminal)
             })
-            .collect();
+            .collect::<FxHashMap<_, _>>()
+            .into();
         Ok(Self { standalone })
+    }
+
+    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.standalone.freeze_as_base()
+    }
+
+    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            standalone: self.standalone.fork_delta()?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
+        self.standalone.shares_base_with(&other.standalone)
     }
 }
 
@@ -1237,7 +1302,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let query_roots_before = crate::check::query::query_demand_measure().root_calls;
         let order = self
             .binder
-            .standalone_namespace_value_attachments()
+            .local_standalone_namespace_value_attachments()
             .into_iter()
             .map(|attachment| attachment.namespace)
             .collect::<Vec<_>>();
@@ -1250,10 +1315,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     continue;
                 };
                 if let Some(cause) = plan.unavailable {
-                    self.namespace_values.standalone_terminals.insert(
-                        namespace,
-                        StandaloneNamespaceTerminal::Unavailable { cause },
-                    );
+                    self.namespace_values
+                        .standalone_terminals
+                        .insert_local(
+                            namespace,
+                            StandaloneNamespaceTerminal::Unavailable { cause },
+                        )
+                        .expect("namespace terminals cannot replace a frozen base row");
                     progressed = true;
                     continue;
                 }
@@ -1361,10 +1429,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     });
                 }
                 if let Some(cause) = unavailable {
-                    self.namespace_values.standalone_terminals.insert(
-                        namespace,
-                        StandaloneNamespaceTerminal::Unavailable { cause },
-                    );
+                    self.namespace_values
+                        .standalone_terminals
+                        .insert_local(
+                            namespace,
+                            StandaloneNamespaceTerminal::Unavailable { cause },
+                        )
+                        .expect("namespace terminals cannot replace a frozen base row");
                     progressed = true;
                     continue;
                 }
@@ -1385,23 +1456,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 });
                 assert!(self.decl_types.get(plan.storage).is_none());
                 self.decl_types.set(plan.storage, ty);
-                self.namespace_values.standalone_terminals.insert(
-                    namespace,
-                    StandaloneNamespaceTerminal::Ready {
-                        storage: plan.storage,
-                        ty,
-                    },
-                );
+                self.namespace_values
+                    .standalone_terminals
+                    .insert_local(
+                        namespace,
+                        StandaloneNamespaceTerminal::Ready {
+                            storage: plan.storage,
+                            ty,
+                        },
+                    )
+                    .expect("namespace terminals cannot replace a frozen base row");
                 progressed = true;
             }
             if !progressed {
                 for namespace in next.drain(..) {
-                    self.namespace_values.standalone_terminals.insert(
-                        namespace,
-                        StandaloneNamespaceTerminal::Unavailable {
-                            cause: NamespaceValueUnavailableCause::NamespaceContainmentCycle,
-                        },
-                    );
+                    self.namespace_values
+                        .standalone_terminals
+                        .insert_local(
+                            namespace,
+                            StandaloneNamespaceTerminal::Unavailable {
+                                cause: NamespaceValueUnavailableCause::NamespaceContainmentCycle,
+                            },
+                        )
+                        .expect("namespace terminals cannot replace a frozen base row");
                 }
                 break;
             }
@@ -2256,13 +2333,13 @@ fn collect_attachment_inputs<Ticket: Copy + PartialEq>(
     modules: &FxHashSet<ScopeId>,
 ) -> Vec<AttachmentInput> {
     let mut inputs = Vec::new();
-    for record in pass.binder.namespaces.merges() {
+    for record in pass.binder.namespaces.local_merges() {
         let Some(owner_scope) = declaration_owner_scope(pass, record.owner) else {
             continue;
         };
         let Some(attachment) = pass
             .binder
-            .namespace_value_attachment(owner_scope, &record.name)
+            .namespace_value_attachment_for_owner(record.owner, &record.name)
         else {
             continue;
         };
@@ -2423,7 +2500,7 @@ fn collect_all_standalone_attachment_inputs<Ticket: Copy + PartialEq>(
     pass: &Pass<'_, '_, Ticket>,
 ) -> Vec<StandaloneAttachmentInput> {
     pass.binder
-        .standalone_namespace_value_attachments()
+        .local_standalone_namespace_value_attachments()
         .into_iter()
         .filter_map(|attachment| standalone_attachment_input(pass, attachment))
         .collect()
@@ -3000,13 +3077,34 @@ mod tests {
                 ty: TypeId(13),
             },
         );
-        let frozen = FrozenNamespaceValueTerminals { standalone };
+        let frozen = FrozenNamespaceValueTerminals {
+            standalone: standalone.into(),
+        };
 
         let parts = frozen.snapshot_parts().expect("snapshot terminals");
         let restored =
             FrozenNamespaceValueTerminals::from_snapshot_parts(parts.clone()).expect("restore");
 
         assert_eq!(restored.snapshot_parts(), Ok(parts));
+    }
+
+    #[test]
+    fn frozen_namespace_terminals_share_their_base_between_deltas() {
+        let mut frozen = FrozenNamespaceValueTerminals {
+            standalone: FxHashMap::from_iter([(
+                NamespaceId(4),
+                StandaloneNamespaceTerminal::Ready {
+                    storage: ValueStorageId(6),
+                    ty: TypeId(8),
+                },
+            )])
+            .into(),
+        };
+        frozen.freeze_as_base().expect("namespace base seals");
+        let first = frozen.fork_delta().expect("first namespace suffix");
+        let second = frozen.fork_delta().expect("second namespace suffix");
+        assert!(first.shares_base_with(&second));
+        assert_eq!(first.snapshot_parts(), second.snapshot_parts());
     }
 
     #[test]

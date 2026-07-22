@@ -5,6 +5,7 @@
 
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
+use crate::types::layered::LayeredVec;
 
 /// Index of a symbol within the binder's [`SymbolTable`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -74,7 +75,7 @@ impl Symbol {
 /// merges declarations across spaces under that one id (architecture §4.1).
 #[derive(Default)]
 pub struct SymbolTable {
-    symbols: Vec<Symbol>,
+    symbols: LayeredVec<Symbol>,
 }
 
 impl SymbolTable {
@@ -85,7 +86,7 @@ impl SymbolTable {
     /// Append a symbol and return its id.
     pub fn push(&mut self, symbol: Symbol) -> SymbolId {
         let id = SymbolId(self.symbols.len() as u32);
-        self.symbols.push(symbol);
+        self.symbols.push_local(symbol);
         id
     }
 
@@ -94,11 +95,42 @@ impl SymbolTable {
     }
 
     pub fn get_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
-        self.symbols.get_mut(id.index())
+        self.symbols.get_mut_local(id.index())
     }
 
-    pub(crate) fn snapshot_symbols(&self) -> &[Symbol] {
-        &self.symbols
+    pub(crate) fn snapshot_symbols(&self) -> impl Iterator<Item = &Symbol> {
+        self.symbols.iter()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.symbols.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_symbols(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
+        let base_len = self.symbols.base_len();
+        self.symbols
+            .local_iter()
+            .enumerate()
+            .map(move |(index, symbol)| {
+                let id = u32::try_from(base_len + index).expect("symbol id fits u32");
+                (SymbolId(id), symbol)
+            })
+    }
+
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.symbols.freeze_as_base()
+    }
+
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            symbols: self.symbols.fork_delta()?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn symbols_share_base_with(&self, other: &Self) -> bool {
+        self.symbols.shares_base_with(&other.symbols)
     }
 
     #[cfg(test)]

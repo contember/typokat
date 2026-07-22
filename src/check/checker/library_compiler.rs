@@ -56,7 +56,9 @@ use crate::span::Span;
 use crate::types::repr::ClassId;
 use crate::types::repr::TypeParamId;
 #[cfg(test)]
-use crate::types::repr::{IntrinsicKind, LiteralValue, ModifierOp, TypeTag, Visibility};
+use crate::types::repr::{
+    IntrinsicKind, LiteralValue, ModifierOp, ObjectType, TypeTag, Visibility,
+};
 #[cfg(test)]
 use crate::types::store::Store;
 use crate::types::store::TypeId;
@@ -549,6 +551,304 @@ fn validate_owned_library_snapshot_parts(
 
 impl OwnedLibraryRuntimeState {
     #[cfg(test)]
+    pub(in crate::check::checker) fn into_user_project_base(
+        self,
+    ) -> (Interner, Binder, super::BoundUserBase) {
+        let Self {
+            interner,
+            binder,
+            published_types,
+            decl_types,
+            semantic_identities,
+            runtime,
+            next_type_param,
+            next_class_id,
+            source_file_count: _,
+        } = self;
+        (
+            interner,
+            binder,
+            super::BoundUserBase {
+                published_types,
+                library_semantic_identities: semantic_identities,
+                lexical_array_alias: None,
+                decl_types,
+                next_type_param,
+                next_class_id,
+                runtime,
+            },
+        )
+    }
+
+    pub(crate) fn freeze_as_library_base(&mut self) -> Result<(), &'static str> {
+        self.interner.freeze_as_base()?;
+        self.binder.freeze_as_base()?;
+        self.published_types.freeze_as_base()?;
+        self.decl_types.freeze_as_base()?;
+        self.runtime.freeze_as_base()
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "activated by the WU4 user-delta entry point")
+    )]
+    pub(crate) fn fork_collision_free_user_delta(
+        &self,
+        _capability: &crate::library::CollisionFreeUserDeltaCapability,
+    ) -> Result<Self, &'static str> {
+        self.fork_user_delta()
+    }
+
+    fn fork_user_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            interner: self.interner.fork_delta()?,
+            binder: self.binder.fork_delta()?,
+            published_types: self.published_types.fork_delta()?,
+            decl_types: self.decl_types.fork_delta()?,
+            semantic_identities: self.semantic_identities.clone(),
+            runtime: self.runtime.fork_delta()?,
+            next_type_param: self.next_type_param,
+            next_class_id: self.next_class_id,
+            source_file_count: self.source_file_count,
+        })
+    }
+
+    #[cfg(test)]
+    fn fork_user_delta_for_test(&self) -> Result<Self, &'static str> {
+        self.fork_user_delta()
+    }
+
+    #[cfg(test)]
+    fn shares_checker_base_with(&self, other: &Self) -> bool {
+        self.published_types
+            .shares_base_with(&other.published_types)
+            && self.decl_types.shares_base_with(&other.decl_types)
+            && self.runtime.shares_base_with(&other.runtime)
+            && match (&self.semantic_identities, &other.semantic_identities) {
+                (Some(left), Some(right)) => left.shares_storage_with(right),
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+            }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_identity_for_test(&self) -> [usize; 8] {
+        [
+            std::ptr::from_ref(self).addr(),
+            std::ptr::from_ref(&self.interner).addr(),
+            std::ptr::from_ref(self.interner.store()).addr(),
+            std::ptr::from_ref(&self.binder).addr(),
+            std::ptr::from_ref(&self.published_types).addr(),
+            std::ptr::from_ref(&self.decl_types).addr(),
+            std::ptr::from_ref(&self.runtime).addr(),
+            self.semantic_identities
+                .as_ref()
+                .map_or(0, |identities| std::ptr::from_ref(identities).addr()),
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initial_visible_user_names_for_test(&self) -> BTreeSet<String> {
+        self.binder.local_names_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_user_delta_drop_witness_for_test(
+        &mut self,
+        discarded: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        self.interner
+            .install_user_delta_drop_witness_for_test(discarded);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn identity_ends_for_test(&self) -> OwnedBaseFinalIdentityEnds {
+        OwnedBaseFinalIdentityEnds {
+            store: self.interner.store().len(),
+            type_params: usize::try_from(self.next_type_param)
+                .expect("type parameter end fits usize"),
+            classes: usize::try_from(self.next_class_id).expect("class end fits usize"),
+            scopes: self.binder.graph.snapshot_len(),
+            symbols: self.binder.symbols.len(),
+            declarations: self.binder.declarations.len(),
+            type_groups: self.binder.type_groups.len(),
+            namespaces: self.binder.namespaces.len(),
+            value_storages: self.decl_types.len(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn named_type_for_test(&self, name: &str) -> Option<TypeId> {
+        let group = self
+            .binder
+            .resolve_type(self.binder.compilation_global, name)
+            .and_then(|symbol| self.binder.symbols.get(symbol))?
+            .ty?;
+        let PublishedTypeGroupTerminal::Ready(group) = self.published_types.groups().get(group)?
+        else {
+            return None;
+        };
+        match group.surface {
+            PublishedTypeGroupSurface::Template(ty) => Some(ty),
+            PublishedTypeGroupSurface::Class(class) => {
+                match self.published_types.classes().published_class(class) {
+                    DemandOutcome::Ready(surface) => Some(surface.instance_template()),
+                    DemandOutcome::Exhausted(_) => None,
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
+        self.interner.frozen_structural_object_probe_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reintern_structural_type_for_test(
+        &self,
+        descriptor: ObjectType,
+    ) -> Result<(TypeId, usize), &'static str> {
+        let mut delta = self.fork_user_delta_for_test()?;
+        let before = delta.interner.store().len();
+        let resolved = delta.interner.intern_object(descriptor);
+        Ok((resolved, delta.interner.store().len() - before))
+    }
+
+    #[cfg(test)]
+    fn final_base_family_clone_counts_for_test(
+        &self,
+        pass: &super::context::Pass<'_, '_>,
+        final_next_class_id: u32,
+    ) -> BTreeMap<&'static str, u64> {
+        let store = self
+            .interner
+            .store()
+            .base_family_sharing_with(pass.interner.store());
+        let interner = self.interner.base_index_family_sharing_with(pass.interner);
+        let binder = self.binder.base_family_sharing_with(pass.binder);
+        let published = self
+            .published_types
+            .base_family_sharing_with(pass.type_environment.published());
+        let identities = match (
+            self.semantic_identities.as_ref(),
+            pass.library_semantic_identities.as_ref(),
+        ) {
+            (Some(base), Some(final_state)) => base.shares_storage_with(final_state),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        let runtime = &self.runtime;
+        let checks = [
+            ("store.rows", store[0]),
+            ("store.payload-tables", store[1]),
+            ("store.type-param-constraints", store[2]),
+            ("store.frozen-type-params", store[3]),
+            ("store.template-names", store[4]),
+            ("interner.dedup-buckets", interner[0]),
+            ("interner.reserved-terminals", interner[1]),
+            ("interner.well-known", interner[2]),
+            ("binder.scopes", binder[0]),
+            ("binder.symbols", binder[1]),
+            ("binder.declarations", binder[2]),
+            ("binder.declaration-site-index", binder[3]),
+            ("binder.type-groups", binder[4]),
+            ("binder.namespaces", binder[5]),
+            ("binder.namespace-indexes", binder[6]),
+            ("binder.module-sources", binder[7]),
+            (
+                "decl-types.slots",
+                self.decl_types.shares_base_with(&pass.decl_types),
+            ),
+            ("published-types.groups", published[0]),
+            ("published-types.classes", published[1]),
+            (
+                "namespace-terminals",
+                pass.namespace_values
+                    .terminals_share_base_with(&runtime.namespace_terminals),
+            ),
+            (
+                "function-groups.symbols",
+                runtime
+                    .named_function_symbols
+                    .shares_base_with(&pass.named_function_symbols),
+            ),
+            (
+                "class.application-parameters",
+                runtime
+                    .class_application_parameters
+                    .shares_base_with(&pass.class_application_parameters),
+            ),
+            ("class.parameter-defaults", published[0]),
+            (
+                "class.parents",
+                runtime.class_parents.shares_base_with(&pass.class_parents),
+            ),
+            (
+                "class.names",
+                runtime.class_names.shares_base_with(&pass.class_names),
+            ),
+            (
+                "class.new-metadata",
+                runtime
+                    .class_new_metadata
+                    .shares_base_with(&pass.class_new_metadata),
+            ),
+            (
+                "class.value-identities",
+                runtime
+                    .class_value_bindings
+                    .shares_base_with(&pass.class_value_bindings),
+            ),
+            (
+                "class.aliases",
+                runtime
+                    .class_value_aliases
+                    .shares_base_with(&pass.class_value_aliases)
+                    && runtime
+                        .standalone_namespace_value_aliases
+                        .shares_base_with(&pass.standalone_namespace_value_aliases),
+            ),
+            ("semantic-identities", identities),
+            (
+                "next-ids",
+                pass.next_type_param >= self.next_type_param
+                    && final_next_class_id >= self.next_class_id,
+            ),
+        ];
+        checks
+            .into_iter()
+            .map(|(family, shared)| (family, u64::from(!shared)))
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn final_local_rows_written_for_test(pass: &super::context::Pass<'_, '_>) -> u64 {
+        let store = pass.interner.store().local_family_row_counts_for_test();
+        let interner = pass.interner.local_index_row_counts_for_test();
+        let binder = pass.binder.local_family_row_counts_for_test();
+        let published = pass
+            .type_environment
+            .published()
+            .local_family_row_counts_for_test();
+        let rows = store.into_iter().sum::<usize>()
+            + interner.into_iter().sum::<usize>()
+            + binder.into_iter().sum::<usize>()
+            + pass.decl_types.local_len()
+            + published.into_iter().sum::<usize>()
+            + pass.namespace_values.local_terminal_row_count_for_test()
+            + pass.named_function_symbols.local_len()
+            + pass.class_application_parameters.local_len()
+            + pass.class_parents.local_len()
+            + pass.class_names.local_len()
+            + pass.class_new_metadata.local_len()
+            + pass.class_value_bindings.local_len()
+            + pass.class_value_aliases.local_len()
+            + pass.standalone_namespace_value_aliases.local_len();
+        u64::try_from(rows).expect("local row count fits u64")
+    }
+
+    #[cfg(test)]
     pub(in crate::check::checker) fn borrowed_snapshot_parts(
         &self,
     ) -> Result<BorrowedLibraryRuntimeSnapshotParts<'_>, &'static str> {
@@ -643,6 +943,31 @@ impl OwnedLibraryRuntimeState {
 }
 
 #[cfg(test)]
+pub(crate) fn compile_synthetic_padding_base_for_test(
+    namespace_count: usize,
+) -> Result<OwnedLibraryRuntimeState, String> {
+    let mut source = String::new();
+    for index in 0..namespace_count {
+        source.push_str(&format!(
+            "declare namespace Pad{index} {{\n\
+             export class Box<T> {{ value: T; }}\n\
+             export interface Shape {{ value: string; }}\n\
+             export const value: string;\n\
+             }}\n"
+        ));
+    }
+    let injected = [InjectedLibrarySource {
+        file_ordinal: LibraryFileOrdinal::new(0),
+        name: "synthetic-padding.d.ts",
+        source: &source,
+    }];
+    let (_, mut state) = compile_owned_injected_profile(&injected)
+        .map_err(|error| format!("synthetic padding base failed: {error:?}"))?;
+    state.freeze_as_library_base().map_err(str::to_owned)?;
+    Ok(state)
+}
+
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OwnedBaseUserTimings {
     pub(crate) parse: Duration,
@@ -659,11 +984,124 @@ pub(crate) struct OwnedBaseUserRun {
 }
 
 #[cfg(test)]
+pub(crate) struct OwnedBaseUserProjectRun {
+    pub(crate) reports: Vec<crate::driver::FileReport>,
+    pub(crate) final_identity: OwnedBaseFinalIdentityWitness,
+    pub(crate) cross_file: OwnedBaseCrossFileWitness,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedBaseCrossFileWitness {
+    pub(crate) producer_type_group: TypeGroupId,
+    pub(crate) consumer_type_group: TypeGroupId,
+    pub(crate) producer_value_storage: ValueStorageId,
+    pub(crate) consumer_value_storage: ValueStorageId,
+}
+
+#[cfg(test)]
+thread_local! {
+    static USER_SOURCE_PARSE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static USER_SOURCE_BIND_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static USER_SOURCE_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct UserSourceWorkForTest {
+    pub(crate) parses: u64,
+    pub(crate) binds: u64,
+    pub(crate) checks: u64,
+}
+
+#[cfg(test)]
+fn user_source_work_for_test() -> UserSourceWorkForTest {
+    UserSourceWorkForTest {
+        parses: USER_SOURCE_PARSE_CALLS.get(),
+        binds: USER_SOURCE_BIND_CALLS.get(),
+        checks: USER_SOURCE_CHECK_CALLS.get(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn record_user_source_parses_for_test(count: usize) {
+    USER_SOURCE_PARSE_CALLS.set(
+        USER_SOURCE_PARSE_CALLS
+            .get()
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn record_user_source_binds_for_test(count: usize) {
+    USER_SOURCE_BIND_CALLS.set(
+        USER_SOURCE_BIND_CALLS
+            .get()
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn record_user_source_checks_for_test(count: usize) {
+    USER_SOURCE_CHECK_CALLS.set(
+        USER_SOURCE_CHECK_CALLS
+            .get()
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+pub(crate) struct UserSourceWorkScopeForTest(UserSourceWorkForTest);
+
+#[cfg(test)]
+impl UserSourceWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(user_source_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> UserSourceWorkForTest {
+        let end = user_source_work_for_test();
+        UserSourceWorkForTest {
+            parses: end.parses.saturating_sub(self.0.parses),
+            binds: end.binds.saturating_sub(self.0.binds),
+            checks: end.checks.saturating_sub(self.0.checks),
+        }
+    }
+}
+
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OwnedBaseFinalIdentityWitness {
     pub(crate) ends: OwnedBaseFinalIdentityEnds,
+    pub(crate) actual_ids: OwnedBaseActualIds,
     pub(crate) named_alias_types: BTreeMap<String, TypeId>,
+    pub(crate) local_names: BTreeSet<String>,
+    pub(crate) references: OwnedBaseReferenceSummary,
     pub(crate) reused_base_shape: Option<OwnedBaseReusedShapeWitness>,
+    pub(crate) base_row_clone_counts: BTreeMap<&'static str, u64>,
+    pub(crate) local_rows_written: u64,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OwnedBaseActualIds {
+    pub(crate) types: Vec<usize>,
+    pub(crate) type_params: Vec<usize>,
+    pub(crate) classes: Vec<usize>,
+    pub(crate) scopes: Vec<usize>,
+    pub(crate) symbols: Vec<usize>,
+    pub(crate) declarations: Vec<usize>,
+    pub(crate) type_groups: Vec<usize>,
+    pub(crate) namespaces: Vec<usize>,
+    pub(crate) value_storages: Vec<usize>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OwnedBaseReferenceSummary {
+    pub(crate) base_to_delta: u64,
+    pub(crate) delta_to_base: u64,
+    pub(crate) delta_to_delta: u64,
 }
 
 #[cfg(test)]
@@ -717,12 +1155,220 @@ fn store_prefix_digest(store: &Store, len: usize) -> Result<String, String> {
 struct FinalIdentityInspection<'a> {
     base_store_len: usize,
     base_value_storage_len: usize,
+    base_type_group_len: usize,
+    base_namespace_len: usize,
     binder: &'a Binder,
     published: &'a PublishedTypeEnvironment,
     interner: &'a Interner,
     decl_types: &'a DeclTypes,
     next_type_param: u32,
     next_class_id: u32,
+    actual_class_ids: Vec<ClassId>,
+    references: OwnedBaseReferenceSummary,
+    base_row_clone_counts: BTreeMap<&'static str, u64>,
+    local_rows_written: u64,
+}
+
+#[cfg(test)]
+fn base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<usize> {
+    match domain {
+        1 => Some(ends.store),
+        2 => Some(ends.type_params),
+        3 => Some(ends.classes),
+        4 => Some(ends.scopes),
+        5 => Some(ends.symbols),
+        6 => Some(ends.declarations),
+        7 => Some(ends.type_groups),
+        8 => Some(ends.namespaces),
+        9 => Some(ends.value_storages),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn classify_live_reference(
+    summary: &mut OwnedBaseReferenceSummary,
+    base: &OwnedBaseFinalIdentityEnds,
+    owner_domain: u8,
+    owner: u32,
+    target_domain: u8,
+    target: u32,
+) {
+    let Some(target_limit) = base_domain_limit(base, target_domain) else {
+        return;
+    };
+    let owner_is_base = base_domain_limit(base, owner_domain)
+        .is_some_and(|owner_limit| usize::try_from(owner).is_ok_and(|owner| owner < owner_limit));
+    let target_is_base = usize::try_from(target).is_ok_and(|target| target < target_limit);
+    match (owner_is_base, target_is_base) {
+        (true, false) => summary.base_to_delta += 1,
+        (false, true) => summary.delta_to_base += 1,
+        (false, false) => summary.delta_to_delta += 1,
+        (true, true) => {}
+    }
+}
+
+#[cfg(test)]
+fn final_reference_summary(
+    pass: &super::context::Pass<'_, '_>,
+    base: &OwnedBaseFinalIdentityEnds,
+) -> OwnedBaseReferenceSummary {
+    let mut summary = OwnedBaseReferenceSummary::default();
+    for (owner_domain, target_domain, _, owner, target) in
+        pass.interner.local_type_reference_records_for_test()
+    {
+        classify_live_reference(
+            &mut summary,
+            base,
+            owner_domain,
+            owner,
+            target_domain,
+            target,
+        );
+    }
+
+    for (owner_domain, owner, target_domain, target) in
+        pass.binder.local_reference_records_for_test()
+    {
+        classify_live_reference(
+            &mut summary,
+            base,
+            owner_domain,
+            owner,
+            target_domain,
+            target,
+        );
+    }
+
+    for (owner, ty) in pass.decl_types.local_slots() {
+        classify_live_reference(&mut summary, base, 9, owner.0, 9, owner.0);
+        if let Some(ty) = ty {
+            classify_live_reference(&mut summary, base, 9, owner.0, 1, ty.0);
+        }
+    }
+
+    let published = pass.type_environment.published();
+    for (owner, terminal) in published.local_group_terminals() {
+        classify_live_reference(&mut summary, base, 7, owner.0, 7, owner.0);
+        let PublishedTypeGroupTerminal::Ready(group) = terminal else {
+            continue;
+        };
+        match group.surface {
+            PublishedTypeGroupSurface::Template(ty) => {
+                classify_live_reference(&mut summary, base, 7, owner.0, 1, ty.0)
+            }
+            PublishedTypeGroupSurface::Class(class) => {
+                classify_live_reference(&mut summary, base, 7, owner.0, 3, class.0)
+            }
+        }
+        for parameter in &group.parameters {
+            classify_live_reference(&mut summary, base, 7, owner.0, 2, parameter.0);
+        }
+        for default in &group.parameter_defaults {
+            if let PublishedTypeParameterDefault::Ready(ty) = default {
+                classify_live_reference(&mut summary, base, 7, owner.0, 1, ty.0);
+            }
+        }
+        for alternative in &group.conflict_alternatives {
+            for ty in &alternative.types {
+                classify_live_reference(&mut summary, base, 7, owner.0, 1, ty.0);
+            }
+        }
+    }
+    for (class, terminal) in published.local_class_terminals() {
+        classify_live_reference(&mut summary, base, 3, class.0, 3, class.0);
+        let PublishedClassSnapshotTerminal::Ready(surface) = &terminal else {
+            continue;
+        };
+        classify_live_reference(&mut summary, base, 3, class.0, 3, surface.class().0);
+        for parameter in surface.type_params() {
+            classify_live_reference(&mut summary, base, 3, class.0, 2, parameter.0);
+        }
+        for ty in [
+            Some(surface.instance_template()),
+            Some(surface.static_template()),
+            surface.constructor_template(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            classify_live_reference(&mut summary, base, 3, class.0, 1, ty.0);
+        }
+    }
+
+    let namespace_terminals = pass
+        .namespace_values
+        .local_terminal_snapshot_parts_for_test()
+        .expect("completed local namespace terminals snapshot");
+    for row in namespace_terminals {
+        classify_live_reference(&mut summary, base, 8, row.namespace.0, 8, row.namespace.0);
+        if let FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } = row.terminal {
+            classify_live_reference(&mut summary, base, 8, row.namespace.0, 9, storage.0);
+            classify_live_reference(&mut summary, base, 8, row.namespace.0, 1, ty.0);
+        }
+    }
+
+    for (&class, parameters) in pass.class_application_parameters.local_iter() {
+        classify_live_reference(&mut summary, base, 3, class.0, 3, class.0);
+        for parameter in parameters {
+            let parameter = (*parameter).snapshot_parts();
+            classify_live_reference(&mut summary, base, 3, class.0, 2, parameter.id.0);
+            if let Some(constraint) = parameter.constraint {
+                classify_live_reference(&mut summary, base, 3, class.0, 1, constraint.0);
+            }
+            if let ClassTypeParameterDefault::Ready(default) = parameter.default {
+                classify_live_reference(&mut summary, base, 3, class.0, 1, default.0);
+            }
+        }
+    }
+    for (&class, metadata) in pass.class_new_metadata.local_iter() {
+        classify_live_reference(&mut summary, base, 3, class.0, 3, class.0);
+        classify_live_reference(
+            &mut summary,
+            base,
+            3,
+            class.0,
+            3,
+            metadata.ctor_declaring_class.0,
+        );
+    }
+    for (&class, &parent) in pass.class_parents.local_iter() {
+        classify_live_reference(&mut summary, base, 3, class.0, 3, parent.0);
+    }
+    for (&alias, &target) in pass.class_value_aliases.local_iter() {
+        classify_live_reference(&mut summary, base, 9, alias.0, 9, target.0);
+    }
+    for (&storage, binding) in pass.class_value_bindings.local_iter() {
+        classify_live_reference(&mut summary, base, 9, storage.0, 3, binding.class_id.0);
+    }
+    for (&alias, &target) in pass.standalone_namespace_value_aliases.local_iter() {
+        classify_live_reference(&mut summary, base, 9, alias.0, 9, target.0);
+    }
+    for &symbol in pass.named_function_symbols.local_iter() {
+        classify_live_reference(&mut summary, base, 5, symbol.0, 5, symbol.0);
+    }
+    for (&class, _) in pass.class_names.local_iter() {
+        classify_live_reference(&mut summary, base, 3, class.0, 3, class.0);
+    }
+    if let Some(identities) = &pass.library_semantic_identities {
+        for terminal in identities.terminals() {
+            let LibraryIdentityTerminal::Ready(identity) = terminal else {
+                continue;
+            };
+            for (domain, target) in std::iter::once((7, identity.group.0))
+                .chain(std::iter::once((1, identity.template.0)))
+                .chain(identity.parameters.iter().map(|parameter| (2, parameter.0)))
+            {
+                let Some(limit) = base_domain_limit(base, domain) else {
+                    continue;
+                };
+                if usize::try_from(target).is_ok_and(|target| target >= limit) {
+                    summary.base_to_delta += 1;
+                }
+            }
+        }
+    }
+    summary
 }
 
 #[cfg(test)]
@@ -730,39 +1376,73 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
     let FinalIdentityInspection {
         base_store_len,
         base_value_storage_len,
+        base_type_group_len,
+        base_namespace_len,
         binder,
         published,
         interner,
         decl_types,
         next_type_param,
         next_class_id,
+        actual_class_ids,
+        references,
+        base_row_clone_counts,
+        local_rows_written,
     } = inputs;
-    let named_alias_types = binder
-        .graph
-        .get(binder.module)
-        .into_iter()
-        .flat_map(|scope| scope.symbols.iter())
-        .filter_map(|(name, symbol)| {
-            let group = binder.symbols.get(*symbol)?.ty?;
-            let declaration = binder.type_groups.get(group)?;
-            declaration
-                .fragments
-                .iter()
-                .any(|fragment| {
-                    fragment.kind == TypeFragmentKind::TypeAlias
-                        && fragment.site.module == binder.module
-                })
-                .then_some(())?;
-            let terminal = published.groups().get(group)?;
-            let PublishedTypeGroupTerminal::Ready(ready) = terminal else {
-                return None;
+    let mut named_alias_types = BTreeMap::new();
+    let mut local_names = BTreeSet::new();
+    let base_type_group_end =
+        u32::try_from(base_type_group_len).expect("base type-group end fits u32");
+    let base_namespace_end =
+        u32::try_from(base_namespace_len).expect("base namespace end fits u32");
+    let mut pending_scopes = vec![(binder.module, String::new())];
+    let mut visited_namespaces = BTreeSet::new();
+    while let Some((scope_id, prefix)) = pending_scopes.pop() {
+        let Some(scope) = binder.graph.get(scope_id) else {
+            continue;
+        };
+        for (name, symbol_id) in &scope.symbols {
+            let qualified = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}.{name}")
             };
-            let PublishedTypeGroupSurface::Template(ty) = ready.surface else {
-                return None;
+            local_names.insert(qualified.clone());
+            let Some(symbol) = binder.symbols.get(*symbol_id) else {
+                continue;
             };
-            Some((name.clone(), ty))
-        })
-        .collect::<BTreeMap<_, _>>();
+            if let Some(group) = symbol.ty.filter(|group| group.0 >= base_type_group_end) {
+                let alias = binder.type_groups.get(group).is_some_and(|declaration| {
+                    declaration
+                        .fragments
+                        .iter()
+                        .any(|fragment| fragment.kind == TypeFragmentKind::TypeAlias)
+                });
+                if alias {
+                    if let Some(PublishedTypeGroupTerminal::Ready(ready)) =
+                        published.groups().get(group)
+                    {
+                        if let PublishedTypeGroupSurface::Template(ty) = ready.surface {
+                            named_alias_types.insert(qualified.clone(), ty);
+                        }
+                    }
+                }
+            }
+            if let Some(namespace) = symbol
+                .ns
+                .filter(|namespace| namespace.0 >= base_namespace_end)
+                .filter(|namespace| visited_namespaces.insert(*namespace))
+            {
+                if let Some(public_scope) = binder
+                    .namespaces
+                    .get(namespace)
+                    .map(|namespace| namespace.public_scope)
+                {
+                    pending_scopes.push((public_scope, qualified));
+                }
+            }
+        }
+    }
 
     let eligible_base_shape = |ty: TypeId| {
         (ty.index() < base_store_len)
@@ -787,8 +1467,7 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
     let reused_base_shape = direct_user_shape.or_else(|| {
         const TYPE_DOMAIN: u8 = 1;
         interner
-            .snapshot_reference_records_for_test()
-            .0
+            .local_type_reference_records_for_test()
             .into_iter()
             .find_map(|(owner_domain, target_domain, _, owner, target)| {
                 (owner_domain == TYPE_DOMAIN
@@ -806,14 +1485,71 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
             type_params: usize::try_from(next_type_param).expect("type parameter end fits usize"),
             classes: usize::try_from(next_class_id).expect("class end fits usize"),
             scopes: binder.graph.snapshot_len(),
-            symbols: binder.symbols.snapshot_symbols().len(),
+            symbols: binder.symbols.len(),
             declarations: binder.declarations.len(),
             type_groups: binder.type_groups.len(),
             namespaces: binder.namespaces.len(),
             value_storages: decl_types.len(),
         },
+        actual_ids: OwnedBaseActualIds {
+            types: interner
+                .store()
+                .local_type_ids_for_test()
+                .map(TypeId::index)
+                .collect(),
+            type_params: interner
+                .store()
+                .local_type_param_ids_for_test()
+                .map(|parameter| {
+                    usize::try_from(parameter.0).expect("type parameter id fits usize")
+                })
+                .collect(),
+            classes: actual_class_ids
+                .into_iter()
+                .map(|class| usize::try_from(class.0).expect("class id fits usize"))
+                .collect(),
+            scopes: binder
+                .graph
+                .local_scopes()
+                .map(|(scope, _)| usize::try_from(scope.0).expect("scope id fits usize"))
+                .collect(),
+            symbols: binder
+                .symbols
+                .local_symbols()
+                .map(|(symbol, _)| usize::try_from(symbol.0).expect("symbol id fits usize"))
+                .collect(),
+            declarations: binder
+                .declarations
+                .local_declarations()
+                .map(|declaration| {
+                    usize::try_from(declaration.id.0).expect("declaration id fits usize")
+                })
+                .collect(),
+            type_groups: binder
+                .type_groups
+                .local_groups()
+                .map(|group| usize::try_from(group.id.0).expect("type group id fits usize"))
+                .collect(),
+            namespaces: binder
+                .namespaces
+                .local_namespaces()
+                .map(|(namespace, _)| {
+                    usize::try_from(namespace.0).expect("namespace id fits usize")
+                })
+                .collect(),
+            value_storages: decl_types
+                .local_slots()
+                .map(|(storage, _)| {
+                    usize::try_from(storage.0).expect("value storage id fits usize")
+                })
+                .collect(),
+        },
         named_alias_types,
+        local_names,
+        references,
         reused_base_shape,
+        base_row_clone_counts,
+        local_rows_written,
     }
 }
 
@@ -1513,8 +2249,9 @@ pub(crate) fn compile_owned_injected_profile(
     let mut interner = Interner::with_intrinsics();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
-    let mut type_decls = Vec::new();
-    let mut type_resolved = vec![None; binder.type_groups.len()];
+    let mut type_decls: super::context::TypeDeclTable<'_> = Vec::new().into();
+    let mut type_resolved: super::context::TypeResolvedTable =
+        vec![None; binder.type_groups.len()].into();
     for ((input, parsed), scope) in canonical
         .iter()
         .zip(&parsed)
@@ -1690,7 +2427,7 @@ pub(crate) fn compile_owned_injected_profile(
             standalone_namespace_value_aliases,
             class_names,
             namespace_terminals,
-            named_function_symbols,
+            named_function_symbols: named_function_symbols.into(),
         },
         next_type_param,
         next_class_id,
@@ -1738,11 +2475,121 @@ pub(crate) fn compile_owned_injected_profile(
 }
 
 #[cfg(test)]
+pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
+    state: OwnedLibraryRuntimeState,
+    inputs: Vec<crate::driver::FileInput>,
+    expected_base: &OwnedLibraryRuntimeState,
+) -> Result<OwnedBaseUserProjectRun, String> {
+    let base_ends = state.identity_ends_for_test();
+    let initial_visible_names = state.initial_visible_user_names_for_test();
+    if !initial_visible_names.is_empty() {
+        return Err("fresh project delta exposes prior user names".to_owned());
+    }
+    let cross_file = std::cell::RefCell::new(None);
+    let final_identity = std::cell::RefCell::new(None);
+    let state = std::cell::RefCell::new(Some(state));
+    super::decls::reset_class_allocation_events_for_test();
+    let reports = crate::driver::check_project_with_owned_checker_for_test(inputs, |units| {
+        let state = state
+            .borrow_mut()
+            .take()
+            .expect("owned project delta is consumed once");
+        super::check_project_programs_with_owned_library(
+            state,
+            units,
+            |binder, module_scopes| {
+                let producer = module_scopes
+                    .iter()
+                    .copied()
+                    .find_map(|scope| {
+                        let ty = binder
+                            .resolve_type(scope, "SharedShape")
+                            .and_then(|symbol| binder.symbols.get(symbol))?
+                            .ty?;
+                        let value = binder
+                            .resolve_value(scope, "sharedValue")
+                            .and_then(|symbol| binder.symbols.get(symbol))?
+                            .value?;
+                        Some((scope, ty, value))
+                    })
+                    .expect("project producer exports both test bindings");
+                let consumer = module_scopes
+                    .iter()
+                    .copied()
+                    .filter(|scope| *scope != producer.0)
+                    .find_map(|scope| {
+                        let ty = binder
+                            .resolve_type(scope, "SharedShape")
+                            .and_then(|symbol| binder.symbols.get(symbol))?
+                            .ty?;
+                        let value = binder
+                            .resolve_value(scope, "sharedValue")
+                            .and_then(|symbol| binder.symbols.get(symbol))?
+                            .value?;
+                        Some((ty, value))
+                    })
+                    .expect("project consumer imports both test bindings");
+                cross_file.replace(Some(OwnedBaseCrossFileWitness {
+                    producer_type_group: producer.1,
+                    consumer_type_group: consumer.0,
+                    producer_value_storage: producer.2,
+                    consumer_value_storage: consumer.1,
+                }));
+            },
+            |pass, final_next_class_id| {
+                final_identity.replace(Some(final_identity_witness(FinalIdentityInspection {
+                    base_store_len: base_ends.store,
+                    base_value_storage_len: base_ends.value_storages,
+                    base_type_group_len: base_ends.type_groups,
+                    base_namespace_len: base_ends.namespaces,
+                    binder: pass.binder,
+                    published: pass.type_environment.published(),
+                    interner: pass.interner,
+                    decl_types: &pass.decl_types,
+                    next_type_param: pass.next_type_param,
+                    next_class_id: final_next_class_id,
+                    actual_class_ids: super::decls::class_allocation_events_for_test(),
+                    references: final_reference_summary(pass, &base_ends),
+                    base_row_clone_counts: expected_base
+                        .final_base_family_clone_counts_for_test(pass, final_next_class_id),
+                    local_rows_written: OwnedLibraryRuntimeState::final_local_rows_written_for_test(
+                        pass,
+                    ),
+                })));
+            },
+        )
+    });
+    Ok(OwnedBaseUserProjectRun {
+        reports,
+        final_identity: final_identity
+            .into_inner()
+            .expect("owned project route captures final identities"),
+        cross_file: cross_file
+            .into_inner()
+            .expect("owned project route captures cross-file identities"),
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn check_caller_certified_collision_free_source_with_owned_library(
     state: OwnedLibraryRuntimeState,
     source: &str,
 ) -> Result<OwnedBaseUserRun, String> {
-    check_caller_certified_collision_free_source_with_owned_library_impl(state, source, false)
+    check_caller_certified_collision_free_source_with_owned_library_impl(state, source, false, None)
+}
+
+#[cfg(test)]
+pub(crate) fn check_caller_certified_collision_free_source_with_base_evidence(
+    state: OwnedLibraryRuntimeState,
+    source: &str,
+    expected_base: &OwnedLibraryRuntimeState,
+) -> Result<OwnedBaseUserRun, String> {
+    check_caller_certified_collision_free_source_with_owned_library_impl(
+        state,
+        source,
+        false,
+        Some(expected_base),
+    )
 }
 
 #[cfg(test)]
@@ -1750,7 +2597,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_and_verify_pr
     state: OwnedLibraryRuntimeState,
     source: &str,
 ) -> Result<OwnedBaseUserRun, String> {
-    check_caller_certified_collision_free_source_with_owned_library_impl(state, source, true)
+    check_caller_certified_collision_free_source_with_owned_library_impl(state, source, true, None)
 }
 
 #[cfg(test)]
@@ -1758,6 +2605,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
     state: OwnedLibraryRuntimeState,
     source: &str,
     verify_store_prefix: bool,
+    expected_base: Option<&OwnedLibraryRuntimeState>,
 ) -> Result<OwnedBaseUserRun, String> {
     // WU5 owns routing for suffixes that collide with the frozen global base.
     let parse_started = Instant::now();
@@ -1769,6 +2617,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
             parsed.diagnostics
         ));
     }
+    record_user_source_parses_for_test(1);
     let parse = parse_started.elapsed();
 
     let OwnedLibraryRuntimeState {
@@ -1787,7 +2636,19 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         .then(|| store_prefix_digest(interner.store(), base_store_len))
         .transpose()?;
     let base_type_group_count = binder.type_groups.len();
+    let base_namespace_count = binder.namespaces.len();
     let base_decl_count = binder.decl_count;
+    let base_identity_ends = OwnedBaseFinalIdentityEnds {
+        store: base_store_len,
+        type_params: usize::try_from(next_type_param).expect("base type parameter end fits usize"),
+        classes: usize::try_from(next_class_id).expect("base class end fits usize"),
+        scopes: binder.graph.snapshot_len(),
+        symbols: binder.symbols.len(),
+        declarations: binder.declarations.len(),
+        type_groups: base_type_group_count,
+        namespaces: base_namespace_count,
+        value_storages: usize::try_from(base_decl_count).expect("base storage end fits usize"),
+    };
     let base_max_source_key = binder.max_source_key().0;
     assert_eq!(
         decl_types.len(),
@@ -1823,10 +2684,12 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
             .and_then(|symbol| symbol.value);
     let final_type_group_count = binder.type_groups.len();
     let final_decl_count = binder.decl_count;
+    record_user_source_binds_for_test(1);
     let bind = bind_started.elapsed();
 
     let check_started = Instant::now();
     let final_identity = std::cell::RefCell::new(None);
+    super::decls::reset_class_allocation_events_for_test();
     let result = check_bound_user_program_with_final_identity_inspector(
         &mut interner,
         binder,
@@ -1841,20 +2704,31 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
             runtime,
         },
         |_, _, _, _, _| {},
-        |binder, published, interner, decl_types, final_next_type_param, final_next_class_id| {
+        |pass, final_next_class_id| {
             final_identity.replace(Some(final_identity_witness(FinalIdentityInspection {
                 base_store_len,
                 base_value_storage_len: usize::try_from(base_decl_count)
                     .expect("base storage end fits usize"),
-                binder,
-                published,
-                interner,
-                decl_types,
-                next_type_param: final_next_type_param,
+                base_type_group_len: base_type_group_count,
+                base_namespace_len: base_namespace_count,
+                binder: pass.binder,
+                published: pass.type_environment.published(),
+                interner: pass.interner,
+                decl_types: &pass.decl_types,
+                next_type_param: pass.next_type_param,
                 next_class_id: final_next_class_id,
+                actual_class_ids: super::decls::class_allocation_events_for_test(),
+                references: final_reference_summary(pass, &base_identity_ends),
+                base_row_clone_counts: expected_base.map_or_else(BTreeMap::new, |expected_base| {
+                    expected_base.final_base_family_clone_counts_for_test(pass, final_next_class_id)
+                }),
+                local_rows_written: OwnedLibraryRuntimeState::final_local_rows_written_for_test(
+                    pass,
+                ),
             })));
         },
     );
+    record_user_source_checks_for_test(1);
     let check = check_started.elapsed();
     let final_identity = final_identity
         .into_inner()
@@ -2547,6 +3421,7 @@ mod tests {
         assert_owned_terminal::<InjectedProfileRun>();
         assert_owned_terminal::<InjectedProfileError>();
         assert_owned_terminal::<LibraryPhaseTimings>();
+        assert_owned_terminal::<OwnedLibraryRuntimeState>();
     }
 
     #[test]
@@ -3021,7 +3896,12 @@ mod tests {
         assert_snapshot_restore_error(empty, "snapshot binder has no retained source ownership");
 
         let mut gapped = compile_semantic_snapshot_parts();
-        let mut sources = gapped.binder.snapshot_module_sources().clone();
+        let mut sources = gapped
+            .binder
+            .snapshot_module_sources()
+            .iter()
+            .map(|(&scope, &source)| (scope, source))
+            .collect::<rustc_hash::FxHashMap<_, _>>();
         let library_scope = sources
             .iter()
             .find_map(|(scope, source)| (source.0 == 1).then_some(*scope))
@@ -3942,12 +4822,38 @@ mod tests {
                 .expect("base type parameter end fits usize"),
             classes: usize::try_from(state.next_class_id).expect("base class end fits usize"),
             scopes: state.binder.graph.snapshot_len(),
-            symbols: state.binder.symbols.snapshot_symbols().len(),
+            symbols: state.binder.symbols.len(),
             declarations: state.binder.declarations.len(),
             type_groups: state.binder.type_groups.len(),
             namespaces: state.binder.namespaces.len(),
             value_storages: state.decl_types.len(),
         }
+    }
+
+    #[test]
+    fn owned_runtime_forks_share_checker_prefixes_and_keep_empty_private_suffixes() {
+        let (_, mut base) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "owned-sharing.d.ts",
+            source: OWNED_MINI_LIBRARY,
+        }])
+        .expect("owned sharing library compiles");
+        base.freeze_as_library_base().expect("owned base seals");
+        let first = base
+            .fork_user_delta_for_test()
+            .expect("first owned checker suffix");
+        let second = base
+            .fork_user_delta_for_test()
+            .expect("second owned checker suffix");
+
+        assert!(first.shares_checker_base_with(&second));
+        assert_eq!(first.decl_types.local_len(), 0);
+        assert_eq!(second.decl_types.local_len(), 0);
+        assert_eq!(first.decl_types.len(), base.decl_types.len());
+        assert_eq!(
+            second.published_types.groups().len(),
+            base.published_types.groups().len()
+        );
     }
 
     #[test]
@@ -4090,6 +4996,43 @@ mod tests {
         assert!(run.witness.final_type_group_count > run.witness.base_type_group_count);
         assert!(run.witness.final_decl_count > run.witness.base_decl_count);
         assert!(run.witness.source_key > run.witness.base_max_source_key);
+    }
+
+    #[test]
+    fn owned_frozen_interface_heritage_projects_into_local_interface() {
+        let (_, state) = compile_owned_injected_profile(&[
+            InjectedLibrarySource {
+                file_ordinal: LibraryFileOrdinal::new(0),
+                name: "owned-mini.d.ts",
+                source: OWNED_MINI_LIBRARY,
+            },
+            InjectedLibrarySource {
+                file_ordinal: LibraryFileOrdinal::new(1),
+                name: "html-element.d.ts",
+                source: "interface HTMLElement { elementMarker: string; }",
+            },
+        ])
+        .expect("owned HTMLElement library compiles");
+        let run = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            r#"interface Local extends HTMLElement { localMarker: number; }
+declare const local: Local;
+const inheritedGood: string = local.elementMarker;
+const inheritedBad: number = local.elementMarker;
+"#,
+        )
+        .expect("local interface composes its frozen heritage endpoint");
+
+        assert_eq!(run.result.diagnostics.len(), 1);
+        assert_eq!(
+            run.result.diagnostics[0].code,
+            crate::diagnostics::DiagnosticCode::TK2322,
+        );
+        assert!(
+            run.result.incomplete.is_empty(),
+            "{:#?}",
+            run.result.incomplete
+        );
     }
 
     #[test]

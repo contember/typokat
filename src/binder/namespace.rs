@@ -17,6 +17,7 @@ use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 use crate::source::LibraryFileOrdinal;
 use crate::source::{CompilationOrigin, OriginalModuleOrdinal};
 use crate::span::Span;
+use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{
     Declaration, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program,
     Statement, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName,
@@ -25,6 +26,185 @@ use oxc_ast::ast::{
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
+
+#[cfg(test)]
+thread_local! {
+    static CONTINUATION_MERGE_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_INSTANCE_FRAGMENT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_CHILD_FRAGMENT_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_ALLOCATION_NAMESPACE_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_ATTACHMENT_NAMESPACE_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_FRAGMENT_SCOPE_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_PLACEMENT_MERGE_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_GLOBAL_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_UMD_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_AMBIENT_ALIAS_MEMBER_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_UMD_STATEMENT_QUERIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_GLOBAL_STATEMENT_QUERIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_LIBRARY_SOURCE_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CONTINUATION_LIBRARY_REPORTING_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NamespaceContinuationWorkForTest {
+    pub(crate) merge_rows: u64,
+    pub(crate) instance_fragment_rows: u64,
+    pub(crate) child_fragment_lookups: u64,
+    pub(crate) allocation_namespace_rows: u64,
+    pub(crate) attachment_namespace_rows: u64,
+    pub(crate) fragment_scope_lookups: u64,
+    pub(crate) placement_merge_rows: u64,
+    pub(crate) global_rows: u64,
+    pub(crate) umd_rows: u64,
+    pub(crate) ambient_alias_member_rows: u64,
+    pub(crate) umd_statement_queries: u64,
+    pub(crate) global_statement_queries: u64,
+    pub(crate) library_source_lookups: u64,
+    pub(crate) library_reporting_lookups: u64,
+}
+
+#[cfg(test)]
+fn namespace_continuation_work_for_test() -> NamespaceContinuationWorkForTest {
+    NamespaceContinuationWorkForTest {
+        merge_rows: CONTINUATION_MERGE_ROWS.get(),
+        instance_fragment_rows: CONTINUATION_INSTANCE_FRAGMENT_ROWS.get(),
+        child_fragment_lookups: CONTINUATION_CHILD_FRAGMENT_LOOKUPS.get(),
+        allocation_namespace_rows: CONTINUATION_ALLOCATION_NAMESPACE_ROWS.get(),
+        attachment_namespace_rows: CONTINUATION_ATTACHMENT_NAMESPACE_ROWS.get(),
+        fragment_scope_lookups: CONTINUATION_FRAGMENT_SCOPE_LOOKUPS.get(),
+        placement_merge_rows: CONTINUATION_PLACEMENT_MERGE_ROWS.get(),
+        global_rows: CONTINUATION_GLOBAL_ROWS.get(),
+        umd_rows: CONTINUATION_UMD_ROWS.get(),
+        ambient_alias_member_rows: CONTINUATION_AMBIENT_ALIAS_MEMBER_ROWS.get(),
+        umd_statement_queries: CONTINUATION_UMD_STATEMENT_QUERIES.get(),
+        global_statement_queries: CONTINUATION_GLOBAL_STATEMENT_QUERIES.get(),
+        library_source_lookups: CONTINUATION_LIBRARY_SOURCE_LOOKUPS.get(),
+        library_reporting_lookups: CONTINUATION_LIBRARY_REPORTING_LOOKUPS.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_continuation_merge_row() {
+    CONTINUATION_MERGE_ROWS.set(CONTINUATION_MERGE_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_instance_fragment_row() {
+    CONTINUATION_INSTANCE_FRAGMENT_ROWS.set(CONTINUATION_INSTANCE_FRAGMENT_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_child_fragment_lookup() {
+    CONTINUATION_CHILD_FRAGMENT_LOOKUPS.set(CONTINUATION_CHILD_FRAGMENT_LOOKUPS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_allocation_namespace_row() {
+    CONTINUATION_ALLOCATION_NAMESPACE_ROWS.set(CONTINUATION_ALLOCATION_NAMESPACE_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_attachment_namespace_row() {
+    CONTINUATION_ATTACHMENT_NAMESPACE_ROWS.set(CONTINUATION_ATTACHMENT_NAMESPACE_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_fragment_scope_lookup() {
+    CONTINUATION_FRAGMENT_SCOPE_LOOKUPS.set(CONTINUATION_FRAGMENT_SCOPE_LOOKUPS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_placement_merge_row() {
+    CONTINUATION_PLACEMENT_MERGE_ROWS.set(CONTINUATION_PLACEMENT_MERGE_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_global_row() {
+    CONTINUATION_GLOBAL_ROWS.set(CONTINUATION_GLOBAL_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_umd_row() {
+    CONTINUATION_UMD_ROWS.set(CONTINUATION_UMD_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_ambient_alias_member_row() {
+    CONTINUATION_AMBIENT_ALIAS_MEMBER_ROWS.set(CONTINUATION_AMBIENT_ALIAS_MEMBER_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_umd_statement_query() {
+    CONTINUATION_UMD_STATEMENT_QUERIES.set(CONTINUATION_UMD_STATEMENT_QUERIES.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_global_statement_query() {
+    CONTINUATION_GLOBAL_STATEMENT_QUERIES.set(CONTINUATION_GLOBAL_STATEMENT_QUERIES.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_library_source_lookup() {
+    CONTINUATION_LIBRARY_SOURCE_LOOKUPS.set(CONTINUATION_LIBRARY_SOURCE_LOOKUPS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_continuation_library_reporting_lookup() {
+    CONTINUATION_LIBRARY_REPORTING_LOOKUPS.set(CONTINUATION_LIBRARY_REPORTING_LOOKUPS.get() + 1);
+}
+
+#[cfg(test)]
+pub(crate) struct NamespaceContinuationWorkScopeForTest(NamespaceContinuationWorkForTest);
+
+#[cfg(test)]
+impl NamespaceContinuationWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(namespace_continuation_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> NamespaceContinuationWorkForTest {
+        let end = namespace_continuation_work_for_test();
+        NamespaceContinuationWorkForTest {
+            merge_rows: end.merge_rows.saturating_sub(self.0.merge_rows),
+            instance_fragment_rows: end
+                .instance_fragment_rows
+                .saturating_sub(self.0.instance_fragment_rows),
+            child_fragment_lookups: end
+                .child_fragment_lookups
+                .saturating_sub(self.0.child_fragment_lookups),
+            allocation_namespace_rows: end
+                .allocation_namespace_rows
+                .saturating_sub(self.0.allocation_namespace_rows),
+            attachment_namespace_rows: end
+                .attachment_namespace_rows
+                .saturating_sub(self.0.attachment_namespace_rows),
+            fragment_scope_lookups: end
+                .fragment_scope_lookups
+                .saturating_sub(self.0.fragment_scope_lookups),
+            placement_merge_rows: end
+                .placement_merge_rows
+                .saturating_sub(self.0.placement_merge_rows),
+            global_rows: end.global_rows.saturating_sub(self.0.global_rows),
+            umd_rows: end.umd_rows.saturating_sub(self.0.umd_rows),
+            ambient_alias_member_rows: end
+                .ambient_alias_member_rows
+                .saturating_sub(self.0.ambient_alias_member_rows),
+            umd_statement_queries: end
+                .umd_statement_queries
+                .saturating_sub(self.0.umd_statement_queries),
+            global_statement_queries: end
+                .global_statement_queries
+                .saturating_sub(self.0.global_statement_queries),
+            library_source_lookups: end
+                .library_source_lookups
+                .saturating_sub(self.0.library_source_lookups),
+            library_reporting_lookups: end
+                .library_reporting_lookups
+                .saturating_sub(self.0.library_reporting_lookups),
+        }
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct NamespaceId(pub u32);
@@ -812,27 +992,37 @@ struct MergeKey {
 /// Canonical namespace, merge, ambient, and global publication metadata.
 #[derive(Default)]
 pub struct NamespaceTable {
-    namespaces: Vec<Namespace>,
-    aggregate_instance_states: Vec<NamespaceInstanceState>,
-    standalone_value_storages: Vec<Option<ValueStorageId>>,
-    fragments: Vec<NamespaceFragment>,
-    members: Vec<NamespaceMember>,
-    namespace_keys: FxHashMap<NamespaceKey, NamespaceId>,
-    canonical_namespaces: Vec<NamespaceId>,
-    placements: FxHashMap<MergeKey, Vec<MergeParticipant>>,
-    merges: Vec<MergeRecord>,
-    globals: Vec<GlobalAugmentation>,
-    deferred_modules: Vec<DeferredAmbientModule>,
-    deferred_children: Vec<DeferredAmbientChild>,
-    umd_exports: Vec<UmdNamespaceExport>,
-    export_contexts: Vec<ExportContext>,
-    source_units: Vec<SourceUnitRecord>,
-    canonical_source_units: Vec<usize>,
-    canonical_globals: Vec<GlobalAugmentationId>,
-    canonical_deferred_modules: Vec<DeferredModuleId>,
-    canonical_deferred_children: Vec<usize>,
-    canonical_umd_exports: Vec<usize>,
-    canonical_export_contexts: Vec<ExportContextId>,
+    namespaces: LayeredVec<Namespace>,
+    aggregate_instance_states: LayeredVec<NamespaceInstanceState>,
+    standalone_value_storages: LayeredVec<Option<ValueStorageId>>,
+    fragments: LayeredVec<NamespaceFragment>,
+    members: LayeredVec<NamespaceMember>,
+    namespace_keys: LayeredMap<NamespaceKey, NamespaceId>,
+    canonical_namespaces: LayeredVec<NamespaceId>,
+    placements: LayeredMap<MergeKey, Vec<MergeParticipant>>,
+    merges: LayeredVec<MergeRecord>,
+    merge_indices: LayeredMap<MergeKey, usize>,
+    standalone_storage_namespaces: LayeredMap<ValueStorageId, NamespaceId>,
+    declaration_owners_by_scope: LayeredMap<ScopeId, DeclarationOwner>,
+    fragments_by_declaration: LayeredMap<DeclId, NamespaceFragmentId>,
+    fragment_private_scopes_by_site: LayeredMap<(ScopeId, u32), ScopeId>,
+    global_augmentations_by_site: LayeredMap<(ScopeId, u32), GlobalAugmentationId>,
+    umd_exports_by_site: LayeredMap<(ScopeId, u32), usize>,
+    source_keys_by_module: LayeredMap<ScopeId, SourceUnitKey>,
+    library_export_default_sites: LayeredMap<(SourceUnitKey, u32), bool>,
+    library_module_reporting_sites: LayeredMap<(ScopeId, u32), bool>,
+    globals: LayeredVec<GlobalAugmentation>,
+    deferred_modules: LayeredVec<DeferredAmbientModule>,
+    deferred_children: LayeredVec<DeferredAmbientChild>,
+    umd_exports: LayeredVec<UmdNamespaceExport>,
+    export_contexts: LayeredVec<ExportContext>,
+    source_units: LayeredVec<SourceUnitRecord>,
+    canonical_source_units: LayeredVec<usize>,
+    canonical_globals: LayeredVec<GlobalAugmentationId>,
+    canonical_deferred_modules: LayeredVec<DeferredModuleId>,
+    canonical_deferred_children: LayeredVec<usize>,
+    canonical_umd_exports: LayeredVec<usize>,
+    canonical_export_contexts: LayeredVec<ExportContextId>,
     compilation_global: Option<ScopeId>,
     script_namespace_root: Option<ScopeId>,
     library_shared_globals: bool,
@@ -854,6 +1044,32 @@ pub(crate) struct NamespaceSnapshotPrimary {
     pub(crate) compilation_global: Option<ScopeId>,
     pub(crate) script_namespace_root: Option<ScopeId>,
     pub(crate) library_shared_globals: bool,
+}
+
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NamespaceReferenceOffsets {
+    pub(crate) placements: usize,
+    pub(crate) deferred_children: usize,
+    pub(crate) umd_exports: usize,
+    pub(crate) canonical_namespaces: usize,
+    pub(crate) canonical_source_units: usize,
+    pub(crate) canonical_globals: usize,
+    pub(crate) canonical_deferred_modules: usize,
+    pub(crate) canonical_deferred_children: usize,
+    pub(crate) canonical_umd_exports: usize,
+    pub(crate) canonical_export_contexts: usize,
+}
+
+pub(crate) struct NamespaceReferenceRows {
+    pub(crate) primary: NamespaceSnapshotPrimary,
+    pub(crate) offsets: NamespaceReferenceOffsets,
+    pub(crate) canonical_namespaces: Vec<u32>,
+    pub(crate) canonical_source_units: Vec<u32>,
+    pub(crate) canonical_globals: Vec<u32>,
+    pub(crate) canonical_deferred_modules: Vec<u32>,
+    pub(crate) canonical_deferred_children: Vec<u32>,
+    pub(crate) canonical_umd_exports: Vec<u32>,
+    pub(crate) canonical_export_contexts: Vec<u32>,
 }
 
 impl NamespaceTable {
@@ -910,7 +1126,17 @@ impl NamespaceTable {
     }
 
     pub fn merges(&self) -> impl Iterator<Item = &MergeRecord> {
-        self.merges.iter()
+        self.merges.iter().inspect(|_| {
+            #[cfg(test)]
+            record_continuation_merge_row();
+        })
+    }
+
+    pub(crate) fn local_merges(&self) -> impl Iterator<Item = &MergeRecord> {
+        self.merges.local_iter().inspect(|_| {
+            #[cfg(test)]
+            record_continuation_merge_row();
+        })
     }
 
     /// Exact source-ordered placement outcomes ready for checker emission.
@@ -918,12 +1144,31 @@ impl NamespaceTable {
         let mut issues = self
             .merges
             .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_placement_merge_row();
+            })
             .flat_map(|record| record.placement_issues.iter())
             .collect::<Vec<_>>();
         issues.sort_by_key(|issue| (issue.source, issue.origin, issue.span.start, issue.owner.0));
         issues.into_iter()
     }
 
+    pub(crate) fn local_placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
+        let mut issues = self
+            .merges
+            .local_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_placement_merge_row();
+            })
+            .flat_map(|record| record.placement_issues.iter())
+            .collect::<Vec<_>>();
+        issues.sort_by_key(|issue| (issue.source, issue.origin, issue.span.start, issue.owner.0));
+        issues.into_iter()
+    }
+
+    #[cfg(test)]
     pub(crate) fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
         self.canonical_source_units
             .iter()
@@ -945,6 +1190,20 @@ impl NamespaceTable {
     pub(crate) fn globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
         self.canonical_globals
             .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_global_row();
+            })
+            .filter_map(|id| self.globals.get(id.index()))
+    }
+
+    pub(crate) fn local_globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
+        self.canonical_globals
+            .local_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_global_row();
+            })
             .filter_map(|id| self.globals.get(id.index()))
     }
 
@@ -1049,12 +1308,14 @@ impl NamespaceTable {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
         self.canonical_deferred_modules
             .iter()
             .filter_map(|id| self.deferred_modules.get(id.index()))
     }
 
+    #[cfg(test)]
     pub(crate) fn deferred_children(&self) -> impl Iterator<Item = &DeferredAmbientChild> {
         self.canonical_deferred_children
             .iter()
@@ -1064,6 +1325,20 @@ impl NamespaceTable {
     pub(crate) fn umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
         self.canonical_umd_exports
             .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_umd_row();
+            })
+            .filter_map(|index| self.umd_exports.get(*index))
+    }
+
+    pub(crate) fn local_umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
+        self.canonical_umd_exports
+            .local_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_umd_row();
+            })
             .filter_map(|index| self.umd_exports.get(*index))
     }
 
@@ -1077,30 +1352,424 @@ impl NamespaceTable {
         self.namespaces.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn local_namespaces(&self) -> impl Iterator<Item = (NamespaceId, &Namespace)> {
+        let base_len = self.namespaces.base_len();
+        self.namespaces
+            .local_iter()
+            .enumerate()
+            .map(move |(index, namespace)| {
+                let id = u32::try_from(base_len + index).expect("namespace id fits u32");
+                (NamespaceId(id), namespace)
+            })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.namespaces.is_empty()
     }
 
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.namespaces.freeze_as_base()?;
+        self.aggregate_instance_states.freeze_as_base()?;
+        self.standalone_value_storages.freeze_as_base()?;
+        self.fragments.freeze_as_base()?;
+        self.members.freeze_as_base()?;
+        self.namespace_keys.freeze_as_base()?;
+        self.canonical_namespaces.freeze_as_base()?;
+        self.placements.freeze_as_base()?;
+        self.merges.freeze_as_base()?;
+        self.merge_indices.freeze_as_base()?;
+        self.standalone_storage_namespaces.freeze_as_base()?;
+        self.declaration_owners_by_scope.freeze_as_base()?;
+        self.fragments_by_declaration.freeze_as_base()?;
+        self.fragment_private_scopes_by_site.freeze_as_base()?;
+        self.global_augmentations_by_site.freeze_as_base()?;
+        self.umd_exports_by_site.freeze_as_base()?;
+        self.source_keys_by_module.freeze_as_base()?;
+        self.library_export_default_sites.freeze_as_base()?;
+        self.library_module_reporting_sites.freeze_as_base()?;
+        self.globals.freeze_as_base()?;
+        self.deferred_modules.freeze_as_base()?;
+        self.deferred_children.freeze_as_base()?;
+        self.umd_exports.freeze_as_base()?;
+        self.export_contexts.freeze_as_base()?;
+        self.source_units.freeze_as_base()?;
+        self.canonical_source_units.freeze_as_base()?;
+        self.canonical_globals.freeze_as_base()?;
+        self.canonical_deferred_modules.freeze_as_base()?;
+        self.canonical_deferred_children.freeze_as_base()?;
+        self.canonical_umd_exports.freeze_as_base()?;
+        self.canonical_export_contexts.freeze_as_base()?;
+        Ok(())
+    }
+
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            namespaces: self.namespaces.fork_delta()?,
+            aggregate_instance_states: self.aggregate_instance_states.fork_delta()?,
+            standalone_value_storages: self.standalone_value_storages.fork_delta()?,
+            fragments: self.fragments.fork_delta()?,
+            members: self.members.fork_delta()?,
+            namespace_keys: self.namespace_keys.fork_delta()?,
+            canonical_namespaces: self.canonical_namespaces.fork_delta()?,
+            placements: self.placements.fork_delta()?,
+            merges: self.merges.fork_delta()?,
+            merge_indices: self.merge_indices.fork_delta()?,
+            standalone_storage_namespaces: self.standalone_storage_namespaces.fork_delta()?,
+            declaration_owners_by_scope: self.declaration_owners_by_scope.fork_delta()?,
+            fragments_by_declaration: self.fragments_by_declaration.fork_delta()?,
+            fragment_private_scopes_by_site: self.fragment_private_scopes_by_site.fork_delta()?,
+            global_augmentations_by_site: self.global_augmentations_by_site.fork_delta()?,
+            umd_exports_by_site: self.umd_exports_by_site.fork_delta()?,
+            source_keys_by_module: self.source_keys_by_module.fork_delta()?,
+            library_export_default_sites: self.library_export_default_sites.fork_delta()?,
+            library_module_reporting_sites: self.library_module_reporting_sites.fork_delta()?,
+            globals: self.globals.fork_delta()?,
+            deferred_modules: self.deferred_modules.fork_delta()?,
+            deferred_children: self.deferred_children.fork_delta()?,
+            umd_exports: self.umd_exports.fork_delta()?,
+            export_contexts: self.export_contexts.fork_delta()?,
+            source_units: self.source_units.fork_delta()?,
+            canonical_source_units: self.canonical_source_units.fork_delta()?,
+            canonical_globals: self.canonical_globals.fork_delta()?,
+            canonical_deferred_modules: self.canonical_deferred_modules.fork_delta()?,
+            canonical_deferred_children: self.canonical_deferred_children.fork_delta()?,
+            canonical_umd_exports: self.canonical_umd_exports.fork_delta()?,
+            canonical_export_contexts: self.canonical_export_contexts.fork_delta()?,
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            library_shared_globals: self.library_shared_globals,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+        self.namespaces.shares_base_with(&other.namespaces)
+            && self
+                .aggregate_instance_states
+                .shares_base_with(&other.aggregate_instance_states)
+            && self
+                .standalone_value_storages
+                .shares_base_with(&other.standalone_value_storages)
+            && self.fragments.shares_base_with(&other.fragments)
+            && self.members.shares_base_with(&other.members)
+            && self.namespace_keys.shares_base_with(&other.namespace_keys)
+            && self
+                .canonical_namespaces
+                .shares_base_with(&other.canonical_namespaces)
+            && self.placements.shares_base_with(&other.placements)
+            && self.merges.shares_base_with(&other.merges)
+            && self.merge_indices.shares_base_with(&other.merge_indices)
+            && self
+                .standalone_storage_namespaces
+                .shares_base_with(&other.standalone_storage_namespaces)
+            && self
+                .declaration_owners_by_scope
+                .shares_base_with(&other.declaration_owners_by_scope)
+            && self
+                .fragments_by_declaration
+                .shares_base_with(&other.fragments_by_declaration)
+            && self
+                .fragment_private_scopes_by_site
+                .shares_base_with(&other.fragment_private_scopes_by_site)
+            && self
+                .global_augmentations_by_site
+                .shares_base_with(&other.global_augmentations_by_site)
+            && self
+                .umd_exports_by_site
+                .shares_base_with(&other.umd_exports_by_site)
+            && self
+                .source_keys_by_module
+                .shares_base_with(&other.source_keys_by_module)
+            && self
+                .library_export_default_sites
+                .shares_base_with(&other.library_export_default_sites)
+            && self
+                .library_module_reporting_sites
+                .shares_base_with(&other.library_module_reporting_sites)
+            && self.globals.shares_base_with(&other.globals)
+            && self
+                .deferred_modules
+                .shares_base_with(&other.deferred_modules)
+            && self
+                .deferred_children
+                .shares_base_with(&other.deferred_children)
+            && self.umd_exports.shares_base_with(&other.umd_exports)
+            && self
+                .export_contexts
+                .shares_base_with(&other.export_contexts)
+            && self.source_units.shares_base_with(&other.source_units)
+            && self
+                .canonical_source_units
+                .shares_base_with(&other.canonical_source_units)
+            && self
+                .canonical_globals
+                .shares_base_with(&other.canonical_globals)
+            && self
+                .canonical_deferred_modules
+                .shares_base_with(&other.canonical_deferred_modules)
+            && self
+                .canonical_deferred_children
+                .shares_base_with(&other.canonical_deferred_children)
+            && self
+                .canonical_umd_exports
+                .shares_base_with(&other.canonical_umd_exports)
+            && self
+                .canonical_export_contexts
+                .shares_base_with(&other.canonical_export_contexts)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
+        let indexes = self
+            .aggregate_instance_states
+            .shares_base_with(&other.aggregate_instance_states)
+            && self
+                .standalone_value_storages
+                .shares_base_with(&other.standalone_value_storages)
+            && self.fragments.shares_base_with(&other.fragments)
+            && self.members.shares_base_with(&other.members)
+            && self.namespace_keys.shares_base_with(&other.namespace_keys)
+            && self
+                .canonical_namespaces
+                .shares_base_with(&other.canonical_namespaces)
+            && self.placements.shares_base_with(&other.placements)
+            && self.merges.shares_base_with(&other.merges)
+            && self.merge_indices.shares_base_with(&other.merge_indices)
+            && self
+                .standalone_storage_namespaces
+                .shares_base_with(&other.standalone_storage_namespaces)
+            && self
+                .declaration_owners_by_scope
+                .shares_base_with(&other.declaration_owners_by_scope)
+            && self
+                .fragments_by_declaration
+                .shares_base_with(&other.fragments_by_declaration)
+            && self
+                .fragment_private_scopes_by_site
+                .shares_base_with(&other.fragment_private_scopes_by_site)
+            && self.globals.shares_base_with(&other.globals)
+            && self
+                .deferred_modules
+                .shares_base_with(&other.deferred_modules)
+            && self
+                .deferred_children
+                .shares_base_with(&other.deferred_children)
+            && self.umd_exports.shares_base_with(&other.umd_exports)
+            && self
+                .export_contexts
+                .shares_base_with(&other.export_contexts)
+            && self.source_units.shares_base_with(&other.source_units)
+            && self
+                .canonical_source_units
+                .shares_base_with(&other.canonical_source_units)
+            && self
+                .canonical_globals
+                .shares_base_with(&other.canonical_globals)
+            && self
+                .canonical_deferred_modules
+                .shares_base_with(&other.canonical_deferred_modules)
+            && self
+                .canonical_deferred_children
+                .shares_base_with(&other.canonical_deferred_children)
+            && self
+                .canonical_umd_exports
+                .shares_base_with(&other.canonical_umd_exports)
+            && self
+                .canonical_export_contexts
+                .shares_base_with(&other.canonical_export_contexts)
+            && self
+                .global_augmentations_by_site
+                .shares_base_with(&other.global_augmentations_by_site)
+            && self
+                .umd_exports_by_site
+                .shares_base_with(&other.umd_exports_by_site)
+            && self
+                .source_keys_by_module
+                .shares_base_with(&other.source_keys_by_module)
+            && self
+                .library_export_default_sites
+                .shares_base_with(&other.library_export_default_sites)
+            && self
+                .library_module_reporting_sites
+                .shares_base_with(&other.library_module_reporting_sites);
+        [self.namespaces.shares_base_with(&other.namespaces), indexes]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
+        let indexes = self.aggregate_instance_states.local_len()
+            + self.standalone_value_storages.local_len()
+            + self.fragments.local_len()
+            + self.members.local_len()
+            + self.namespace_keys.local_len()
+            + self.canonical_namespaces.local_len()
+            + self.placements.local_len()
+            + self.merges.local_len()
+            + self.merge_indices.local_len()
+            + self.standalone_storage_namespaces.local_len()
+            + self.declaration_owners_by_scope.local_len()
+            + self.fragments_by_declaration.local_len()
+            + self.fragment_private_scopes_by_site.local_len()
+            + self.globals.local_len()
+            + self.deferred_modules.local_len()
+            + self.deferred_children.local_len()
+            + self.umd_exports.local_len()
+            + self.export_contexts.local_len()
+            + self.source_units.local_len()
+            + self.canonical_source_units.local_len()
+            + self.canonical_globals.local_len()
+            + self.canonical_deferred_modules.local_len()
+            + self.canonical_deferred_children.local_len()
+            + self.canonical_umd_exports.local_len()
+            + self.canonical_export_contexts.local_len()
+            + self.global_augmentations_by_site.local_len()
+            + self.umd_exports_by_site.local_len()
+            + self.source_keys_by_module.local_len()
+            + self.library_export_default_sites.local_len()
+            + self.library_module_reporting_sites.local_len();
+        [self.namespaces.local_len(), indexes]
+    }
+
     pub(crate) fn snapshot_primary(&self) -> NamespaceSnapshotPrimary {
         NamespaceSnapshotPrimary {
-            namespaces: self.namespaces.clone(),
-            standalone_value_storages: self.standalone_value_storages.clone(),
-            fragments: self.fragments.clone(),
-            members: self.members.clone(),
+            namespaces: self.namespaces.iter().cloned().collect(),
+            standalone_value_storages: self.standalone_value_storages.iter().copied().collect(),
+            fragments: self.fragments.iter().cloned().collect(),
+            members: self.members.iter().cloned().collect(),
             placements: self
                 .merges
                 .iter()
                 .map(|merge| (merge.owner, merge.name.clone(), merge.declarations.clone()))
                 .collect(),
-            globals: self.globals.clone(),
-            deferred_modules: self.deferred_modules.clone(),
-            deferred_children: self.deferred_children.clone(),
-            umd_exports: self.umd_exports.clone(),
-            export_contexts: self.export_contexts.clone(),
-            source_units: self.source_units.clone(),
+            globals: self.globals.iter().cloned().collect(),
+            deferred_modules: self.deferred_modules.iter().cloned().collect(),
+            deferred_children: self.deferred_children.iter().cloned().collect(),
+            umd_exports: self.umd_exports.iter().cloned().collect(),
+            export_contexts: self.export_contexts.iter().cloned().collect(),
+            source_units: self.source_units.iter().cloned().collect(),
             compilation_global: self.compilation_global,
             script_namespace_root: self.script_namespace_root,
             library_shared_globals: self.library_shared_globals,
+        }
+    }
+
+    pub(crate) fn snapshot_reference_rows(&self, local_only: bool) -> NamespaceReferenceRows {
+        if !local_only {
+            return NamespaceReferenceRows {
+                primary: self.snapshot_primary(),
+                offsets: NamespaceReferenceOffsets::default(),
+                canonical_namespaces: self
+                    .canonical_namespaces
+                    .iter()
+                    .map(|namespace| namespace.0)
+                    .collect(),
+                canonical_source_units: self
+                    .canonical_source_units
+                    .iter()
+                    .map(|index| self.source_units[*index].source.0)
+                    .collect(),
+                canonical_globals: self
+                    .canonical_globals
+                    .iter()
+                    .map(|global| global.0)
+                    .collect(),
+                canonical_deferred_modules: self
+                    .canonical_deferred_modules
+                    .iter()
+                    .map(|module| module.0)
+                    .collect(),
+                canonical_deferred_children: self
+                    .canonical_deferred_children
+                    .iter()
+                    .map(|index| u32::try_from(*index).expect("deferred child index fits u32"))
+                    .collect(),
+                canonical_umd_exports: self
+                    .canonical_umd_exports
+                    .iter()
+                    .map(|index| u32::try_from(*index).expect("UMD export index fits u32"))
+                    .collect(),
+                canonical_export_contexts: self
+                    .canonical_export_contexts
+                    .iter()
+                    .map(|context| context.0)
+                    .collect(),
+            };
+        }
+
+        let primary = NamespaceSnapshotPrimary {
+            namespaces: self.namespaces.local_iter().cloned().collect(),
+            standalone_value_storages: self
+                .standalone_value_storages
+                .local_iter()
+                .copied()
+                .collect(),
+            fragments: self.fragments.local_iter().cloned().collect(),
+            members: self.members.local_iter().cloned().collect(),
+            placements: self
+                .merges
+                .local_iter()
+                .map(|merge| (merge.owner, merge.name.clone(), merge.declarations.clone()))
+                .collect(),
+            globals: self.globals.local_iter().cloned().collect(),
+            deferred_modules: self.deferred_modules.local_iter().cloned().collect(),
+            deferred_children: self.deferred_children.local_iter().cloned().collect(),
+            umd_exports: self.umd_exports.local_iter().cloned().collect(),
+            export_contexts: self.export_contexts.local_iter().cloned().collect(),
+            source_units: self.source_units.local_iter().cloned().collect(),
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            library_shared_globals: self.library_shared_globals,
+        };
+        NamespaceReferenceRows {
+            primary,
+            offsets: NamespaceReferenceOffsets {
+                placements: self.merges.base_len(),
+                deferred_children: self.deferred_children.base_len(),
+                umd_exports: self.umd_exports.base_len(),
+                canonical_namespaces: self.canonical_namespaces.base_len(),
+                canonical_source_units: self.canonical_source_units.base_len(),
+                canonical_globals: self.canonical_globals.base_len(),
+                canonical_deferred_modules: self.canonical_deferred_modules.base_len(),
+                canonical_deferred_children: self.canonical_deferred_children.base_len(),
+                canonical_umd_exports: self.canonical_umd_exports.base_len(),
+                canonical_export_contexts: self.canonical_export_contexts.base_len(),
+            },
+            canonical_namespaces: self
+                .canonical_namespaces
+                .local_iter()
+                .map(|namespace| namespace.0)
+                .collect(),
+            canonical_source_units: self
+                .canonical_source_units
+                .local_iter()
+                .map(|index| self.source_units[*index].source.0)
+                .collect(),
+            canonical_globals: self
+                .canonical_globals
+                .local_iter()
+                .map(|global| global.0)
+                .collect(),
+            canonical_deferred_modules: self
+                .canonical_deferred_modules
+                .local_iter()
+                .map(|module| module.0)
+                .collect(),
+            canonical_deferred_children: self
+                .canonical_deferred_children
+                .local_iter()
+                .map(|index| u32::try_from(*index).expect("deferred child index fits u32"))
+                .collect(),
+            canonical_umd_exports: self
+                .canonical_umd_exports
+                .local_iter()
+                .map(|index| u32::try_from(*index).expect("UMD export index fits u32"))
+                .collect(),
+            canonical_export_contexts: self
+                .canonical_export_contexts
+                .local_iter()
+                .map(|context| context.0)
+                .collect(),
         }
     }
 
@@ -1174,33 +1843,52 @@ impl NamespaceTable {
                 return Err("snapshot merge placement index contains a duplicate");
             }
         }
+        let mut layered_namespace_keys = LayeredMap::default();
+        for (key, id) in namespace_keys {
+            layered_namespace_keys.insert_local(key, id)?;
+        }
+        let mut layered_placements = LayeredMap::default();
+        for (key, declarations) in placements {
+            layered_placements.insert_local(key, declarations)?;
+        }
         let mut table = Self {
-            namespaces,
-            aggregate_instance_states: Vec::new(),
-            standalone_value_storages,
-            fragments,
-            members,
-            namespace_keys,
-            canonical_namespaces: Vec::new(),
-            placements,
-            merges: Vec::new(),
-            globals,
-            deferred_modules,
-            deferred_children,
-            umd_exports,
-            export_contexts,
-            source_units,
-            canonical_source_units: Vec::new(),
-            canonical_globals: Vec::new(),
-            canonical_deferred_modules: Vec::new(),
-            canonical_deferred_children: Vec::new(),
-            canonical_umd_exports: Vec::new(),
-            canonical_export_contexts: Vec::new(),
+            namespaces: namespaces.into(),
+            aggregate_instance_states: LayeredVec::default(),
+            standalone_value_storages: standalone_value_storages.into(),
+            fragments: fragments.into(),
+            members: members.into(),
+            namespace_keys: layered_namespace_keys,
+            canonical_namespaces: LayeredVec::default(),
+            placements: layered_placements,
+            merges: LayeredVec::default(),
+            merge_indices: LayeredMap::default(),
+            standalone_storage_namespaces: LayeredMap::default(),
+            declaration_owners_by_scope: LayeredMap::default(),
+            fragments_by_declaration: LayeredMap::default(),
+            fragment_private_scopes_by_site: LayeredMap::default(),
+            global_augmentations_by_site: LayeredMap::default(),
+            umd_exports_by_site: LayeredMap::default(),
+            source_keys_by_module: LayeredMap::default(),
+            library_export_default_sites: LayeredMap::default(),
+            library_module_reporting_sites: LayeredMap::default(),
+            globals: globals.into(),
+            deferred_modules: deferred_modules.into(),
+            deferred_children: deferred_children.into(),
+            umd_exports: umd_exports.into(),
+            export_contexts: export_contexts.into(),
+            source_units: source_units.into(),
+            canonical_source_units: LayeredVec::default(),
+            canonical_globals: LayeredVec::default(),
+            canonical_deferred_modules: LayeredVec::default(),
+            canonical_deferred_children: LayeredVec::default(),
+            canonical_umd_exports: LayeredVec::default(),
+            canonical_export_contexts: LayeredVec::default(),
             compilation_global,
             script_namespace_root,
             library_shared_globals,
         };
-        table.classify();
+        table.classify()?;
+        table.rebuild_local_standalone_storage_index()?;
         if table.snapshot_primary() != decoded_primary {
             return Err("snapshot namespace derived state is not canonical");
         }
@@ -1303,10 +1991,12 @@ impl NamespaceTable {
             .ok_or("snapshot namespace derived ordering is not canonical")
     }
 
-    fn classify(&mut self) {
+    fn classify(&mut self) -> Result<(), &'static str> {
+        self.rebuild_local_fragment_declaration_index()?;
+        self.rebuild_local_statement_site_indexes()?;
         self.compute_namespace_instance_states();
         let library_order = self.uses_library_shared_globals();
-        for namespace in &mut self.namespaces {
+        for namespace in self.namespaces.local_iter_mut() {
             if library_order {
                 namespace.fragments.sort_by_key(|fragment| {
                     let fragment = self
@@ -1334,40 +2024,48 @@ impl NamespaceTable {
                 });
             }
         }
-        self.canonical_namespaces = (0..self.namespaces.len())
+        self.canonical_namespaces.clear_local();
+        for id in (self.namespaces.base_len()..self.namespaces.len())
             .map(|index| NamespaceId(u32::try_from(index).expect("namespace count fits u32")))
-            .collect();
-        if library_order {
-            self.canonical_namespaces.sort_by_key(|id| {
-                let namespace = &self.namespaces[id.index()];
-                let first = namespace
-                    .fragments
-                    .first()
-                    .and_then(|fragment| self.fragments.get(fragment.index()))
-                    .expect("canonical library namespace has a fragment");
-                (first.origin, first.source_start, namespace.name.clone())
-            });
-        } else {
-            self.canonical_namespaces.sort_by_key(|id| {
-                let namespace = &self.namespaces[id.index()];
-                let first = namespace
-                    .fragments
-                    .first()
-                    .and_then(|fragment| self.fragments.get(fragment.index()));
-                (
-                    first
-                        .map(|fragment| fragment.source)
-                        .unwrap_or(SourceUnitKey(u32::MAX)),
-                    first
-                        .map(|fragment| fragment.source_start)
-                        .unwrap_or(u32::MAX),
-                    namespace.name.clone(),
-                )
-            });
+        {
+            self.canonical_namespaces.push_local(id);
         }
-        self.merges = self
+        if library_order {
+            self.canonical_namespaces
+                .local_slice_mut()
+                .sort_by_key(|id| {
+                    let namespace = &self.namespaces[id.index()];
+                    let first = namespace
+                        .fragments
+                        .first()
+                        .and_then(|fragment| self.fragments.get(fragment.index()))
+                        .expect("canonical library namespace has a fragment");
+                    (first.origin, first.source_start, namespace.name.clone())
+                });
+        } else {
+            self.canonical_namespaces
+                .local_slice_mut()
+                .sort_by_key(|id| {
+                    let namespace = &self.namespaces[id.index()];
+                    let first = namespace
+                        .fragments
+                        .first()
+                        .and_then(|fragment| self.fragments.get(fragment.index()));
+                    (
+                        first
+                            .map(|fragment| fragment.source)
+                            .unwrap_or(SourceUnitKey(u32::MAX)),
+                        first
+                            .map(|fragment| fragment.source_start)
+                            .unwrap_or(u32::MAX),
+                        namespace.name.clone(),
+                    )
+                });
+        }
+        self.merges.clear_local();
+        let local_merges = self
             .placements
-            .iter()
+            .local_iter()
             .map(|(key, participants)| {
                 let mut declarations = participants.clone();
                 if library_order {
@@ -1397,9 +2095,12 @@ impl NamespaceTable {
                     placement_issues,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        for merge in local_merges {
+            self.merges.push_local(merge);
+        }
         if library_order {
-            self.merges.sort_by(|left, right| {
+            self.merges.local_slice_mut().sort_by(|left, right| {
                 let left_key = left
                     .declarations
                     .first()
@@ -1415,7 +2116,7 @@ impl NamespaceTable {
                     .then_with(|| left.name.cmp(&right.name))
             });
         } else {
-            self.merges.sort_by(|left, right| {
+            self.merges.local_slice_mut().sort_by(|left, right| {
                 let left_key = left
                     .declarations
                     .first()
@@ -1431,91 +2132,365 @@ impl NamespaceTable {
                     .then_with(|| left.name.cmp(&right.name))
             });
         }
-        self.canonical_globals = (0..self.globals.len())
+        self.rebuild_local_merge_index()?;
+        self.rebuild_local_declaration_owner_scope_index()?;
+        self.canonical_globals.clear_local();
+        for id in (self.globals.base_len()..self.globals.len())
             .map(|index| GlobalAugmentationId(u32::try_from(index).expect("global count fits u32")))
-            .collect();
+        {
+            self.canonical_globals.push_local(id);
+        }
         if library_order {
-            self.canonical_globals.sort_by_key(|id| {
+            self.canonical_globals.local_slice_mut().sort_by_key(|id| {
                 let global = &self.globals[id.index()];
                 (global.origin, global.diagnostic_span.start, global.source)
             });
         } else {
-            self.canonical_globals.sort_by_key(|id| {
+            self.canonical_globals.local_slice_mut().sort_by_key(|id| {
                 let global = &self.globals[id.index()];
                 (global.source, global.diagnostic_span.start, global.origin)
             });
         }
-        self.canonical_deferred_modules = (0..self.deferred_modules.len())
+        self.canonical_deferred_modules.clear_local();
+        for id in (self.deferred_modules.base_len()..self.deferred_modules.len())
             .map(|index| DeferredModuleId(u32::try_from(index).expect("module count fits u32")))
-            .collect();
-        if library_order {
-            self.canonical_deferred_modules.sort_by_key(|id| {
-                let module = &self.deferred_modules[id.index()];
-                (module.origin, module.span.start, module.source)
-            });
-        } else {
-            self.canonical_deferred_modules.sort_by_key(|id| {
-                let module = &self.deferred_modules[id.index()];
-                (module.source, module.span.start, module.origin)
-            });
+        {
+            self.canonical_deferred_modules.push_local(id);
         }
-        self.canonical_source_units = (0..self.source_units.len()).collect();
         if library_order {
-            self.canonical_source_units.sort_by_key(|index| {
-                let unit = &self.source_units[*index];
-                (unit.origin, unit.source)
-            });
+            self.canonical_deferred_modules
+                .local_slice_mut()
+                .sort_by_key(|id| {
+                    let module = &self.deferred_modules[id.index()];
+                    (module.origin, module.span.start, module.source)
+                });
         } else {
-            self.canonical_source_units.sort_by_key(|index| {
-                let unit = &self.source_units[*index];
-                (unit.source, unit.origin)
-            });
+            self.canonical_deferred_modules
+                .local_slice_mut()
+                .sort_by_key(|id| {
+                    let module = &self.deferred_modules[id.index()];
+                    (module.source, module.span.start, module.origin)
+                });
         }
-        self.canonical_deferred_children = (0..self.deferred_children.len()).collect();
+        self.canonical_source_units.clear_local();
+        for index in self.source_units.base_len()..self.source_units.len() {
+            self.canonical_source_units.push_local(index);
+        }
         if library_order {
-            self.canonical_deferred_children.sort_by_key(|index| {
-                let child = &self.deferred_children[*index];
-                (child.origin, child.span.start, child.source)
-            });
+            self.canonical_source_units
+                .local_slice_mut()
+                .sort_by_key(|index| {
+                    let unit = &self.source_units[*index];
+                    (unit.origin, unit.source)
+                });
         } else {
-            self.canonical_deferred_children.sort_by_key(|index| {
-                let child = &self.deferred_children[*index];
-                (child.source, child.span.start, child.origin)
-            });
+            self.canonical_source_units
+                .local_slice_mut()
+                .sort_by_key(|index| {
+                    let unit = &self.source_units[*index];
+                    (unit.source, unit.origin)
+                });
         }
-        self.canonical_umd_exports = (0..self.umd_exports.len()).collect();
+        self.canonical_deferred_children.clear_local();
+        for index in self.deferred_children.base_len()..self.deferred_children.len() {
+            self.canonical_deferred_children.push_local(index);
+        }
         if library_order {
-            self.canonical_umd_exports.sort_by_key(|index| {
-                let export = &self.umd_exports[*index];
-                (export.origin, export.span.start, export.source)
-            });
+            self.canonical_deferred_children
+                .local_slice_mut()
+                .sort_by_key(|index| {
+                    let child = &self.deferred_children[*index];
+                    (child.origin, child.span.start, child.source)
+                });
         } else {
-            self.canonical_umd_exports.sort_by_key(|index| {
-                let export = &self.umd_exports[*index];
-                (export.source, export.span.start, export.origin)
-            });
+            self.canonical_deferred_children
+                .local_slice_mut()
+                .sort_by_key(|index| {
+                    let child = &self.deferred_children[*index];
+                    (child.source, child.span.start, child.origin)
+                });
         }
-        self.canonical_export_contexts = (0..self.export_contexts.len())
-            .map(|index| {
-                ExportContextId(u32::try_from(index).expect("export context count fits u32"))
+        self.canonical_umd_exports.clear_local();
+        for index in self.umd_exports.base_len()..self.umd_exports.len() {
+            self.canonical_umd_exports.push_local(index);
+        }
+        if library_order {
+            self.canonical_umd_exports
+                .local_slice_mut()
+                .sort_by_key(|index| {
+                    let export = &self.umd_exports[*index];
+                    (export.origin, export.span.start, export.source)
+                });
+        } else {
+            self.canonical_umd_exports
+                .local_slice_mut()
+                .sort_by_key(|index| {
+                    let export = &self.umd_exports[*index];
+                    (export.source, export.span.start, export.origin)
+                });
+        }
+        self.canonical_export_contexts.clear_local();
+        for id in (self.export_contexts.base_len()..self.export_contexts.len()).map(|index| {
+            ExportContextId(u32::try_from(index).expect("export context count fits u32"))
+        }) {
+            self.canonical_export_contexts.push_local(id);
+        }
+        if library_order {
+            self.canonical_export_contexts
+                .local_slice_mut()
+                .sort_by_key(|id| {
+                    let context = &self.export_contexts[id.index()];
+                    (context.origin, context.span.start, context.source)
+                });
+        } else {
+            self.canonical_export_contexts
+                .local_slice_mut()
+                .sort_by_key(|id| {
+                    let context = &self.export_contexts[id.index()];
+                    (context.source, context.span.start, context.origin)
+                });
+        }
+        Ok(())
+    }
+
+    fn rebuild_local_merge_index(&mut self) -> Result<(), &'static str> {
+        self.merge_indices.clear_local();
+        let base_len = self.merges.base_len();
+        let rows = self
+            .merges
+            .local_iter()
+            .enumerate()
+            .map(|(offset, record)| {
+                (
+                    MergeKey {
+                        owner: record.owner,
+                        name: record.name.clone(),
+                    },
+                    base_len + offset,
+                )
             })
-            .collect();
-        if library_order {
-            self.canonical_export_contexts.sort_by_key(|id| {
-                let context = &self.export_contexts[id.index()];
-                (context.origin, context.span.start, context.source)
-            });
-        } else {
-            self.canonical_export_contexts.sort_by_key(|id| {
-                let context = &self.export_contexts[id.index()];
-                (context.source, context.span.start, context.origin)
-            });
+            .collect::<Vec<_>>();
+        for (key, index) in rows {
+            self.merge_indices.insert_local(key, index)?;
         }
+        Ok(())
+    }
+
+    fn rebuild_local_fragment_declaration_index(&mut self) -> Result<(), &'static str> {
+        self.fragments_by_declaration.clear_local();
+        self.fragment_private_scopes_by_site.clear_local();
+        let rows = self
+            .fragments
+            .local_iter()
+            .map(|fragment| {
+                (
+                    fragment.declaration,
+                    fragment.id,
+                    (fragment.module, fragment.source_start),
+                    fragment.private_scope,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (declaration, fragment, site, private_scope) in rows {
+            if self
+                .fragments_by_declaration
+                .insert_local(declaration, fragment)
+                .map_err(|_| "namespace fragment declaration index contains a duplicate")?
+                .is_some()
+            {
+                return Err("namespace fragment declaration index contains a duplicate");
+            }
+            if self
+                .fragment_private_scopes_by_site
+                .insert_local(site, private_scope)
+                .map_err(|_| "namespace fragment site index contains a duplicate")?
+                .is_some()
+            {
+                return Err("namespace fragment site index contains a duplicate");
+            }
+        }
+        Ok(())
+    }
+
+    fn rebuild_local_statement_site_indexes(&mut self) -> Result<(), &'static str> {
+        self.global_augmentations_by_site.clear_local();
+        self.umd_exports_by_site.clear_local();
+        self.source_keys_by_module.clear_local();
+        self.library_export_default_sites.clear_local();
+        self.library_module_reporting_sites.clear_local();
+        let globals = self
+            .globals
+            .local_iter()
+            .map(|global| ((global.module, global.diagnostic_span.start), global.id))
+            .collect::<Vec<_>>();
+        for (site, global) in globals {
+            if self
+                .global_augmentations_by_site
+                .insert_local(site, global)
+                .map_err(|_| "global augmentation site index contains a duplicate")?
+                .is_some()
+            {
+                return Err("global augmentation site index contains a duplicate");
+            }
+        }
+        let umd_base = self.umd_exports.base_len();
+        let exports = self
+            .umd_exports
+            .local_iter()
+            .enumerate()
+            .map(|(offset, export)| ((export.module, export.span.start), umd_base + offset))
+            .collect::<Vec<_>>();
+        for (site, export) in exports {
+            if self
+                .umd_exports_by_site
+                .insert_local(site, export)
+                .map_err(|_| "UMD export site index contains a duplicate")?
+                .is_some()
+            {
+                return Err("UMD export site index contains a duplicate");
+            }
+        }
+        let sources = self
+            .source_units
+            .local_iter()
+            .map(|unit| (unit.module, unit.source))
+            .collect::<Vec<_>>();
+        for (module, source) in sources {
+            if self
+                .source_keys_by_module
+                .insert_local(module, source)
+                .map_err(|_| "source-module index contains a duplicate")?
+                .is_some()
+            {
+                return Err("source-module index contains a duplicate");
+            }
+        }
+        let default_sites = self
+            .export_contexts
+            .local_iter()
+            .filter(|context| {
+                context.kind == ExportContextKind::ExportDefault
+                    && context.syntax == ExportSyntaxDisposition::FutureTk1319
+                    && matches!(context.origin, CompilationOrigin::Library(_))
+            })
+            .map(|context| ((context.source, context.span.start), true))
+            .collect::<Vec<_>>();
+        for (site, owned) in default_sites {
+            if self
+                .library_export_default_sites
+                .insert_local(site, owned)
+                .map_err(|_| "library export-default reporting index contains a duplicate")?
+                .is_some()
+            {
+                return Err("library export-default reporting index contains a duplicate");
+            }
+        }
+        let module_sites = self
+            .export_contexts
+            .local_iter()
+            .filter(|context| {
+                context.syntax == ExportSyntaxDisposition::FutureTk1319
+                    && matches!(context.origin, CompilationOrigin::Library(_))
+            })
+            .filter_map(|context| match context.owner {
+                ExportContextOwner::NamespaceFragment(fragment) => self
+                    .fragment(fragment)
+                    .map(|fragment| ((fragment.module, fragment.source_start), true)),
+                ExportContextOwner::GlobalAugmentation(_)
+                | ExportContextOwner::DeferredAmbientModule(_) => None,
+            })
+            .collect::<Vec<_>>();
+        for (site, owned) in module_sites {
+            if self
+                .library_module_reporting_sites
+                .insert_local(site, owned)
+                .map_err(|_| "library module-reporting index contains a duplicate")?
+                .is_some()
+            {
+                return Err("library module-reporting index contains a duplicate");
+            }
+        }
+        Ok(())
+    }
+
+    fn rebuild_local_standalone_storage_index(&mut self) -> Result<(), &'static str> {
+        self.standalone_storage_namespaces.clear_local();
+        let base_len = self.standalone_value_storages.base_len();
+        let rows = self
+            .standalone_value_storages
+            .local_iter()
+            .enumerate()
+            .filter_map(|(offset, storage)| {
+                let storage = (*storage)?;
+                let index = base_len + offset;
+                Some((
+                    storage,
+                    NamespaceId(u32::try_from(index).expect("namespace index fits u32")),
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (storage, namespace) in rows {
+            self.standalone_storage_namespaces
+                .insert_local(storage, namespace)?;
+        }
+        Ok(())
+    }
+
+    fn rebuild_local_declaration_owner_scope_index(&mut self) -> Result<(), &'static str> {
+        self.declaration_owners_by_scope.clear_local();
+        if let Some(scope) = self.compilation_global {
+            if !self.declaration_owners_by_scope.contains_key(&scope) {
+                self.declaration_owners_by_scope
+                    .insert_local(scope, DeclarationOwner::CompilationGlobal)?;
+            }
+        }
+        let namespace_base = self.namespaces.base_len();
+        let namespace_rows = self
+            .namespaces
+            .local_iter()
+            .enumerate()
+            .map(|(offset, namespace)| {
+                let id = NamespaceId(
+                    u32::try_from(namespace_base + offset).expect("namespace id fits u32"),
+                );
+                (
+                    namespace.public_scope,
+                    DeclarationOwner::NamespacePublic(id),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (scope, owner) in namespace_rows {
+            self.declaration_owners_by_scope
+                .insert_local(scope, owner)?;
+        }
+        let fragment_base = self.fragments.base_len();
+        let fragment_rows = self
+            .fragments
+            .local_iter()
+            .enumerate()
+            .map(|(offset, fragment)| {
+                let id = NamespaceFragmentId(
+                    u32::try_from(fragment_base + offset).expect("fragment id fits u32"),
+                );
+                (
+                    fragment.private_scope,
+                    DeclarationOwner::NamespacePrivate(id),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (scope, owner) in fragment_rows {
+            self.declaration_owners_by_scope
+                .insert_local(scope, owner)?;
+        }
+        Ok(())
     }
 
     fn compute_namespace_instance_states(&mut self) {
-        let mut states = vec![NamespaceInstanceState::NonInstantiated; self.fragments.len()];
-        for fragment in &self.fragments {
+        let fragment_base = self.fragments.base_len();
+        let mut states = vec![NamespaceInstanceState::NonInstantiated; self.fragments.local_len()];
+        for fragment in self.fragments.local_iter() {
+            #[cfg(test)]
+            record_continuation_instance_fragment_row();
             for member in fragment
                 .members
                 .iter()
@@ -1544,32 +2519,37 @@ impl NamespaceTable {
                     }
                     _ => NamespaceInstanceState::NonInstantiated,
                 };
-                states[fragment.id.index()] =
-                    join_instance_state(states[fragment.id.index()], direct);
+                let index = fragment.id.index() - fragment_base;
+                states[index] = join_instance_state(states[index], direct);
             }
         }
 
         loop {
             let mut changed = false;
-            for fragment in &self.fragments {
-                let mut state = states[fragment.id.index()];
+            for fragment in self.fragments.local_iter() {
+                #[cfg(test)]
+                record_continuation_instance_fragment_row();
+                let fragment_index = fragment.id.index() - fragment_base;
+                let mut state = states[fragment_index];
                 for member in fragment
                     .members
                     .iter()
                     .filter_map(|member| self.members.get(member.index()))
                     .filter(|member| member.kind == MergeDeclarationKind::Namespace)
                 {
-                    let child = member.declaration.and_then(|declaration| {
-                        self.fragments
-                            .iter()
-                            .find(|candidate| candidate.declaration == declaration)
-                    });
-                    if let Some(child) = child {
-                        state = join_instance_state(state, states[child.id.index()]);
+                    #[cfg(test)]
+                    record_continuation_child_fragment_lookup();
+                    let child = member
+                        .declaration
+                        .and_then(|declaration| self.fragments_by_declaration.get(&declaration))
+                        .and_then(|fragment| self.fragments.get(fragment.index()));
+                    if let Some(child) = child.filter(|child| child.id.index() >= fragment_base) {
+                        state =
+                            join_instance_state(state, states[child.id.index() - fragment_base]);
                     }
                 }
-                if state != states[fragment.id.index()] {
-                    states[fragment.id.index()] = state;
+                if state != states[fragment_index] {
+                    states[fragment_index] = state;
                     changed = true;
                 }
             }
@@ -1578,31 +2558,39 @@ impl NamespaceTable {
             }
         }
 
-        for fragment in &mut self.fragments {
-            fragment.instance_state = states[fragment.id.index()];
+        for fragment in self.fragments.local_iter_mut() {
+            fragment.instance_state = states[fragment.id.index() - fragment_base];
         }
-        self.aggregate_instance_states.resize(
-            self.namespaces.len(),
-            NamespaceInstanceState::NonInstantiated,
-        );
-        self.aggregate_instance_states
-            .fill(NamespaceInstanceState::NonInstantiated);
-        for fragment in &self.fragments {
-            let aggregate = &mut self.aggregate_instance_states[fragment.namespace.index()];
-            *aggregate = join_instance_state(*aggregate, fragment.instance_state);
+        self.aggregate_instance_states.clear_local();
+        for _ in 0..self.namespaces.local_len() {
+            self.aggregate_instance_states
+                .push_local(NamespaceInstanceState::NonInstantiated);
         }
-        for participants in self.placements.values_mut() {
+        for fragment in self.fragments.local_iter() {
+            if let Some(aggregate) = self
+                .aggregate_instance_states
+                .get_mut_local(fragment.namespace.index())
+            {
+                *aggregate = join_instance_state(*aggregate, fragment.instance_state);
+            }
+        }
+        for participants in self.placements.local_values_mut() {
             for participant in participants {
                 participant.namespace_instance = participant
                     .namespace_fragment
-                    .map(|fragment| states[fragment.index()]);
+                    .and_then(|fragment| fragment.index().checked_sub(fragment_base))
+                    .and_then(|index| states.get(index).copied());
             }
         }
     }
 
     fn dormant_standalone_value_storage_candidates(&self) -> Vec<NamespaceId> {
         self.canonical_namespaces
-            .iter()
+            .local_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_allocation_namespace_row();
+            })
             .copied()
             .filter(|namespace| {
                 self.aggregate_instance_state(*namespace)
@@ -1653,9 +2641,13 @@ impl NamespaceTable {
             }
             NamespaceOwner::CompilationGlobal => DeclarationOwner::CompilationGlobal,
         };
-        self.merges
-            .iter()
-            .find(|record| record.owner == owner && record.name == namespace.name)
+        let key = MergeKey {
+            owner,
+            name: namespace.name.clone(),
+        };
+        self.merge_indices
+            .get(&key)
+            .and_then(|index| self.merges.get(*index))
     }
 
     fn has_compilation_global_ancestor(&self, id: NamespaceId) -> bool {
@@ -1689,12 +2681,17 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
         let slot = state
             .namespaces
             .standalone_value_storages
-            .get_mut(namespace.index())
+            .get_mut_local(namespace.index())
             .expect("namespace storage side column is dense");
         assert!(
             slot.replace(storage).is_none(),
             "namespace storage is stable"
         );
+        state
+            .namespaces
+            .standalone_storage_namespaces
+            .insert_local(storage, namespace)
+            .expect("namespace storage cannot replace a frozen index entry");
         let symbol = state
             .namespaces
             .get(namespace)
@@ -1713,7 +2710,11 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
     let type_only = state
         .namespaces
         .canonical_namespaces
-        .iter()
+        .local_iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            record_continuation_allocation_namespace_row();
+        })
         .copied()
         .filter(|namespace| {
             state.namespaces.aggregate_instance_state(*namespace)
@@ -1730,11 +2731,9 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
         .filter_map(|namespace| state.namespaces.get(namespace).map(|root| root.symbol))
         .collect::<Vec<_>>();
     for symbol in type_only {
-        state
-            .symbols
-            .get_mut(symbol)
-            .expect("type-only namespace root exists")
-            .blocks_value_lookup = true;
+        if let Some(symbol) = state.symbols.get_mut(symbol) {
+            symbol.blocks_value_lookup = true;
+        }
     }
 }
 
@@ -1753,11 +2752,12 @@ impl Binder {
         module: ScopeId,
         source_start: u32,
     ) -> Option<ScopeId> {
+        #[cfg(test)]
+        record_continuation_fragment_scope_lookup();
         self.namespaces
-            .fragments
-            .iter()
-            .find(|fragment| fragment.module == module && fragment.source_start == source_start)
-            .map(|fragment| fragment.private_scope)
+            .fragment_private_scopes_by_site
+            .get(&(module, source_start))
+            .copied()
     }
 
     pub(crate) fn standalone_namespace_for_storage(
@@ -1765,18 +2765,21 @@ impl Binder {
         storage: ValueStorageId,
     ) -> Option<NamespaceId> {
         self.namespaces
-            .standalone_value_storages
-            .iter()
-            .position(|candidate| *candidate == Some(storage))
-            .map(|index| NamespaceId(u32::try_from(index).expect("namespace index fits u32")))
+            .standalone_storage_namespaces
+            .get(&storage)
+            .copied()
     }
 
-    pub(crate) fn standalone_namespace_value_attachments(
+    pub(crate) fn local_standalone_namespace_value_attachments(
         &self,
     ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
         self.namespaces
             .canonical_namespaces
-            .iter()
+            .local_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_attachment_namespace_row();
+            })
             .filter_map(|namespace| {
                 let storage = self.namespaces.standalone_value_storage(*namespace)?;
                 let root = self.namespaces.get(*namespace)?;
@@ -1870,10 +2873,12 @@ impl Binder {
         module: ScopeId,
         binding_start: u32,
     ) -> Option<ScopeId> {
+        #[cfg(test)]
+        record_continuation_global_statement_query();
         self.namespaces
-            .globals
-            .iter()
-            .find(|global| global.module == module && global.diagnostic_span.start == binding_start)
+            .global_augmentations_by_site
+            .get(&(module, binding_start))
+            .and_then(|global| self.namespaces.globals.get(global.index()))
             .map(|global| global.overlay_scope)
     }
 
@@ -1882,9 +2887,14 @@ impl Binder {
         module: ScopeId,
         binding_start: u32,
     ) -> bool {
-        let Some(global) = self.namespaces.globals.iter().find(|global| {
-            global.module == module && global.diagnostic_span.start == binding_start
-        }) else {
+        #[cfg(test)]
+        record_continuation_global_statement_query();
+        let Some(global) = self
+            .namespaces
+            .global_augmentations_by_site
+            .get(&(module, binding_start))
+            .and_then(|global| self.namespaces.globals.get(global.index()))
+        else {
             return false;
         };
         if !global.issues.is_empty() {
@@ -1900,14 +2910,9 @@ impl Binder {
                     let fragment = member
                         .declaration
                         .and_then(|declaration| {
-                            self.namespaces
-                                .merges
-                                .iter()
-                                .flat_map(|record| &record.declarations)
-                                .find(|participant| participant.declaration == declaration)
+                            self.namespaces.fragments_by_declaration.get(&declaration)
                         })
-                        .and_then(|participant| participant.namespace_fragment)
-                        .and_then(|fragment| self.namespaces.fragment(fragment));
+                        .and_then(|fragment| self.namespaces.fragment(*fragment));
                     fragment.is_none_or(|fragment| {
                         fragment.instance_state == NamespaceInstanceState::Instantiated
                     })
@@ -1918,11 +2923,13 @@ impl Binder {
     }
 
     pub(crate) fn umd_export_requires_incomplete(&self, module: ScopeId, span_start: u32) -> bool {
-        self.namespaces.umd_exports.iter().any(|export| {
-            export.module == module
-                && export.span.start == span_start
-                && export.context == UmdContext::DeferredValidBacklog15
-        })
+        #[cfg(test)]
+        record_continuation_umd_statement_query();
+        self.namespaces
+            .umd_exports_by_site
+            .get(&(module, span_start))
+            .and_then(|export| self.namespaces.umd_exports.get(*export))
+            .is_some_and(|export| export.context == UmdContext::DeferredValidBacklog15)
     }
 
     #[cfg(test)]
@@ -1931,37 +2938,22 @@ impl Binder {
         module: ScopeId,
         span_start: u32,
     ) -> bool {
-        let source = self
-            .namespaces
-            .source_units()
-            .find(|unit| unit.module == module)
-            .map(|unit| unit.source);
+        record_continuation_library_source_lookup();
+        let source = self.namespaces.source_keys_by_module.get(&module).copied();
+        record_continuation_library_reporting_lookup();
         source.is_some_and(|source| {
-            self.namespaces.export_contexts().any(|context| {
-                context.source == source
-                    && context.span.start == span_start
-                    && context.kind == ExportContextKind::ExportDefault
-                    && context.syntax == ExportSyntaxDisposition::FutureTk1319
-                    && matches!(context.origin, CompilationOrigin::Library(_))
-            })
+            self.namespaces
+                .library_export_default_sites
+                .contains_key(&(source, span_start))
         })
     }
 
     #[cfg(test)]
     pub(crate) fn library_module_reporting_owns(&self, module: ScopeId, source_start: u32) -> bool {
-        self.namespaces.export_contexts().any(|context| {
-            if context.syntax != ExportSyntaxDisposition::FutureTk1319
-                || !matches!(context.origin, CompilationOrigin::Library(_))
-            {
-                return false;
-            }
-            let ExportContextOwner::NamespaceFragment(fragment) = context.owner else {
-                return false;
-            };
-            self.namespaces.fragment(fragment).is_some_and(|fragment| {
-                fragment.module == module && fragment.source_start == source_start
-            })
-        })
+        record_continuation_library_reporting_lookup();
+        self.namespaces
+            .library_module_reporting_sites
+            .contains_key(&(module, source_start))
     }
 
     /// Return the frozen namespace-side input for one lexical value owner.
@@ -1971,9 +2963,36 @@ impl Binder {
         scope: ScopeId,
         name: &str,
     ) -> Option<NamespaceValueAttachment<'_>> {
-        let record = self.namespaces.merges.iter().find(|record| {
-            record.name == name && self.declaration_owner_scope(record.owner) == Some(scope)
-        })?;
+        let owner = self
+            .namespaces
+            .declaration_owners_by_scope
+            .get(&scope)
+            .copied()
+            .unwrap_or(DeclarationOwner::Lexical(scope));
+        self.namespace_value_attachment_for_owner(owner, name)
+    }
+
+    pub(crate) fn namespace_value_attachment_for_owner(
+        &self,
+        owner: DeclarationOwner,
+        name: &str,
+    ) -> Option<NamespaceValueAttachment<'_>> {
+        let key = MergeKey {
+            owner,
+            name: name.to_owned(),
+        };
+        let record = self
+            .namespaces
+            .merge_indices
+            .get(&key)
+            .and_then(|index| self.namespaces.merges.get(*index))?;
+        self.namespace_value_attachment_from_record(record)
+    }
+
+    fn namespace_value_attachment_from_record<'a>(
+        &'a self,
+        record: &'a MergeRecord,
+    ) -> Option<NamespaceValueAttachment<'a>> {
         let disposition = namespace_value_attachment_disposition(record)?;
         let namespace = record.declarations.iter().find_map(|participant| {
             participant
@@ -2063,7 +3082,11 @@ impl Binder {
     ) -> Vec<LocalAmbientExportAliasFailure> {
         self.namespaces
             .members
-            .iter()
+            .local_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                record_continuation_ambient_alias_member_row();
+            })
             .filter(|member| {
                 matches!(member.owner, NamespaceMemberOwner::Fragment(_))
                     && member.kind == MergeDeclarationKind::DeferredExport
@@ -2267,41 +3290,33 @@ impl Binder {
     }
 
     fn namespace_for_lookup_scope(&self, scope: ScopeId) -> Option<NamespaceId> {
-        self.namespaces.namespaces.iter().find_map(|namespace| {
-            if namespace.public_scope == scope {
-                return Some(namespace.id);
-            }
-            namespace.fragments.iter().find_map(|fragment| {
-                self.namespaces
-                    .fragments
-                    .get(fragment.index())
-                    .filter(|fragment| fragment.private_scope == scope)
-                    .map(|_| namespace.id)
-            })
-        })
-    }
-
-    fn declaration_owner_scope(&self, owner: DeclarationOwner) -> Option<ScopeId> {
-        match owner {
-            DeclarationOwner::Lexical(scope) => Some(scope),
-            DeclarationOwner::NamespacePublic(namespace) => self
-                .namespaces
-                .get(namespace)
-                .map(|namespace| namespace.public_scope),
-            DeclarationOwner::NamespacePrivate(fragment) => self
+        match self
+            .namespaces
+            .declaration_owners_by_scope
+            .get(&scope)
+            .copied()
+        {
+            Some(DeclarationOwner::NamespacePublic(namespace)) => Some(namespace),
+            Some(DeclarationOwner::NamespacePrivate(fragment)) => self
                 .namespaces
                 .fragment(fragment)
-                .map(|fragment| fragment.private_scope),
-            DeclarationOwner::CompilationGlobal => Some(self.compilation_global),
-            DeclarationOwner::DeferredAmbientModule(_) => None,
+                .map(|fragment| fragment.namespace),
+            Some(DeclarationOwner::Lexical(_))
+            | Some(DeclarationOwner::CompilationGlobal)
+            | Some(DeclarationOwner::DeferredAmbientModule(_))
+            | None => None,
         }
     }
 
     fn root_merge_record(&self, scope: ScopeId, name: &str) -> Option<&MergeRecord> {
+        let key = MergeKey {
+            owner: DeclarationOwner::Lexical(scope),
+            name: name.to_owned(),
+        };
         self.namespaces
-            .merges
-            .iter()
-            .find(|record| record.owner == DeclarationOwner::Lexical(scope) && record.name == name)
+            .merge_indices
+            .get(&key)
+            .and_then(|index| self.namespaces.merges.get(*index))
     }
 
     fn merge_deferred_reason(record: &MergeRecord) -> Option<QualifiedTypePathDeferredReason> {
@@ -2817,7 +3832,7 @@ pub(super) fn collect_namespace_metadata(
     script_namespace_root: ScopeId,
     root: NamespaceMetadataRoot,
 ) {
-    state.namespaces.source_units.push(SourceUnitRecord {
+    state.namespaces.source_units.push_local(SourceUnitRecord {
         source: unit.source,
         origin: unit.origin,
         module,
@@ -2853,7 +3868,10 @@ pub(super) fn collect_namespace_metadata(
 
 pub(super) fn finalize_namespace_metadata(state: &mut BindState) {
     resolve_local_ambient_export_alias_targets(state);
-    state.namespaces.classify();
+    state
+        .namespaces
+        .classify()
+        .unwrap_or_else(|error| panic!("namespace classification failed: {error}"));
 }
 
 pub(super) fn fill_namespace_value_attachments(state: &mut BindState, program: &Program<'_>) {
@@ -2894,7 +3912,7 @@ struct NamespaceValueBindingTarget {
 
 fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Program<'_>) {
     let mut targets = Vec::new();
-    for record in &state.namespaces.merges {
+    for record in state.namespaces.local_merges() {
         let attached = matches!(
             namespace_value_attachment_disposition(record),
             Some(
@@ -2997,7 +4015,11 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
             .graph
             .get(target.scope)
             .and_then(|scope| scope.lookup_local(&target.name));
-        if let Some(member) = state.namespaces.members.get_mut(target.member.index()) {
+        if let Some(member) = state
+            .namespaces
+            .members
+            .get_mut_local(target.member.index())
+        {
             member.local_symbol = local_symbol;
         }
         let Some(symbol) = target.public_symbol else {
@@ -3144,10 +4166,11 @@ fn bind_selected_namespace_module_body(
 }
 
 fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
+    let member_base = state.namespaces.members.base_len();
     let candidates = state
         .namespaces
         .members
-        .iter()
+        .local_iter()
         .enumerate()
         .filter(|(_, member)| {
             matches!(member.owner, NamespaceMemberOwner::Fragment(_))
@@ -3156,12 +4179,12 @@ fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
                 && member.alias_context == Some(AliasContext::ValidAmbient)
                 && member.module_specifier.is_none()
         })
-        .filter_map(|(index, member)| {
+        .filter_map(|(local_index, member)| {
             let NamespaceMemberOwner::Fragment(fragment) = member.owner else {
                 return None;
             };
             Some((
-                index,
+                member_base + local_index,
                 fragment,
                 member.local_name.as_ref()?.text().to_string(),
             ))
@@ -3181,7 +4204,9 @@ fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
             local_declaration_symbol(state, private_scope, &local_name).or_else(|| {
                 public_scope.and_then(|scope| local_declaration_symbol(state, scope, &local_name))
             });
-        state.namespaces.members[index].local_symbol = local_symbol;
+        if let Some(member) = state.namespaces.members.get_mut_local(index) {
+            member.local_symbol = local_symbol;
+        }
     }
 }
 
@@ -3465,7 +4490,7 @@ fn walk_statement(
             } else {
                 UmdContext::DeferredValidBacklog15
             };
-            state.namespaces.umd_exports.push(UmdNamespaceExport {
+            state.namespaces.umd_exports.push_local(UmdNamespaceExport {
                 declaration,
                 source: unit.source,
                 origin: unit.origin,
@@ -3847,7 +4872,7 @@ fn bind_module_declaration(
     let fragment = NamespaceFragmentId(
         u32::try_from(state.namespaces.fragments.len()).expect("namespace fragment count fits u32"),
     );
-    state.namespaces.fragments.push(NamespaceFragment {
+    state.namespaces.fragments.push_local(NamespaceFragment {
         id: fragment,
         namespace,
         declaration: declaration_id,
@@ -3866,7 +4891,7 @@ fn bind_module_declaration(
     state
         .namespaces
         .namespaces
-        .get_mut(namespace.index())
+        .get_mut_local(namespace.index())
         .expect("namespace exists")
         .fragments
         .push(fragment);
@@ -3887,7 +4912,7 @@ fn bind_module_declaration(
         context.ambient || declaration.declare || unit.binding.declaration_file(),
         unit,
     );
-    for participants in state.namespaces.placements.values_mut() {
+    for participants in state.namespaces.placements.local_values_mut() {
         if let Some(participant) = participants
             .iter_mut()
             .find(|participant| participant.declaration == declaration_id)
@@ -4036,7 +5061,7 @@ fn push_export_context(
         u32::try_from(state.namespaces.export_contexts.len())
             .expect("export context count fits u32"),
     );
-    state.namespaces.export_contexts.push(ExportContext {
+    state.namespaces.export_contexts.push_local(ExportContext {
         id,
         owner,
         kind,
@@ -4173,7 +5198,7 @@ fn namespace_for(state: &mut BindState, owner: NamespaceOwner, name: &str) -> Na
     let id = NamespaceId(
         u32::try_from(state.namespaces.namespaces.len()).expect("namespace count fits u32"),
     );
-    state.namespaces.namespaces.push(Namespace {
+    state.namespaces.namespaces.push_local(Namespace {
         id,
         owner,
         name: name.to_string(),
@@ -4184,9 +5209,9 @@ fn namespace_for(state: &mut BindState, owner: NamespaceOwner, name: &str) -> Na
     state
         .namespaces
         .aggregate_instance_states
-        .push(NamespaceInstanceState::NonInstantiated);
-    state.namespaces.standalone_value_storages.push(None);
-    state.namespaces.namespace_keys.insert(key, id);
+        .push_local(NamespaceInstanceState::NonInstantiated);
+    state.namespaces.standalone_value_storages.push_local(None);
+    let _ = state.namespaces.namespace_keys.insert_local(key, id);
     id
 }
 
@@ -4296,7 +5321,7 @@ fn bind_deferred_module(
     state
         .namespaces
         .deferred_modules
-        .push(DeferredAmbientModule {
+        .push_local(DeferredAmbientModule {
             id,
             declaration: declaration_id,
             source: unit.source,
@@ -4367,7 +5392,7 @@ fn record_deferred_statement(
             state
                 .namespaces
                 .deferred_children
-                .push(DeferredAmbientChild {
+                .push_local(DeferredAmbientChild {
                     module,
                     declaration: None,
                     kind: DeferredChildKind::DeferredExport,
@@ -4653,7 +5678,7 @@ fn record_deferred_binding(
     state
         .namespaces
         .deferred_children
-        .push(DeferredAmbientChild {
+        .push_local(DeferredAmbientChild {
             module,
             declaration,
             kind: child_kind,
@@ -4674,7 +5699,7 @@ fn record_deferred_export(
     state
         .namespaces
         .deferred_children
-        .push(DeferredAmbientChild {
+        .push_local(DeferredAmbientChild {
             module,
             declaration: None,
             kind: DeferredChildKind::DeferredExport,
@@ -4746,7 +5771,7 @@ fn bind_global(
     let id = GlobalAugmentationId(
         u32::try_from(state.namespaces.globals.len()).expect("global count fits u32"),
     );
-    state.namespaces.globals.push(GlobalAugmentation {
+    state.namespaces.globals.push_local(GlobalAugmentation {
         id,
         declaration: declaration_id,
         source: unit.source,
@@ -4832,14 +5857,13 @@ fn push_placement(
         namespace_fragment: None,
         namespace_instance: None,
     };
-    let entries = state
-        .namespaces
-        .placements
-        .entry(MergeKey {
-            owner,
-            name: name.to_string(),
-        })
-        .or_default();
+    let Ok(entries) = state.namespaces.placements.entry_local(MergeKey {
+        owner,
+        name: name.to_string(),
+    }) else {
+        return;
+    };
+    let entries = entries.or_default();
     if !entries.iter().any(|entry| entry.declaration == declaration) {
         entries.push(participant);
     }
@@ -4850,7 +5874,7 @@ fn set_placement_syntax(
     declaration: DeclId,
     syntax: DeclarationSyntaxFacts,
 ) {
-    for participants in state.namespaces.placements.values_mut() {
+    for participants in state.namespaces.placements.local_values_mut() {
         if let Some(participant) = participants
             .iter_mut()
             .find(|participant| participant.declaration == declaration)
@@ -4865,8 +5889,8 @@ fn placement_syntax(state: &BindState, declaration: DeclId) -> Option<Declaratio
     state
         .namespaces
         .placements
-        .values()
-        .flatten()
+        .local_iter()
+        .flat_map(|(_, participants)| participants)
         .find(|participant| participant.declaration == declaration)
         .map(|participant| participant.syntax)
 }
@@ -4905,7 +5929,7 @@ fn push_member(
     let syntax = declaration
         .and_then(|declaration| placement_syntax(state, declaration))
         .unwrap_or(DeclarationSyntaxFacts::None);
-    state.namespaces.members.push(NamespaceMember {
+    state.namespaces.members.push_local(NamespaceMember {
         id,
         owner,
         target,
@@ -4938,14 +5962,14 @@ fn push_member(
         NamespaceMemberOwner::Fragment(fragment) => state
             .namespaces
             .fragments
-            .get_mut(fragment.index())
+            .get_mut_local(fragment.index())
             .expect("namespace fragment exists")
             .members
             .push(id),
         NamespaceMemberOwner::GlobalAugmentation(global) => state
             .namespaces
             .globals
-            .get_mut(global.index())
+            .get_mut_local(global.index())
             .expect("global augmentation exists")
             .members
             .push(id),
@@ -4962,9 +5986,14 @@ fn attach_export_member(
     let Some(context) = context else {
         return;
     };
-    let members = &mut state.namespaces.export_contexts[context.index()].members;
-    if !members.contains(&member) {
-        members.push(member);
+    if let Some(context) = state
+        .namespaces
+        .export_contexts
+        .get_mut_local(context.index())
+    {
+        if !context.members.contains(&member) {
+            context.members.push(member);
+        }
     }
 }
 
@@ -5048,7 +6077,7 @@ fn push_export_alias_member(
     let id = NamespaceMemberId(
         u32::try_from(state.namespaces.members.len()).expect("namespace member count fits u32"),
     );
-    state.namespaces.members.push(NamespaceMember {
+    state.namespaces.members.push_local(NamespaceMember {
         id,
         owner,
         target,
@@ -5081,11 +6110,15 @@ fn push_export_alias_member(
         publication,
     });
     match owner {
-        NamespaceMemberOwner::Fragment(fragment) => state.namespaces.fragments[fragment.index()]
-            .members
-            .push(id),
+        NamespaceMemberOwner::Fragment(fragment) => {
+            if let Some(fragment) = state.namespaces.fragments.get_mut_local(fragment.index()) {
+                fragment.members.push(id);
+            }
+        }
         NamespaceMemberOwner::GlobalAugmentation(global) => {
-            state.namespaces.globals[global.index()].members.push(id)
+            if let Some(global) = state.namespaces.globals.get_mut_local(global.index()) {
+                global.members.push(id);
+            }
         }
         NamespaceMemberOwner::DeferredAmbientModule(_) => {}
     }
@@ -5134,6 +6167,42 @@ mod tests {
     use oxc_span::SourceType;
 
     #[test]
+    fn namespace_base_sharing_witness_covers_every_layered_field() {
+        let source = include_str!("namespace.rs");
+        let fields = source
+            .split_once("pub struct NamespaceTable {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map(|(body, _)| body)
+            .expect("NamespaceTable declaration");
+        let layered_fields = fields
+            .lines()
+            .filter(|line| line.contains("LayeredVec<") || line.contains("LayeredMap<"))
+            .filter_map(|line| line.trim().split_once(':').map(|(name, _)| name))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            layered_fields.len(),
+            31,
+            "layered namespace field inventory"
+        );
+
+        let witness = source
+            .split_once("pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {")
+            .and_then(|(_, rest)| rest.split_once("\n    }"))
+            .map(|(body, _)| body)
+            .expect("namespace base-sharing witness")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        for field in layered_fields {
+            let required = format!("self.{field}.shares_base_with(&other.{field})");
+            assert!(
+                witness.contains(&required),
+                "missing sharing witness for {field}"
+            );
+        }
+    }
+
+    #[test]
     fn library_compilation_unit_retains_declaration_context_and_origin() {
         let allocator = Allocator::default();
         let parsed = Parser::new(&allocator, "interface LibraryShape {}", SourceType::ts()).parse();
@@ -5180,6 +6249,122 @@ mod tests {
         };
         let (module, _) = builder.add_module(&parsed.program, &[], unit);
         builder.finish(module)
+    }
+
+    fn bind_snapshot_validation_library() -> Binder {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            r#"
+                export {};
+                export as namespace FirstUmd;
+                export as namespace SecondUmd;
+                declare global { interface FirstGlobal {} }
+                declare global { interface SecondGlobal {} }
+                declare namespace FirstNamespace {
+                    export default function first(): void;
+                }
+                declare namespace SecondNamespace {
+                    export default function second(): void;
+                }
+            "#,
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(prelude.diagnostics.is_empty());
+        assert!(!source.panicked);
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let unit = CompilationUnit::library(
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+            &source.program,
+        );
+        let module = builder.add_library_modules(&[(&source.program, unit)])[0];
+        builder.finish(module)
+    }
+
+    fn assert_snapshot_corruption(
+        primary: &NamespaceSnapshotPrimary,
+        corrupt: impl FnOnce(&mut NamespaceSnapshotPrimary),
+        expected: &'static str,
+    ) {
+        let mut corrupt_primary = primary.clone();
+        corrupt(&mut corrupt_primary);
+        let actual = NamespaceTable::from_snapshot_primary(corrupt_primary)
+            .err()
+            .expect("corrupt snapshot must be rejected");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn snapshot_decode_rejects_duplicate_fragment_derived_keys() {
+        let primary = bind_snapshot_validation_library()
+            .namespaces
+            .snapshot_primary();
+        assert!(primary.fragments.len() >= 2);
+        assert!(NamespaceTable::from_snapshot_primary(primary.clone()).is_ok());
+
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| corrupt.fragments[1].declaration = corrupt.fragments[0].declaration,
+            "namespace fragment declaration index contains a duplicate",
+        );
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| {
+                corrupt.fragments[1].module = corrupt.fragments[0].module;
+                corrupt.fragments[1].source_start = corrupt.fragments[0].source_start;
+            },
+            "namespace fragment site index contains a duplicate",
+        );
+    }
+
+    #[test]
+    fn snapshot_decode_rejects_duplicate_statement_and_reporting_keys() {
+        let primary = bind_snapshot_validation_library()
+            .namespaces
+            .snapshot_primary();
+        assert!(primary.globals.len() >= 2);
+        assert!(primary.umd_exports.len() >= 2);
+        assert!(primary.export_contexts.len() >= 2);
+        assert!(NamespaceTable::from_snapshot_primary(primary.clone()).is_ok());
+
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| {
+                corrupt.globals[1].module = corrupt.globals[0].module;
+                corrupt.globals[1].diagnostic_span.start = corrupt.globals[0].diagnostic_span.start;
+            },
+            "global augmentation site index contains a duplicate",
+        );
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| {
+                corrupt.umd_exports[1].module = corrupt.umd_exports[0].module;
+                corrupt.umd_exports[1].span.start = corrupt.umd_exports[0].span.start;
+            },
+            "UMD export site index contains a duplicate",
+        );
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| corrupt.source_units.push(corrupt.source_units[0].clone()),
+            "source-module index contains a duplicate",
+        );
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| {
+                corrupt.export_contexts[1].source = corrupt.export_contexts[0].source;
+                corrupt.export_contexts[1].span.start = corrupt.export_contexts[0].span.start;
+            },
+            "library export-default reporting index contains a duplicate",
+        );
+        assert_snapshot_corruption(
+            &primary,
+            |corrupt| corrupt.export_contexts[1].owner = corrupt.export_contexts[0].owner,
+            "library module-reporting index contains a duplicate",
+        );
     }
 
     fn merge<'a>(binder: &'a Binder, name: &str) -> &'a MergeRecord {

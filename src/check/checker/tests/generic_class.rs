@@ -24,6 +24,42 @@ fn diags(source: &str) -> Vec<(u32, String)> {
     v
 }
 
+#[test]
+fn qualified_namespace_generic_construction_uses_class_inference_and_respects_value_shadowing() {
+    let src = r#"namespace DeltaSpace {
+  export class Box<T> { constructor(public value: T) {} }
+}
+const good: DeltaSpace.Box<string> = new DeltaSpace.Box("ok");
+const inferredBad: DeltaSpace.Box<string> = new DeltaSpace.Box(1);
+const explicitBad = new DeltaSpace.Box<string>(1);
+namespace ShadowSpace {
+  export class Box { constructor(value: string) {} }
+}
+function shadow(ShadowSpace: { Box: new (value: number) => { value: number } }) {
+  const local = new ShadowSpace.Box(1);
+  const value: number = local.value;
+}
+"#;
+    let checked = check_source(src);
+    assert!(checked.parse_errors.is_empty());
+    assert!(checked.incomplete.is_empty(), "{:#?}", checked.incomplete);
+    let index = crate::span::LineIndex::new(src);
+    let diagnostics = checked
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            (
+                index.line_of(diagnostic.span.start),
+                diagnostic.code.as_str().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        diagnostics,
+        vec![(5, "TK2322".to_string()), (6, "TK2345".to_string())],
+    );
+}
+
 /// Explicit type arguments instantiate the constructor + instance: `new Box<number>(1)`
 /// types the constructor `(v: number)` and the instance `{ value: number; get: () =>
 /// number }`, so `b.get()` is `number`. A wrong target annotation (`bad: string`) is

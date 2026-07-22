@@ -30,7 +30,7 @@ use crate::binder::scope::ScopeId;
 use crate::check::checker::context::{
     CheckerEffects, ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder,
     ConstraintCheckObligation, OverrideCheck, Pass, PublishedClassNewMetadata,
-    PublishedClassValueBinding, TypeDecl,
+    PublishedClassValueBinding, TypeDecl, TypeDeclTable, TypeDeclView, TypeResolvedTable,
 };
 use crate::check::checker::decls::type_decl_id;
 use crate::check::checker::events::UserRecordTicket;
@@ -44,6 +44,7 @@ use crate::diagnostics::{render_type, Diagnostic, IncompleteSurface};
 use crate::relate::RelationOutcome;
 use crate::source::SourceOrdinal;
 use crate::span::Span as CheckSpan;
+use crate::types::layered::LayeredMap;
 use crate::types::repr::{
     ClassId, FunctionType, ObjectType, PropertyType, TypeParamId, Visibility,
 };
@@ -271,8 +272,8 @@ impl<Ticket: Copy> TicketRecord<Ticket> {
 struct Resolver<'a, 'ast, Ticket: Copy> {
     binder: &'a crate::binder::Binder,
     scope: ScopeId,
-    declarations: &'a [TypeDecl<'ast>],
-    resolved: &'a [Option<TypeId>],
+    declarations: &'a TypeDeclTable<'ast>,
+    resolved: &'a TypeResolvedTable,
     reservations: &'a LexicalReservations<Ticket>,
     source: SourceOrdinal,
     fallback: Ticket,
@@ -400,8 +401,34 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
         &self,
         id: crate::binder::declaration::TypeGroupId,
     ) -> SurfaceNameResolution<Ticket> {
-        let Some(declaration) = self.declarations.get(id.index()) else {
+        let Some(declaration) = self.declarations.view(id.index()) else {
             return SurfaceNameResolution::Unavailable(self.fallback);
+        };
+        let declaration = match declaration {
+            TypeDeclView::Published(published) => {
+                let Some(template) = self.resolved.get(id.index()).copied().flatten() else {
+                    return SurfaceNameResolution::Poisoned(self.fallback);
+                };
+                if template == self.error {
+                    return SurfaceNameResolution::Poisoned(self.fallback);
+                }
+                return if published.params.is_empty() {
+                    SurfaceNameResolution::Direct(template)
+                } else {
+                    SurfaceNameResolution::Alias {
+                        template,
+                        parameters: published
+                            .params
+                            .iter()
+                            .map(|id| ClassTypeParameter {
+                                id: *id,
+                                default: ClassTypeParameterDefault::Absent,
+                            })
+                            .collect(),
+                    }
+                };
+            }
+            TypeDeclView::Local(declaration) => declaration,
         };
         match declaration {
             TypeDecl::Class { class_id, .. } => SurfaceNameResolution::Class {
@@ -714,6 +741,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_decls
             .iter()
             .enumerate()
+            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
             .filter(|(_, declaration)| matches!(declaration, TypeDecl::Class { .. }))
             .map(|(index, _)| {
                 crate::binder::declaration::TypeGroupId(
@@ -1257,7 +1285,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     self.decl_types.set(value_decl, static_side);
                 }
                 if let Some(name) = class.id.as_ref() {
-                    self.class_names.insert(class_id, name.name.to_string());
+                    self.class_names
+                        .insert_local(class_id, name.name.to_string())
+                        .expect("class names cannot replace a frozen base row");
                 }
                 resolver.fallback = reservation.tickets.immediate;
                 resolver.qualified_outer_type_parameters_visible = true;
@@ -1316,7 +1346,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         identity_root: base,
                         owner: reservation.tickets.deferred,
                     });
-                    self.class_parents.insert(class_id, parent);
+                    self.class_parents
+                        .insert_local(class_id, parent)
+                        .expect("class parents cannot replace a frozen base row");
                 }
                 if let Some(interface_fragments) = prepared_interface_groups.get(&binding.type_decl)
                 {
@@ -1380,7 +1412,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for (class, parameters) in application_parameters {
             assert!(
                 self.class_application_parameters
-                    .insert(class, parameters)
+                    .insert_local(class, parameters)
+                    .expect("class parameters cannot replace a frozen base row")
                     .is_none(),
                 "class application parameter epochs are disjoint"
             );
@@ -1493,13 +1526,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(value_decl) = binding.value_decl {
                 assert!(
                     self.class_value_bindings
-                        .insert(
+                        .insert_local(
                             value_decl,
                             PublishedClassValueBinding {
                                 class_id: binding.class_id,
                                 has_header_type_params: !binding.header_type_params.is_empty(),
                             },
                         )
+                        .expect("class value bindings cannot replace a frozen base row")
                         .is_none(),
                     "class value bindings publish once"
                 );
@@ -1520,7 +1554,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             &type_decls,
             &self.class_parents,
         ));
-        for declaration in &type_decls {
+        for declaration in type_decls.iter() {
             let TypeDecl::Class {
                 class_id, class, ..
             } = declaration
@@ -1529,16 +1563,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             let (ctor_visibility, ctor_declaring_class) =
                 effective_constructor_access(*class_id, class, &type_decls, &self.class_parents);
-            self.class_new_metadata.insert(
-                *class_id,
-                PublishedClassNewMetadata {
-                    is_abstract: class.r#abstract,
-                    ctor_visibility,
-                    ctor_declaring_class,
-                    has_source_overloads: super::visibility::constructor_declaration_count(class)
-                        > 1,
-                },
-            );
+            self.class_new_metadata
+                .insert_local(
+                    *class_id,
+                    PublishedClassNewMetadata {
+                        is_abstract: class.r#abstract,
+                        ctor_visibility,
+                        ctor_declaring_class,
+                        has_source_overloads: super::visibility::constructor_declaration_count(
+                            class,
+                        ) > 1,
+                    },
+                )
+                .expect("class new metadata cannot replace a frozen base row");
         }
         self.collect_override_checks(&type_decls);
         assert!(self.staged_class_validation.is_none());
@@ -1639,7 +1676,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn collect_override_checks(&mut self, type_decls: &[TypeDecl<'_>]) {
+    fn collect_override_checks(&mut self, type_decls: &TypeDeclTable<'_>) {
         let class_defs: FxHashMap<ClassId, &Class<'_>> = type_decls
             .iter()
             .filter_map(|declaration| match declaration {
@@ -1805,8 +1842,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 fn effective_constructor_access(
     class_id: ClassId,
     class: &Class<'_>,
-    declarations: &[TypeDecl<'_>],
-    parents: &FxHashMap<ClassId, ClassId>,
+    declarations: &TypeDeclTable<'_>,
+    parents: &LayeredMap<ClassId, ClassId>,
 ) -> (Visibility, ClassId) {
     if super::visibility::constructor_declaration_count(class) > 0 {
         return (super::visibility::constructor_visibility(class), class_id);
@@ -2736,8 +2773,8 @@ struct AbstractClassInfo<'ast, Ticket: Copy> {
 
 fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
     reservations: &LexicalReservations<Ticket>,
-    declarations: &[TypeDecl<'ast>],
-    parents: &FxHashMap<ClassId, ClassId>,
+    declarations: &TypeDeclTable<'ast>,
+    parents: &LayeredMap<ClassId, ClassId>,
 ) -> Vec<TicketRecord<Ticket>> {
     let mut classes = FxHashMap::default();
     for reservation in reservations.classes() {
@@ -2762,7 +2799,7 @@ fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
     fn pending_for<Ticket: Copy>(
         class_id: ClassId,
         classes: &FxHashMap<ClassId, AbstractClassInfo<'_, Ticket>>,
-        parents: &FxHashMap<ClassId, ClassId>,
+        parents: &LayeredMap<ClassId, ClassId>,
         visiting: &mut BTreeSet<ClassId>,
         memo: &mut FxHashMap<ClassId, Vec<String>>,
     ) -> Vec<String> {
@@ -2888,7 +2925,7 @@ fn class_member_is_method(
     mut class_id: ClassId,
     name: &str,
     classes: &FxHashMap<ClassId, &Class<'_>>,
-    parents: &FxHashMap<ClassId, ClassId>,
+    parents: &LayeredMap<ClassId, ClassId>,
 ) -> bool {
     let mut visited = BTreeSet::new();
     while visited.insert(class_id) {
@@ -2927,7 +2964,7 @@ fn class_member_has_explicit_surface(
     mut class_id: ClassId,
     name: &str,
     classes: &FxHashMap<ClassId, &Class<'_>>,
-    parents: &FxHashMap<ClassId, ClassId>,
+    parents: &LayeredMap<ClassId, ClassId>,
 ) -> bool {
     let mut visited = BTreeSet::new();
     while visited.insert(class_id) {
@@ -2978,12 +3015,13 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
     construction: &mut ClassConstruction<Ticket>,
     factory: &mut SurfaceTypeFactory<'_>,
     binder: &crate::binder::Binder,
-    declarations: &[TypeDecl<'ast>],
-    resolved: &[Option<TypeId>],
+    declarations: &TypeDeclTable<'ast>,
+    resolved: &TypeResolvedTable,
     reservations: &LexicalReservations<Ticket>,
     error: TypeId,
 ) {
-    for (index, declaration) in declarations.iter().enumerate() {
+    for (local_index, declaration) in declarations.iter().enumerate() {
+        let index = declarations.published_len() + local_index;
         match declaration {
             TypeDecl::Alias { .. } => {
                 let Some(root) = resolved.get(index).copied().flatten() else {
@@ -3052,56 +3090,66 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                     else {
                         continue;
                     };
-                    let Some(target) = declarations.get(target_id.index()) else {
+                    let Some(target) = declarations.view(target_id.index()) else {
                         continue;
                     };
                     let child = match target {
-                        TypeDecl::Class { class_id, .. } => {
-                            let parameters = resolver.class_parameters(target);
-                            let mut explicit = Vec::new();
-                            let mut unavailable = false;
-                            if let Some(arguments) = heritage.type_arguments.as_deref() {
-                                for argument in &arguments.params {
-                                    let (lowered, child_failures) =
-                                        lower_type(factory, &mut resolver, argument, &frame);
-                                    if !child_failures.is_empty() {
-                                        unavailable = true;
-                                    }
-                                    match lowered {
-                                        Ok(argument) => {
-                                            explicit.push(ExplicitClassArgument::Ready(argument));
-                                        }
-                                        Err(_) => unavailable = true,
-                                    }
-                                }
-                            }
-                            if unavailable {
-                                None
-                            } else {
-                                match complete_class_arguments(
-                                    factory,
-                                    ClassApplicationRequest {
-                                        class: *class_id,
-                                        parameters: &parameters,
-                                        source_arguments: SourceClassArguments::Explicit(&explicit),
-                                        inferred: &[],
-                                        kind: ClassApplicationKind::TypeReference,
-                                    },
-                                ) {
-                                    DemandOutcome::Ready(arguments) => {
-                                        Some(factory.intern_class_instance(*class_id, arguments))
-                                    }
-                                    DemandOutcome::Exhausted(_) => None,
-                                }
-                            }
-                        }
-                        TypeDecl::Interface { reserved, .. } => Some(*reserved),
-                        TypeDecl::Alias { .. } | TypeDecl::Resolved { .. } => resolved
+                        TypeDeclView::Published(_) => resolved
                             .get(target_id.index())
                             .copied()
                             .flatten()
                             .filter(|root| *root != error),
-                        TypeDecl::Unavailable { .. } => None,
+                        TypeDeclView::Local(target) => match target {
+                            TypeDecl::Class { class_id, .. } => {
+                                let parameters = resolver.class_parameters(target);
+                                let mut explicit = Vec::new();
+                                let mut unavailable = false;
+                                if let Some(arguments) = heritage.type_arguments.as_deref() {
+                                    for argument in &arguments.params {
+                                        let (lowered, child_failures) =
+                                            lower_type(factory, &mut resolver, argument, &frame);
+                                        if !child_failures.is_empty() {
+                                            unavailable = true;
+                                        }
+                                        match lowered {
+                                            Ok(argument) => {
+                                                explicit
+                                                    .push(ExplicitClassArgument::Ready(argument));
+                                            }
+                                            Err(_) => unavailable = true,
+                                        }
+                                    }
+                                }
+                                if unavailable {
+                                    None
+                                } else {
+                                    match complete_class_arguments(
+                                        factory,
+                                        ClassApplicationRequest {
+                                            class: *class_id,
+                                            parameters: &parameters,
+                                            source_arguments: SourceClassArguments::Explicit(
+                                                &explicit,
+                                            ),
+                                            inferred: &[],
+                                            kind: ClassApplicationKind::TypeReference,
+                                        },
+                                    ) {
+                                        DemandOutcome::Ready(arguments) => Some(
+                                            factory.intern_class_instance(*class_id, arguments),
+                                        ),
+                                        DemandOutcome::Exhausted(_) => None,
+                                    }
+                                }
+                            }
+                            TypeDecl::Interface { reserved, .. } => Some(*reserved),
+                            TypeDecl::Alias { .. } | TypeDecl::Resolved { .. } => resolved
+                                .get(target_id.index())
+                                .copied()
+                                .flatten()
+                                .filter(|root| *root != error),
+                            TypeDecl::Unavailable { .. } => None,
+                        },
                     };
                     children.extend(child);
                 }
@@ -3196,7 +3244,7 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
 fn resolve_parent(
     binder: &crate::binder::Binder,
     scope: ScopeId,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     class: &Class<'_>,
 ) -> Option<ClassId> {
     let Expression::Identifier(identifier) = class.super_class.as_ref()? else {
@@ -3217,7 +3265,7 @@ fn lower_heritage_application<Ticket: Copy + PartialEq>(
     resolver: &mut Resolver<'_, '_, Ticket>,
     binder: &crate::binder::Binder,
     scope: ScopeId,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
     class: &Class<'_>,
     frame: &[(String, TypeId)],
 ) -> HeritageApplicationResult<Ticket> {

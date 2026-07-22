@@ -922,21 +922,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             super::super::type_groups::TypeEnvironmentState::Constructing { inherited, drafts } => {
                 drafts
                     .as_ref()
-                    .and_then(|drafts| drafts.staged_published_classes.clone())
-                    .or_else(|| {
-                        inherited
-                            .as_ref()
-                            .map(|environment| environment.classes().clone())
-                    })
+                    .and_then(|drafts| drafts.staged_published_classes.as_ref())
+                    .or_else(|| inherited.as_ref().map(|environment| environment.classes()))
                     .expect("construction has one inherited or staged class registry")
             }
             super::super::type_groups::TypeEnvironmentState::Published(environment) => {
-                environment.classes().clone()
+                environment.classes()
             }
         };
         let outcome = build_class_application(
             &mut SurfaceTypeFactory::new(self.interner),
-            &classes,
+            classes,
             ClassApplicationRequest {
                 class: class_id,
                 parameters: &parameters,
@@ -1416,6 +1412,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(decl_id)
         {
             return published.parameters.clone();
+        }
+        if let Some(params) = self.type_decls.published_params(decl_id.index()) {
+            return params.to_vec();
         }
         match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface {

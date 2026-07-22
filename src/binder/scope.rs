@@ -5,6 +5,7 @@
 //! parallel checking.
 
 use crate::binder::symbol::SymbolId;
+use crate::types::layered::LayeredVec;
 use rustc_hash::FxHashMap;
 
 /// Index of a scope within the scope graph.
@@ -78,7 +79,7 @@ impl Scope {
 /// via [`ScopeGraph::resolve`].
 #[derive(Default)]
 pub struct ScopeGraph {
-    scopes: Vec<Scope>,
+    scopes: LayeredVec<Scope>,
 }
 
 impl ScopeGraph {
@@ -89,7 +90,7 @@ impl ScopeGraph {
     /// Append a scope and return its id.
     pub fn push(&mut self, scope: Scope) -> ScopeId {
         let id = ScopeId(self.scopes.len() as u32);
-        self.scopes.push(scope);
+        self.scopes.push_local(scope);
         id
     }
 
@@ -98,15 +99,47 @@ impl ScopeGraph {
     }
 
     pub fn get_mut(&mut self, id: ScopeId) -> Option<&mut Scope> {
-        self.scopes.get_mut(id.index())
+        self.scopes.get_mut_local(id.index())
     }
 
     pub(crate) fn snapshot_len(&self) -> usize {
         self.scopes.len()
     }
 
-    pub(crate) fn snapshot_scopes(&self) -> &[Scope] {
-        &self.scopes
+    #[cfg(test)]
+    pub(crate) fn base_len_for_test(&self) -> usize {
+        self.scopes.base_len()
+    }
+
+    pub(crate) fn snapshot_scopes(&self) -> impl Iterator<Item = &Scope> {
+        self.scopes.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_scopes(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
+        let base_len = self.scopes.base_len();
+        self.scopes
+            .local_iter()
+            .enumerate()
+            .map(move |(index, scope)| {
+                let id = u32::try_from(base_len + index).expect("scope id fits u32");
+                (ScopeId(id), scope)
+            })
+    }
+
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.scopes.freeze_as_base()
+    }
+
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            scopes: self.scopes.fork_delta()?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scopes_share_base_with(&self, other: &Self) -> bool {
+        self.scopes.shares_base_with(&other.scopes)
     }
 
     /// Declare `name → symbol` directly in `scope`; duplicate-name diagnostics are deferred.

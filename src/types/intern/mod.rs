@@ -17,6 +17,21 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+#[cfg(test)]
+struct UserDeltaDropWitness {
+    discarded: Arc<AtomicBool>,
+}
+
+#[cfg(test)]
+impl Drop for UserDeltaDropWitness {
+    fn drop(&mut self) {
+        self.discarded.store(true, Ordering::Release);
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReservedTypeKind {
@@ -87,7 +102,7 @@ struct ReservedType {
 /// fixed order, these ids are stable for the life of the process and can be used
 /// as constants (e.g. relation-engine fast paths, the checker's annotation
 /// lowering).
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct WellKnown {
     pub error: TypeId,
     pub any: TypeId,
@@ -133,13 +148,19 @@ impl WellKnown {
 
 pub struct Interner {
     store: Store,
+    /// Immutable structural buckets owned by the sealed prefix.
+    dedup_base: Arc<FxHashMap<u64, SmallVec<[TypeId; 2]>>>,
     /// Structural hash → interned candidates sharing that hash (architecture
     /// §3.3). `SmallVec` because collisions are rare; the common case is a
     /// 1-element bucket.
     dedup: FxHashMap<u64, SmallVec<[TypeId; 2]>>,
+    /// Immutable nominal reservation terminals owned by the sealed prefix.
+    reserved_types_base: Arc<FxHashMap<TypeId, ReservedType>>,
     /// Nominal placeholder rows are mutable exactly once, as one validated batch.
     reserved_types: FxHashMap<TypeId, ReservedType>,
     well_known: WellKnown,
+    #[cfg(test)]
+    user_delta_drop_witness: Option<UserDeltaDropWitness>,
 }
 
 impl Interner {
@@ -149,7 +170,9 @@ impl Interner {
     pub fn with_intrinsics() -> Self {
         let mut interner = Interner {
             store: Store::new(),
+            dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
+            reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types: FxHashMap::default(),
             // Placeholder; overwritten below before any use.
             well_known: WellKnown {
@@ -171,6 +194,8 @@ impl Interner {
                 omit_this_parameter: TypeId(0),
                 object: TypeId(0),
             },
+            #[cfg(test)]
+            user_delta_drop_witness: None,
         };
 
         // Intern every intrinsic in the canonical order so ids are fixed.
@@ -216,6 +241,109 @@ impl Interner {
         &self.store
     }
 
+    /// Seal a complete standalone interner as the immutable shared prefix.
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        if !self.dedup_base.is_empty() || !self.reserved_types_base.is_empty() {
+            return Err("interner is already sealed");
+        }
+        if self
+            .reserved_types
+            .values()
+            .any(|reserved| reserved.state == ReservedTypeState::Pending)
+        {
+            return Err("interner has pending reserved types");
+        }
+        self.store.freeze_as_base()?;
+        self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
+        self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
+        Ok(())
+    }
+
+    /// Create an isolated interner suffix over this sealed prefix.
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        if !self.dedup.is_empty() || !self.reserved_types.is_empty() {
+            return Err("interner base has an unpublished suffix");
+        }
+        Ok(Self {
+            store: self.store.fork_delta()?,
+            dedup_base: Arc::clone(&self.dedup_base),
+            dedup: FxHashMap::default(),
+            reserved_types_base: Arc::clone(&self.reserved_types_base),
+            reserved_types: FxHashMap::default(),
+            well_known: self.well_known,
+            #[cfg(test)]
+            user_delta_drop_witness: None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_user_delta_drop_witness_for_test(&mut self, discarded: Arc<AtomicBool>) {
+        self.user_delta_drop_witness = Some(UserDeltaDropWitness { discarded });
+    }
+
+    fn reserved_type(&self, id: TypeId) -> Option<ReservedType> {
+        self.reserved_types_base
+            .get(&id)
+            .or_else(|| self.reserved_types.get(&id))
+            .copied()
+    }
+
+    fn contains_reserved_type(&self, id: TypeId) -> bool {
+        self.reserved_types_base.contains_key(&id) || self.reserved_types.contains_key(&id)
+    }
+
+    fn dedup_buckets(&self) -> impl Iterator<Item = (&u64, &SmallVec<[TypeId; 2]>)> {
+        self.dedup_base.iter().chain(self.dedup.iter())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
+        let id = self
+            .dedup_base
+            .values()
+            .flatten()
+            .copied()
+            .filter(|id| self.store.tag(*id) == TypeTag::Object)
+            .min_by_key(|id| id.0)?;
+        Some((id, self.store.object_type(id)?.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn base_index_family_sharing_with(&self, other: &Self) -> [bool; 3] {
+        [
+            Arc::ptr_eq(&self.dedup_base, &other.dedup_base),
+            Arc::ptr_eq(&self.reserved_types_base, &other.reserved_types_base),
+            self.well_known == other.well_known,
+        ]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_index_row_counts_for_test(&self) -> [usize; 3] {
+        [
+            self.dedup.values().map(SmallVec::len).sum(),
+            self.reserved_types.len(),
+            0,
+        ]
+    }
+
+    fn reserved_types(&self) -> impl Iterator<Item = (&TypeId, &ReservedType)> {
+        self.reserved_types_base
+            .iter()
+            .chain(self.reserved_types.iter())
+    }
+
+    fn has_nonempty_delta(&self) -> bool {
+        self.store.has_nonempty_delta()
+            || (self.store.is_sealed_base()
+                && (!self.dedup.is_empty() || !self.reserved_types.is_empty()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_indexes_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.dedup_base, &other.dedup_base)
+            && Arc::ptr_eq(&self.reserved_types_base, &other.reserved_types_base)
+    }
+
     fn register_reserved_type(&mut self, id: TypeId, kind: ReservedTypeKind) -> TypeId {
         let previous = self.reserved_types.insert(
             id,
@@ -246,7 +374,7 @@ impl Interner {
 
         for fill in &fills {
             let id = fill.target();
-            let Some(reserved) = self.reserved_types.get(&id) else {
+            let Some(reserved) = self.reserved_type(id) else {
                 return Err(ReservedTypeFillError::NotReserved(id));
             };
             if reserved.kind != fill.kind() {
@@ -328,6 +456,15 @@ impl Interner {
     /// right after `reserve_conditional`/`reserve_mapped` for a named alias, so a
     /// deferred instantiation renders as `Extract<K, string>` instead of the raw body.
     pub fn set_template_name(&mut self, id: TypeId, name: impl Into<String>) {
+        let Some(reserved) = self.reserved_types.get(&id) else {
+            return;
+        };
+        if !matches!(
+            reserved.kind,
+            ReservedTypeKind::Conditional | ReservedTypeKind::Mapped
+        ) {
+            return;
+        }
         self.store.set_template_name(id, name.into());
     }
 
@@ -407,8 +544,12 @@ impl Interner {
     /// Look up an existing id in the dedup bucket for `hash`, accepting the first
     /// candidate for which `eq` confirms a real structural match.
     fn lookup(&self, hash: u64, eq: impl Fn(&Store, TypeId) -> bool) -> Option<TypeId> {
-        let bucket = self.dedup.get(&hash)?;
-        bucket.iter().copied().find(|&id| eq(&self.store, id))
+        self.dedup_base
+            .get(&hash)
+            .into_iter()
+            .chain(self.dedup.get(&hash))
+            .flat_map(|bucket| bucket.iter().copied())
+            .find(|&id| eq(&self.store, id))
     }
 }
 

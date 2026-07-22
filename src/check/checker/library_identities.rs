@@ -13,6 +13,7 @@ use crate::types::repr::{
 };
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LibraryIdentityUnavailable {
@@ -38,6 +39,11 @@ pub(crate) enum LibraryIdentityTerminal {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LibrarySemanticIdentities {
+    inner: Arc<LibrarySemanticIdentityRows>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LibrarySemanticIdentityRows {
     array: LibraryIdentityTerminal,
     readonly_array: LibraryIdentityTerminal,
     string: LibraryIdentityTerminal,
@@ -51,6 +57,11 @@ pub(crate) struct LibrarySemanticIdentities {
 pub(crate) type LibrarySemanticIdentitiesSnapshotParts = [LibraryIdentityTerminal; 8];
 
 impl LibrarySemanticIdentities {
+    #[cfg(test)]
+    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Select roots once from the library compilation-global scope. Consumer scopes
     /// never participate, so same-named user declarations cannot hijack native syntax.
     pub(in crate::check::checker) fn select(
@@ -68,21 +79,30 @@ impl LibrarySemanticIdentities {
         store: &Store,
     ) -> Self {
         Self {
-            array: select_in_scope(binder, scope, published, store, "Array", 1),
-            readonly_array: select_in_scope(binder, scope, published, store, "ReadonlyArray", 1),
-            string: select_in_scope(binder, scope, published, store, "String", 0),
-            number: select_in_scope(binder, scope, published, store, "Number", 0),
-            boolean: select_in_scope(binder, scope, published, store, "Boolean", 0),
-            regexp: select_in_scope(binder, scope, published, store, "RegExp", 0),
-            object: select_in_scope(binder, scope, published, store, "Object", 0),
-            callable_function: select_in_scope(
-                binder,
-                scope,
-                published,
-                store,
-                "CallableFunction",
-                0,
-            ),
+            inner: Arc::new(LibrarySemanticIdentityRows {
+                array: select_in_scope(binder, scope, published, store, "Array", 1),
+                readonly_array: select_in_scope(
+                    binder,
+                    scope,
+                    published,
+                    store,
+                    "ReadonlyArray",
+                    1,
+                ),
+                string: select_in_scope(binder, scope, published, store, "String", 0),
+                number: select_in_scope(binder, scope, published, store, "Number", 0),
+                boolean: select_in_scope(binder, scope, published, store, "Boolean", 0),
+                regexp: select_in_scope(binder, scope, published, store, "RegExp", 0),
+                object: select_in_scope(binder, scope, published, store, "Object", 0),
+                callable_function: select_in_scope(
+                    binder,
+                    scope,
+                    published,
+                    store,
+                    "CallableFunction",
+                    0,
+                ),
+            }),
         }
     }
 
@@ -94,19 +114,19 @@ impl LibrarySemanticIdentities {
 
     pub(crate) fn terminals(&self) -> [&LibraryIdentityTerminal; 8] {
         [
-            &self.array,
-            &self.readonly_array,
-            &self.string,
-            &self.number,
-            &self.boolean,
-            &self.regexp,
-            &self.object,
-            &self.callable_function,
+            &self.inner.array,
+            &self.inner.readonly_array,
+            &self.inner.string,
+            &self.inner.number,
+            &self.inner.boolean,
+            &self.inner.regexp,
+            &self.inner.object,
+            &self.inner.callable_function,
         ]
     }
 
     pub(in crate::check::checker) fn array_group(&self) -> Option<TypeGroupId> {
-        match &self.array {
+        match &self.inner.array {
             LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
             LibraryIdentityTerminal::Unavailable(_) => None,
         }
@@ -114,7 +134,7 @@ impl LibrarySemanticIdentities {
 
     #[cfg(test)]
     pub(in crate::check::checker) fn callable_function_group(&self) -> Option<TypeGroupId> {
-        match &self.callable_function {
+        match &self.inner.callable_function {
             LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
             LibraryIdentityTerminal::Unavailable(_) => None,
         }
@@ -124,27 +144,29 @@ impl LibrarySemanticIdentities {
         let [array, readonly_array, string, number, boolean, regexp, object, callable_function] =
             terminals;
         Self {
-            array,
-            readonly_array,
-            string,
-            number,
-            boolean,
-            regexp,
-            object,
-            callable_function,
+            inner: Arc::new(LibrarySemanticIdentityRows {
+                array,
+                readonly_array,
+                string,
+                number,
+                boolean,
+                regexp,
+                object,
+                callable_function,
+            }),
         }
     }
 
     pub(crate) fn snapshot_parts(&self) -> LibrarySemanticIdentitiesSnapshotParts {
         [
-            self.array.clone(),
-            self.readonly_array.clone(),
-            self.string.clone(),
-            self.number.clone(),
-            self.boolean.clone(),
-            self.regexp.clone(),
-            self.object.clone(),
-            self.callable_function.clone(),
+            self.inner.array.clone(),
+            self.inner.readonly_array.clone(),
+            self.inner.string.clone(),
+            self.inner.number.clone(),
+            self.inner.boolean.clone(),
+            self.inner.regexp.clone(),
+            self.inner.object.clone(),
+            self.inner.callable_function.clone(),
         ]
     }
 
@@ -420,6 +442,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .library_semantic_identities
             .as_ref()
             .expect("installed identities remain available")
+            .inner
             .object
             .clone();
         let LibraryIdentityTerminal::Ready(identity) = terminal else {
@@ -436,7 +459,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     pub(in crate::check::checker) fn regexp_literal_type(&mut self, span: Span) -> Option<TypeId> {
         let identities = self.library_semantic_identities.as_ref()?;
-        match &identities.regexp {
+        match &identities.inner.regexp {
             LibraryIdentityTerminal::Ready(identity) => Some(identity.template),
             LibraryIdentityTerminal::Unavailable(_) => {
                 self.record_incomplete(
@@ -482,9 +505,9 @@ fn native_bridge(
     {
         return Some(NativeMemberBridge::Generic {
             terminal: if readonly.is_some() {
-                identities.readonly_array.clone()
+                identities.inner.readonly_array.clone()
             } else {
-                identities.array.clone()
+                identities.inner.array.clone()
             },
             argument: element,
             incomplete_id: "library-bridge/array/identity",
@@ -503,9 +526,9 @@ fn native_bridge(
         let argument = interner.union(elements);
         return Some(NativeMemberBridge::Generic {
             terminal: if readonly.is_some() {
-                identities.readonly_array.clone()
+                identities.inner.readonly_array.clone()
             } else {
-                identities.array.clone()
+                identities.inner.array.clone()
             },
             argument,
             incomplete_id: "library-bridge/tuple/identity",
@@ -516,28 +539,32 @@ fn native_bridge(
         .literal_value(ty)
         .map(LiteralValue::base_kind)
     {
-        Some(IntrinsicKind::String) => Some((&identities.string, "library-bridge/string/identity")),
-        Some(IntrinsicKind::Number) => Some((&identities.number, "library-bridge/number/identity")),
+        Some(IntrinsicKind::String) => {
+            Some((&identities.inner.string, "library-bridge/string/identity"))
+        }
+        Some(IntrinsicKind::Number) => {
+            Some((&identities.inner.number, "library-bridge/number/identity"))
+        }
         Some(IntrinsicKind::Boolean) => {
-            Some((&identities.boolean, "library-bridge/boolean/identity"))
+            Some((&identities.inner.boolean, "library-bridge/boolean/identity"))
         }
         _ => match interner.store().intrinsic_kind(ty) {
             Some(IntrinsicKind::String) => {
-                Some((&identities.string, "library-bridge/string/identity"))
+                Some((&identities.inner.string, "library-bridge/string/identity"))
             }
             Some(IntrinsicKind::Number) => {
-                Some((&identities.number, "library-bridge/number/identity"))
+                Some((&identities.inner.number, "library-bridge/number/identity"))
             }
             Some(IntrinsicKind::Boolean) => {
-                Some((&identities.boolean, "library-bridge/boolean/identity"))
+                Some((&identities.inner.boolean, "library-bridge/boolean/identity"))
             }
             Some(IntrinsicKind::Object) => {
-                Some((&identities.object, "library-bridge/object/identity"))
+                Some((&identities.inner.object, "library-bridge/object/identity"))
             }
             // FunctionType carries call signatures only; construct shapes need a
             // separate NewableFunction identity when the representation gains them.
             _ if interner.store().tag(ty) == TypeTag::Function => Some((
-                &identities.callable_function,
+                &identities.inner.callable_function,
                 "library-bridge/callable-function/identity",
             )),
             _ => None,
@@ -775,7 +802,7 @@ mod tests {
                 projected_property(pass, function, "callResult"),
                 Some(wk.number)
             );
-            let expected_regexp = match &identities.regexp {
+            let expected_regexp = match &identities.inner.regexp {
                 LibraryIdentityTerminal::Ready(identity) => identity.template,
                 LibraryIdentityTerminal::Unavailable(_) => unreachable!(),
             };

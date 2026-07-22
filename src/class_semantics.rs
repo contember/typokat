@@ -1,5 +1,6 @@
 //! Shared immutable domain for ADR-0006 class publication and semantic outcomes.
 
+use crate::types::layered::LayeredMap;
 use crate::types::repr::{ClassId, TypeParamId};
 use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
@@ -148,12 +149,22 @@ pub(crate) enum PublishedClassSnapshotTerminal {
 
 /// Immutable proof that every registered class reached a final state. Drafts
 /// and partially composed surfaces never enter this registry.
-#[derive(Clone)]
 pub(crate) struct PublishedClasses {
-    states: FxHashMap<ClassId, ClassConstructionState>,
-    surfaces: FxHashMap<ClassId, PublishedClassSurface>,
-    poison: FxHashMap<ClassId, PublishedClassPoison>,
+    states: LayeredMap<ClassId, ClassConstructionState>,
+    surfaces: LayeredMap<ClassId, PublishedClassSurface>,
+    poison: LayeredMap<ClassId, PublishedClassPoison>,
     identity: Arc<()>,
+}
+
+impl Clone for PublishedClasses {
+    fn clone(&self) -> Self {
+        Self {
+            states: self.states.clone(),
+            surfaces: self.surfaces.clone(),
+            poison: self.poison.clone(),
+            identity: Arc::clone(&self.identity),
+        }
+    }
 }
 
 impl PublishedClasses {
@@ -184,6 +195,35 @@ impl PublishedClasses {
                 })
                 .collect()
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_snapshot_terminals(
+        &self,
+    ) -> Vec<(ClassId, PublishedClassSnapshotTerminal)> {
+        self.states
+            .local_iter()
+            .filter_map(|(&class, state)| match state {
+                ClassConstructionState::Published => self
+                    .surfaces
+                    .get(&class)
+                    .cloned()
+                    .map(|surface| (class, PublishedClassSnapshotTerminal::Ready(surface))),
+                ClassConstructionState::Poisoned => self
+                    .poison
+                    .get(&class)
+                    .cloned()
+                    .map(|cause| (class, PublishedClassSnapshotTerminal::Poisoned(cause))),
+                ClassConstructionState::Pending
+                | ClassConstructionState::Building
+                | ClassConstructionState::Built => None,
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_row_count_for_test(&self) -> usize {
+        self.states.local_len() + self.surfaces.local_len() + self.poison.local_len()
     }
 
     pub(crate) fn from_snapshot_terminals(
@@ -262,9 +302,15 @@ impl PublishedClasses {
         {
             return None;
         }
-        self.states.extend(extension.states);
-        self.surfaces.extend(extension.surfaces);
-        self.poison.extend(extension.poison);
+        for (&class, &state) in extension.states.iter() {
+            self.states.insert_local(class, state).ok()?;
+        }
+        for (&class, surface) in extension.surfaces.iter() {
+            self.surfaces.insert_local(class, surface.clone()).ok()?;
+        }
+        for (&class, &poison) in extension.poison.iter() {
+            self.poison.insert_local(class, poison).ok()?;
+        }
         self.identity = Arc::new(());
         Some(self)
     }
@@ -309,24 +355,46 @@ impl PublishedClasses {
             && exact_surface_set
             && exact_poison_set)
             .then_some(PublishedClasses {
-                states,
-                surfaces,
-                poison,
+                states: states.into(),
+                surfaces: surfaces.into(),
+                poison: poison.into(),
                 identity: Arc::new(()),
             })
     }
 
     pub(crate) fn empty() -> Self {
         PublishedClasses {
-            states: FxHashMap::default(),
-            surfaces: FxHashMap::default(),
-            poison: FxHashMap::default(),
+            states: LayeredMap::default(),
+            surfaces: LayeredMap::default(),
+            poison: LayeredMap::default(),
             identity: Arc::new(()),
         }
     }
 
     pub(crate) fn identity(&self) -> &Arc<()> {
         &self.identity
+    }
+
+    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.states.freeze_as_base()?;
+        self.surfaces.freeze_as_base()?;
+        self.poison.freeze_as_base()
+    }
+
+    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            states: self.states.fork_delta()?,
+            surfaces: self.surfaces.fork_delta()?,
+            poison: self.poison.fork_delta()?,
+            identity: Arc::clone(&self.identity),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_base_with(&self, other: &Self) -> bool {
+        self.states.shares_base_with(&other.states)
+            && self.surfaces.shares_base_with(&other.surfaces)
+            && self.poison.shares_base_with(&other.poison)
     }
 
     pub(crate) fn require(&self, class: ClassId) -> DemandOutcome<()> {
@@ -367,9 +435,9 @@ impl PublishedClasses {
     #[cfg(test)]
     pub(crate) fn forged(class: ClassId, state: ClassConstructionState) -> Self {
         PublishedClasses {
-            states: FxHashMap::from_iter([(class, state)]),
-            surfaces: FxHashMap::default(),
-            poison: FxHashMap::default(),
+            states: FxHashMap::from_iter([(class, state)]).into(),
+            surfaces: LayeredMap::default(),
+            poison: LayeredMap::default(),
             identity: Arc::new(()),
         }
     }
@@ -429,6 +497,45 @@ mod tests {
             PublishedClassSnapshotTerminal::Ready(surface),
         )])
         .is_err());
+    }
+
+    #[test]
+    fn published_classes_share_frozen_rows_and_isolate_extensions() {
+        let base_class = ClassId(2);
+        let local_class = ClassId(3);
+        let mut base = PublishedClasses::from_publication(
+            FxHashMap::from_iter([(base_class, ClassConstructionState::Published)]),
+            FxHashMap::from_iter([(
+                base_class,
+                PublishedClassSurface::new(base_class, Vec::new(), TypeId(10), TypeId(11), None),
+            )]),
+            FxHashMap::default(),
+        )
+        .expect("base publication");
+        base.freeze_as_base().expect("class base seals");
+        let first = base.fork_delta().expect("first class suffix");
+        let second = base.fork_delta().expect("second class suffix");
+        assert!(first.shares_base_with(&second));
+
+        let extension = PublishedClasses::from_publication(
+            FxHashMap::from_iter([(local_class, ClassConstructionState::Published)]),
+            FxHashMap::from_iter([(
+                local_class,
+                PublishedClassSurface::new(local_class, Vec::new(), TypeId(12), TypeId(13), None),
+            )]),
+            FxHashMap::default(),
+        )
+        .expect("local publication");
+        let extended = first.extend(extension).expect("disjoint class suffix");
+        assert!(matches!(
+            extended.require(local_class),
+            DemandOutcome::Ready(())
+        ));
+        assert!(matches!(
+            second.require(local_class),
+            DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+        ));
+        assert!(base.shares_base_with(&extended));
     }
 
     #[test]

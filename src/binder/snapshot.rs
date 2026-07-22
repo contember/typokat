@@ -20,6 +20,23 @@ const BINDER_SNAPSHOT_VERSION: u32 = 1;
 
 type SnapshotReferenceRecord = (u8, u8, u8, u32, u32);
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ReferenceView {
+    Full,
+    #[cfg(test)]
+    Local,
+}
+
+impl ReferenceView {
+    const fn local_only(self) -> bool {
+        match self {
+            Self::Full => false,
+            #[cfg(test)]
+            Self::Local => true,
+        }
+    }
+}
+
 // Shared snapshot reference domains. These discriminants are append-only.
 const REF_SCOPE: u8 = 4;
 const REF_SYMBOL: u8 = 5;
@@ -206,10 +223,11 @@ fn push_canonical_index_references(
     records: &mut Vec<SnapshotReferenceRecord>,
     owner_domain: u8,
     target_domain: u8,
+    owner_start: usize,
     targets: impl IntoIterator<Item = u32>,
 ) -> Result<(), SnapshotCodecError> {
     for (index, target) in targets.into_iter().enumerate() {
-        let owner = u32::try_from(index)
+        let owner = u32::try_from(owner_start + index)
             .map_err(|_| SnapshotCodecError::invalid(0, "canonical index exceeds u32"))?;
         push_reference(
             records,
@@ -223,70 +241,42 @@ fn push_canonical_index_references(
     Ok(())
 }
 
-fn canonical_row_indices<T: PartialEq>(
-    primary: &[T],
-    canonical: impl Iterator<Item = T>,
-) -> Result<Vec<u32>, SnapshotCodecError> {
-    let mut claimed = vec![false; primary.len()];
-    canonical
-        .map(|row| {
-            let index = primary
-                .iter()
-                .enumerate()
-                .find(|(index, candidate)| !claimed[*index] && **candidate == row)
-                .map(|(index, _)| index)
-                .ok_or_else(|| {
-                    SnapshotCodecError::invalid(0, "canonical row is absent from its primary table")
-                })?;
-            claimed[index] = true;
-            u32::try_from(index)
-                .map_err(|_| SnapshotCodecError::invalid(0, "primary row index exceeds u32"))
-        })
-        .collect()
-}
-
 /// Enumerate every typed binder reference without consulting snapshot wire bytes.
 pub(crate) fn snapshot_reference_records(
     binder: &Binder,
 ) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
+    snapshot_reference_records_with_view(binder, ReferenceView::Full)
+}
+
+fn snapshot_reference_records_with_view(
+    binder: &Binder,
+    view: ReferenceView,
+) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
     let mut records = Vec::new();
     let root = 0;
-    push_reference(
-        &mut records,
-        REF_ROOT_ROW,
-        REF_SCOPE,
-        ROOT_MODULE,
-        root,
-        binder.module.0,
-    );
-    push_reference(
-        &mut records,
-        REF_ROOT_ROW,
-        REF_SCOPE,
-        ROOT_PRELUDE_MODULE,
-        root,
-        binder.prelude_module.0,
-    );
-    push_reference(
-        &mut records,
-        REF_ROOT_ROW,
-        REF_SCOPE,
-        ROOT_COMPILATION_GLOBAL,
-        root,
-        binder.compilation_global.0,
-    );
-    push_reference(
-        &mut records,
-        REF_ROOT_ROW,
-        REF_SCOPE,
-        ROOT_SCRIPT_NAMESPACE,
-        root,
-        binder.script_namespace_root.0,
-    );
+    let root_scope_is_in_view = |_scope: ScopeId| {
+        if !view.local_only() {
+            return true;
+        }
+        #[cfg(test)]
+        {
+            _scope.index() >= binder.graph.base_len_for_test()
+        }
+        #[cfg(not(test))]
+        unreachable!("local reference view is test-only")
+    };
+    for (field, scope) in [
+        (ROOT_MODULE, binder.module),
+        (ROOT_PRELUDE_MODULE, binder.prelude_module),
+        (ROOT_COMPILATION_GLOBAL, binder.compilation_global),
+        (ROOT_SCRIPT_NAMESPACE, binder.script_namespace_root),
+    ] {
+        if root_scope_is_in_view(scope) {
+            push_reference(&mut records, REF_ROOT_ROW, REF_SCOPE, field, root, scope.0);
+        }
+    }
 
-    for (index, scope) in binder.graph.snapshot_scopes().iter().enumerate() {
-        let owner = u32::try_from(index)
-            .map_err(|_| SnapshotCodecError::invalid(0, "scope index exceeds u32"))?;
+    let mut record_scope = |owner: u32, scope: &Scope| {
         if let Some(parent) = scope.parent {
             push_reference(
                 &mut records,
@@ -317,21 +307,45 @@ pub(crate) fn snapshot_reference_records(
                 symbol.0,
             );
         }
+    };
+    if view.local_only() {
+        #[cfg(test)]
+        for (owner, scope) in binder.graph.local_scopes() {
+            record_scope(owner.0, scope);
+        }
+    } else {
+        for (index, scope) in binder.graph.snapshot_scopes().enumerate() {
+            let owner = u32::try_from(index)
+                .map_err(|_| SnapshotCodecError::invalid(0, "scope index exceeds u32"))?;
+            record_scope(owner, scope);
+        }
     }
-    for (scope, source) in binder.snapshot_module_sources() {
-        push_reference(
-            &mut records,
-            REF_SCOPE,
-            REF_SOURCE_UNIT,
-            SCOPE_MODULE_SOURCE,
-            scope.0,
-            source.0,
-        );
+    if view.local_only() {
+        #[cfg(test)]
+        for (scope, source) in binder.snapshot_module_sources().local_iter() {
+            push_reference(
+                &mut records,
+                REF_SCOPE,
+                REF_SOURCE_UNIT,
+                SCOPE_MODULE_SOURCE,
+                scope.0,
+                source.0,
+            );
+        }
+    } else {
+        for (scope, source) in binder.snapshot_module_sources().iter() {
+            push_reference(
+                &mut records,
+                REF_SCOPE,
+                REF_SOURCE_UNIT,
+                SCOPE_MODULE_SOURCE,
+                scope.0,
+                source.0,
+            );
+        }
     }
 
-    for (index, symbol) in binder.symbols.snapshot_symbols().iter().enumerate() {
-        let owner = u32::try_from(index)
-            .map_err(|_| SnapshotCodecError::invalid(0, "symbol index exceeds u32"))?;
+    let mut record_symbol = |owner: u32, symbol: &Symbol| {
         if let Some(value) = symbol.value {
             push_reference(
                 &mut records,
@@ -382,9 +396,31 @@ pub(crate) fn snapshot_reference_records(
                 declaration.0,
             );
         }
+    };
+    if view.local_only() {
+        #[cfg(test)]
+        for (owner, symbol) in binder.symbols.local_symbols() {
+            record_symbol(owner.0, symbol);
+        }
+    } else {
+        for (index, symbol) in binder.symbols.snapshot_symbols().enumerate() {
+            let owner = u32::try_from(index)
+                .map_err(|_| SnapshotCodecError::invalid(0, "symbol index exceeds u32"))?;
+            record_symbol(owner, symbol);
+        }
     }
 
-    for declaration in binder.declarations.iter() {
+    let declarations: Box<dyn Iterator<Item = &LexicalDeclaration>> = if view.local_only() {
+        #[cfg(test)]
+        {
+            Box::new(binder.declarations.local_declarations())
+        }
+        #[cfg(not(test))]
+        unreachable!("local reference view is test-only")
+    } else {
+        Box::new(binder.declarations.iter())
+    };
+    for declaration in declarations {
         let owner = declaration.id.0;
         push_reference(
             &mut records,
@@ -452,7 +488,17 @@ pub(crate) fn snapshot_reference_records(
         }
     }
 
-    for group in binder.type_groups.iter() {
+    let groups: Box<dyn Iterator<Item = &TypeGroup>> = if view.local_only() {
+        #[cfg(test)]
+        {
+            Box::new(binder.type_groups.local_groups())
+        }
+        #[cfg(not(test))]
+        unreachable!("local reference view is test-only")
+    } else {
+        Box::new(binder.type_groups.iter())
+    };
+    for group in groups {
         for fragment in &group.fragments {
             let owner = group.id.0;
             push_reference(
@@ -500,29 +546,35 @@ pub(crate) fn snapshot_reference_records(
         }
     }
 
-    let primary = binder.namespaces.snapshot_primary();
+    let namespace_rows = binder.namespaces.snapshot_reference_rows(view.local_only());
+    let primary = namespace_rows.primary;
+    let offsets = namespace_rows.offsets;
     if let Some(scope) = primary.compilation_global {
-        push_reference(
-            &mut records,
-            REF_ROOT_ROW,
-            REF_SCOPE,
-            ROOT_NAMESPACE_COMPILATION_GLOBAL,
-            root,
-            scope.0,
-        );
+        if root_scope_is_in_view(scope) {
+            push_reference(
+                &mut records,
+                REF_ROOT_ROW,
+                REF_SCOPE,
+                ROOT_NAMESPACE_COMPILATION_GLOBAL,
+                root,
+                scope.0,
+            );
+        }
     }
     if let Some(scope) = primary.script_namespace_root {
-        push_reference(
-            &mut records,
-            REF_ROOT_ROW,
-            REF_SCOPE,
-            ROOT_NAMESPACE_SCRIPT_NAMESPACE,
-            root,
-            scope.0,
-        );
+        if root_scope_is_in_view(scope) {
+            push_reference(
+                &mut records,
+                REF_ROOT_ROW,
+                REF_SCOPE,
+                ROOT_NAMESPACE_SCRIPT_NAMESPACE,
+                root,
+                scope.0,
+            );
+        }
     }
 
-    for namespace in &primary.namespaces {
+    for (index, namespace) in primary.namespaces.iter().enumerate() {
         let owner = namespace.id.0;
         push_namespace_owner_reference(
             &mut records,
@@ -574,7 +626,7 @@ pub(crate) fn snapshot_reference_records(
                 fragment.0,
             );
         }
-        if let Some(storage) = primary.standalone_value_storages[namespace.id.index()] {
+        if let Some(storage) = primary.standalone_value_storages[index] {
             push_reference(
                 &mut records,
                 REF_NAMESPACE,
@@ -713,7 +765,7 @@ pub(crate) fn snapshot_reference_records(
     }
 
     for (index, (placement_owner, _, participants)) in primary.placements.iter().enumerate() {
-        let owner = u32::try_from(index)
+        let owner = u32::try_from(offsets.placements + index)
             .map_err(|_| SnapshotCodecError::invalid(0, "merge placement index exceeds u32"))?;
         push_declaration_owner_reference(
             &mut records,
@@ -752,8 +804,18 @@ pub(crate) fn snapshot_reference_records(
             }
         }
     }
-    for (index, merge) in binder.namespaces.merges().enumerate() {
-        let owner = u32::try_from(index)
+    let merges: Box<dyn Iterator<Item = &MergeRecord>> = if view.local_only() {
+        #[cfg(test)]
+        {
+            Box::new(binder.namespaces.local_merges())
+        }
+        #[cfg(not(test))]
+        unreachable!("local reference view is test-only")
+    } else {
+        Box::new(binder.namespaces.merges())
+    };
+    for (index, merge) in merges.enumerate() {
+        let owner = u32::try_from(offsets.placements + index)
             .map_err(|_| SnapshotCodecError::invalid(0, "merge placement index exceeds u32"))?;
         for issue in &merge.placement_issues {
             push_reference(
@@ -876,7 +938,7 @@ pub(crate) fn snapshot_reference_records(
     }
 
     for (index, child) in primary.deferred_children.iter().enumerate() {
-        let owner = u32::try_from(index)
+        let owner = u32::try_from(offsets.deferred_children + index)
             .map_err(|_| SnapshotCodecError::invalid(0, "deferred child index exceeds u32"))?;
         push_reference(
             &mut records,
@@ -907,7 +969,7 @@ pub(crate) fn snapshot_reference_records(
     }
 
     for (index, export) in primary.umd_exports.iter().enumerate() {
-        let owner = u32::try_from(index)
+        let owner = u32::try_from(offsets.umd_exports + index)
             .map_err(|_| SnapshotCodecError::invalid(0, "UMD export index exceeds u32"))?;
         push_reference(
             &mut records,
@@ -993,60 +1055,50 @@ pub(crate) fn snapshot_reference_records(
         &mut records,
         REF_CANONICAL_NAMESPACE_INDEX,
         REF_NAMESPACE,
-        binder
-            .namespaces
-            .namespaces()
-            .map(|namespace| namespace.id.0),
+        offsets.canonical_namespaces,
+        namespace_rows.canonical_namespaces,
     )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_SOURCE_UNIT_INDEX,
         REF_SOURCE_UNIT,
-        binder.namespaces.source_units().map(|unit| unit.source.0),
+        offsets.canonical_source_units,
+        namespace_rows.canonical_source_units,
     )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_GLOBAL_INDEX,
         REF_GLOBAL_AUGMENTATION,
-        binder.namespaces.globals().map(|global| global.id.0),
+        offsets.canonical_globals,
+        namespace_rows.canonical_globals,
     )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_DEFERRED_MODULE_INDEX,
         REF_DEFERRED_MODULE,
-        binder
-            .namespaces
-            .deferred_modules()
-            .map(|module| module.id.0),
-    )?;
-    let canonical_deferred_children = canonical_row_indices(
-        &primary.deferred_children,
-        binder.namespaces.deferred_children().cloned(),
+        offsets.canonical_deferred_modules,
+        namespace_rows.canonical_deferred_modules,
     )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_DEFERRED_CHILD_INDEX,
         REF_DEFERRED_CHILD,
-        canonical_deferred_children,
-    )?;
-    let canonical_umd_exports = canonical_row_indices(
-        &primary.umd_exports,
-        binder.namespaces.umd_exports().cloned(),
+        offsets.canonical_deferred_children,
+        namespace_rows.canonical_deferred_children,
     )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_UMD_EXPORT_INDEX,
         REF_UMD_EXPORT,
-        canonical_umd_exports,
+        offsets.canonical_umd_exports,
+        namespace_rows.canonical_umd_exports,
     )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_EXPORT_CONTEXT_INDEX,
         REF_EXPORT_CONTEXT,
-        binder
-            .namespaces
-            .export_contexts()
-            .map(|context| context.id.0),
+        offsets.canonical_export_contexts,
+        namespace_rows.canonical_export_contexts,
     )?;
 
     records.sort_unstable();
@@ -1056,6 +1108,14 @@ pub(crate) fn snapshot_reference_records(
 #[cfg(test)]
 pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<SnapshotReferenceRecord> {
     snapshot_reference_records(binder).expect("typed binder references enumerate")
+}
+
+#[cfg(test)]
+pub(crate) fn local_snapshot_reference_records_for_test(
+    binder: &Binder,
+) -> Vec<SnapshotReferenceRecord> {
+    snapshot_reference_records_with_view(binder, ReferenceView::Local)
+        .expect("typed local binder references enumerate")
 }
 
 fn invalid(reader: &SnapshotReader<'_>, message: impl Into<String>) -> SnapshotCodecError {
@@ -1269,7 +1329,8 @@ fn encode_scopes(
     writer: &mut SnapshotWriter,
     graph: &ScopeGraph,
 ) -> Result<(), SnapshotCodecError> {
-    write_vec(writer, graph.snapshot_scopes(), |writer, scope| {
+    write_len(writer, graph.snapshot_len())?;
+    for scope in graph.snapshot_scopes() {
         write_option(writer, scope.parent, |writer, value| {
             write_scope_id(writer, value);
             Ok(())
@@ -1286,8 +1347,8 @@ fn encode_scopes(
             writer.string(name)?;
             write_symbol_id(writer, *symbol);
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 fn decode_scopes(reader: &mut SnapshotReader<'_>) -> Result<ScopeGraph, SnapshotCodecError> {
@@ -1322,7 +1383,8 @@ fn encode_symbols(
     writer: &mut SnapshotWriter,
     symbols: &SymbolTable,
 ) -> Result<(), SnapshotCodecError> {
-    write_vec(writer, symbols.snapshot_symbols(), |writer, symbol| {
+    write_len(writer, symbols.len())?;
+    for symbol in symbols.snapshot_symbols() {
         writer.string(&symbol.name)?;
         write_option(writer, symbol.value, |writer, value| {
             write_value_storage_id(writer, value);
@@ -1347,8 +1409,9 @@ fn encode_symbols(
         write_vec(writer, &symbol.declarations, |writer, value| {
             write_decl_id(writer, *value);
             Ok(())
-        })
-    })
+        })?;
+    }
+    Ok(())
 }
 
 fn decode_symbols(reader: &mut SnapshotReader<'_>) -> Result<SymbolTable, SnapshotCodecError> {
@@ -2371,7 +2434,7 @@ fn id_in_range(id: u32, len: usize) -> bool {
 
 fn validate_binder(binder: &Binder, offset: usize) -> Result<(), SnapshotCodecError> {
     let scope_len = binder.graph.snapshot_len();
-    let symbol_len = binder.symbols.snapshot_symbols().len();
+    let symbol_len = binder.symbols.len();
     let declaration_len = binder.declarations.len();
     let type_group_len = binder.type_groups.len();
     let namespace_len = binder.namespaces.len();
@@ -2467,7 +2530,6 @@ fn validate_binder(binder: &Binder, offset: usize) -> Result<(), SnapshotCodecEr
     let module_scope_count = binder
         .graph
         .snapshot_scopes()
-        .iter()
         .filter(|scope| scope.kind == ScopeKind::Module)
         .count();
     if binder.snapshot_module_sources().len() != module_scope_count
@@ -2489,7 +2551,7 @@ fn validate_binder(binder: &Binder, offset: usize) -> Result<(), SnapshotCodecEr
     {
         return Err(invalid("module-source index is incomplete or inconsistent"));
     }
-    for (index, scope) in binder.graph.snapshot_scopes().iter().enumerate() {
+    for (index, scope) in binder.graph.snapshot_scopes().enumerate() {
         let id = ScopeId(u32::try_from(index).map_err(|_| invalid("scope count exceeds u32"))?);
         if scope.kind == ScopeKind::Module && !binder.snapshot_module_sources().contains_key(&id) {
             return Err(invalid("module-source index omits a module scope"));
@@ -3312,6 +3374,64 @@ mod tests {
     }
 
     #[test]
+    fn local_reference_view_matches_full_state_and_excludes_frozen_owners() {
+        let all_local = fixture_rich_reference_binder();
+        assert_eq!(
+            local_snapshot_reference_records_for_test(&all_local),
+            snapshot_reference_records_for_test(&all_local),
+        );
+
+        let mut base = fixture_rich_reference_binder();
+        let base_records = snapshot_reference_records_for_test(&base);
+        let mut base_domain_ends = std::collections::BTreeMap::<u8, u32>::new();
+        for &(owner_domain, target_domain, _, owner, target) in &base_records {
+            base_domain_ends
+                .entry(owner_domain)
+                .and_modify(|end| *end = (*end).max(owner.saturating_add(1)))
+                .or_insert(owner.saturating_add(1));
+            base_domain_ends
+                .entry(target_domain)
+                .and_modify(|end| *end = (*end).max(target.saturating_add(1)))
+                .or_insert(target.saturating_add(1));
+        }
+        base.freeze_as_base().expect("reference fixture freezes");
+
+        let allocator = Allocator::default();
+        let source = Parser::new(
+            &allocator,
+            "export namespace Local { export interface Item {} export const value = 1; }",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(source.diagnostics.is_empty());
+        let (mut builder, source_key) =
+            ProjectBinderBuilder::resume_frozen_library(base.fork_delta().expect("binder delta"));
+        let unit = CompilationUnit::implementation(source_key, &source.program);
+        let (module, _) = builder.add_module(&source.program, &[], unit);
+        let delta = builder
+            .finish_frozen_library_continuation(module)
+            .expect("reference delta finishes");
+        let local = local_snapshot_reference_records_for_test(&delta);
+
+        assert!(local.iter().all(|record| {
+            record.0 == REF_ROOT_ROW
+                || base_domain_ends
+                    .get(&record.0)
+                    .is_none_or(|base_end| record.3 >= *base_end)
+        }));
+        assert!(local.iter().any(|record| {
+            base_domain_ends
+                .get(&record.1)
+                .is_some_and(|base_end| record.4 < *base_end)
+        }));
+        assert!(local.iter().any(|record| {
+            base_domain_ends
+                .get(&record.1)
+                .is_some_and(|base_end| record.4 >= *base_end)
+        }));
+    }
+
+    #[test]
     fn binder_reference_inventory_is_order_independent_and_tracks_mutated_roots() {
         let mut reordered = fixture_rich_reference_binder();
         let original = snapshot_reference_records_for_test(&reordered);
@@ -3387,6 +3507,7 @@ mod tests {
             &mut canonical,
             REF_CANONICAL_NAMESPACE_INDEX,
             REF_NAMESPACE,
+            0,
             targets.iter().copied(),
         )
         .expect("canonical index references enumerate");
@@ -3396,6 +3517,7 @@ mod tests {
             &mut swapped,
             REF_CANONICAL_NAMESPACE_INDEX,
             REF_NAMESPACE,
+            0,
             targets.iter().copied(),
         )
         .expect("canonical index references enumerate");

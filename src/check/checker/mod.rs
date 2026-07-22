@@ -6,6 +6,8 @@
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
+#[cfg(test)]
+use crate::binder::namespace::SourceUnitKey;
 use crate::binder::namespace::{
     CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
     UmdContext,
@@ -22,6 +24,7 @@ use crate::source::{
     CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot,
 };
 use crate::span::Span;
+use crate::types::layered::{LayeredMap, LayeredSet};
 use crate::types::repr::ClassId;
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -73,7 +76,7 @@ use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
     ClassFillState, ConstructionDrafts, DeclTypes, DeferredRelationObligation,
     InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
-    Pass, TypeDecl,
+    Pass, TemplateFillTable, TypeDecl, TypeDeclTable, TypeResolvedTable,
 };
 use decls::{reserve_type_decls, type_decl_id, walk_type_decls, TopTypeDecl};
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
@@ -220,15 +223,15 @@ struct TrustedPreludeHandoff {
 #[derive(Default)]
 pub(in crate::check::checker) struct FrozenCheckerRuntimeMetadata {
     class_application_parameters:
-        BTreeMap<ClassId, Vec<classes::construction::DraftClassTypeParameter<()>>>,
-    class_new_metadata: BTreeMap<ClassId, context::PublishedClassNewMetadata>,
-    class_parents: FxHashMap<ClassId, ClassId>,
-    class_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
-    class_value_bindings: FxHashMap<ValueStorageId, context::PublishedClassValueBinding>,
-    standalone_namespace_value_aliases: FxHashMap<ValueStorageId, ValueStorageId>,
-    class_names: FxHashMap<ClassId, String>,
+        LayeredMap<ClassId, Vec<classes::construction::DraftClassTypeParameter<()>>>,
+    class_new_metadata: LayeredMap<ClassId, context::PublishedClassNewMetadata>,
+    class_parents: LayeredMap<ClassId, ClassId>,
+    class_value_aliases: LayeredMap<ValueStorageId, ValueStorageId>,
+    class_value_bindings: LayeredMap<ValueStorageId, context::PublishedClassValueBinding>,
+    standalone_namespace_value_aliases: LayeredMap<ValueStorageId, ValueStorageId>,
+    class_names: LayeredMap<ClassId, String>,
     namespace_terminals: namespace_values::FrozenNamespaceValueTerminals,
-    named_function_symbols: FxHashSet<SymbolId>,
+    named_function_symbols: LayeredSet<SymbolId>,
 }
 
 pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
@@ -251,10 +254,64 @@ pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
 }
 
 impl FrozenCheckerRuntimeMetadata {
+    pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.class_application_parameters.freeze_as_base()?;
+        self.class_new_metadata.freeze_as_base()?;
+        self.class_parents.freeze_as_base()?;
+        self.class_value_aliases.freeze_as_base()?;
+        self.class_value_bindings.freeze_as_base()?;
+        self.standalone_namespace_value_aliases.freeze_as_base()?;
+        self.class_names.freeze_as_base()?;
+        self.namespace_terminals.freeze_as_base()?;
+        self.named_function_symbols.freeze_as_base()
+    }
+
+    pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            class_application_parameters: self.class_application_parameters.fork_delta()?,
+            class_new_metadata: self.class_new_metadata.fork_delta()?,
+            class_parents: self.class_parents.fork_delta()?,
+            class_value_aliases: self.class_value_aliases.fork_delta()?,
+            class_value_bindings: self.class_value_bindings.fork_delta()?,
+            standalone_namespace_value_aliases: self
+                .standalone_namespace_value_aliases
+                .fork_delta()?,
+            class_names: self.class_names.fork_delta()?,
+            namespace_terminals: self.namespace_terminals.fork_delta()?,
+            named_function_symbols: self.named_function_symbols.fork_delta()?,
+        })
+    }
+
+    #[cfg(test)]
+    pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
+        self.class_application_parameters
+            .shares_base_with(&other.class_application_parameters)
+            && self
+                .class_new_metadata
+                .shares_base_with(&other.class_new_metadata)
+            && self.class_parents.shares_base_with(&other.class_parents)
+            && self
+                .class_value_aliases
+                .shares_base_with(&other.class_value_aliases)
+            && self
+                .class_value_bindings
+                .shares_base_with(&other.class_value_bindings)
+            && self
+                .standalone_namespace_value_aliases
+                .shares_base_with(&other.standalone_namespace_value_aliases)
+            && self.class_names.shares_base_with(&other.class_names)
+            && self
+                .namespace_terminals
+                .shares_base_with(&other.namespace_terminals)
+            && self
+                .named_function_symbols
+                .shares_base_with(&other.named_function_symbols)
+    }
+
     pub(in crate::check::checker) fn snapshot_parts(
         &self,
     ) -> Result<FrozenCheckerRuntimeSnapshotParts, &'static str> {
-        let class_application_parameters = self
+        let mut class_application_parameters = self
             .class_application_parameters
             .iter()
             .map(|(&class, parameters)| {
@@ -267,12 +324,14 @@ impl FrozenCheckerRuntimeMetadata {
                         .collect(),
                 )
             })
-            .collect();
-        let class_new_metadata = self
+            .collect::<Vec<_>>();
+        class_application_parameters.sort_by_key(|(class, _)| class.0);
+        let mut class_new_metadata = self
             .class_new_metadata
             .iter()
             .map(|(&class, &metadata)| (class, metadata))
-            .collect();
+            .collect::<Vec<_>>();
+        class_new_metadata.sort_by_key(|(class, _)| class.0);
         let mut class_parents = self
             .class_parents
             .iter()
@@ -354,36 +413,61 @@ impl FrozenCheckerRuntimeMetadata {
         {
             return Err("snapshot checker runtime rows are not strictly ordered");
         }
-        let mut class_application_parameters = BTreeMap::new();
+        let mut class_application_parameters = LayeredMap::default();
         for (class, parameters) in parts.class_application_parameters {
             let mut ids = BTreeSet::new();
             if parameters.iter().any(|parameter| !ids.insert(parameter.id)) {
                 return Err("snapshot class application repeats a parameter id");
             }
-            class_application_parameters.insert(
+            class_application_parameters.insert_local(
                 class,
                 parameters
                     .into_iter()
                     .map(classes::construction::DraftClassTypeParameter::from_snapshot_parts)
                     .collect(),
-            );
+            )?;
         }
         Ok(Self {
             class_application_parameters,
-            class_new_metadata: parts.class_new_metadata.into_iter().collect(),
-            class_parents: parts.class_parents.into_iter().collect(),
-            class_value_aliases: parts.class_value_aliases.into_iter().collect(),
-            class_value_bindings: parts.class_value_bindings.into_iter().collect(),
+            class_new_metadata: parts
+                .class_new_metadata
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
+                .into(),
+            class_parents: parts
+                .class_parents
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
+                .into(),
+            class_value_aliases: parts
+                .class_value_aliases
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
+                .into(),
+            class_value_bindings: parts
+                .class_value_bindings
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
+                .into(),
             standalone_namespace_value_aliases: parts
                 .standalone_namespace_value_aliases
                 .into_iter()
-                .collect(),
-            class_names: parts.class_names.into_iter().collect(),
+                .collect::<FxHashMap<_, _>>()
+                .into(),
+            class_names: parts
+                .class_names
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
+                .into(),
             namespace_terminals:
                 namespace_values::FrozenNamespaceValueTerminals::from_snapshot_parts(
                     parts.namespace_terminals,
                 )?,
-            named_function_symbols: parts.named_function_symbols.into_iter().collect(),
+            named_function_symbols: parts
+                .named_function_symbols
+                .into_iter()
+                .collect::<FxHashSet<_>>()
+                .into(),
         })
     }
 }
@@ -414,8 +498,8 @@ fn bootstrap_trusted_prelude(
     let binder = bind(&parsed.program);
     let mut next_type_param = 0;
     let mut next_class_id = 0;
-    let mut type_resolved = vec![None; binder.type_groups.len()];
-    let mut type_decls = Vec::new();
+    let mut type_resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
+    let mut type_decls: TypeDeclTable<'_> = Vec::new().into();
     reserve_type_decls(
         interner,
         &binder,
@@ -649,14 +733,7 @@ where
         &namespace_values::NamespaceValueRegistry,
     ),
 {
-    check_bound_user_program_inner(
-        interner,
-        binder,
-        program,
-        base,
-        inspect,
-        |_, _, _, _, _, _| {},
-    )
+    check_bound_user_program_inner(interner, binder, program, base, inspect, |_, _| {})
 }
 
 #[cfg(test)]
@@ -680,7 +757,7 @@ where
         &DeclTypes,
         &namespace_values::NamespaceValueRegistry,
     ),
-    G: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner, &DeclTypes, u32, u32),
+    G: FnOnce(&Pass<'_, 'ast>, u32),
 {
     FINAL_IDENTITY_INSPECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
     check_bound_user_program_inner(interner, binder, program, base, inspect, inspect_final)
@@ -702,7 +779,7 @@ where
         &DeclTypes,
         &namespace_values::NamespaceValueRegistry,
     ),
-    G: FnOnce(&Binder, &type_groups::PublishedTypeEnvironment, &Interner, &DeclTypes, u32, u32),
+    G: FnOnce(&Pass<'_, 'ast>, u32),
 {
     #[cfg(test)]
     BOUND_USER_CHECK_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -801,7 +878,11 @@ where
     pass.publish_class_surfaces();
     pass.finalize_standalone_namespace_values();
     pass.precompute_standalone_namespace_value_aliases(&[(binder.module, program.body.as_slice())]);
-    pass.fill_pending_interfaces_range(binder.module, 0, pass.type_decls.len());
+    pass.fill_pending_interfaces_range(
+        binder.module,
+        pass.type_decls.published_len(),
+        pass.type_decls.len(),
+    );
     pass.publish_type_groups();
     pass.validate_published_class_surfaces();
     inspect(
@@ -822,14 +903,7 @@ where
 
     let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
     let (diagnostics, incomplete) = records.remove(&module_ordinal).unwrap_or_default();
-    inspect_final(
-        &binder,
-        pass.type_environment.published(),
-        pass.interner,
-        &pass.decl_types,
-        pass.next_type_param,
-        next_class_id,
-    );
+    inspect_final(&pass, next_class_id);
 
     CheckResult {
         module_ordinal,
@@ -910,6 +984,225 @@ pub fn check_project_programs<'ast>(
         |_, _, _, _, _, _, _| {},
         |_| {},
     )
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn check_project_programs_with_owned_library<'ast, F, G>(
+    state: library_compiler::OwnedLibraryRuntimeState,
+    units: &[ProjectProgram<'ast>],
+    inspect_bindings: F,
+    inspect_final: G,
+) -> Vec<CheckResult>
+where
+    F: FnOnce(&Binder, &[ScopeId]),
+    G: FnOnce(&Pass<'_, 'ast>, u32),
+{
+    if units.is_empty() {
+        return Vec::new();
+    }
+
+    let (mut interner, binder, base) = state.into_user_project_base();
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    for (slot, unit) in units.iter().enumerate() {
+        debug_assert_eq!(unit.unit_slot.index(), slot);
+        lexical_events
+            .reserve_program(
+                unit.module_ordinal,
+                unit.unit_slot,
+                unit.program,
+                &mut event_store,
+            )
+            .expect("lexical event reservation must reference valid events");
+    }
+
+    let BoundUserBase {
+        published_types,
+        library_semantic_identities,
+        lexical_array_alias,
+        mut decl_types,
+        mut next_type_param,
+        mut next_class_id,
+        runtime,
+    } = base;
+    let mut module_scopes = Vec::with_capacity(units.len());
+    let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
+    let mut external_effects: BTreeMap<UserRecordTicket, CandidateEffects> = BTreeMap::new();
+    let (mut builder, first_source) = ProjectBinderBuilder::resume_frozen_library(binder);
+    builder.reserve_script_namespace_roots(units.iter().enumerate().map(|(index, unit)| {
+        let source = SourceUnitKey(
+            first_source
+                .0
+                .checked_add(u32::try_from(index).expect("project unit count fits u32"))
+                .expect("project source key suffix fits u32"),
+        );
+        (
+            unit.program,
+            CompilationUnit {
+                source,
+                origin: unit.compilation_unit.origin,
+                binding: unit.compilation_unit.binding,
+            },
+        )
+    }));
+    let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
+    for (index, unit) in units.iter().enumerate() {
+        let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
+        let source = SourceUnitKey(
+            first_source
+                .0
+                .checked_add(u32::try_from(index).expect("project unit count fits u32"))
+                .expect("project source key suffix fits u32"),
+        );
+        let compilation_unit = CompilationUnit {
+            source,
+            origin: unit.compilation_unit.origin,
+            binding: unit.compilation_unit.binding,
+        };
+        let (scope, placeholders) = builder.add_module(unit.program, &imports, compilation_unit);
+        let surface = collect_exports(
+            &builder,
+            scope,
+            unit.program,
+            unit.module_ordinal,
+            &lexical_events,
+            &mut external_effects,
+        );
+        module_scopes.push(scope);
+        module_placeholders.push(placeholders);
+        exports.push(surface);
+    }
+    let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
+    let binder = builder
+        .finish_frozen_library_continuation(binder_module)
+        .expect("collision-free project continuation binds");
+    library_compiler::record_user_source_binds_for_test(units.len());
+    decl_types.resize(binder.decl_count);
+
+    let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
+    let user_type_start = type_decls.len();
+    type_resolved.resize(binder.type_groups.len(), None);
+    let error = interner.well_known().error;
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        reserve_type_decls(
+            &mut interner,
+            &binder,
+            scope,
+            unit.program,
+            &mut next_type_param,
+            &mut next_class_id,
+            &mut type_decls,
+            &mut type_resolved,
+        );
+        attach_type_decl_owners(
+            &mut lexical_events,
+            SourceOrdinal::User(unit.module_ordinal),
+            &binder,
+            scope,
+            unit.program,
+        );
+        attach_class_bindings(
+            &mut lexical_events,
+            SourceOrdinal::User(unit.module_ordinal),
+            &binder,
+            scope,
+            unit.program,
+            &type_decls,
+        );
+    }
+    lexical_events
+        .reserve_callable_type_params(&mut next_type_param)
+        .expect("one callable binder reservation pass");
+    inspect_bindings(&binder, &module_scopes);
+    enqueue_local_ambient_export_alias_diagnostics(&binder, &lexical_events, &mut external_effects);
+    enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects);
+    enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects);
+    for placeholders in &module_placeholders {
+        for placeholder in placeholders {
+            if let Some(decl_id) = placeholder.value {
+                decl_types.set(decl_id, error);
+            }
+        }
+    }
+
+    let mut pass = build_pass_with_reporting(
+        &mut interner,
+        &binder,
+        type_decls,
+        type_resolved,
+        decl_types,
+        next_type_param,
+        PassReporting {
+            source: SourceUnit::User {
+                module_ordinal: units[0].module_ordinal,
+                unit_slot: units[0].unit_slot,
+            },
+            lexical_events,
+            suppress_effects: false,
+        },
+    );
+    pass.install_published_type_environment_base(published_types);
+    pass.lexical_array_alias = lexical_array_alias;
+    if let Some(identities) = library_semantic_identities {
+        pass.install_library_semantic_identities(identities);
+    }
+    pass.class_application_parameters = runtime.class_application_parameters;
+    pass.class_new_metadata = runtime.class_new_metadata;
+    pass.class_parents = runtime.class_parents;
+    pass.class_value_aliases = runtime.class_value_aliases;
+    pass.class_value_bindings = runtime.class_value_bindings;
+    pass.standalone_namespace_value_aliases = runtime.standalone_namespace_value_aliases;
+    pass.class_names = runtime.class_names;
+    pass.namespace_values
+        .install_frozen_terminals(runtime.namespace_terminals);
+    pass.named_function_symbols = runtime.named_function_symbols;
+    for effects in external_effects.into_values() {
+        pass.enqueue_effects(CheckerEffects::from_records(effects));
+    }
+
+    pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
+    let standalone_modules = module_scopes
+        .iter()
+        .copied()
+        .zip(units.iter())
+        .map(|(scope, unit)| (scope, unit.program.body.as_slice()))
+        .collect::<Vec<_>>();
+    pass.prepare_project_attached_namespace_values(&standalone_modules);
+    pass.prepare_project_standalone_namespace_values(&standalone_modules);
+    pass.publish_class_surfaces();
+    pass.finalize_standalone_namespace_values();
+    pass.precompute_standalone_namespace_value_aliases(&standalone_modules);
+    pass.fill_pending_interfaces_range(binder.module, user_type_start, pass.type_decls.len());
+    pass.publish_type_groups();
+    pass.validate_published_class_surfaces();
+
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        pass.build_flow_graph(scope, &unit.program.body);
+        pass.check_statements(scope, &unit.program.body);
+        emit_test_incomplete(&mut pass);
+    }
+    library_compiler::record_user_source_checks_for_test(units.len());
+
+    let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
+    inspect_final(&pass, next_class_id);
+    units
+        .iter()
+        .map(|unit| {
+            let (diagnostics, incomplete) =
+                records.remove(&unit.module_ordinal).unwrap_or_default();
+            CheckResult {
+                module_ordinal: unit.module_ordinal,
+                unit_slot: unit.unit_slot,
+                diagnostics,
+                incomplete,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1144,7 +1437,7 @@ where
     let unreserved_user_groups: Vec<_> = type_decls
         .iter()
         .enumerate()
-        .skip(user_type_start)
+        .map(|(index, declaration)| (user_type_start + index, declaration))
         .filter(|(_, declaration)| matches!(declaration, TypeDecl::Resolved { .. }))
         .map(|(index, _)| {
             let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
@@ -1546,7 +1839,7 @@ fn enqueue_namespace_placement_diagnostics(
     reservations: &LexicalReservations,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
-    for issue in binder.namespaces.placement_issues() {
+    for issue in binder.namespaces.local_placement_issues() {
         let Some(original_module) = user_original_module(issue.origin) else {
             continue;
         };
@@ -1579,7 +1872,7 @@ fn enqueue_ambient_context_diagnostics(
     reservations: &LexicalReservations,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) {
-    for global in binder.namespaces.globals() {
+    for global in binder.namespaces.local_globals() {
         let Some(original_module) = user_original_module(global.origin) else {
             continue;
         };
@@ -1606,7 +1899,7 @@ fn enqueue_ambient_context_diagnostics(
         }
     }
 
-    for export in binder.namespaces.umd_exports() {
+    for export in binder.namespaces.local_umd_exports() {
         let Some(original_module) = user_original_module(export.origin) else {
             continue;
         };
@@ -1666,7 +1959,7 @@ fn prelude_intrinsic_markers(interner: &Interner) -> [TypeId; 6] {
 
 fn seed_prelude_intrinsics(
     binder: &Binder,
-    type_resolved: &mut [Option<TypeId>],
+    type_resolved: &mut TypeResolvedTable,
     markers: [TypeId; 6],
 ) {
     for (name, marker) in [
@@ -1697,7 +1990,7 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
 ) {
     for declaration in binder
         .declarations
-        .iter()
+        .local_declarations()
         .filter(|declaration| declaration.site.module == scope)
     {
         reservations
@@ -1720,7 +2013,7 @@ fn attach_class_bindings<Ticket: Copy + PartialEq>(
     binder: &Binder,
     scope: ScopeId,
     program: &Program<'_>,
-    declarations: &[TypeDecl<'_>],
+    declarations: &TypeDeclTable<'_>,
 ) {
     let mut reserved_class_owners = BTreeMap::new();
     walk_type_decls(binder, scope, program, &mut |_, _, declaration| {
@@ -2316,8 +2609,8 @@ fn build_pass<'a, 'ast>(
     build_pass_with_reporting(
         interner,
         binder,
-        type_decls,
-        type_resolved,
+        type_decls.into(),
+        type_resolved.into(),
         decl_types,
         next_type_param,
         PassReporting {
@@ -2334,8 +2627,8 @@ fn build_pass<'a, 'ast>(
 fn build_pass_with_reporting<'a, 'ast>(
     interner: &'a mut Interner,
     binder: &'a Binder,
-    type_decls: Vec<TypeDecl<'ast>>,
-    type_resolved: Vec<Option<TypeId>>,
+    type_decls: TypeDeclTable<'ast>,
+    type_resolved: TypeResolvedTable,
     decl_types: DeclTypes,
     next_type_param: u32,
     reporting: PassReporting<UserRecordTicket>,
@@ -2359,8 +2652,8 @@ fn build_pass_with_reporting<'a, 'ast>(
 fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     interner: &'a mut Interner,
     binder: &'a Binder,
-    type_decls: Vec<TypeDecl<'ast>>,
-    type_resolved: Vec<Option<TypeId>>,
+    type_decls: TypeDeclTable<'ast>,
+    type_resolved: TypeResolvedTable,
     decl_types: DeclTypes,
     next_type_param: u32,
     reporting_plan: PassReportingPlan<Ticket>,
@@ -2379,7 +2672,8 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         assert_eq!(existing, index);
         pending_effects.push(CheckerEffects::new(ticket));
     }
-    let template_fill: Vec<ClassFillState> = type_decls
+    let published_type_count = type_decls.published_len();
+    let template_fill = type_decls
         .iter()
         .map(|decl| match decl {
             TypeDecl::Interface { .. } => ClassFillState::Pending,
@@ -2390,6 +2684,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
             _ => ClassFillState::Done,
         })
         .collect();
+    let template_fill = TemplateFillTable::new(published_type_count, template_fill);
     #[cfg(test)]
     let cycle_tainted_application_cache_capture =
         context::capture_cycle_tainted_application_cache_measure();
@@ -2430,23 +2725,23 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         semantic_queries: SemanticQueryState::default(),
         library_semantic_identities: None,
         lexical_array_alias: None,
-        class_application_parameters: BTreeMap::new(),
+        class_application_parameters: LayeredMap::default(),
         staged_class_validation: None,
         retained_class_callables: BTreeMap::new(),
         class_body_views: BTreeMap::new(),
         class_super_constructors: BTreeMap::new(),
-        class_new_metadata: BTreeMap::new(),
+        class_new_metadata: LayeredMap::default(),
         type_param_scopes: Vec::new(),
         static_class_type_param_barriers: Vec::new(),
         next_type_param,
-        class_parents: FxHashMap::default(),
-        class_value_aliases: FxHashMap::default(),
-        class_value_bindings: FxHashMap::default(),
-        standalone_namespace_value_aliases: FxHashMap::default(),
-        class_names: FxHashMap::default(),
+        class_parents: LayeredMap::default(),
+        class_value_aliases: LayeredMap::default(),
+        class_value_bindings: LayeredMap::default(),
+        standalone_namespace_value_aliases: LayeredMap::default(),
+        class_names: LayeredMap::default(),
         decl_types,
         function_groups: function_groups::FunctionGroupRegistry::default(),
-        named_function_symbols: FxHashSet::default(),
+        named_function_symbols: LayeredSet::default(),
         class_namespace_payloads: BTreeMap::new(),
         namespace_values: namespace_values::NamespaceValueRegistry::default(),
         var_annotation_surfaces: FxHashMap::default(),
@@ -2485,6 +2780,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         .type_decls
         .iter()
         .enumerate()
+        .map(|(index, declaration)| (pass.type_decls.published_len() + index, declaration))
         .filter(|(_, declaration)| matches!(declaration, TypeDecl::Unavailable { .. }))
         .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
         .collect();
@@ -2505,3 +2801,27 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod layered_runtime_tests {
+    use super::FrozenCheckerRuntimeMetadata;
+    use crate::types::repr::ClassId;
+
+    #[test]
+    fn checker_runtime_metadata_forks_share_every_frozen_table() {
+        let mut runtime = FrozenCheckerRuntimeMetadata::default();
+        runtime.freeze_as_base().expect("runtime metadata seals");
+        let mut first = runtime.fork_delta().expect("first runtime suffix");
+        let second = runtime.fork_delta().expect("second runtime suffix");
+        assert!(first.shares_base_with(&second));
+        first
+            .class_names
+            .insert_local(ClassId(7), "Local".to_owned())
+            .expect("local class metadata inserts");
+        assert_eq!(
+            first.class_names.get(&ClassId(7)).map(String::as_str),
+            Some("Local")
+        );
+        assert!(second.class_names.get(&ClassId(7)).is_none());
+    }
+}
