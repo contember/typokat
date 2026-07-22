@@ -216,6 +216,147 @@ fn planned_and_unplanned_relations_reuse_binder_environment_identity() {
     assert!(planned.binder_environment_identity_hits >= 64);
 }
 
+fn measure_repeated_contextual_payload(width: usize, reverse: bool) -> RelationMeasure {
+    use crate::types::repr::GenericTypeParam;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_id = TypeParamId(91_021);
+    let target_id = TypeParamId(91_022);
+    let source_param = interner.intern_type_param(source_id, "S");
+    let target_param = interner.intern_type_param(target_id, "T");
+    let source_payload = interner.intern_object(ObjectType {
+        properties: vec![prop("value", source_param)],
+        ..Default::default()
+    });
+    let target_payload = interner.intern_object(ObjectType {
+        properties: vec![prop("value", target_param)],
+        ..Default::default()
+    });
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: source_id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: (0..width)
+            .map(|index| ParameterType::required(format!("source{index}"), source_payload))
+            .collect(),
+        ret: wk.void,
+    });
+    let target = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: target_id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: (0..width)
+            .map(|index| ParameterType::required(format!("target{index}"), target_payload))
+            .collect(),
+        ret: wk.void,
+    });
+    let (source, target) = if reverse {
+        (target, source)
+    } else {
+        (source, target)
+    };
+
+    reset_relation_measure();
+    assert!(
+        Relater::new(interner.store(), wk)
+            .is_assignable(source, target)
+            .is_yes(),
+        "alpha-aligned generic payloads must relate in either order"
+    );
+    relation_measure()
+}
+
+#[test]
+fn repeated_completed_contextual_payload_relation_is_bounded_by_unique_pair() {
+    const SMALL_WIDTH: usize = 8;
+    const LARGE_WIDTH: usize = 128;
+
+    let small = measure_repeated_contextual_payload(SMALL_WIDTH, false);
+    let large = measure_repeated_contextual_payload(LARGE_WIDTH, false);
+    let reverse = measure_repeated_contextual_payload(LARGE_WIDTH, true);
+
+    assert_eq!(small.function_parameter_positions, SMALL_WIDTH as u64);
+    assert_eq!(large.function_parameter_positions, LARGE_WIDTH as u64);
+    assert_eq!(reverse.function_parameter_positions, LARGE_WIDTH as u64);
+    assert!(
+        large.function_parameter_positions >= small.function_parameter_positions * 8,
+        "witness did not scale outer parameter work: small={small:?}, large={large:?}"
+    );
+    assert!(
+        small.object_target_properties > 0,
+        "witness did not reach the shared contextual payload: {small:?}"
+    );
+    assert!(
+        large.object_target_properties <= small.object_target_properties + 2,
+        "completed contextual payload work scaled with repeated positions: small={small:?}, large={large:?}, reverse={reverse:?}"
+    );
+    assert!(
+        reverse.object_target_properties <= small.object_target_properties + 2,
+        "reverse-order contextual payload work was not bounded: small={small:?}, reverse={reverse:?}"
+    );
+}
+
+#[test]
+fn completed_contextual_reuse_replays_specialization_in_each_fresh_frame() {
+    use crate::types::repr::GenericTypeParam;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(91_023);
+    let parameter_type = interner.intern_type_param(parameter_id, "T");
+    let number_payload = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.number)],
+        ..Default::default()
+    });
+    let string_payload = interner.intern_object(ObjectType {
+        properties: vec![prop("value", wk.string)],
+        ..Default::default()
+    });
+    let generic_payload = interner.intern_object(ObjectType {
+        properties: vec![prop("value", parameter_type)],
+        ..Default::default()
+    });
+    let parameters = vec![GenericTypeParam {
+        id: parameter_id,
+        constraint: None,
+        default: None,
+    }];
+    let mut relater = Relater::new(interner.store(), wk);
+
+    for pass in 0..2 {
+        relater.with_binder_context(
+            BinderRelationContext::source_specialization(&parameters),
+            |relater| {
+                assert!(
+                    relater
+                        .is_assignable(number_payload, generic_payload)
+                        .is_yes(),
+                    "fresh frame {pass} must specialize T to number"
+                );
+                let result = relater.is_assignable(string_payload, generic_payload);
+                match result {
+                    Relation::No(reason) => match reason.head {
+                        Reason::Property { name, .. } => assert_eq!(name, "value"),
+                        other => {
+                            panic!("expected value mismatch in fresh frame {pass}, got {other:?}")
+                        }
+                    },
+                    Relation::Yes => {
+                        panic!("fresh frame {pass} must retain its number specialization")
+                    }
+                }
+            },
+        );
+    }
+}
+
 #[test]
 fn measure_relation_keeps_first_target_failure_order() {
     let mut interner = Interner::with_intrinsics();
