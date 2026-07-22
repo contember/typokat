@@ -358,6 +358,270 @@ fn completed_contextual_reuse_replays_specialization_in_each_fresh_frame() {
 }
 
 #[test]
+fn completed_contextual_yes_does_not_skip_nested_specialization_in_one_relation() {
+    use crate::types::repr::GenericTypeParam;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(91_024);
+    let parameter_type = interner.intern_type_param(parameter_id, "T");
+    let generic = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: parameter_id,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("value", parameter_type)],
+        ret: parameter_type,
+    });
+    let concrete = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.number,
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("first", generic), prop("second", generic)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("first", concrete), prop("second", concrete)],
+        ..Default::default()
+    });
+    let mut relater = Relater::new(interner.store(), wk);
+
+    reset_relation_measure();
+    relater.with_binder_context(BinderRelationContext::default(), |relater| {
+        assert!(relater.is_assignable(source, target).is_yes());
+    });
+
+    let measure = relation_measure();
+    assert_eq!(measure.function_parameter_positions, 2);
+    assert_eq!(measure.completed_contextual_yes_hits, 0);
+    assert_eq!(measure.completed_contextual_yes_admissions, 0);
+}
+
+#[test]
+fn completed_contextual_yes_is_scoped_to_one_top_level_relation() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = interner.reserve_object();
+    interner.fill_object(
+        source,
+        ObjectType {
+            properties: vec![prop("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    let target = interner.reserve_object();
+    interner.fill_object(
+        target,
+        ObjectType {
+            properties: vec![prop("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    let mut relater = Relater::new(interner.store(), wk);
+
+    reset_relation_measure();
+    relater.with_binder_context(BinderRelationContext::default(), |relater| {
+        assert!(relater.is_assignable(source, target).is_yes());
+        assert!(relater.is_assignable(source, target).is_yes());
+    });
+
+    let measure = relation_measure();
+    assert_eq!(measure.completed_contextual_yes_hits, 0);
+    assert_eq!(measure.completed_contextual_yes_admissions, 2);
+    assert_eq!(measure.object_target_properties, 2);
+}
+
+#[test]
+fn contextual_yes_memo_rejects_demand_and_exhaustion_tainted_frames() {
+    struct TaintedNormalization {
+        demand: Option<TypeId>,
+        exhaustion: Option<TypeId>,
+    }
+
+    impl RelationNormalization for TaintedNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            if self.exhaustion == Some(ty) {
+                Err(Exhaustion::ClassProjectionBudget)
+            } else {
+                Ok(ty)
+            }
+        }
+
+        fn relation_demand(&self, _store: &Store, ty: TypeId) -> Option<RelationDemand> {
+            (self.demand == Some(ty)).then_some(RelationDemand::ClassProjection(ty))
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = interner.reserve_object();
+    interner.fill_object(
+        source,
+        ObjectType {
+            properties: vec![prop("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    let demanded = interner.reserve_object();
+    interner.fill_object(
+        demanded,
+        ObjectType {
+            properties: vec![prop("rejected", wk.number)],
+            ..Default::default()
+        },
+    );
+    let exhausted = interner.reserve_object();
+    interner.fill_object(
+        exhausted,
+        ObjectType {
+            properties: vec![prop("rejected", wk.number)],
+            ..Default::default()
+        },
+    );
+    let successful = interner.reserve_object();
+    interner.fill_object(
+        successful,
+        ObjectType {
+            properties: vec![prop("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    let demand_target = interner.union(vec![demanded, successful]);
+    let exhaustion_target = interner.union(vec![exhausted, successful]);
+
+    let demand_normalization = TaintedNormalization {
+        demand: Some(demanded),
+        exhaustion: None,
+    };
+    let mut demand_relater = Relater::planned(
+        interner.store(),
+        wk,
+        RelationCache::new(),
+        &demand_normalization,
+    );
+    reset_relation_measure();
+    demand_relater.with_binder_context(BinderRelationContext::default(), |relater| {
+        relater.allow_relation_demand = true;
+        relater.query_demand = None;
+        relater.query_demand_observed = false;
+        let mut assumed = AssumedSet::default();
+        assert!(relater
+            .relate(
+                source,
+                demand_target,
+                RelationKind::Assignable,
+                &mut assumed,
+            )
+            .is_yes());
+        assert_eq!(
+            relater.query_demand,
+            Some(RelationDemand::ClassProjection(demanded))
+        );
+        let root_key = relater.stack_relation_key(RelationKey::new(
+            source,
+            demand_target,
+            RelationKind::Assignable,
+        ));
+        assert!(!relater.completed_contextual_yes.contains(&root_key));
+    });
+    assert_eq!(relation_measure().completed_contextual_yes_admissions, 0);
+
+    let exhaustion_normalization = TaintedNormalization {
+        demand: None,
+        exhaustion: Some(exhausted),
+    };
+    let mut exhaustion_relater = Relater::planned(
+        interner.store(),
+        wk,
+        RelationCache::new(),
+        &exhaustion_normalization,
+    );
+    reset_relation_measure();
+    exhaustion_relater.with_binder_context(BinderRelationContext::default(), |relater| {
+        relater.allow_relation_demand = false;
+        relater.query_exhaustion = None;
+        let mut assumed = AssumedSet::default();
+        assert!(relater
+            .relate(
+                source,
+                exhaustion_target,
+                RelationKind::Assignable,
+                &mut assumed,
+            )
+            .is_yes());
+        assert!(matches!(
+            relater.query_exhaustion,
+            Some(Exhaustion::ClassProjectionBudget)
+        ));
+        let root_key = relater.stack_relation_key(RelationKey::new(
+            source,
+            exhaustion_target,
+            RelationKind::Assignable,
+        ));
+        assert!(!relater.completed_contextual_yes.contains(&root_key));
+    });
+    assert_eq!(relation_measure().completed_contextual_yes_admissions, 0);
+}
+
+#[test]
+fn provisional_contextual_cycle_success_is_not_memoized() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (ancestor_target, nested_target, ancestor_source, nested_source) = (
+        interner.reserve_object(),
+        interner.reserve_object(),
+        interner.reserve_object(),
+        interner.reserve_object(),
+    );
+    interner.fill_object(
+        ancestor_target,
+        ObjectType {
+            properties: vec![prop("peer", nested_target), prop("tag", wk.number)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        nested_target,
+        ObjectType {
+            properties: vec![prop("back", ancestor_target), prop("leaf", wk.number)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        ancestor_source,
+        ObjectType {
+            properties: vec![prop("peer", nested_source), prop("tag", wk.string)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        nested_source,
+        ObjectType {
+            properties: vec![prop("back", ancestor_source), prop("leaf", wk.number)],
+            ..Default::default()
+        },
+    );
+
+    let mut relater = Relater::new(interner.store(), wk);
+    relater.with_binder_context(BinderRelationContext::default(), |relater| {
+        assert!(!relater
+            .is_assignable(ancestor_source, ancestor_target)
+            .is_yes());
+        let nested_key = relater.stack_relation_key(RelationKey::new(
+            nested_source,
+            nested_target,
+            RelationKind::Assignable,
+        ));
+        assert!(!relater.completed_contextual_yes.contains(&nested_key));
+    });
+}
+
+#[test]
 fn measure_relation_keeps_first_target_failure_order() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();

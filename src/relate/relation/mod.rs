@@ -30,6 +30,8 @@ pub(super) struct RelationMeasure {
     pub object_target_properties: u64,
     pub object_source_property_comparisons: u64,
     pub function_parameter_positions: u64,
+    pub completed_contextual_yes_hits: u64,
+    pub completed_contextual_yes_admissions: u64,
 }
 
 #[cfg(test)]
@@ -330,6 +332,10 @@ pub(crate) struct Relater<'a> {
     /// recursive/mutually-recursive types (`interface List { tail: List | null }`)
     /// re-enter an in-flight key and rely on this to terminate.
     stack: FxHashSet<StackRelationKey>,
+    /// Ground contextual successes completed during the current top-level
+    /// relation operation. Unlike the durable cache, this key includes the
+    /// effective binder environment and stores only fully-discharged `Yes`es.
+    completed_contextual_yes: FxHashSet<StackRelationKey>,
     /// Temporary generic-binder alignments and one-way source specializations.
     /// Every relation below one of these frames bypasses the durable three-word
     /// cache because its verdict depends on this local environment.
@@ -338,6 +344,9 @@ pub(crate) struct Relater<'a> {
     binder_environments: FxHashMap<StackBinderEnvironment, BinderEnvironmentId>,
     /// Every mutation of an active binder context must invalidate this identity.
     active_binder_environment: Option<BinderEnvironmentId>,
+    /// Monotonic guard against memoizing a frame that performed a contextual
+    /// source specialization anywhere in its subtree.
+    source_specialization_epoch: u64,
 }
 
 /// The in-flight cycle identity. The durable cache intentionally remains the
@@ -474,9 +483,11 @@ impl<'a> Relater<'a> {
             query_demand: None,
             query_demand_observed: false,
             stack: FxHashSet::default(),
+            completed_contextual_yes: FxHashSet::default(),
             binder_contexts: Vec::new(),
             binder_environments: FxHashMap::default(),
             active_binder_environment: Some(EMPTY_BINDER_ENVIRONMENT),
+            source_specialization_epoch: 0,
         }
     }
 
@@ -499,9 +510,11 @@ impl<'a> Relater<'a> {
             query_demand: None,
             query_demand_observed: false,
             stack: FxHashSet::default(),
+            completed_contextual_yes: FxHashSet::default(),
             binder_contexts: Vec::new(),
             binder_environments: FxHashMap::default(),
             active_binder_environment: Some(EMPTY_BINDER_ENVIRONMENT),
+            source_specialization_epoch: 0,
         }
     }
 
@@ -581,6 +594,13 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
+        // An empty active stack marks a fresh top-level relation operation. This
+        // deliberately scopes the contextual memo more narrowly than some public
+        // coordinator attempts, so it can never cross a demand-mode change.
+        if self.stack.is_empty() {
+            self.completed_contextual_yes.clear();
+        }
+
         let original_src = src;
         let original_tgt = tgt;
         let (src, tgt) = if let Some(normalization) = self.normalization {
@@ -645,6 +665,15 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
+        // Contextual successes cannot use the durable three-word cache, but a
+        // completed ground result is reusable under the exact same effective
+        // binder environment for the remainder of this relation operation.
+        if !self.binder_contexts.is_empty() && self.completed_contextual_yes.contains(&stack_key) {
+            #[cfg(test)]
+            measure_relation(|measure| measure.completed_contextual_yes_hits += 1);
+            return Relation::Yes;
+        }
+
         // Cache: a previously-decided durable relation. Only **sound** verdicts are
         // ever stored (a genuine `false`, or a `true` that rested on no outstanding
         // assumption — see the commit below), so a cached hit is ground truth. A
@@ -688,6 +717,7 @@ impl<'a> Relater<'a> {
         // This frame's own assumption accumulator. Children record the ancestor
         // keys (including, possibly, this frame's own key) they assumed true.
         let mut frame_assumed: AssumedSet = FxHashSet::default();
+        let frame_specialization_epoch = self.source_specialization_epoch;
         #[cfg(test)]
         measure_relation_source_cold(|measure| measure.uncached_relation_frames += 1);
         let result = self.relate_uncached(src, tgt, kind, &mut frame_assumed);
@@ -701,6 +731,18 @@ impl<'a> Relater<'a> {
         // accounts for them too.
         let provisional = !frame_assumed.is_empty();
         assumed.extend(frame_assumed.iter().cloned());
+
+        if !self.binder_contexts.is_empty()
+            && result.is_yes()
+            && !provisional
+            && !self.query_demand_observed
+            && self.query_exhaustion.is_none()
+            && self.source_specialization_epoch == frame_specialization_epoch
+        {
+            self.completed_contextual_yes.insert(stack_key.clone());
+            #[cfg(test)]
+            measure_relation(|measure| measure.completed_contextual_yes_admissions += 1);
+        }
 
         // Commit only sound verdicts on first decision:
         //   * a `false` is ALWAYS genuine — the assume-true rule only ever
@@ -941,6 +983,10 @@ impl<'a> Relater<'a> {
         if let Some(context) = self.binder_contexts.get_mut(context_index) {
             context.source_instantiations.insert(parameter, ty);
             self.active_binder_environment = None;
+            self.source_specialization_epoch = self
+                .source_specialization_epoch
+                .checked_add(1)
+                .expect("source specialization epoch overflowed");
         }
     }
 
