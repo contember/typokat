@@ -21,10 +21,8 @@ fn typed_relation_outcome_requires_exhaustive_matching() {
     }
 
     assert_eq!(classify(RelationOutcome::Yes), 0);
-    assert_eq!(
-        classify(RelationOutcome::No(ReasonChain::leaf(TypeId(0), TypeId(1)))),
-        1
-    );
+    let failure = std::sync::Arc::new(ReasonChain::leaf(TypeId(0), TypeId(1)));
+    assert_eq!(classify(RelationOutcome::No(failure)), 1);
     assert_eq!(
         classify(RelationOutcome::Exhausted(
             Exhaustion::ClassProjectionBudget

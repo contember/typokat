@@ -452,6 +452,10 @@ struct ResidualDelta {
     planner_tainted_finishes: u64,
     planner_zero_write_finishes: u64,
     planner_commits: u64,
+    completed_relation_yes_hits: u64,
+    completed_relation_no_hits: u64,
+    completed_relation_yes_inserts: u64,
+    completed_relation_no_inserts: u64,
     durable_true_cache_hits: u64,
     durable_false_reason_rebuilds: u64,
     uncached_relation_frames: u64,
@@ -490,6 +494,26 @@ impl ResidualDelta {
                 small.query.planner_commits,
                 "planner commits",
             ),
+            completed_relation_yes_hits: difference(
+                large.query.completed_relation_yes_hits,
+                small.query.completed_relation_yes_hits,
+                "completed relation yes hits",
+            ),
+            completed_relation_no_hits: difference(
+                large.query.completed_relation_no_hits,
+                small.query.completed_relation_no_hits,
+                "completed relation no hits",
+            ),
+            completed_relation_yes_inserts: difference(
+                large.query.completed_relation_yes_inserts,
+                small.query.completed_relation_yes_inserts,
+                "completed relation yes inserts",
+            ),
+            completed_relation_no_inserts: difference(
+                large.query.completed_relation_no_inserts,
+                small.query.completed_relation_no_inserts,
+                "completed relation no inserts",
+            ),
             durable_true_cache_hits: difference(
                 large.relation.durable_true_cache_hits,
                 small.relation.durable_true_cache_hits,
@@ -518,7 +542,6 @@ fn assert_residual_accounting(measure: ResidualMeasure) {
 }
 
 #[test]
-#[ignore = "RED: classify residual repeated-query planning work before optimizing it"]
 fn repeated_assignment_residual_work_is_bounded_by_the_fixed_semantic_graph() {
     const TRANSACTION_DELTA_MAX: u64 = 8;
     const TAINTED_DELTA_MAX: u64 = 0;
@@ -561,6 +584,18 @@ fn repeated_assignment_residual_work_is_bounded_by_the_fixed_semantic_graph() {
             "{delta:#?}"
         );
         let _durable_true_cache_hits = delta.durable_true_cache_hits;
+        assert_eq!(small.query.completed_relation_yes_inserts, 0, "{small:#?}");
+        assert_eq!(large.query.completed_relation_yes_inserts, 0, "{large:#?}");
+        assert_eq!(small.query.completed_relation_no_inserts, 2, "{small:#?}");
+        assert_eq!(large.query.completed_relation_no_inserts, 2, "{large:#?}");
+        assert_eq!(delta.completed_relation_yes_hits, 0, "{delta:#?}");
+        assert_eq!(delta.completed_relation_yes_inserts, 0, "{delta:#?}");
+        assert_eq!(delta.completed_relation_no_inserts, 0, "{delta:#?}");
+        assert_eq!(
+            delta.completed_relation_no_hits,
+            2 * u64::try_from(REPEATED_LARGE - REPEATED_SMALL).expect("repetition delta fits u64"),
+            "{delta:#?}"
+        );
 
         for (name, actual, maximum) in [
             (

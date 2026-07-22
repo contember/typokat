@@ -347,13 +347,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     #[cfg(test)]
     fn measure_discarded_candidate_queries(
         &self,
-        parent_lengths: (usize, usize, usize),
+        parent_lengths: (usize, usize, usize, usize, usize),
         child_queries: &crate::check::query::SemanticQueryState,
     ) {
         let child_lengths = child_queries.durable_lengths();
         let discarded = child_lengths.0.saturating_sub(parent_lengths.0)
             + child_lengths.1.saturating_sub(parent_lengths.1)
-            + child_lengths.2.saturating_sub(parent_lengths.2);
+            + child_lengths.2.saturating_sub(parent_lengths.2)
+            + child_lengths.3.saturating_sub(parent_lengths.3)
+            + child_lengths.4.saturating_sub(parent_lengths.4);
         measure_call(|measure| {
             measure.speculative_query_forks += 1;
             measure.speculative_query_writes_discarded +=

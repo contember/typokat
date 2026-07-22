@@ -14,6 +14,7 @@ use crate::types::repr::{GenericTypeParam, IntrinsicKind, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Arc;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -257,7 +258,7 @@ pub enum Relation {
 #[derive(Clone, Debug)]
 pub(crate) enum RelationOutcome {
     Yes,
-    No(ReasonChain),
+    No(Arc<ReasonChain>),
     Exhausted(Exhaustion),
 }
 
@@ -488,7 +489,7 @@ impl<'a> Relater<'a> {
             Some(reason) => RelationOutcome::Exhausted(reason),
             None => match relation {
                 Relation::Yes => RelationOutcome::Yes,
-                Relation::No(reason) => RelationOutcome::No(reason),
+                Relation::No(reason) => RelationOutcome::No(Arc::new(reason)),
             },
         }
     }
@@ -509,7 +510,7 @@ impl<'a> Relater<'a> {
             return RelationAttempt::Needs(demand);
         }
         match relation {
-            Relation::No(reason) => RelationAttempt::Decided(RelationOutcome::No(reason)),
+            Relation::No(reason) => RelationAttempt::Decided(RelationOutcome::No(Arc::new(reason))),
             Relation::Yes => RelationAttempt::Decided(RelationOutcome::Yes),
         }
     }

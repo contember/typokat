@@ -875,7 +875,7 @@ impl<'a> Relater<'a> {
         }
         if !compatible {
             return super::RelationAttempt::Decided(super::RelationOutcome::No(
-                super::ReasonChain::leaf(overload_ty, implementation_ty),
+                std::sync::Arc::new(super::ReasonChain::leaf(overload_ty, implementation_ty)),
             ));
         }
         super::RelationAttempt::Decided(super::RelationOutcome::Yes)

@@ -1,8 +1,8 @@
 use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
 use crate::types::repr::{
-    ClassId, ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType,
-    ParameterType, PropertyType, TemplateType, TypeParamId, Visibility,
+    ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
+    ObjectType, ParameterType, PropertyType, TemplateType, TypeParamId, Visibility,
 };
 
 fn published(
@@ -232,7 +232,7 @@ fn non_regular_application_exhausts_exactly_at_129_and_writes_nothing() {
         outcome,
         RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget)
     ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 
     let projection_memo = FxHashMap::default();
     let evaluator_memo = FxHashMap::default();
@@ -276,7 +276,7 @@ fn non_regular_same_pair_succeeds_without_projecting_the_spine() {
         coordinator.is_assignable(application, application)
     };
     assert!(matches!(outcome, RelationOutcome::Yes));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -365,7 +365,7 @@ fn outer_demand_does_not_descend_through_ordinary_wrappers() {
         .demand(root);
         assert_eq!(outcome, DemandOutcome::Ready(root));
     }
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn prepublication_state_precedes_same_pair_identity_and_writes_nothing() {
                 state: found_state,
             }) if found == class && found_state == expected_state
         ));
-        assert_eq!(state.durable_lengths(), (0, 0, 0));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     }
 }
 
@@ -443,7 +443,7 @@ fn nested_class_boundary_precedes_child_identity_and_writes_nothing() {
                 state: found_state,
             }) if found == class && found_state == expected_state
         ));
-        assert_eq!(state.durable_lengths(), (0, 0, 0));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     }
 
     let published = PublishedClasses::from_publication(
@@ -463,7 +463,7 @@ fn nested_class_boundary_precedes_child_identity_and_writes_nothing() {
         RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { class: found })
             if found == class
     ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -533,7 +533,7 @@ fn nested_equal_composite_cannot_hide_an_unpublished_or_poisoned_class() {
                 ),
                 "equal {wrapper_name} wrapper hid {expected_state:?}",
             );
-            assert_eq!(state.durable_lengths(), (0, 0, 0));
+            assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
         }
 
         let published = PublishedClasses::from_publication(
@@ -560,7 +560,7 @@ fn nested_equal_composite_cannot_hide_an_unpublished_or_poisoned_class() {
             ),
             "equal {wrapper_name} wrapper hid initializer poison",
         );
-        assert_eq!(state.durable_lengths(), (0, 0, 0));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     }
 }
 
@@ -579,7 +579,7 @@ fn identical_deferred_relation_remains_lazy_and_writes_nothing() {
             .is_assignable(deferred, deferred);
 
     assert!(matches!(outcome, RelationOutcome::Yes));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     assert_eq!(query_demand_measure(), QueryDemandMeasure::default());
 }
 
@@ -626,7 +626,7 @@ fn overload_entry_rejects_equal_composite_class_boundaries_without_writes() {
                 state: found_state,
             }) if found == class && found_state == expected_state
         ));
-        assert_eq!(state.durable_lengths(), (0, 0, 0));
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     }
 
     let published = PublishedClasses::from_publication(
@@ -646,7 +646,7 @@ fn overload_entry_rejects_equal_composite_class_boundaries_without_writes() {
         RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { class: found })
             if found == class
     ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -677,7 +677,7 @@ fn poison_precedes_same_pair_identity_and_cache() {
         RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { class: found })
             if found == class
     ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     assert_eq!(wk.error, interner.well_known().error);
 }
 
@@ -972,9 +972,11 @@ fn identity_normalizes_nested_aliases_without_mutating_the_published_shape() {
             .map(|property| property.ty),
         Some(identity_string)
     );
-    let (_, evaluations, relations) = state.durable_lengths();
+    let (_, evaluations, relations, completed, no_candidates) = state.durable_lengths();
     assert!(evaluations > 0);
     assert_eq!(relations, 0);
+    assert_eq!(completed, 0);
+    assert_eq!(no_candidates, 0);
 }
 
 #[test]
@@ -1356,7 +1358,7 @@ fn identity_exhaustion_discards_both_roots_pending_writes() {
         outcome,
         DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
     );
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     assert_eq!(next_type_param, initial_type_param + 1);
     let subsequent_binder = TypeParamId(next_type_param);
     assert_ne!(subsequent_binder, TypeParamId(initial_type_param));
@@ -1402,7 +1404,7 @@ fn planner_bounds_successive_evaluator_results_as_one_query() {
         outcome,
         DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
     ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -1437,7 +1439,7 @@ fn exhausted_inference_attempt_contributes_no_candidate_or_write() {
             if found == class
     ));
     assert!(candidates.is_empty());
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -1465,7 +1467,7 @@ fn exhausted_inference_preserves_caller_candidates() {
     assert!(matches!(outcome, DemandOutcome::Exhausted(_)));
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates.get(&existing_parameter), Some(&vec![wk.number]));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -1562,7 +1564,7 @@ fn relation_preserves_frontier_vs_earlier_mismatch_order() {
         exhausted,
         RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget)
     ));
-    assert_eq!(state.durable_lengths(), (0, 0, 0));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 
     let early_source_class = ClassId(80_108);
     let early_target_class = ClassId(80_109);
@@ -1627,10 +1629,13 @@ fn relation_preserves_frontier_vs_earlier_mismatch_order() {
         coordinator.is_assignable(early_source, early_target)
     };
     assert!(matches!(early_mismatch, RelationOutcome::No(_)));
-    let (projections, evaluations, relations) = early_state.durable_lengths();
+    let (projections, evaluations, relations, completed, no_candidates) =
+        early_state.durable_lengths();
     assert_eq!(projections, 2);
     assert_eq!(evaluations, 0);
     assert!(relations > 0);
+    assert_eq!(completed, 0);
+    assert_eq!(no_candidates, 1);
 }
 
 /// The production query path must alpha-align a DOM-style recursive listener's
@@ -2074,11 +2079,13 @@ fn local_evaluation_override_wins_and_commits_only_the_delta() {
     let wk = interner.well_known();
     let conditional = decidable_conditional(&mut interner, wk.number);
     let retained = decidable_conditional(&mut interner, wk.boolean);
+    let published = PublishedClasses::empty();
     let mut state = SemanticQueryState {
         evaluation_memo: FxHashMap::from_iter([(conditional, wk.number), (retained, wk.boolean)]),
+        publication_store_identity: Some(Arc::clone(interner.store().semantic_graph_identity())),
+        publication_snapshot_identity: Some(Arc::clone(published.identity())),
         ..SemanticQueryState::default()
     };
-    let published = PublishedClasses::empty();
     let projection = FxHashMap::default();
     let transaction = {
         let mut planner = ProjectionPlanner::new(
@@ -2127,6 +2134,8 @@ fn tainted_transaction_discards_local_delta_and_preserves_parent() {
     let published = PublishedClasses::empty();
     let mut state = SemanticQueryState {
         evaluation_memo: FxHashMap::from_iter([(retained, wk.boolean)]),
+        publication_store_identity: Some(Arc::clone(interner.store().semantic_graph_identity())),
+        publication_snapshot_identity: Some(Arc::clone(published.identity())),
         ..SemanticQueryState::default()
     };
     let original = state.evaluation_memo.clone();
@@ -2159,4 +2168,503 @@ fn normalization_follows_borrowed_durable_chain_without_local_copies() {
     assert!(transaction.plan.evaluation_overlay.is_empty());
     assert!(transaction.plan.resolved_evaluations.is_empty());
     assert!(transaction.pending_evaluator_writes.is_empty());
+}
+
+fn expect_no(outcome: RelationOutcome) -> Arc<ReasonChain> {
+    match outcome {
+        RelationOutcome::No(reason) => reason,
+        RelationOutcome::Yes => panic!("expected relation failure, got success"),
+        RelationOutcome::Exhausted(reason) => {
+            panic!("expected relation failure, got exhaustion: {reason:?}")
+        }
+    }
+}
+
+#[test]
+fn completed_failure_replays_pointer_identical_reason_and_keeps_directions_distinct() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let number = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let string = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let first = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(number, string),
+    );
+    let first_render = crate::diagnostics::render_reason_chain(interner.store(), first.head());
+    let promoted = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(number, string),
+    );
+    let repeated = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(number, string),
+    );
+    assert!(Arc::ptr_eq(&promoted, &repeated));
+    assert_eq!(
+        crate::diagnostics::render_reason_chain(interner.store(), repeated.head()),
+        first_render
+    );
+
+    let reverse_first = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(string, number),
+    );
+    let reverse_promoted = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(string, number),
+    );
+    let reverse_repeated = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(string, number),
+    );
+    assert!(!Arc::ptr_eq(&first, &reverse_first));
+    assert!(!Arc::ptr_eq(&promoted, &reverse_promoted));
+    assert!(Arc::ptr_eq(&reverse_promoted, &reverse_repeated));
+    assert_eq!(state.completed_relation_len(), 2);
+    assert_eq!(state.completed_relation_no_candidate_len(), 0);
+    assert!(state.relation_cache.len() > state.completed_relation_len());
+}
+
+#[test]
+fn one_shot_failures_retain_only_compact_admission_keys() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+
+    for index in 0..128 {
+        let source = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public(format!("value{index}"), wk.number)],
+            ..Default::default()
+        });
+        expect_no(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+        );
+    }
+
+    assert_eq!(state.completed_relation_len(), 0);
+    assert_eq!(state.completed_relation_no_candidate_len(), 128);
+}
+
+#[test]
+fn completed_success_hits_without_planning_again() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType::default());
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let guard = start_query_source_cold_measure();
+
+    for _ in 0..2 {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+            RelationOutcome::Yes
+        ));
+    }
+    let measure = query_source_cold_measure().expect("measurement is active");
+    assert_eq!(measure.completed_relation_yes_inserts, 1);
+    assert_eq!(measure.completed_relation_yes_hits, 1);
+    assert_eq!(measure.planner_transactions, 1);
+    assert_eq!(state.completed_relation_len(), 1);
+    drop(guard);
+}
+
+#[test]
+fn demand_preserves_durable_union_normalization() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let conditional = decidable_conditional(&mut interner, wk.string);
+    let union = interner.union(vec![conditional, wk.number]);
+    let expected = interner.union(vec![wk.string, wk.number]);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let mut candidates = Candidates::default();
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .infer_types(union, expected, &mut candidates),
+        DemandOutcome::Ready(())
+    ));
+    assert_eq!(state.evaluation_memo.get(&union), Some(&expected));
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .demand(union),
+        DemandOutcome::Ready(expected)
+    );
+}
+
+#[test]
+fn semantic_graph_mutation_invalidates_cached_success_before_recertification() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(82_006);
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    assert!(interner.set_type_param_constraint(parameter, wk.number));
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_assignable(parameter_type, wk.number),
+        RelationOutcome::Yes
+    ));
+    assert_eq!(state.completed_relation_len(), 1);
+    assert!(!state.relation_cache.is_empty());
+
+    assert!(interner.remove_type_param_constraint(parameter));
+    expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(parameter_type, wk.number),
+    );
+    assert_eq!(state.completed_relation_len(), 0);
+    assert_eq!(state.completed_relation_no_candidate_len(), 1);
+}
+
+#[test]
+fn semantic_graph_mutation_invalidates_non_relation_evaluation_memo() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let reserved = interner.reserve_object();
+    let key = interner.intern_literal(LiteralValue::String("value".to_string()));
+    let access = interner.intern_deferred_indexed_access(reserved, key);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(access),
+        DemandOutcome::Ready(wk.error)
+    );
+    assert_eq!(state.evaluation_memo.get(&access), Some(&wk.error));
+
+    interner.fill_object(
+        reserved,
+        ObjectType {
+            properties: vec![PropertyType::public("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(access),
+        DemandOutcome::Ready(wk.number)
+    );
+    assert_eq!(state.evaluation_memo.get(&access), Some(&wk.number));
+}
+
+#[test]
+fn publication_change_invalidates_projection_and_relation_success() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(82_007);
+    let number_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let string_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let application = interner.intern_class_instance(class, Vec::new());
+    let number_publication = published(class, Vec::new(), number_template, wk.error);
+    let string_publication = published(class, Vec::new(), string_template, wk.error);
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(
+            &mut interner,
+            &number_publication,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(application, target),
+        RelationOutcome::Yes
+    ));
+    expect_no(
+        SemanticQueryCoordinator::new(
+            &mut interner,
+            &string_publication,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(application, target),
+    );
+}
+
+#[test]
+fn completed_outcome_invalidates_after_reserved_fill_and_constraint_change() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let reserved = interner.reserve_object();
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(reserved, target),
+    );
+    assert_eq!(state.completed_relation_len(), 0);
+    assert_eq!(state.completed_relation_no_candidate_len(), 1);
+    interner.fill_object(
+        reserved,
+        ObjectType {
+            properties: vec![PropertyType::public("value", wk.number)],
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_assignable(reserved, target),
+        RelationOutcome::Yes
+    ));
+    assert_eq!(state.completed_relation_len(), 1);
+
+    let parameter = TypeParamId(82_001);
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    let parameter_source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", parameter_type)],
+        ..Default::default()
+    });
+    expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(parameter_source, target),
+    );
+    assert!(interner.set_type_param_constraint(parameter, wk.number));
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_assignable(parameter_source, target),
+        RelationOutcome::Yes
+    ));
+    assert_eq!(state.completed_relation_len(), 1);
+}
+
+#[test]
+fn publication_poison_precedes_and_invalidates_completed_success() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(82_002);
+    let template = interner.intern_object(ObjectType::default());
+    let application = interner.intern_class_instance(class, Vec::new());
+    let target = interner.intern_object(ObjectType::default());
+    let ready = published(class, Vec::new(), template, wk.error);
+    let poisoned = poisoned_publication(&[(class, PublishedClassPoison::Heritage)]);
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &ready, &mut state, &mut next_type_param,)
+            .is_assignable(application, target),
+        RelationOutcome::Yes
+    ));
+    assert_eq!(state.completed_relation_len(), 1);
+    assert!(matches!(
+        SemanticQueryCoordinator::new(
+            &mut interner,
+            &poisoned,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(application, target),
+        RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { class: found })
+            if found == class
+    ));
+    assert_eq!(state.completed_relation_len(), 0);
+}
+
+#[test]
+fn exhausted_relation_never_promotes_completed_outcome() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let mut source = wk.number;
+    for _ in 0..=DEFAULT_STEP_BUDGET {
+        source = decidable_conditional(&mut interner, source);
+    }
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for _ in 0..2 {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, wk.string),
+            RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+        ));
+        assert_eq!(state.completed_relation_len(), 0);
+    }
+}
+
+#[test]
+fn completed_outcomes_follow_query_state_fork_promotion_rules() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let number = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let string = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut parent = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let parent_reason = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut parent, &mut next_type_param)
+            .is_assignable(number, string),
+    );
+    assert_eq!(parent.completed_relation_len(), 0);
+    assert_eq!(parent.completed_relation_no_candidate_len(), 1);
+    let mut child = parent.fork();
+    let promoted = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+            .is_assignable(number, string),
+    );
+    let inherited_hit = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+            .is_assignable(number, string),
+    );
+    assert!(Arc::ptr_eq(&promoted, &inherited_hit));
+    assert_eq!(
+        crate::diagnostics::render_reason_chain(interner.store(), parent_reason.head()),
+        crate::diagnostics::render_reason_chain(interner.store(), promoted.head())
+    );
+    expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+            .is_assignable(string, number),
+    );
+    expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+            .is_assignable(string, number),
+    );
+    assert_eq!(child.completed_relation_len(), 2);
+    assert_eq!(child.completed_relation_no_candidate_len(), 0);
+    assert_eq!(parent.completed_relation_len(), 0);
+    assert_eq!(parent.completed_relation_no_candidate_len(), 1);
+    drop(child);
+    assert_eq!(parent.completed_relation_len(), 0);
+    assert_eq!(parent.completed_relation_no_candidate_len(), 1);
+}
+
+#[test]
+fn completed_generic_failure_preserves_binder_and_fresh_id_result() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let infer = interner.intern_infer(0);
+    let check = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let extends_ty = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", infer)],
+        ..Default::default()
+    });
+    let inferred = interner.intern_conditional(ConditionalType {
+        check,
+        extends_ty,
+        true_branch: infer,
+        false_branch: wk.never,
+        infer_count: 1,
+        distributive: false,
+        poisoned: false,
+    });
+    let source_param = TypeParamId(82_003);
+    let target_param = TypeParamId(82_004);
+    let source_param_ty = interner.intern_type_param(source_param, "T");
+    let target_param_ty = interner.intern_type_param(target_param, "U");
+    let source = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: source_param,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("value", source_param_ty)],
+        ret: inferred,
+    });
+    let target = interner.intern_function(FunctionType {
+        type_params: vec![GenericTypeParam {
+            id: target_param,
+            constraint: None,
+            default: None,
+        }],
+        receiver: None,
+        params: vec![ParameterType::required("value", target_param_ty)],
+        ret: wk.number,
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 90_000;
+
+    let first = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(source, target),
+    );
+    let after_first = next_type_param;
+    let promoted = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(source, target),
+    );
+    let after_promotion = next_type_param;
+    let repeated = expect_no(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(source, target),
+    );
+    assert!(Arc::ptr_eq(&promoted, &repeated));
+    assert_eq!(
+        crate::diagnostics::render_reason_chain(interner.store(), first.head()),
+        crate::diagnostics::render_reason_chain(interner.store(), repeated.head())
+    );
+    assert!(after_promotion >= after_first);
+    assert_eq!(next_type_param, after_promotion);
+    assert_eq!(state.completed_relation_len(), 1);
 }

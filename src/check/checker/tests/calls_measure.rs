@@ -364,7 +364,7 @@ fn measure_call_and_construct_constraint_failure_precedence() {
             trial_receiver_relation_queries: 0,
             selected_receiver_relation_queries: 0,
             speculative_query_forks: 8,
-            speculative_query_writes_discarded: 4,
+            speculative_query_writes_discarded: 8,
         }
     );
 }

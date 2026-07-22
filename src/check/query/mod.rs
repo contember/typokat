@@ -62,6 +62,10 @@ pub(crate) struct QuerySourceColdMeasure {
     pub planner_tainted_finishes: u64,
     pub planner_zero_write_finishes: u64,
     pub planner_commits: u64,
+    pub completed_relation_yes_hits: u64,
+    pub completed_relation_no_hits: u64,
+    pub completed_relation_yes_inserts: u64,
+    pub completed_relation_no_inserts: u64,
     pub durable_memo_seed_copy_entries: u64,
     pub exhaustion_frontiers: u64,
 }
@@ -173,6 +177,51 @@ pub(crate) trait PublishedClassLookup {
     fn publication_identity(&self) -> &Arc<()>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CompletedRelationOperation {
+    Assignable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CompletedRelationKey {
+    src: TypeId,
+    tgt: TypeId,
+    operation: CompletedRelationOperation,
+}
+
+impl CompletedRelationKey {
+    fn assignable(src: TypeId, tgt: TypeId) -> Self {
+        Self {
+            src,
+            tgt,
+            operation: CompletedRelationOperation::Assignable,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum CompletedRelationOutcome {
+    Yes,
+    No(Arc<ReasonChain>),
+}
+
+impl CompletedRelationOutcome {
+    fn from_outcome(outcome: &RelationOutcome) -> Option<Self> {
+        match outcome {
+            RelationOutcome::Yes => Some(Self::Yes),
+            RelationOutcome::No(reason) => Some(Self::No(Arc::clone(reason))),
+            RelationOutcome::Exhausted(_) => None,
+        }
+    }
+
+    fn outcome(&self) -> RelationOutcome {
+        match self {
+            Self::Yes => RelationOutcome::Yes,
+            Self::No(reason) => RelationOutcome::No(Arc::clone(reason)),
+        }
+    }
+}
+
 impl PublishedClassLookup for PublishedClasses {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
         PublishedClasses::published_class(self, class)
@@ -189,6 +238,8 @@ pub(crate) struct SemanticQueryState {
     projection_memo: FxHashMap<TypeId, TypeId>,
     evaluation_memo: FxHashMap<TypeId, TypeId>,
     relation_cache: RelationCache,
+    completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
+    completed_relation_no_candidates: FxHashSet<CompletedRelationKey>,
     publication_clean: FxHashSet<TypeId>,
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
@@ -202,12 +253,24 @@ impl SemanticQueryState {
     }
 
     #[cfg(test)]
-    pub(crate) fn durable_lengths(&self) -> (usize, usize, usize) {
+    pub(crate) fn durable_lengths(&self) -> (usize, usize, usize, usize, usize) {
         (
             self.projection_memo.len(),
             self.evaluation_memo.len(),
             self.relation_cache.len(),
+            self.completed_relations.len(),
+            self.completed_relation_no_candidates.len(),
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_relation_len(&self) -> usize {
+        self.completed_relations.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_relation_no_candidate_len(&self) -> usize {
+        self.completed_relation_no_candidates.len()
     }
 }
 
@@ -226,6 +289,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         state: &'a mut SemanticQueryState,
         next_type_param: &'a mut u32,
     ) -> Self {
+        refresh_semantic_context(interner.store(), published, state);
         SemanticQueryCoordinator {
             interner,
             published,
@@ -239,6 +303,22 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     pub(crate) fn demand(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
         #[cfg(test)]
         measure_query_demand(|measure| measure.root_calls += 1);
+        if matches!(
+            self.interner.store().tag(root),
+            TypeTag::Intrinsic
+                | TypeTag::Literal
+                | TypeTag::TypeParam
+                | TypeTag::Infer
+                | TypeTag::MappedValue
+                | TypeTag::Object
+                | TypeTag::Intersection
+                | TypeTag::Function
+                | TypeTag::Array
+                | TypeTag::Tuple
+                | TypeTag::Readonly
+        ) {
+            return DemandOutcome::Ready(root);
+        }
         let transaction = ProjectionPlanner::new(
             self.interner,
             self.published,
@@ -923,10 +1003,20 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         ) {
             return RelationOutcome::Exhausted(reason);
         }
+        let completed_key = CompletedRelationKey::assignable(src, tgt);
+        if let Some(completed) = self.state.completed_relations.get(&completed_key).cloned() {
+            #[cfg(test)]
+            measure_query_source_cold(|measure| match &completed {
+                CompletedRelationOutcome::Yes => measure.completed_relation_yes_hits += 1,
+                CompletedRelationOutcome::No(_) => measure.completed_relation_no_hits += 1,
+            });
+            return completed.outcome();
+        }
         if src == tgt {
             return RelationOutcome::Yes;
         }
         if let Some(outcome) = self.same_class_covariant_argument_mismatch(src, tgt) {
+            self.remember_completed_relation(completed_key, &outcome);
             return outcome;
         }
         let mut planner = ProjectionPlanner::new(
@@ -976,6 +1066,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         self.state.relation_cache = relation_cache;
         if commit_plan {
             self.commit_plan(transaction.into_commit());
+            self.remember_completed_relation(completed_key, &outcome);
         }
         outcome
     }
@@ -1023,7 +1114,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             match self.is_assignable(source, target) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(_) => {
-                    return Some(RelationOutcome::No(ReasonChain::leaf(src, tgt)))
+                    return Some(RelationOutcome::No(Arc::new(ReasonChain::leaf(src, tgt))))
                 }
                 RelationOutcome::Exhausted(exhaustion) => {
                     return Some(RelationOutcome::Exhausted(exhaustion))
@@ -1161,6 +1252,31 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             .evaluation_memo
             .extend(transaction.pending_evaluator_writes);
         *self.next_type_param = transaction.next_type_param;
+    }
+
+    fn remember_completed_relation(
+        &mut self,
+        key: CompletedRelationKey,
+        outcome: &RelationOutcome,
+    ) {
+        if matches!(outcome, RelationOutcome::No(_))
+            && !self.state.completed_relation_no_candidates.remove(&key)
+        {
+            self.state.completed_relation_no_candidates.insert(key);
+            return;
+        }
+        let Some(completed) = CompletedRelationOutcome::from_outcome(outcome) else {
+            return;
+        };
+        if self.state.completed_relations.contains_key(&key) {
+            return;
+        }
+        #[cfg(test)]
+        measure_query_source_cold(|measure| match &completed {
+            CompletedRelationOutcome::Yes => measure.completed_relation_yes_inserts += 1,
+            CompletedRelationOutcome::No(_) => measure.completed_relation_no_inserts += 1,
+        });
+        self.state.completed_relations.insert(key, completed);
     }
 }
 
@@ -1708,22 +1824,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         measure.publication_calls += 1;
         measure.publication_query_roots += u64::try_from(roots.len()).unwrap();
     });
-    let store_identity = store.semantic_graph_identity();
-    let publication_identity = published.publication_identity();
-    let same_store = state
-        .publication_store_identity
-        .as_ref()
-        .is_some_and(|identity| Arc::ptr_eq(identity, store_identity));
-    let same_publication = state
-        .publication_snapshot_identity
-        .as_ref()
-        .is_some_and(|identity| Arc::ptr_eq(identity, publication_identity));
-    if !same_store || !same_publication {
-        state.publication_clean.clear();
-        state.publication_store_identity = Some(Arc::clone(store_identity));
-        state.publication_snapshot_identity = Some(Arc::clone(publication_identity));
-    }
-
+    refresh_semantic_context(store, published, state);
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
@@ -1742,6 +1843,33 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
     }
     state.publication_clean.extend(seen);
     None
+}
+
+fn refresh_semantic_context<L: PublishedClassLookup + ?Sized>(
+    store: &Store,
+    published: &L,
+    state: &mut SemanticQueryState,
+) {
+    let store_identity = store.semantic_graph_identity();
+    let publication_identity = published.publication_identity();
+    let same_store = state
+        .publication_store_identity
+        .as_ref()
+        .is_some_and(|identity| Arc::ptr_eq(identity, store_identity));
+    let same_publication = state
+        .publication_snapshot_identity
+        .as_ref()
+        .is_some_and(|identity| Arc::ptr_eq(identity, publication_identity));
+    if !same_store || !same_publication {
+        state.projection_memo.clear();
+        state.evaluation_memo.clear();
+        state.relation_cache = RelationCache::default();
+        state.publication_clean.clear();
+        state.completed_relations.clear();
+        state.completed_relation_no_candidates.clear();
+        state.publication_store_identity = Some(Arc::clone(store_identity));
+        state.publication_snapshot_identity = Some(Arc::clone(publication_identity));
+    }
 }
 
 fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
