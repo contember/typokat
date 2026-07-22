@@ -4041,12 +4041,21 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
 ) -> Result<DecodedLibraryBaseForTest, SnapshotError> {
     let strategy = SnapshotDecodeStrategy::EagerComplete;
     let (next, source_file_count) = decode_next_ids(section(&validated, 10))?;
-    let interner = Interner::decode_split_snapshot_sections_for_test(
-        section(&validated, 1),
-        section(&validated, 2),
-    )
-    .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
-    let binder = decode_binder_snapshot(section(&validated, 3))
+    let (interner_result, binder_result) = std::thread::scope(|scope| {
+        let interner = scope.spawn(|| {
+            Interner::decode_split_snapshot_sections_for_test(
+                section(&validated, 1),
+                section(&validated, 2),
+            )
+        });
+        let binder = scope.spawn(|| decode_binder_snapshot(section(&validated, 3)));
+        (interner.join(), binder.join())
+    });
+    let interner = interner_result
+        .expect("canonical interner decode does not panic")
+        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    let binder = binder_result
+        .expect("canonical binder decode does not panic")
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     if interner.store().len() != next.types
         || binder.graph.snapshot_len() != next.scopes
@@ -4077,8 +4086,15 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
             "root index disagrees with binder global scope",
         ));
     }
-    let (store_references, interner_references) = interner.snapshot_reference_records_for_test();
-    let binder_references = snapshot_reference_records_for_test(&binder);
+    let (interner_references_result, binder_references_result) = std::thread::scope(|scope| {
+        let interner_references = scope.spawn(|| interner.snapshot_reference_records_for_test());
+        let binder_references = scope.spawn(|| snapshot_reference_records_for_test(&binder));
+        (interner_references.join(), binder_references.join())
+    });
+    let (store_references, interner_references) =
+        interner_references_result.expect("canonical interner reference extraction does not panic");
+    let binder_references =
+        binder_references_result.expect("canonical binder reference extraction does not panic");
     let reference_limits = ReferenceLimits::from_canonical_references(
         &next,
         &roots,
