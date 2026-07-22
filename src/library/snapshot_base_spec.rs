@@ -21,10 +21,8 @@ use super::snapshot::test_support::{
 };
 use std::sync::{Arc, Barrier};
 
-const PROFILE_IDENTITY: &str =
-    "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SCHEMA_IDENTITY: &str =
-    "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
+const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+const SCHEMA_IDENTITY: &str = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
 const EXPECTED_COMPONENTS: [&str; 10] = [
     "store",
     "interner",
@@ -39,6 +37,26 @@ const EXPECTED_COMPONENTS: [&str; 10] = [
 ];
 
 fn assert_send_sync_static<T: Send + Sync + 'static>() {}
+
+fn exact_struct_fields(source: &str, declaration: &str) -> Vec<String> {
+    let declaration_offset = source.find(declaration).expect("struct declaration");
+    let body_offset = source[declaration_offset..]
+        .find('{')
+        .map(|offset| declaration_offset + offset + 1)
+        .expect("struct body");
+    let body_end = source[body_offset..]
+        .find("\n}")
+        .map(|offset| body_offset + offset)
+        .expect("simple private field block");
+
+    source[body_offset..body_end]
+        .lines()
+        .filter_map(|line| {
+            let field = line.strip_prefix("    ")?.strip_suffix(',')?;
+            field.contains(':').then(|| field.to_owned())
+        })
+        .collect()
+}
 
 fn acquire(
     provider: &LibraryBaseProvider,
@@ -89,7 +107,10 @@ fn canonical_snapshot_decodes_to_complete_frozen_library_base() {
     assert_eq!(inventory.runtime_family_count(), 10);
     assert_eq!(inventory.projection_subtable_count(), 31);
     assert_eq!(inventory.component_names(), EXPECTED_COMPONENTS);
-    assert_eq!(inventory.root_name_count(), base.root_names_for_test().len());
+    assert_eq!(
+        inventory.root_name_count(),
+        base.root_names_for_test().len()
+    );
     assert_eq!(inventory.prefixes().types, base.type_count_for_test());
     assert!(inventory.prefixes().types > 0);
     assert!(inventory.prefixes().type_params > 0);
@@ -115,8 +136,8 @@ fn source_compiled_and_decoded_bases_have_identical_canonical_projection() {
     let compiled = LibraryCompiler::new()
         .compile(&profile)
         .expect("complete source-backed compilation");
-    let source_projection = canonical_projection_from_compiled_for_test(&compiled)
-        .expect("source runtime projection");
+    let source_projection =
+        canonical_projection_from_compiled_for_test(&compiled).expect("source runtime projection");
     let provider = LibraryBaseProvider::new();
     let decoded = acquire(&provider).expect("decoded canonical base");
     let decoded_projection = decoded
@@ -172,7 +193,7 @@ fn provider_caches_one_pointer_identical_typed_initialization_failure() {
         family: 0,
         endpoint: ReferenceEndpoint::First,
     })
-        .expect("digest-valid dangling-reference fixture");
+    .expect("digest-valid dangling-reference fixture");
     let provider = Arc::new(LibraryBaseProvider::with_pre_admitted_snapshot_for_test(
         snapshot,
     ));
@@ -238,7 +259,10 @@ fn canonical_provider_rejects_every_changed_byte_at_artifact_admission() {
 #[test]
 fn pre_admitted_decoder_rejects_deep_structural_corruption_before_publication() {
     let cases = [
-        (SnapshotTestMutation::UnknownVersion, LibraryInitStage::Header),
+        (
+            SnapshotTestMutation::UnknownVersion,
+            LibraryInitStage::Header,
+        ),
         (
             SnapshotTestMutation::WrongProfileIdentity,
             LibraryInitStage::Header,
@@ -361,6 +385,43 @@ fn frozen_library_base_retains_only_ast_free_semantic_state() {
     assert_eq!(base.retained_source_bytes_for_test(), 0);
     assert_eq!(base.retained_archive_bytes_for_test(), 0);
     assert_eq!(base.retained_projection_witnesses_for_test(), 0);
+
+    let source = include_str!("base.rs");
+    assert!(
+        source.contains("use crate::check::checker::library_compiler::OwnedLibraryRuntimeState;")
+    );
+    assert!(!source.contains("type OwnedLibraryRuntimeState"));
+    assert_eq!(
+        exact_struct_fields(source, "pub struct FrozenLibraryBase"),
+        [
+            "runtime: OwnedLibraryRuntimeState",
+            "root_names: BTreeSet<String>",
+            "prefixes: FrozenLibraryPrefixes",
+            "identity: FrozenLibraryIdentity",
+        ]
+    );
+    let body = exact_struct_fields(source, "pub struct FrozenLibraryBase").join("\n");
+    for forbidden in [
+        "Allocator",
+        "Program",
+        "Ast",
+        "SourceText",
+        "Pass",
+        "Draft",
+        "EventStore",
+        "Flow",
+        "Query",
+        "Evaluator",
+        "Projection",
+        "Relation",
+        "ApplicationCache",
+        "Vec<u8>",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "retained forbidden field: {forbidden}"
+        );
+    }
 }
 
 #[test]

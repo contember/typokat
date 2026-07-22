@@ -1,10 +1,16 @@
 schema = 1
+clean_builds = 2
 release_filter = "library::snapshot_base_spec::frozen_library_base_release_probe_once"
 record_prefix = "TYPOKAT_LIBRARY_BASE_PROBE="
 route = "production-frozen-library-base"
 windows = 3
 warmups_per_window = 5
 samples_per_window = 10
+required_total_processes = 45
+require_unique_pids = true
+require_nonoverlapping_windows = true
+required_binary_profile = "release"
+external_measurement = "/usr/bin/time -v"
 p95_wall_us_max = 120000
 rss_bytes_max = 536870912
 profile_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
@@ -16,3 +22,4 @@ required_publications = 1
 required_compiler_invocations = 0
 required_generator_invocations = 0
 required_source_bytes_read = 0
+required_projection_identities = 1
