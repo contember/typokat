@@ -86,9 +86,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-// SHA-256 of the preceding schema identity plus `|function-groups.symbols-v1`.
+// SHA-256 of the preceding schema identity plus `|projection-witness-v1`.
 const SNAPSHOT_SCHEMA_IDENTITY: &str =
-    "b7f9c947fd684e45da2ef8f351f9d09c71d1d8330e7f52b7953bb80ef128a311";
+    "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
 const FAST_CLEAN: &str =
     include_str!("../../../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 const FAST_ERRORS: &str =
