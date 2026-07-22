@@ -331,6 +331,10 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             record["process"]["env"]["TYPOKAT_WU0B_PROFILE_ROOT"] = reused_root
         self.assert_invalid(self.evidence)
 
+    def test_malformed_build_source_root_fails_closed(self) -> None:
+        del self.evidence["builds"][0]["source_before"]["root"]
+        self.assert_invalid(self.evidence)
+
     def test_dependency_source_integrity_is_required(self) -> None:
         self.evidence["builds"][0]["cargo_home_after"]["registry_sources"]["files"] = 0
         self.assert_invalid(self.evidence)
