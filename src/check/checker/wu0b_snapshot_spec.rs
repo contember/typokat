@@ -45,7 +45,10 @@
 //! and is cross-checked against the decoded owned state. The spec independently
 //! corrupts the first and last reference of every family plus its discriminants.
 //! Domain and field discriminants are append-only values in `0..=31`; other values
-//! are invalid in this schema version.
+//! are invalid in this schema version. After the semantic-identity payload, section 8
+//! ends with `(u32 projection_version=1, u32 projection_count=31)` and 31 fixed-order
+//! `(u64 row_count, sha256[32])` projection witnesses. They are evidence metadata, not
+//! semantic authority; typed state and the complete reference manifest remain decisive.
 //!
 //! ## Loading strategies
 //!
