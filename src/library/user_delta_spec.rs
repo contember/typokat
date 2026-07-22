@@ -105,6 +105,10 @@ fn assert_dense_suffix_ranges(
 }
 
 fn assert_exact_assignment_diagnostic(receipt: &super::base::UserDeltaCheckReceiptForTest) {
+    assert!(
+        receipt.initial_visible_user_names.is_empty(),
+        "a fresh delta exposes no prior user names"
+    );
     assert_eq!(
         receipt.normalized_diagnostics(),
         [concat!(
@@ -116,6 +120,10 @@ fn assert_exact_assignment_diagnostic(receipt: &super::base::UserDeltaCheckRecei
 }
 
 fn assert_exact_isolation_diagnostic(receipt: &super::base::UserDeltaCheckReceiptForTest) {
+    assert!(
+        receipt.initial_visible_user_names.is_empty(),
+        "an isolation probe starts from an empty user suffix"
+    );
     assert_eq!(
         receipt.normalized_diagnostics(),
         [
