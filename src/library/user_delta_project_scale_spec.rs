@@ -45,7 +45,8 @@ export const sharedValue = "ok";
 const CONSUMER_PATH: &str = "/project/consumer.ts";
 const CONSUMER_SOURCE: &str = r#"import { SharedShape, sharedValue } from "./model";
 const valueBad: number = sharedValue;
-const shapeBad: SharedShape = { value: 123 };
+const wrongValue: number = 123;
+const shapeBad: SharedShape = { value: wrongValue };
 void valueBad;
 void shapeBad;
 "#;
@@ -113,7 +114,7 @@ fn one_project_delta_preserves_cross_file_symbols_and_is_deterministic() {
                 "Type 'string' is not assignable to type 'number'"
             ),
             concat!(
-                "/project/consumer.ts:3:7-3:15 TK2322 ",
+                "/project/consumer.ts:4:7-4:15 TK2322 ",
                 "Type '{ value: number }' is not assignable to type '{ value: string }'"
             ),
         ]
