@@ -41,21 +41,30 @@ source. Each build has a fresh configless Cargo home and target; only the host
 registry cache/index is exposed, while dependency sources are freshly expanded
 and hashed. It records Cargo/rustc versions, Cargo lock/config/toolchain inputs,
 effective fingerprint/rustflags, host/affinity/priority, build output, and the
-selected Cargo JSON libtest identity. The two binaries must be byte-identical but
-live at distinct paths.
+selected Cargo JSON libtest identity. Both builds receive the same ordered path
+remaps for both physical build roots, collapsing them to
+`/typokat-wu0b/build` across every rustc path scope; all other rustflags are
+forbidden. Each root has the exact `build-N/{source,cargo-home,target}` shape,
+and the two roots are distinct siblings. The two binaries must be byte-identical
+but live at distinct paths.
 
 Before any probe, each release libtest must run the complete pinned WU0B module:
 exactly 16 non-ignored tests pass and the four coordinator-only probes remain
 ignored. Roundtrip, identity, corruption, completeness, real-checker semantics,
 and route calibration therefore form raw preflight evidence rather than child
-claims.
+claims. Each preflight runs from its matching isolated source copy with
+`TYPOKAT_WU0B_PROFILE_ROOT` pinned to that copy, and the coordinator hashes the
+tracked source immediately before and after it.
 
 It then launches two distinct regeneration children with distinct nonexistent
 output paths. Both must create exactly one regular file, terminate cleanly, and
 produce byte-identical archives. Generation is never timed. Every warmup and
 recorded timing child gets only the canonical first artifact through
 `TYPOKAT_WU0B_SNAPSHOT_INPUT`; the output variable is absent, and the artifact's
-identity is checked before and after each launch.
+identity is checked before and after each launch. Regeneration uses the matching
+isolated source root in both its working directory and
+`TYPOKAT_WU0B_PROFILE_ROOT`, with paired source hashes; timing always runs from
+the authoritative repository root and receives no profile-root variable.
 
 The coordinator itself parses both archives. It requires the exact magic,
 version, profile and schema digests, ten ordered tags with zero reserved bits,

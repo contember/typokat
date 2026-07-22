@@ -531,8 +531,21 @@ def prepare_cargo_home(build_root: Path) -> tuple[Path, Path, dict[str, Any]]:
     return cargo_home, target, before
 
 
-def build_environment(cargo_home: Path, target: Path) -> dict[str, str]:
+def canonical_rustflags(build_roots: Iterable[Path]) -> list[str]:
+    roots = [root.resolve() for root in build_roots]
+    if not roots or len(roots) != len(set(roots)):
+        raise ContractError("canonical build roots must be nonempty and distinct")
+    return [
+        *(f"--remap-path-prefix={root}=/typokat-wu0b/build" for root in roots),
+        "--remap-path-scope=all",
+    ]
+
+
+def build_environment(
+    cargo_home: Path, target: Path, build_roots: Iterable[Path] = ()
+) -> dict[str, str]:
     cargo = executable("cargo")
+    rustflags = canonical_rustflags(build_roots) if build_roots else []
     result = sanitized_environment()
     result.update({
         "PATH": f"{cargo.parent}:/usr/bin:/bin",
@@ -540,7 +553,7 @@ def build_environment(cargo_home: Path, target: Path) -> dict[str, str]:
         "CARGO_TARGET_DIR": str(target.resolve()),
         "CARGO_NET_OFFLINE": "true",
         "CARGO_TERM_COLOR": "never",
-        "CARGO_ENCODED_RUSTFLAGS": "",
+        "CARGO_ENCODED_RUSTFLAGS": "\x1f".join(rustflags),
         "CARGO_BUILD_RUSTFLAGS": "",
         "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/bin/cc",
     })
@@ -587,18 +600,24 @@ def repo_cargo_configs() -> list[dict[str, Any]]:
     return [file_identity(path) for path in (ROOT / ".cargo/config", ROOT / ".cargo/config.toml") if path.exists()]
 
 
-def effective_fingerprint(target: Path) -> dict[str, Any]:
+def effective_fingerprint(target: Path, rustflags: list[str]) -> dict[str, Any]:
     candidates = list((target / "release/.fingerprint").glob("typokat-*/test-lib-typokat.json"))
     if len(candidates) != 1:
         raise ContractError(f"fresh build produced {len(candidates)} libtest fingerprints")
     path = candidates[0]
     value = strict_json(path.read_text(encoding="utf-8"), "Cargo libtest fingerprint")
-    if not isinstance(value, dict) or value.get("rustflags") != []:
-        raise ContractError("effective release libtest rustflags are not empty")
+    if not isinstance(value, dict) or value.get("rustflags") != rustflags:
+        raise ContractError("effective release libtest rustflags differ")
     return {"file": file_identity(path), "invoked_timestamp": file_identity(path.parent / "invoked.timestamp"), "rustflags": value["rustflags"], "features": value.get("features"), "profile": value.get("profile"), "config": value.get("config")}
 
 
-def collect_build(contract: dict[str, Any], run_root: Path, repository_source: dict[str, Any], progress: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], Path]:
+def collect_build(
+    contract: dict[str, Any],
+    run_root: Path,
+    repository_source: dict[str, Any],
+    build_roots: list[Path],
+    progress: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], Path]:
     record: dict[str, Any] = {"stage": "preparing-isolated-source"}
     if progress is not None:
         progress.append(record)
@@ -609,7 +628,8 @@ def collect_build(contract: dict[str, Any], run_root: Path, repository_source: d
         raise ContractError("isolated tracked source differs from clean repository HEAD")
     cargo_home, target, cargo_home_before = prepare_cargo_home(run_root)
     command = [str(executable("cargo")), *contract["libtest"]["build_args"]]
-    environment = build_environment(cargo_home, target)
+    rustflags = canonical_rustflags(build_roots)
+    environment = build_environment(cargo_home, target, build_roots)
     record.update({"stage": "toolchain-probes", "command": command, "environment": environment, "cargo_home_before": cargo_home_before})
     cargo_version = run_process([str(executable("cargo")), "--version", "--verbose"], cwd=source_root, environment=environment, timeout=10, stdout_cap=65536, stderr_cap=65536)
     record["cargo_version"] = cargo_version
@@ -638,7 +658,7 @@ def collect_build(contract: dict[str, Any], run_root: Path, repository_source: d
         "toolchain_files": toolchain_identities(),
         "cargo_home_before": cargo_home_before,
         "cargo_home_after": cargo_home_layout(cargo_home),
-        "effective_fingerprint": effective_fingerprint(target),
+        "effective_fingerprint": effective_fingerprint(target, rustflags),
         "source_before": source_before,
         "source_after": source_after,
         "libtest": file_identity(selected),
@@ -659,15 +679,27 @@ def preflight_command(binary: Path, contract: dict[str, Any]) -> list[str]:
     return [str(binary.resolve()), *args]
 
 
-def execute_preflight(binary: Path, contract: dict[str, Any], progress: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def execute_preflight(
+    binary: Path,
+    source_root: Path,
+    contract: dict[str, Any],
+    progress: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     before = file_identity(binary)
-    process = run_process(preflight_command(binary, contract), cwd=ROOT, environment=sanitized_environment(), timeout=600, stdout_cap=contract["sampling"]["maximum_stdout_bytes"], stderr_cap=contract["sampling"]["maximum_stderr_bytes"])
+    source_before = source_snapshot(source_root, include_status=False)
+    environment = sanitized_environment() | {
+        "TYPOKAT_WU0B_PROFILE_ROOT": str(source_root.resolve())
+    }
+    process = run_process(preflight_command(binary, contract), cwd=source_root, environment=environment, timeout=600, stdout_cap=contract["sampling"]["maximum_stdout_bytes"], stderr_cap=contract["sampling"]["maximum_stderr_bytes"])
     after = file_identity(binary)
-    record = {"filter": contract["libtest"]["preflight_filter"], "binary_before": before, "binary_after": after, "process": process}
+    source_after = source_snapshot(source_root, include_status=False)
+    record = {"filter": contract["libtest"]["preflight_filter"], "binary_before": before, "binary_after": after, "source_before": source_before, "source_after": source_after, "process": process}
     if progress is not None:
         progress.append(record)
     if before != after:
         raise ContractError("release libtest mutated during WU0B preflight")
+    if source_before != source_after:
+        raise ContractError("isolated tracked source mutated during WU0B preflight")
     passed = contract["libtest"]["preflight_passed"]
     ignored = contract["libtest"]["preflight_ignored"]
     pattern = re.compile(rf"test result: ok\. {passed} passed; 0 failed; {ignored} ignored; 0 measured; \d+ filtered out")
@@ -741,34 +773,46 @@ def validate_probe(record: Any, contract: dict[str, Any], *, artifact: dict[str,
     return record
 
 
-def child_environment(*, input_path: Path | None = None, output_path: Path | None = None) -> dict[str, str]:
+def child_environment(*, input_path: Path | None = None, output_path: Path | None = None, profile_root: Path | None = None) -> dict[str, str]:
     if (input_path is None) == (output_path is None):
         raise ContractError("child must exclusively generate or consume a snapshot")
     result = sanitized_environment()
     if input_path is not None:
+        if profile_root is not None:
+            raise ContractError("timing child cannot receive a profile root")
         result["TYPOKAT_WU0B_SNAPSHOT_INPUT"] = str(input_path.resolve())
     else:
         assert output_path is not None
+        if profile_root is None:
+            raise ContractError("generation child requires an isolated profile root")
         result["TYPOKAT_WU0B_SNAPSHOT_OUTPUT"] = str(output_path.resolve())
+        result["TYPOKAT_WU0B_PROFILE_ROOT"] = str(profile_root.resolve())
     return result
 
 
-def execute_child(binary: Path, filter_name: str, contract: dict[str, Any], environment: dict[str, str]) -> dict[str, Any]:
+def execute_child(binary: Path, filter_name: str, contract: dict[str, Any], environment: dict[str, str], *, cwd: Path = ROOT, source_root: Path | None = None) -> dict[str, Any]:
     before = file_identity(binary)
     artifact_path = environment.get("TYPOKAT_WU0B_SNAPSHOT_INPUT")
     artifact_before = file_identity(Path(artifact_path)) if artifact_path else None
-    process = run_process(test_command(binary, filter_name, contract), cwd=ROOT, environment=environment, timeout=contract["sampling"]["timeout_seconds"], stdout_cap=contract["sampling"]["maximum_stdout_bytes"], stderr_cap=contract["sampling"]["maximum_stderr_bytes"])
+    source_before = source_snapshot(source_root, include_status=False) if source_root else None
+    process = run_process(test_command(binary, filter_name, contract), cwd=cwd, environment=environment, timeout=contract["sampling"]["timeout_seconds"], stdout_cap=contract["sampling"]["maximum_stdout_bytes"], stderr_cap=contract["sampling"]["maximum_stderr_bytes"])
     after = file_identity(binary)
     if before != after:
         raise ContractError("release libtest mutated during child execution")
     artifact_after = file_identity(Path(artifact_path)) if artifact_path else None
     if artifact_before != artifact_after:
         raise ContractError("prebuilt snapshot artifact mutated during timing")
-    return {"role": "generation" if artifact_path is None else "timing", "filter": filter_name, "binary_before": before, "binary_after": after, "artifact_before": artifact_before, "artifact_after": artifact_after, "process": process}
+    record = {"role": "generation" if artifact_path is None else "timing", "filter": filter_name, "binary_before": before, "binary_after": after, "artifact_before": artifact_before, "artifact_after": artifact_after, "process": process}
+    if source_root is not None:
+        source_after = source_snapshot(source_root, include_status=False)
+        record.update({"source_before": source_before, "source_after": source_after})
+        if source_before != source_after:
+            raise ContractError("isolated tracked source mutated during snapshot regeneration")
+    return record
 
 
-def collect_generations(binaries: list[Path], contract: dict[str, Any], run_root: Path, progress: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], Path, dict[str, Any]]:
-    if len(binaries) != 2:
+def collect_generations(binaries: list[Path], source_roots: list[Path], contract: dict[str, Any], run_root: Path, progress: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], Path, dict[str, Any]]:
+    if len(binaries) != 2 or len(source_roots) != 2:
         raise ContractError("two independent release libtests are required")
     records = []
     outputs = []
@@ -778,7 +822,15 @@ def collect_generations(binaries: list[Path], contract: dict[str, Any], run_root
         output = directory / "library.snapshot"
         if output.exists():
             raise ContractError("regeneration output path already exists")
-        record = execute_child(binaries[ordinal], contract["libtest"]["regeneration_filter"], contract, child_environment(output_path=output))
+        source_root = source_roots[ordinal]
+        record = execute_child(
+            binaries[ordinal],
+            contract["libtest"]["regeneration_filter"],
+            contract,
+            child_environment(output_path=output, profile_root=source_root),
+            cwd=source_root,
+            source_root=source_root,
+        )
         if progress is not None:
             progress.append(record)
         assert_one_test(record["process"], contract["libtest"]["regeneration_filter"])
@@ -880,6 +932,22 @@ def same_source(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return {key: left.get(key) for key in keys} == {key: right.get(key) for key in keys}
 
 
+def validated_source_root(value: Any, label: str) -> Path:
+    keys = {"root", "git_commit", "git_tree", "git_status", "tracked_files", "tracked_bytes", "tracked_sha256"}
+    source = exact_keys(value, keys, label)
+    root_value = source["root"]
+    if not isinstance(root_value, str) or not root_value:
+        raise ContractError(f"{label} root is malformed")
+    try:
+        root = Path(root_value)
+        resolved = root.resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ContractError(f"{label} root is malformed: {error}") from error
+    if not root.is_absolute() or str(resolved) != root_value:
+        raise ContractError(f"{label} root is not a canonical absolute path")
+    return resolved
+
+
 def validate_identity(value: Any, label: str) -> dict[str, Any]:
     exact_keys(value, {"path", "bytes", "sha256"}, label)
     if not isinstance(value["path"], str) or require_int(value["bytes"], f"{label}.bytes", 1) <= 0 or not isinstance(value["sha256"], str) or not HEX64.fullmatch(value["sha256"]):
@@ -908,7 +976,12 @@ def validate_wire_record(wire: Any, artifact_bytes: int, contract: dict[str, Any
     return wire
 
 
-def validate_build_record(build: Any, contract: dict[str, Any], repository_source: dict[str, Any]) -> dict[str, Any]:
+def validate_build_record(
+    build: Any,
+    contract: dict[str, Any],
+    repository_source: dict[str, Any],
+    build_roots: list[Path],
+) -> dict[str, Any]:
     exact_keys(build, {"command", "environment", "cargo_version", "rustc_version", "process", "cargo_lock", "cargo_configs", "toolchain_files", "cargo_home_before", "cargo_home_after", "effective_fingerprint", "source_before", "source_after", "libtest"}, "build evidence")
     source_keys = {"root", "git_commit", "git_tree", "git_status", "tracked_files", "tracked_bytes", "tracked_sha256"}
     exact_keys(build["source_before"], source_keys, "isolated source before build")
@@ -928,8 +1001,11 @@ def validate_build_record(build: Any, contract: dict[str, Any], repository_sourc
             raise ContractError("toolchain version provenance differs")
     if not build["cargo_version"]["stdout"].startswith("cargo ") or not build["rustc_version"]["stdout"].startswith("rustc ") or build["cargo_version"]["argv"][0] == build["rustc_version"]["argv"][0]:
         raise ContractError("Cargo/rustc identities are not distinct real tool proxies")
-    required = {"CARGO_NET_OFFLINE": "true", "CARGO_TERM_COLOR": "never", "CARGO_ENCODED_RUSTFLAGS": "", "CARGO_BUILD_RUSTFLAGS": "", "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/bin/cc"}
-    if any(build["environment"].get(key) != value for key, value in required.items()) or "RUSTFLAGS" in build["environment"]:
+    build_root = Path(build["source_before"]["root"]).parent.resolve()
+    expected_environment = build_environment(
+        build_root / "cargo-home", build_root / "target", build_roots
+    )
+    if build["environment"] != expected_environment:
         raise ContractError("release build environment is not configless/offline")
     if not same_source(build["source_before"], repository_source) or build["source_before"] != build["source_after"]:
         raise ContractError("isolated tracked source provenance differs")
@@ -939,7 +1015,7 @@ def validate_build_record(build: Any, contract: dict[str, Any], repository_sourc
     if build["cargo_lock"]["sha256"] != sha256_file(ROOT / "Cargo.lock"):
         raise ContractError("Cargo.lock provenance differs")
     exact_keys(build["effective_fingerprint"], {"file", "invoked_timestamp", "rustflags", "features", "profile", "config"}, "effective fingerprint")
-    if build["effective_fingerprint"]["rustflags"] != []:
+    if build["effective_fingerprint"]["rustflags"] != canonical_rustflags(build_roots):
         raise ContractError("effective release rustflags differ")
     validate_identity(build["effective_fingerprint"]["file"], "Cargo fingerprint file")
     validate_identity(build["effective_fingerprint"]["invoked_timestamp"], "Cargo invoked timestamp")
@@ -951,17 +1027,32 @@ def validate_build_record(build: Any, contract: dict[str, Any], repository_sourc
                 raise ContractError("Cargo dependency-source tree identity is malformed")
     if build["cargo_home_before"]["registry_sources"]["files"] != 0 or build["cargo_home_after"]["registry_sources"]["files"] <= 0:
         raise ContractError("dependency sources were not freshly materialized and attested")
-    if build["cargo_home_before"]["root"] != build["cargo_home_after"]["root"]:
+    expected_cargo_home = str((build_root / "cargo-home").resolve())
+    if build["cargo_home_before"]["root"] != expected_cargo_home or build["cargo_home_after"]["root"] != expected_cargo_home:
         raise ContractError("Cargo home changed during build")
     return binary
 
 
-def validate_preflight(item: Any, binary: dict[str, Any], contract: dict[str, Any], seen: set[int]) -> dict[str, Any]:
-    exact_keys(item, {"filter", "binary_before", "binary_after", "process"}, "preflight evidence")
+def validate_source_pair(
+    before: Any, after: Any, expected: dict[str, Any], label: str
+) -> None:
+    keys = {"root", "git_commit", "git_tree", "git_status", "tracked_files", "tracked_bytes", "tracked_sha256"}
+    exact_keys(before, keys, f"{label} source before")
+    exact_keys(after, keys, f"{label} source after")
+    if before != expected or after != expected or before != after:
+        raise ContractError(f"{label} source provenance differs or mutated")
+
+
+def validate_preflight(item: Any, binary: dict[str, Any], source: dict[str, Any], contract: dict[str, Any], seen: set[int]) -> dict[str, Any]:
+    exact_keys(item, {"filter", "binary_before", "binary_after", "source_before", "source_after", "process"}, "preflight evidence")
     if item["filter"] != contract["libtest"]["preflight_filter"] or item["binary_before"] != binary or item["binary_after"] != binary:
         raise ContractError("preflight target identity differs")
+    validate_source_pair(item["source_before"], item["source_after"], source, "preflight")
     process = validate_process_shape(item["process"], "preflight process")
-    if process["pid"] in seen or process["argv"] != preflight_command(Path(binary["path"]), contract) or process["env"] != sanitized_environment():
+    expected_environment = sanitized_environment() | {
+        "TYPOKAT_WU0B_PROFILE_ROOT": source["root"]
+    }
+    if process["pid"] in seen or process["argv"] != preflight_command(Path(binary["path"]), contract) or process["cwd"] != source["root"] or process["env"] != expected_environment:
         raise ContractError("preflight process is reused or noncanonical")
     seen.add(process["pid"])
     passed = contract["libtest"]["preflight_passed"]
@@ -991,14 +1082,27 @@ def validate_evidence(evidence: Any, contract: dict[str, Any]) -> dict[str, Any]
     builds = evidence["builds"]
     if not isinstance(builds, list) or len(builds) != 2:
         raise ContractError("two independent clean builds are required")
-    binaries = [validate_build_record(build, contract, evidence["source"]) for build in builds]
+    build_roots = []
+    for ordinal, build in enumerate(builds, 1):
+        exact_keys(build, {"command", "environment", "cargo_version", "rustc_version", "process", "cargo_lock", "cargo_configs", "toolchain_files", "cargo_home_before", "cargo_home_after", "effective_fingerprint", "source_before", "source_after", "libtest"}, "build evidence")
+        source_root = validated_source_root(
+            build["source_before"], "isolated source before build"
+        )
+        build_root = source_root.parent.resolve()
+        if source_root != build_root / "source" or build_root.name != f"build-{ordinal}":
+            raise ContractError("isolated source root does not match its canonical build root")
+        build_roots.append(build_root)
+    if build_roots[0] == build_roots[1] or build_roots[0].parent != build_roots[1].parent:
+        raise ContractError("isolated build roots are reused or do not share one run root")
+    binaries = [validate_build_record(build, contract, evidence["source"], build_roots) for build in builds]
     if binaries[0]["path"] == binaries[1]["path"] or {key: binaries[0][key] for key in ("bytes", "sha256")} != {key: binaries[1][key] for key in ("bytes", "sha256")}:
         raise ContractError("independent builds were reused or produced different libtests")
     preflights = evidence["preflights"]
     if not isinstance(preflights, list) or len(preflights) != 2:
         raise ContractError("both independent libtests require full preflight")
     seen_pids: set[int] = set()
-    preflight_processes = [validate_preflight(item, binary, contract, seen_pids) for item, binary in zip(preflights, binaries, strict=True)]
+    build_sources = [build["source_after"] for build in builds]
+    preflight_processes = [validate_preflight(item, binary, source, contract, seen_pids) for item, binary, source in zip(preflights, binaries, build_sources, strict=True)]
     artifact = evidence["artifact"]
     exact_keys(artifact, {"path", "bytes", "sha256", "wire"}, "artifact identity")
     validate_identity({key: artifact[key] for key in ("path", "bytes", "sha256")}, "artifact file identity")
@@ -1011,12 +1115,14 @@ def validate_evidence(evidence: Any, contract: dict[str, Any]) -> dict[str, Any]
     outputs = []
     previous_generation_end = None
     for ordinal, item in enumerate(generations, 1):
-        exact_keys(item, {"role", "filter", "binary_before", "binary_after", "artifact_before", "artifact_after", "process", "output", "wire"}, "generation record")
+        exact_keys(item, {"role", "filter", "binary_before", "binary_after", "artifact_before", "artifact_after", "source_before", "source_after", "process", "output", "wire"}, "generation record")
         if item["role"] != "generation" or item["filter"] != contract["libtest"]["regeneration_filter"] or item["artifact_before"] is not None or item["artifact_after"] is not None:
             raise ContractError("generation record route differs")
         binary = binaries[ordinal - 1]
         if item["binary_before"] != binary or item["binary_after"] != binary:
             raise ContractError("generation libtest identity differs")
+        source = build_sources[ordinal - 1]
+        validate_source_pair(item["source_before"], item["source_after"], source, "generation")
         process = validate_process_shape(item["process"], "generation process")
         if process["pid"] in seen_pids:
             raise ContractError("regenerations reused one process")
@@ -1028,10 +1134,13 @@ def validate_evidence(evidence: Any, contract: dict[str, Any]) -> dict[str, Any]
         previous_generation_end = process["ended_monotonic_ns"]
         output_identity = validate_identity(item["output"], "regenerated artifact identity")
         expected_output = output_identity["path"]
-        expected_env = sanitized_environment() | {"TYPOKAT_WU0B_SNAPSHOT_OUTPUT": expected_output}
+        expected_env = sanitized_environment() | {
+            "TYPOKAT_WU0B_SNAPSHOT_OUTPUT": expected_output,
+            "TYPOKAT_WU0B_PROFILE_ROOT": source["root"],
+        }
         if process["env"] != expected_env or "TYPOKAT_WU0B_SNAPSHOT_INPUT" in process["env"]:
             raise ContractError("generation child environment differs")
-        if process["argv"] != test_command(Path(binary["path"]), contract["libtest"]["regeneration_filter"], contract):
+        if process["argv"] != test_command(Path(binary["path"]), contract["libtest"]["regeneration_filter"], contract) or process["cwd"] != source["root"]:
             raise ContractError("generation command differs")
         assert_one_test(process, contract["libtest"]["regeneration_filter"])
         if item["wire"] != artifact["wire"]:
@@ -1147,17 +1256,28 @@ def collect_run(output: Path, labels: list[str]) -> dict[str, Any]:
         stage = "independent-builds"
         builds = []
         binaries = []
-        for ordinal in (1, 2):
-            build, binary = collect_build(contract, run_root / f"build-{ordinal}", source, partial["builds"])
+        build_roots = [run_root / f"build-{ordinal}" for ordinal in (1, 2)]
+        for build_root in build_roots:
+            build, binary = collect_build(
+                contract,
+                build_root,
+                source,
+                build_roots,
+                partial["builds"],
+            )
             builds.append(build)
             binaries.append(binary)
         identities = [file_identity(binary) for binary in binaries]
         if identities[0]["path"] == identities[1]["path"] or {key: identities[0][key] for key in ("bytes", "sha256")} != {key: identities[1][key] for key in ("bytes", "sha256")}:
             raise ContractError("two independent clean builds produced different/reused libtests")
+        source_roots = [Path(build["source_after"]["root"]) for build in builds]
         stage = "release-preflight"
-        preflights = [execute_preflight(binary, contract, partial["preflights"]) for binary in binaries]
+        preflights = [
+            execute_preflight(binary, source_root, contract, partial["preflights"])
+            for binary, source_root in zip(binaries, source_roots, strict=True)
+        ]
         stage = "snapshot-regeneration"
-        generations, artifact_path, artifact_file = collect_generations(binaries, contract, run_root, partial["generations"])
+        generations, artifact_path, artifact_file = collect_generations(binaries, source_roots, contract, run_root, partial["generations"])
         artifact = {**artifact_file, "wire": generations[0]["wire"]}
         stage = "timing"
         windows = []
@@ -1198,11 +1318,21 @@ def assert_red() -> None:
     if source["git_status"]:
         raise ContractError("RED witness requires a completely clean worktree")
     run_root = Path(tempfile.mkdtemp(prefix="typokat-full-lib-snapshot-red-"))
-    _, binary = collect_build(contract, run_root, source)
+    build_roots = [run_root / f"build-{ordinal}" for ordinal in (1, 2)]
+    build, binary = collect_build(contract, build_roots[0], source, build_roots)
+    source_root = Path(build["source_after"]["root"])
     for key in ("regeneration_filter", "timing_filter"):
         output = run_root / f"absent-{key}.snapshot"
-        environment = child_environment(output_path=output) if key == "regeneration_filter" else child_environment(input_path=ROOT / "Cargo.lock")
-        result = execute_child(binary, contract["libtest"][key], contract, environment)["process"]
+        generation = key == "regeneration_filter"
+        environment = child_environment(output_path=output, profile_root=source_root) if generation else child_environment(input_path=ROOT / "Cargo.lock")
+        result = execute_child(
+            binary,
+            contract["libtest"][key],
+            contract,
+            environment,
+            cwd=source_root if generation else ROOT,
+            source_root=source_root if generation else None,
+        )["process"]
         if result["returncode"] != 0 or result["stderr"] or result["stdout"].count("running 0 tests") != 1 or not HARNESS_ZERO.search(result["stdout"]):
             raise ContractError(f"{key} is not the expected absent RED probe")
         if output.exists():

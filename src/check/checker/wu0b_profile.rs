@@ -102,7 +102,18 @@ impl StrictLibraryProfile {
 }
 
 pub(crate) fn load_strict_profile() -> Result<StrictLibraryProfile, String> {
-    let profile_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(PROFILE_RELATIVE_PATH);
+    let source_root = match std::env::var_os("TYPOKAT_WU0B_PROFILE_ROOT") {
+        Some(root) => {
+            let root = PathBuf::from(root);
+            if !root.is_absolute() {
+                return Err("TYPOKAT_WU0B_PROFILE_ROOT must be absolute".to_owned());
+            }
+            root
+        }
+        None => std::env::current_dir()
+            .map_err(|error| format!("cannot resolve the ordinary-test profile root: {error}"))?,
+    };
+    let profile_dir = source_root.join(PROFILE_RELATIVE_PATH);
     let (actual_files, actual_dirs) = collect_tree(&profile_dir)?;
     let library_dir = profile_dir.join("lib");
     require_real_directory(&library_dir)?;
