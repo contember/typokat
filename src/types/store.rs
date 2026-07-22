@@ -16,6 +16,7 @@ use crate::types::repr::{
     GenericTypeParam, ModifierOp, ParameterType, PropertyType, TupleRestType, Visibility,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Arc;
 
 /// A run-local handle to a type: an index into the SoA arena. Cheap to copy and
 /// compare; structural equality of two interned types is `a == b`.
@@ -38,6 +39,10 @@ impl TypeId {
 /// The SoA arena. Hot columns first, cold side-tables after.
 #[derive(Default)]
 pub struct Store {
+    /// Identity of the current outgoing-edge graph. Append-only rows preserve it;
+    /// filling a reserved row or changing a side-column edge replaces it.
+    semantic_graph_identity: Arc<()>,
+
     // --- hot, parallel, indexed by TypeId ---
     tag: Vec<TypeTag>,
     flags: Vec<TypeFlags>,
@@ -130,6 +135,14 @@ impl Store {
 
     pub fn is_empty(&self) -> bool {
         self.tag.is_empty()
+    }
+
+    pub(crate) fn semantic_graph_identity(&self) -> &Arc<()> {
+        &self.semantic_graph_identity
+    }
+
+    pub(crate) fn mark_semantic_graph_mutation(&mut self) {
+        self.semantic_graph_identity = Arc::new(());
     }
 
     #[inline]
@@ -320,7 +333,10 @@ impl Store {
         if self.frozen_type_params.contains(&id) {
             return false;
         }
-        self.type_param_constraints.insert(id, constraint);
+        let changed = self.type_param_constraints.insert(id, constraint) != Some(constraint);
+        if changed {
+            self.mark_semantic_graph_mutation();
+        }
         true
     }
 
@@ -330,7 +346,9 @@ impl Store {
         if self.frozen_type_params.contains(&id) {
             return false;
         }
-        self.type_param_constraints.remove(&id);
+        if self.type_param_constraints.remove(&id).is_some() {
+            self.mark_semantic_graph_mutation();
+        }
         true
     }
 
@@ -985,6 +1003,7 @@ impl Store {
         }
 
         let store = Store {
+            semantic_graph_identity: Arc::new(()),
             tag,
             flags,
             payload,

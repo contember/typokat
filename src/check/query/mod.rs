@@ -17,6 +17,7 @@ use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Arc;
 
 pub(crate) const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
 
@@ -162,11 +163,16 @@ fn measure_publication_children(parent: TypeId, children: &[TypeId]) {
 /// must return poison/pre-publication exhaustion before exposing any template.
 pub(crate) trait PublishedClassLookup {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface>;
+    fn publication_identity(&self) -> &Arc<()>;
 }
 
 impl PublishedClassLookup for PublishedClasses {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
         PublishedClasses::published_class(self, class)
+    }
+
+    fn publication_identity(&self) -> &Arc<()> {
+        self.identity()
     }
 }
 
@@ -176,6 +182,9 @@ pub(crate) struct SemanticQueryState {
     projection_memo: FxHashMap<TypeId, TypeId>,
     evaluation_memo: FxHashMap<TypeId, TypeId>,
     relation_cache: RelationCache,
+    publication_clean: FxHashSet<TypeId>,
+    publication_store_identity: Option<Arc<()>>,
+    publication_snapshot_identity: Option<Arc<()>>,
 }
 
 impl SemanticQueryState {
@@ -272,9 +281,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     /// canonical identities. Interface heritage uses identity rather than
     /// assignability (`1` differs from `number`, and `any` differs from `string`).
     pub(crate) fn is_identical(&mut self, left: TypeId, right: TypeId) -> DemandOutcome<bool> {
-        if let Some(reason) =
-            publication_exhaustion(self.interner.store(), &[left, right], self.published)
-        {
+        if let Some(reason) = publication_exhaustion(
+            self.interner.store(),
+            &[left, right],
+            self.published,
+            self.state,
+        ) {
             return DemandOutcome::Exhausted(reason);
         }
         let transaction = ProjectionPlanner::new(
@@ -896,9 +908,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Plan, normalize, and relate one top-level assignability operation.
     pub(crate) fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
-        if let Some(reason) =
-            publication_exhaustion(self.interner.store(), &[src, tgt], self.published)
-        {
+        if let Some(reason) = publication_exhaustion(
+            self.interner.store(),
+            &[src, tgt],
+            self.published,
+            self.state,
+        ) {
             return RelationOutcome::Exhausted(reason);
         }
         if src == tgt {
@@ -1068,6 +1083,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.interner.store(),
             &[overload, implementation],
             self.published,
+            self.state,
         ) {
             return RelationOutcome::Exhausted(reason);
         }
@@ -1640,16 +1656,33 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
     store: &Store,
     roots: &[TypeId],
     published: &L,
+    state: &mut SemanticQueryState,
 ) -> Option<Exhaustion> {
     #[cfg(test)]
     measure_query_source_cold(|measure| {
         measure.publication_calls += 1;
         measure.publication_query_roots += u64::try_from(roots.len()).unwrap();
     });
+    let store_identity = store.semantic_graph_identity();
+    let publication_identity = published.publication_identity();
+    let same_store = state
+        .publication_store_identity
+        .as_ref()
+        .is_some_and(|identity| Arc::ptr_eq(identity, store_identity));
+    let same_publication = state
+        .publication_snapshot_identity
+        .as_ref()
+        .is_some_and(|identity| Arc::ptr_eq(identity, publication_identity));
+    if !same_store || !same_publication {
+        state.publication_clean.clear();
+        state.publication_store_identity = Some(Arc::clone(store_identity));
+        state.publication_snapshot_identity = Some(Arc::clone(publication_identity));
+    }
+
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
-        if !seen.insert(ty) {
+        if state.publication_clean.contains(&ty) || !seen.insert(ty) {
             continue;
         }
         if let Some(instance) = store.class_instance_type(ty) {
@@ -1662,6 +1695,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         measure_publication_children(ty, &children);
         stack.extend(children);
     }
+    state.publication_clean.extend(seen);
     None
 }
 

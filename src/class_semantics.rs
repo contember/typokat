@@ -3,6 +3,7 @@
 use crate::types::repr::{ClassId, TypeParamId};
 use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 /// Construction state for one class declaration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -152,6 +153,7 @@ pub(crate) struct PublishedClasses {
     states: FxHashMap<ClassId, ClassConstructionState>,
     surfaces: FxHashMap<ClassId, PublishedClassSurface>,
     poison: FxHashMap<ClassId, PublishedClassPoison>,
+    identity: Arc<()>,
 }
 
 impl PublishedClasses {
@@ -263,6 +265,7 @@ impl PublishedClasses {
         self.states.extend(extension.states);
         self.surfaces.extend(extension.surfaces);
         self.poison.extend(extension.poison);
+        self.identity = Arc::new(());
         Some(self)
     }
 
@@ -309,6 +312,7 @@ impl PublishedClasses {
                 states,
                 surfaces,
                 poison,
+                identity: Arc::new(()),
             })
     }
 
@@ -317,7 +321,12 @@ impl PublishedClasses {
             states: FxHashMap::default(),
             surfaces: FxHashMap::default(),
             poison: FxHashMap::default(),
+            identity: Arc::new(()),
         }
+    }
+
+    pub(crate) fn identity(&self) -> &Arc<()> {
+        &self.identity
     }
 
     pub(crate) fn require(&self, class: ClassId) -> DemandOutcome<()> {
@@ -361,6 +370,7 @@ impl PublishedClasses {
             states: FxHashMap::from_iter([(class, state)]),
             surfaces: FxHashMap::default(),
             poison: FxHashMap::default(),
+            identity: Arc::new(()),
         }
     }
 }

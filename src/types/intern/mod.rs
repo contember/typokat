@@ -277,6 +277,9 @@ impl Interner {
 
         // Every fallible check is complete. The exclusive interner borrow keeps the
         // sequential writes unobservable until the whole batch is frozen.
+        if !fills.is_empty() {
+            self.store.mark_semantic_graph_mutation();
+        }
         for fill in fills {
             let id = fill.target();
             match fill {

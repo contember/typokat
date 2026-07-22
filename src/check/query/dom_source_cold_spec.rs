@@ -261,7 +261,6 @@ fn assert_accounting(measure: QuerySourceColdMeasure) {
 }
 
 #[test]
-#[ignore = "RED: repeated publication scans still exceed the reachable-graph bound"]
 fn publication_edge_work_is_bounded_by_the_unique_reachable_graph() {
     for order in QueryOrder::ALL {
         let (small, small_measure) = check_cold_measured(SMALL_TARGETS, order);

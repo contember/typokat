@@ -1780,3 +1780,246 @@ fn recursive_generic_listener_deferred_lookup_is_order_independent() {
     assert!(right_to_left_first);
     assert!(left_to_right_second);
 }
+
+fn poisoned_publication(classes: &[(ClassId, PublishedClassPoison)]) -> PublishedClasses {
+    PublishedClasses::from_publication(
+        classes
+            .iter()
+            .map(|(class, _)| (*class, ClassConstructionState::Poisoned))
+            .collect(),
+        FxHashMap::default(),
+        classes.iter().copied().collect(),
+    )
+    .expect("poisoned test publication is complete")
+}
+
+#[test]
+fn publication_clean_cache_skips_repeated_acyclic_and_recursive_graphs() {
+    let mut interner = Interner::with_intrinsics();
+    let first = interner.reserve_object();
+    let second = interner.reserve_object();
+    interner.fill_object(
+        first,
+        ObjectType {
+            properties: vec![PropertyType::public("next", second)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        second,
+        ObjectType {
+            properties: vec![PropertyType::public("next", first)],
+            ..Default::default()
+        },
+    );
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let guard = start_query_source_cold_measure();
+
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[first], &published, &mut state),
+        None
+    );
+    let cold = query_source_cold_measure().expect("measurement is active");
+    assert_eq!(cold.publication_edge_visits, 2);
+    assert_eq!(state.publication_clean.len(), 2);
+
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[second], &published, &mut state),
+        None
+    );
+    let warm = query_source_cold_measure().expect("measurement is active");
+    assert_eq!(warm.publication_edge_visits, cold.publication_edge_visits);
+    drop(guard);
+}
+
+#[test]
+fn publication_clean_cache_preserves_first_poison_in_cyclic_order() {
+    let mut interner = Interner::with_intrinsics();
+    let first_poison = ClassId(81_001);
+    let second_poison = ClassId(81_002);
+    let first_application = interner.intern_class_instance(first_poison, Vec::new());
+    let second_application = interner.intern_class_instance(second_poison, Vec::new());
+    let first = interner.reserve_object();
+    let second = interner.reserve_object();
+    interner.fill_object(
+        first,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("aPoison", first_application),
+                PropertyType::public("zCycle", second),
+            ],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        second,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("aPoison", second_application),
+                PropertyType::public("zCycle", first),
+            ],
+            ..Default::default()
+        },
+    );
+    let published = poisoned_publication(&[
+        (first_poison, PublishedClassPoison::Heritage),
+        (second_poison, PublishedClassPoison::Surface),
+    ]);
+    let mut state = SemanticQueryState::default();
+
+    for _ in 0..2 {
+        assert_eq!(
+            publication_exhaustion(interner.store(), &[first], &published, &mut state),
+            Some(Exhaustion::ClassSurfacePoison {
+                class: second_poison
+            })
+        );
+        assert!(state.publication_clean.is_empty());
+    }
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[second], &published, &mut state),
+        Some(Exhaustion::ClassHeritagePoison {
+            class: first_poison
+        })
+    );
+    assert!(state.publication_clean.is_empty());
+}
+
+#[test]
+fn publication_clean_cache_invalidates_after_type_param_constraint_change() {
+    let mut interner = Interner::with_intrinsics();
+    let parameter = TypeParamId(81_003);
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    let poison = ClassId(81_003);
+    let poison_application = interner.intern_class_instance(poison, Vec::new());
+    let published = poisoned_publication(&[(poison, PublishedClassPoison::Initializer)]);
+    let mut state = SemanticQueryState::default();
+
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[parameter_type], &published, &mut state),
+        None
+    );
+    assert!(state.publication_clean.contains(&parameter_type));
+    assert!(interner.set_type_param_constraint(parameter, poison_application));
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[parameter_type], &published, &mut state),
+        Some(Exhaustion::ClassInitializerPoison { class: poison })
+    );
+    assert!(state.publication_clean.is_empty());
+}
+
+#[test]
+fn publication_clean_cache_invalidates_after_reserved_type_fill() {
+    let mut interner = Interner::with_intrinsics();
+    let root = interner.reserve_object();
+    let poison = ClassId(81_004);
+    let poison_application = interner.intern_class_instance(poison, Vec::new());
+    let published = poisoned_publication(&[(poison, PublishedClassPoison::Heritage)]);
+    let mut state = SemanticQueryState::default();
+
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[root], &published, &mut state),
+        None
+    );
+    assert!(state.publication_clean.contains(&root));
+    interner.fill_object(
+        root,
+        ObjectType {
+            properties: vec![PropertyType::public("poison", poison_application)],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[root], &published, &mut state),
+        Some(Exhaustion::ClassHeritagePoison { class: poison })
+    );
+    assert!(state.publication_clean.is_empty());
+}
+
+#[test]
+fn publication_clean_cache_uses_snapshot_identity_and_clone_stability() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let child = interner.intern_object(ObjectType::default());
+    let root = interner.intern_array(child);
+    let base_publication = PublishedClasses::empty();
+    let cloned = base_publication.clone();
+    let class = ClassId(81_005);
+    let extension = published(class, Vec::new(), wk.error, wk.error);
+    let extended = base_publication
+        .clone()
+        .extend(extension)
+        .expect("disjoint publication extends");
+    let mut state = SemanticQueryState::default();
+    let guard = start_query_source_cold_measure();
+
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[root], &base_publication, &mut state),
+        None
+    );
+    let cold = query_source_cold_measure().expect("measurement is active");
+    assert_eq!(cold.publication_edge_visits, 1);
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[root], &cloned, &mut state),
+        None
+    );
+    let cloned_warm = query_source_cold_measure().expect("measurement is active");
+    assert_eq!(cloned_warm.publication_edge_visits, 1);
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[root], &extended, &mut state),
+        None
+    );
+    let extended_cold = query_source_cold_measure().expect("measurement is active");
+    assert_eq!(extended_cold.publication_edge_visits, 2);
+    drop(guard);
+}
+
+#[test]
+fn publication_clean_cache_never_certifies_projection_overlays() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let ready = ClassId(81_006);
+    let poison = ClassId(81_007);
+    let poison_application = interner.intern_class_instance(poison, Vec::new());
+    let template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("poison", poison_application)],
+        ..Default::default()
+    });
+    let application = interner.intern_class_instance(ready, Vec::new());
+    let published = PublishedClasses::from_publication(
+        FxHashMap::from_iter([
+            (ready, ClassConstructionState::Published),
+            (poison, ClassConstructionState::Poisoned),
+        ]),
+        FxHashMap::from_iter([(
+            ready,
+            PublishedClassSurface::new(ready, Vec::new(), template, wk.error, None),
+        )]),
+        FxHashMap::from_iter([(poison, PublishedClassPoison::Surface)]),
+    )
+    .expect("test publication is complete");
+    let mut state = SemanticQueryState::default();
+
+    assert_eq!(
+        publication_exhaustion(interner.store(), &[application], &published, &mut state),
+        None
+    );
+    assert!(state.publication_clean.contains(&application));
+    assert!(!state.publication_clean.contains(&template));
+    assert!(!state.publication_clean.contains(&poison_application));
+
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("poison", wk.number)],
+        ..Default::default()
+    });
+    let mut next_type_param = 0;
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(application, target),
+        RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { class })
+            if class == poison
+    ));
+    assert!(!state.publication_clean.contains(&template));
+    assert!(!state.publication_clean.contains(&poison_application));
+}
