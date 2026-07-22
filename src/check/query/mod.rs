@@ -50,9 +50,44 @@ pub(crate) struct QueryDemandMeasure {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QuerySourceColdMeasure {
+    pub publication_calls: u64,
+    pub publication_query_roots: u64,
+    pub publication_edge_visits: u64,
+    pub publication_unique_edges: u64,
+    pub planner_transactions: u64,
+    pub durable_memo_seed_copy_entries: u64,
+    pub exhaustion_frontiers: u64,
+}
+
+#[cfg(test)]
 thread_local! {
     static QUERY_DEMAND_MEASURE: std::cell::RefCell<QueryDemandMeasure> =
         std::cell::RefCell::new(QueryDemandMeasure::default());
+    static QUERY_SOURCE_COLD_MEASURE: std::cell::RefCell<QuerySourceColdMeasure> =
+        std::cell::RefCell::new(QuerySourceColdMeasure::default());
+    static PUBLICATION_UNIQUE_EDGES: std::cell::RefCell<FxHashSet<(TypeId, TypeId)>> =
+        std::cell::RefCell::new(FxHashSet::default());
+    static QUERY_SOURCE_COLD_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) struct QuerySourceColdMeasureGuard {
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for QuerySourceColdMeasureGuard {
+    fn drop(&mut self) {
+        QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
+            assert!(enabled.get(), "source-cold measurement scope is not active");
+            enabled.set(false);
+        });
+        QUERY_SOURCE_COLD_MEASURE
+            .with(|measure| *measure.borrow_mut() = QuerySourceColdMeasure::default());
+        PUBLICATION_UNIQUE_EDGES.with(|edges| edges.borrow_mut().clear());
+    }
 }
 
 #[cfg(test)]
@@ -61,13 +96,66 @@ pub(crate) fn reset_query_demand_measure() {
 }
 
 #[cfg(test)]
+pub(crate) fn start_query_source_cold_measure() -> QuerySourceColdMeasureGuard {
+    QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
+        assert!(
+            !enabled.get(),
+            "source-cold measurement scope is already active"
+        );
+        enabled.set(true);
+    });
+    QUERY_SOURCE_COLD_MEASURE
+        .with(|measure| *measure.borrow_mut() = QuerySourceColdMeasure::default());
+    PUBLICATION_UNIQUE_EDGES.with(|edges| edges.borrow_mut().clear());
+    QuerySourceColdMeasureGuard {
+        _not_send: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn query_demand_measure() -> QueryDemandMeasure {
     QUERY_DEMAND_MEASURE.with(|measure| *measure.borrow())
 }
 
 #[cfg(test)]
+pub(crate) fn query_source_cold_measure() -> Option<QuerySourceColdMeasure> {
+    QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
+        enabled
+            .get()
+            .then(|| QUERY_SOURCE_COLD_MEASURE.with(|measure| *measure.borrow()))
+    })
+}
+
+#[cfg(test)]
 fn measure_query_demand(update: impl FnOnce(&mut QueryDemandMeasure)) {
     QUERY_DEMAND_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+}
+
+#[cfg(test)]
+fn measure_query_source_cold(update: impl FnOnce(&mut QuerySourceColdMeasure)) {
+    QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
+        if enabled.get() {
+            QUERY_SOURCE_COLD_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
+        }
+    });
+}
+
+#[cfg(test)]
+fn measure_publication_children(parent: TypeId, children: &[TypeId]) {
+    if !QUERY_SOURCE_COLD_ENABLED.with(std::cell::Cell::get) {
+        return;
+    }
+    let unique = PUBLICATION_UNIQUE_EDGES.with(|edges| {
+        let mut edges = edges.borrow_mut();
+        children
+            .iter()
+            .filter(|&&child| edges.insert((parent, child)))
+            .count()
+    });
+    measure_query_source_cold(|measure| {
+        measure.publication_edge_visits += u64::try_from(children.len()).unwrap();
+        measure.publication_unique_edges += u64::try_from(unique).unwrap();
+    });
 }
 
 /// Immutable published-class boundary consumed by query planning. Implementors
@@ -1140,6 +1228,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
             .iter()
             .filter_map(|(&source, &result)| (source != result).then_some((source, result)))
             .collect();
+        #[cfg(test)]
+        measure_query_source_cold(|measure| {
+            measure.planner_transactions += 1;
+            measure.durable_memo_seed_copy_entries +=
+                u64::try_from(reusable_evaluations.len()).unwrap();
+        });
         ProjectionPlanner {
             interner,
             published,
@@ -1532,6 +1626,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
                 _ => {}
             }
         });
+        #[cfg(test)]
+        measure_query_source_cold(|measure| measure.exhaustion_frontiers += 1);
         self.planning_tainted = true;
         if self.first_exhaustion.is_none() {
             self.first_exhaustion = Some(reason.clone());
@@ -1545,6 +1641,11 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
     roots: &[TypeId],
     published: &L,
 ) -> Option<Exhaustion> {
+    #[cfg(test)]
+    measure_query_source_cold(|measure| {
+        measure.publication_calls += 1;
+        measure.publication_query_roots += u64::try_from(roots.len()).unwrap();
+    });
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
@@ -1556,7 +1657,10 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
                 return Some(reason);
             }
         }
-        stack.extend(query_children(store, ty));
+        let children = query_children(store, ty);
+        #[cfg(test)]
+        measure_publication_children(ty, &children);
+        stack.extend(children);
     }
     None
 }
@@ -1646,6 +1750,9 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
         TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod dom_source_cold_spec;
 
 #[cfg(test)]
 mod tests;
