@@ -320,6 +320,17 @@ class SnapshotCoordinatorTests(unittest.TestCase):
         self.evidence["builds"][1]["libtest"] = self.evidence["builds"][0]["libtest"]
         self.assert_invalid(self.evidence)
 
+    def test_two_independent_source_roots_are_required(self) -> None:
+        reused_root = self.evidence["builds"][0]["source_after"]["root"]
+        for key in ("source_before", "source_after"):
+            self.evidence["builds"][1][key]["root"] = reused_root
+        for record in (self.evidence["preflights"][1], self.evidence["generations"][1]):
+            record["source_before"]["root"] = reused_root
+            record["source_after"]["root"] = reused_root
+            record["process"]["cwd"] = reused_root
+            record["process"]["env"]["TYPOKAT_WU0B_PROFILE_ROOT"] = reused_root
+        self.assert_invalid(self.evidence)
+
     def test_dependency_source_integrity_is_required(self) -> None:
         self.evidence["builds"][0]["cargo_home_after"]["registry_sources"]["files"] = 0
         self.assert_invalid(self.evidence)
