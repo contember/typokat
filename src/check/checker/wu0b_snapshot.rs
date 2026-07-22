@@ -3532,7 +3532,7 @@ pub(in crate::check::checker) struct SnapshotFastCleanProbeRecordForTest {
     pub(in crate::check::checker) validated_bytes: usize,
     pub(in crate::check::checker) compiler_measure: LibraryCompilerMeasureForTest,
     pub(in crate::check::checker) runtime_projection_sha256: String,
-    pub(in crate::check::checker) semantics: ProbeSemanticsForTest,
+    pub(in crate::check::checker) semantics: ProbeSemanticsCaseForTest,
     pub(in crate::check::checker) validation_us: u64,
     pub(in crate::check::checker) decode_us: u64,
     pub(in crate::check::checker) user_check_us: u64,
@@ -3572,11 +3572,26 @@ fn json_strings(values: &[String]) -> String {
 
 impl SnapshotFastCleanProbeRecordForTest {
     pub(in crate::check::checker) fn render(&self) -> String {
-        format!(concat!("TYPOKAT_WU0B_PROBE={{\"schema\":1,\"kind\":\"eager-fast-clean\",\"route\":\"{}\",\"profile_sha256\":\"{}\",", "\"strategy\":\"eager-complete\",\"artifact_sha256\":\"{}\",\"artifact_bytes\":{},\"validated_bytes\":{},", "\"runtime_projection_sha256\":\"{}\",\"input_path\":{},", "\"semantics\":{{\"fast-clean\":{{\"exit\":{},\"diagnostics\":{}}},\"fast-errors\":{{\"exit\":{},\"diagnostics\":{}}}}},", "\"compiler_measure\":{{\"source_loads\":{},\"parse_units\":{},\"bind_units\":{},\"semantic_units\":{},\"snapshot_generations\":{}}},", "\"internal\":{{\"validation_us\":{},\"decode_us\":{},\"user_check_us\":{},\"wall_us\":{},\"peak_rss_bytes\":{}}}}}"),
+        format!(concat!("TYPOKAT_WU0B_PROBE={{\"schema\":1,\"kind\":\"eager-fast-clean\",\"route\":\"{}\",\"profile_sha256\":\"{}\",", "\"strategy\":\"eager-complete\",\"artifact_sha256\":\"{}\",\"artifact_bytes\":{},\"validated_bytes\":{},", "\"runtime_projection_sha256\":\"{}\",\"input_path\":{},", "\"semantics\":{{\"fast-clean\":{{\"exit\":{},\"diagnostics\":{}}}}},", "\"compiler_measure\":{{\"source_loads\":{},\"parse_units\":{},\"bind_units\":{},\"semantic_units\":{},\"snapshot_generations\":{}}},", "\"internal\":{{\"validation_us\":{},\"decode_us\":{},\"user_check_us\":{},\"wall_us\":{},\"peak_rss_bytes\":{}}}}}"),
             self.route, self.profile_identity, self.artifact_sha256, self.artifact_bytes, self.validated_bytes, self.runtime_projection_sha256, json_string(&self.input_path),
-            self.semantics.fast_clean.exit, json_strings(&self.semantics.fast_clean.diagnostics), self.semantics.fast_errors.exit, json_strings(&self.semantics.fast_errors.diagnostics),
+            self.semantics.exit, json_strings(&self.semantics.diagnostics),
             self.compiler_measure.source_loads, self.compiler_measure.parse_units, self.compiler_measure.bind_units, self.compiler_measure.semantic_units, self.compiler_measure.snapshot_generations,
             self.validation_us, self.decode_us, self.user_check_us, self.wall_us, self.peak_rss_bytes)
+    }
+}
+
+pub(in crate::check::checker) struct SnapshotSemanticCalibrationRecordForTest {
+    semantics: ProbeSemanticsForTest,
+    artifact_sha256: String,
+    artifact_bytes: usize,
+}
+
+impl SnapshotSemanticCalibrationRecordForTest {
+    pub(in crate::check::checker) fn render(&self) -> String {
+        format!(concat!("TYPOKAT_WU0B_SEMANTICS={{\"schema\":1,\"kind\":\"decoded-semantic-calibration\",", "\"profile_sha256\":\"{}\",\"artifact_sha256\":\"{}\",\"artifact_bytes\":{},", "\"semantics\":{{\"fast-clean\":{{\"exit\":{},\"diagnostics\":{}}},\"fast-errors\":{{\"exit\":{},\"diagnostics\":{}}}}}}}"),
+            PROFILE_IDENTITY, self.artifact_sha256, self.artifact_bytes,
+            self.semantics.fast_clean.exit, json_strings(&self.semantics.fast_clean.diagnostics),
+            self.semantics.fast_errors.exit, json_strings(&self.semantics.fast_errors.diagnostics))
     }
 }
 
@@ -3635,7 +3650,6 @@ fn diagnostic_identities(name: &str, source: &str, diagnostics: &[Diagnostic]) -
 pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
     path: &Path,
     fast_clean: &str,
-    fast_errors: &str,
 ) -> Result<SnapshotFastCleanProbeRecordForTest, SnapshotError> {
     let compiler_scope = start_library_compiler_measure_for_test();
     let wall = Instant::now();
@@ -3643,23 +3657,15 @@ pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
         fs::read(path).map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
     let validation = Instant::now();
     let validated = validate_snapshot_for_test(&bytes)?;
-    let error_validated = validated.clone();
     let validation_us = elapsed_us(validation)?;
     let decode = Instant::now();
     let clean_base = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)?;
-    let error_base =
-        decode_snapshot_for_test(error_validated, SnapshotDecodeStrategy::EagerComplete)?;
     let projection_sha = clean_base.projection.sha256();
     let decode_us = elapsed_us(decode)?;
     let user = Instant::now();
     let clean = check_source_with_decoded_base_for_test(clean_base, fast_clean);
     let user_check_us = elapsed_us(user)?;
-    let errors = check_source_with_decoded_base_for_test(error_base, fast_errors);
-    if !clean.parse_errors.is_empty()
-        || !clean.incomplete.is_empty()
-        || !errors.parse_errors.is_empty()
-        || !errors.incomplete.is_empty()
-    {
+    if !clean.parse_errors.is_empty() || !clean.incomplete.is_empty() {
         return Err(invalid(
             SnapshotErrorStage::UserCheck,
             "probe encountered parse or incomplete surfaces",
@@ -3674,23 +3680,13 @@ pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
         validated_bytes: bytes.len(),
         compiler_measure,
         runtime_projection_sha256: projection_sha,
-        semantics: ProbeSemanticsForTest {
-            fast_clean: ProbeSemanticsCaseForTest {
-                exit: u8::from(!clean.diagnostics.is_empty()),
-                diagnostics: diagnostic_identities(
-                    "fast-clean/main.ts",
-                    fast_clean,
-                    &clean.diagnostics,
-                ),
-            },
-            fast_errors: ProbeSemanticsCaseForTest {
-                exit: u8::from(!errors.diagnostics.is_empty()),
-                diagnostics: diagnostic_identities(
-                    "fast-errors/main.ts",
-                    fast_errors,
-                    &errors.diagnostics,
-                ),
-            },
+        semantics: ProbeSemanticsCaseForTest {
+            exit: u8::from(!clean.diagnostics.is_empty()),
+            diagnostics: diagnostic_identities(
+                "fast-clean/main.ts",
+                fast_clean,
+                &clean.diagnostics,
+            ),
         },
         validation_us,
         decode_us,
@@ -3751,12 +3747,54 @@ pub(in crate::check::checker) fn snapshot_decode_strategy_probe_for_test(
 
 pub(in crate::check::checker) fn snapshot_regeneration_artifact_for_test(
     path: &Path,
-) -> Result<(), SnapshotError> {
+    fast_clean: &str,
+    fast_errors: &str,
+) -> Result<SnapshotSemanticCalibrationRecordForTest, SnapshotError> {
     let profile = super::wu0b_profile::load_strict_profile()
         .map_err(|error| invalid(SnapshotErrorStage::Generation, error.to_string()))?;
     let compiled = compile_snapshot_for_test(&profile.injected_sources())?;
     fs::write(path, compiled.archive.as_bytes())
-        .map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))
+        .map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
+    let bytes =
+        fs::read(path).map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
+    let validated = validate_snapshot_for_test(&bytes)?;
+    let clean_base =
+        decode_snapshot_for_test(validated.clone(), SnapshotDecodeStrategy::EagerComplete)?;
+    let error_base = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)?;
+    let clean = check_source_with_decoded_base_for_test(clean_base, fast_clean);
+    let errors = check_source_with_decoded_base_for_test(error_base, fast_errors);
+    if !clean.parse_errors.is_empty()
+        || !clean.incomplete.is_empty()
+        || !errors.parse_errors.is_empty()
+        || !errors.incomplete.is_empty()
+    {
+        return Err(invalid(
+            SnapshotErrorStage::UserCheck,
+            "semantic calibration encountered parse or incomplete surfaces",
+        ));
+    }
+    Ok(SnapshotSemanticCalibrationRecordForTest {
+        semantics: ProbeSemanticsForTest {
+            fast_clean: ProbeSemanticsCaseForTest {
+                exit: u8::from(!clean.diagnostics.is_empty()),
+                diagnostics: diagnostic_identities(
+                    "fast-clean/main.ts",
+                    fast_clean,
+                    &clean.diagnostics,
+                ),
+            },
+            fast_errors: ProbeSemanticsCaseForTest {
+                exit: u8::from(!errors.diagnostics.is_empty()),
+                diagnostics: diagnostic_identities(
+                    "fast-errors/main.ts",
+                    fast_errors,
+                    &errors.diagnostics,
+                ),
+            },
+        },
+        artifact_sha256: hex(&digest32(&bytes)),
+        artifact_bytes: bytes.len(),
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -4095,19 +4133,16 @@ mod tests {
         fs::write(&path, compiled.archive().as_bytes()).expect("write probe artifact");
         let compiler = start_library_compiler_measure_for_test();
         let route = start_decoded_base_route_measure_for_test();
-        let record = snapshot_fast_clean_probe_for_test(
-            &path,
-            "const value: string = snapshotProbe.value;",
-            "const wrong: number = snapshotProbe.value;",
-        )
-        .expect("probe succeeds");
+        let record =
+            snapshot_fast_clean_probe_for_test(&path, "const value: string = snapshotProbe.value;")
+                .expect("probe succeeds");
         let route = route.finish();
         assert_eq!(compiler.finish(), LibraryCompilerMeasureForTest::default());
         assert_eq!(
             record.compiler_measure,
             LibraryCompilerMeasureForTest::default()
         );
-        assert_eq!(route.user_checks, 2);
+        assert_eq!(route.user_checks, 1);
         assert_eq!(
             route.runtime_projection_sha256,
             record.runtime_projection_sha256
@@ -4115,7 +4150,7 @@ mod tests {
         assert!(record.peak_rss_bytes > 0);
         let rendered = record.render();
         assert!(rendered.contains("\"fast-clean\""));
-        assert!(rendered.contains("\"fast-errors\""));
+        assert!(!rendered.contains("\"fast-errors\""));
         assert!(!rendered.contains("\"fast_clean\""));
         assert!(!rendered.contains("\"fast_errors\""));
         fs::remove_file(path).expect("remove probe artifact");

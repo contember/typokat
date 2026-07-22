@@ -1331,9 +1331,10 @@ fn snapshot_regeneration_probe_once() {
         std::env::var_os("TYPOKAT_WU0B_SNAPSHOT_OUTPUT")
             .expect("coordinator supplies an exact fresh artifact path"),
     );
-    snapshot_regeneration_artifact_for_test(&path)
-        .expect("fresh process writes one complete snapshot artifact");
+    let calibration = snapshot_regeneration_artifact_for_test(&path, FAST_CLEAN, FAST_ERRORS)
+        .expect("fresh process writes and calibrates one complete snapshot artifact");
     assert!(path.is_file());
+    println!("{}", calibration.render());
 }
 
 #[test]

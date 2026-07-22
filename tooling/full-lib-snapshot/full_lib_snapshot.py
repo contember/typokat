@@ -38,6 +38,11 @@ HARNESS_ONE = re.compile(
 HARNESS_ZERO = re.compile(
     r"test result: ok\. 0 passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out"
 )
+HARNESS_RECORD_SUFFIX = re.compile(
+    r"^\r?\n(?:ok|test [^\r\n]+ \.\.\. ok)\r?\n\r?\n"
+    r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+    r"\d+ filtered out; finished in [0-9.]+s\r?\n?$"
+)
 STRATEGY = "eager-complete"
 RECORD_KIND = "eager-fast-clean"
 SCHEMA_IDENTITY = hashlib.sha256(
@@ -184,7 +189,7 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     for key in ("profile_sha256", "wu0a_oracles_sha256", "wu0a_workloads_sha256"):
         if not isinstance(data[key], str) or not HEX64.fullmatch(data[key]):
             raise ContractError(f"contract {key} is malformed")
-    exact_keys(data["libtest"], {"package", "target", "build_args", "preflight_filter", "preflight_args", "preflight_passed", "preflight_ignored", "regeneration_filter", "timing_filter", "strategy_filter", "scaling_filter", "test_args", "record_prefix"}, "contract.libtest")
+    exact_keys(data["libtest"], {"package", "target", "build_args", "preflight_filter", "preflight_args", "preflight_passed", "preflight_ignored", "regeneration_filter", "timing_filter", "strategy_filter", "scaling_filter", "test_args", "record_prefix", "semantic_record_prefix"}, "contract.libtest")
     expected_build = ["test", "--release", "--lib", "--no-run", "--message-format=json-render-diagnostics"]
     expected_args = ["--ignored", "--exact", "{filter}", "--nocapture", "--test-threads=1"]
     if data["libtest"]["package"] != "typokat" or data["libtest"]["target"] != "typokat":
@@ -204,6 +209,8 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
             raise ContractError(f"canonical {key} differs")
     if data["libtest"]["record_prefix"] != "TYPOKAT_WU0B_PROBE=":
         raise ContractError("probe record prefix differs")
+    if data["libtest"]["semantic_record_prefix"] != "TYPOKAT_WU0B_SEMANTICS=":
+        raise ContractError("semantic calibration record prefix differs")
     exact_keys(data["artifact"], {"maximum_bytes", "minimum_bytes", "regenerations", "schema"}, "contract.artifact")
     if data["artifact"] != {"maximum_bytes": 32 * 1024 * 1024, "minimum_bytes": 1024 * 1024, "regenerations": 2, "schema": 1}:
         raise ContractError("artifact contract differs")
@@ -716,16 +723,28 @@ def assert_one_test(process: dict[str, Any], filter_name: str) -> None:
         raise ContractError(f"{filter_name} did not execute exactly one passing test")
 
 
-def extract_probe(stdout: str, contract: dict[str, Any]) -> dict[str, Any]:
-    prefix = contract["libtest"]["record_prefix"]
+def extract_prefixed_record(stdout: str, prefix: str, label: str) -> Any:
     if stdout.count(prefix) != 1:
-        raise ContractError("timing child must emit exactly one probe record")
+        raise ContractError(f"{label} child must emit exactly one record")
     tail = stdout.split(prefix, 1)[1]
-    decoder = json.JSONDecoder(object_pairs_hook=lambda pairs: _strict_pairs(pairs, "probe record"), parse_constant=lambda value: (_ for _ in ()).throw(ContractError(f"probe record contains {value}")))
+    decoder = json.JSONDecoder(object_pairs_hook=lambda pairs: _strict_pairs(pairs, f"{label} record"), parse_constant=lambda value: (_ for _ in ()).throw(ContractError(f"{label} record contains {value}")))
     try:
-        record, _ = decoder.raw_decode(tail.lstrip())
+        value = tail.lstrip()
+        record, end = decoder.raw_decode(value)
     except (json.JSONDecodeError, ContractError) as error:
-        raise ContractError(f"malformed probe record: {error}") from error
+        raise ContractError(f"malformed {label} record: {error}") from error
+    suffix = value[end:]
+    if suffix and not HARNESS_RECORD_SUFFIX.fullmatch(suffix):
+        raise ContractError(f"malformed {label} record boundary")
+    return record
+
+
+def extract_probe(stdout: str, contract: dict[str, Any]) -> dict[str, Any]:
+    if contract["libtest"]["semantic_record_prefix"] in stdout:
+        raise ContractError("timing child emitted untimed semantic calibration")
+    record = extract_prefixed_record(
+        stdout, contract["libtest"]["record_prefix"], "timing probe"
+    )
     return validate_probe(record, contract)
 
 
@@ -744,6 +763,31 @@ def expected_semantics() -> dict[str, Any]:
     return {key: rows[key] for key in ("fast-clean", "fast-errors")}
 
 
+def validate_semantic_calibration(record: Any, contract: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
+    exact_keys(record, {"schema", "kind", "profile_sha256", "artifact_sha256", "artifact_bytes", "semantics"}, "semantic calibration record")
+    if record["schema"] != 1 or record["kind"] != "decoded-semantic-calibration":
+        raise ContractError("semantic calibration schema or kind differs")
+    if record["profile_sha256"] != contract["profile_sha256"]:
+        raise ContractError("semantic calibration profile identity differs")
+    if not isinstance(record["artifact_sha256"], str) or not HEX64.fullmatch(record["artifact_sha256"]):
+        raise ContractError("semantic calibration artifact digest is malformed")
+    require_int(record["artifact_bytes"], "semantic calibration artifact bytes", 1)
+    if record["artifact_sha256"] != artifact["sha256"] or record["artifact_bytes"] != artifact["bytes"]:
+        raise ContractError("semantic calibration artifact identity differs")
+    if record["semantics"] != expected_semantics():
+        raise ContractError("semantic calibration differs from WU0A")
+    return record
+
+
+def extract_semantic_calibration(stdout: str, contract: dict[str, Any], artifact: dict[str, Any]) -> dict[str, Any]:
+    if contract["libtest"]["record_prefix"] in stdout:
+        raise ContractError("generation child emitted a timing probe record")
+    record = extract_prefixed_record(
+        stdout, contract["libtest"]["semantic_record_prefix"], "semantic calibration"
+    )
+    return validate_semantic_calibration(record, contract, artifact)
+
+
 def validate_probe(record: Any, contract: dict[str, Any], *, artifact: dict[str, Any] | None = None, input_path: str | None = None) -> dict[str, Any]:
     exact_keys(record, {"schema", "kind", "route", "profile_sha256", "strategy", "artifact_sha256", "artifact_bytes", "validated_bytes", "runtime_projection_sha256", "input_path", "semantics", "compiler_measure", "internal"}, "probe record")
     if record["schema"] != 1 or record["kind"] != RECORD_KIND or record["strategy"] != STRATEGY or record["route"] != "decoded-base-user-check":
@@ -760,7 +804,7 @@ def validate_probe(record: Any, contract: dict[str, Any], *, artifact: dict[str,
     for key, value in record["compiler_measure"].items():
         if require_int(value, f"probe compiler measure {key}") != 0:
             raise ContractError("source/compiler/generation work occurred inside timing")
-    if record["semantics"] != expected_semantics():
+    if record["semantics"] != {"fast-clean": expected_semantics()["fast-clean"]}:
         raise ContractError("probe semantic identities differ from WU0A")
     exact_keys(record["internal"], {"validation_us", "decode_us", "user_check_us", "wall_us", "peak_rss_bytes"}, "probe internal telemetry")
     for key, value in record["internal"].items():
@@ -839,8 +883,12 @@ def collect_generations(binaries: list[Path], source_roots: list[Path], contract
             raise ContractError("regeneration child wrote outside its exact artifact path")
         identity = file_identity(output)
         wire = parse_snapshot_wire(output, contract)
+        semantic_calibration = extract_semantic_calibration(
+            record["process"]["stdout"], contract, identity
+        )
         record["output"] = identity
         record["wire"] = wire
+        record["semantic_calibration"] = semantic_calibration
         records.append(record)
         outputs.append((output, identity))
     if outputs[0][1]["sha256"] != outputs[1][1]["sha256"] or outputs[0][1]["bytes"] != outputs[1][1]["bytes"] or records[0]["wire"] != records[1]["wire"]:
@@ -1115,7 +1163,7 @@ def validate_evidence(evidence: Any, contract: dict[str, Any]) -> dict[str, Any]
     outputs = []
     previous_generation_end = None
     for ordinal, item in enumerate(generations, 1):
-        exact_keys(item, {"role", "filter", "binary_before", "binary_after", "artifact_before", "artifact_after", "source_before", "source_after", "process", "output", "wire"}, "generation record")
+        exact_keys(item, {"role", "filter", "binary_before", "binary_after", "artifact_before", "artifact_after", "source_before", "source_after", "process", "output", "wire", "semantic_calibration"}, "generation record")
         if item["role"] != "generation" or item["filter"] != contract["libtest"]["regeneration_filter"] or item["artifact_before"] is not None or item["artifact_after"] is not None:
             raise ContractError("generation record route differs")
         binary = binaries[ordinal - 1]
@@ -1143,6 +1191,9 @@ def validate_evidence(evidence: Any, contract: dict[str, Any]) -> dict[str, Any]
         if process["argv"] != test_command(Path(binary["path"]), contract["libtest"]["regeneration_filter"], contract) or process["cwd"] != source["root"]:
             raise ContractError("generation command differs")
         assert_one_test(process, contract["libtest"]["regeneration_filter"])
+        parsed_calibration = extract_semantic_calibration(process["stdout"], contract, output_identity)
+        if item["semantic_calibration"] != parsed_calibration:
+            raise ContractError("retained semantic calibration differs from raw output")
         if item["wire"] != artifact["wire"]:
             raise ContractError("external snapshot wire projections differ")
         outputs.append(output_identity)
