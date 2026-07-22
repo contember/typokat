@@ -459,6 +459,15 @@ class SnapshotCoordinatorTests(unittest.TestCase):
         sample["process"]["stdout"] += sample["process"]["stdout"]
         self.assert_invalid(self.evidence)
 
+    def test_prefixed_record_rejects_trailing_payload(self) -> None:
+        for suffix in ("\n{}", "\nGARBAGE", "\r\n[]"):
+            with self.subTest(suffix=suffix), self.assertRaises(snapshot.ContractError):
+                snapshot.extract_prefixed_record(
+                    'PREFIX={"schema":1}' + suffix,
+                    "PREFIX=",
+                    "adversarial",
+                )
+
     def test_stale_or_wrong_libtest_identity_is_rejected(self) -> None:
         sample = self.evidence["windows"][2]["recorded"][4]
         sample["binary_before"] = copy.deepcopy(sample["binary_before"])
