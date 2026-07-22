@@ -58,6 +58,40 @@ fn exact_struct_fields(source: &str, declaration: &str) -> Vec<String> {
         .collect()
 }
 
+fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
+    let declaration_offset = source.find(declaration).expect("struct declaration");
+    let body_offset = source[declaration_offset..]
+        .find('{')
+        .map(|offset| declaration_offset + offset + 1)
+        .expect("struct body");
+    let body_end = source[body_offset..]
+        .find("\n}")
+        .map(|offset| body_offset + offset)
+        .expect("field-only struct body");
+    let mut fields = Vec::new();
+    let mut declaration = String::new();
+    for line in source[body_offset..body_end].lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !declaration.is_empty() {
+            declaration.push(' ');
+        }
+        declaration.push_str(line);
+        if line.ends_with(',') {
+            let (name, _) = declaration
+                .strip_suffix(',')
+                .and_then(|field| field.split_once(':'))
+                .expect("named struct field");
+            fields.push(name.trim().to_owned());
+            declaration.clear();
+        }
+    }
+    assert!(declaration.is_empty(), "unterminated struct field");
+    fields
+}
+
 fn acquire(
     provider: &LibraryBaseProvider,
 ) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
@@ -422,6 +456,43 @@ fn frozen_library_base_retains_only_ast_free_semantic_state() {
             "retained forbidden field: {forbidden}"
         );
     }
+
+    let compiler_source = include_str!("../check/checker/library_compiler.rs");
+    assert_eq!(
+        exact_struct_field_names(
+            compiler_source,
+            "pub(crate) struct OwnedLibraryRuntimeState"
+        ),
+        [
+            "interner",
+            "binder",
+            "published_types",
+            "decl_types",
+            "semantic_identities",
+            "runtime",
+            "next_type_param",
+            "next_class_id",
+            "source_file_count",
+        ]
+    );
+    let checker_source = include_str!("../check/checker/mod.rs");
+    assert_eq!(
+        exact_struct_field_names(
+            checker_source,
+            "pub(in crate::check::checker) struct FrozenCheckerRuntimeMetadata",
+        ),
+        [
+            "class_application_parameters",
+            "class_new_metadata",
+            "class_parents",
+            "class_value_aliases",
+            "class_value_bindings",
+            "standalone_namespace_value_aliases",
+            "class_names",
+            "namespace_terminals",
+            "named_function_symbols",
+        ]
+    );
 }
 
 #[test]
