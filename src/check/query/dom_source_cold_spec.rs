@@ -287,7 +287,6 @@ fn publication_edge_work_is_bounded_by_the_unique_reachable_graph() {
 }
 
 #[test]
-#[ignore = "RED: planner transactions still copy durable evaluation memo seeds"]
 fn planner_transactions_borrow_durable_memos_without_seed_copies() {
     for order in QueryOrder::ALL {
         let (run, measure) = check_cold_measured(LARGE_TARGETS, order);

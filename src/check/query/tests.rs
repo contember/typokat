@@ -2023,3 +2023,140 @@ fn publication_clean_cache_never_certifies_projection_overlays() {
     assert!(!state.publication_clean.contains(&template));
     assert!(!state.publication_clean.contains(&poison_application));
 }
+
+fn decidable_conditional(interner: &mut Interner, result: TypeId) -> TypeId {
+    let wk = interner.well_known();
+    interner.intern_conditional(ConditionalType {
+        check: wk.number,
+        extends_ty: wk.number,
+        true_branch: result,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    })
+}
+
+#[test]
+fn borrowed_durable_identity_requires_explicit_admission() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let conditional = decidable_conditional(&mut interner, wk.string);
+    let durable = FxHashMap::from_iter([(conditional, conditional)]);
+    let plan = ProjectionPlan {
+        durable_evaluation_memo: Some(&durable),
+        ..ProjectionPlan::default()
+    };
+
+    assert_eq!(plan.normalize(conditional), Ok(conditional));
+    assert!(matches!(
+        plan.relation_demand(interner.store(), conditional),
+        Some(RelationDemand::Evaluation(found)) if found == conditional
+    ));
+
+    let published = PublishedClasses::empty();
+    let projection = FxHashMap::default();
+    let transaction = ProjectionPlanner::new(&mut interner, &published, &projection, &durable, 0)
+        .plan(&[conditional]);
+    assert_eq!(transaction.plan.normalize(conditional), Ok(conditional));
+    assert_eq!(
+        transaction
+            .plan
+            .relation_demand(interner.store(), conditional),
+        None
+    );
+    assert!(transaction.pending_evaluator_writes.is_empty());
+}
+
+#[test]
+fn local_evaluation_override_wins_and_commits_only_the_delta() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let conditional = decidable_conditional(&mut interner, wk.number);
+    let retained = decidable_conditional(&mut interner, wk.boolean);
+    let mut state = SemanticQueryState {
+        evaluation_memo: FxHashMap::from_iter([(conditional, wk.number), (retained, wk.boolean)]),
+        ..SemanticQueryState::default()
+    };
+    let published = PublishedClasses::empty();
+    let projection = FxHashMap::default();
+    let transaction = {
+        let mut planner = ProjectionPlanner::new(
+            &mut interner,
+            &published,
+            &projection,
+            &state.evaluation_memo,
+            0,
+        );
+        planner.record_evaluation(conditional, wk.string);
+        planner.finish()
+    };
+    assert_eq!(transaction.plan.normalize(conditional), Ok(wk.string));
+    assert_eq!(
+        transaction.pending_evaluator_writes,
+        FxHashMap::from_iter([(conditional, wk.string)])
+    );
+
+    let commit = transaction.into_commit();
+    let mut next_type_param = 0;
+    SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+        .commit_plan(commit);
+    assert_eq!(state.evaluation_memo.get(&conditional), Some(&wk.string));
+    assert_eq!(state.evaluation_memo.get(&retained), Some(&wk.boolean));
+    assert_eq!(state.evaluation_memo.len(), 2);
+}
+
+#[test]
+fn tainted_transaction_discards_local_delta_and_preserves_parent() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let retained = decidable_conditional(&mut interner, wk.boolean);
+    let completed = decidable_conditional(&mut interner, wk.string);
+    let mut exhausting = wk.number;
+    for _ in 0..=DEFAULT_STEP_BUDGET {
+        exhausting = decidable_conditional(&mut interner, exhausting);
+    }
+    let source = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("aCompleted", completed),
+            PropertyType::public("zExhausting", exhausting),
+        ],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType::default());
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState {
+        evaluation_memo: FxHashMap::from_iter([(retained, wk.boolean)]),
+        ..SemanticQueryState::default()
+    };
+    let original = state.evaluation_memo.clone();
+    let mut next_type_param = 0;
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_identical(source, target),
+        DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
+    );
+    assert_eq!(state.evaluation_memo, original);
+}
+
+#[test]
+fn normalization_follows_borrowed_durable_chain_without_local_copies() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first = decidable_conditional(&mut interner, wk.number);
+    let second = decidable_conditional(&mut interner, wk.string);
+    let durable = FxHashMap::from_iter([(first, second), (second, wk.string)]);
+    let published = PublishedClasses::empty();
+    let projection = FxHashMap::default();
+    let planner = ProjectionPlanner::new(&mut interner, &published, &projection, &durable, 0);
+    assert_eq!(planner.plan.normalize(first), Ok(wk.string));
+    assert!(planner.working_evaluation_memo.is_empty());
+    assert!(planner.plan.evaluation_overlay.is_empty());
+    let transaction = planner.finish();
+
+    assert_eq!(transaction.plan.normalize(first), Ok(wk.string));
+    assert!(transaction.plan.evaluation_overlay.is_empty());
+    assert!(transaction.plan.resolved_evaluations.is_empty());
+    assert!(transaction.pending_evaluator_writes.is_empty());
+}

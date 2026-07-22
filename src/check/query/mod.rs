@@ -243,7 +243,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         *self.next_type_param = transaction.next_type_param;
         match transaction.plan.normalize(root) {
             Ok(normalized) if !transaction.planning_tainted => {
-                self.commit_plan(transaction);
+                self.commit_plan(transaction.into_commit());
                 DemandOutcome::Ready(normalized)
             }
             Ok(_) => DemandOutcome::Exhausted(
@@ -315,14 +315,14 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &mut Vec::new(),
         );
         if matches!(outcome, DemandOutcome::Ready(_)) {
-            self.commit_plan(transaction);
+            self.commit_plan(transaction.into_commit());
         }
         outcome
     }
 
     fn identical_recursive(
         store: &Store,
-        plan: &ProjectionPlan,
+        plan: &ProjectionPlan<'_>,
         left: TypeId,
         right: TypeId,
         seen: &mut IdentitySeen,
@@ -758,7 +758,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     fn identical_optional(
         store: &Store,
-        plan: &ProjectionPlan,
+        plan: &ProjectionPlan<'_>,
         left: Option<TypeId>,
         right: Option<TypeId>,
         seen: &mut IdentitySeen,
@@ -813,7 +813,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     fn identical_unordered(
         store: &Store,
-        plan: &ProjectionPlan,
+        plan: &ProjectionPlan<'_>,
         left: &[TypeId],
         right: &[TypeId],
         seen: &mut IdentitySeen,
@@ -857,7 +857,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     fn flatten_normalized_family(
         store: &Store,
-        plan: &ProjectionPlan,
+        plan: &ProjectionPlan<'_>,
         family: TypeTag,
         roots: &[TypeId],
     ) -> Result<Vec<TypeId>, Exhaustion> {
@@ -885,7 +885,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     fn collapse_exact_family_root(
         store: &Store,
-        plan: &ProjectionPlan,
+        plan: &ProjectionPlan<'_>,
         root: TypeId,
     ) -> Result<TypeId, Exhaustion> {
         let tag = store.tag(root);
@@ -968,7 +968,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
         self.state.relation_cache = relation_cache;
         if commit_plan {
-            self.commit_plan(transaction);
+            self.commit_plan(transaction.into_commit());
         }
         outcome
     }
@@ -1067,7 +1067,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         .unwrap_or(Exhaustion::ClassProjectionBudget),
                 );
             }
-            self.commit_plan(transaction);
+            self.commit_plan(transaction.into_commit());
         }
         outcome
     }
@@ -1134,12 +1134,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
         self.state.relation_cache = relation_cache;
         if commit_plan {
-            self.commit_plan(transaction);
+            self.commit_plan(transaction.into_commit());
         }
         outcome
     }
 
-    fn commit_plan(&mut self, transaction: PlannedQuery) {
+    fn commit_plan(&mut self, transaction: PendingQueryCommit) {
         #[cfg(test)]
         measure_query_demand(|measure| {
             measure.durable_evaluation_inserts +=
@@ -1157,14 +1157,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
 /// Immutable overlays consumed by relation before identity/cache/cycle logic.
 #[derive(Default)]
-pub(crate) struct ProjectionPlan {
+pub(crate) struct ProjectionPlan<'a> {
     class_projection_overlay: FxHashMap<TypeId, TypeId>,
     evaluation_overlay: FxHashMap<TypeId, TypeId>,
     resolved_evaluations: FxHashSet<TypeId>,
     frontier: FxHashMap<TypeId, Exhaustion>,
+    durable_evaluation_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
 }
 
-impl RelationNormalization for ProjectionPlan {
+impl RelationNormalization for ProjectionPlan<'_> {
     fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
         let mut current = ty;
         let mut seen = FxHashSet::default();
@@ -1178,6 +1179,10 @@ impl RelationNormalization for ProjectionPlan {
             let next = self
                 .evaluation_overlay
                 .get(&current)
+                .or_else(|| {
+                    self.durable_evaluation_memo
+                        .and_then(|memo| memo.get(&current))
+                })
                 .or_else(|| self.class_projection_overlay.get(&current))
                 .copied();
             match next {
@@ -1196,7 +1201,10 @@ impl RelationNormalization for ProjectionPlan {
             | TypeTag::Instantiation
             | TypeTag::Mapped
             | TypeTag::Template
-                if !self.resolved_evaluations.contains(&ty) =>
+                if !self.resolved_evaluations.contains(&ty)
+                    && self
+                        .durable_evaluation_memo
+                        .is_none_or(|memo| memo.get(&ty).is_none_or(|result| *result == ty)) =>
             {
                 Some(RelationDemand::Evaluation(ty))
             }
@@ -1205,8 +1213,8 @@ impl RelationNormalization for ProjectionPlan {
     }
 }
 
-struct PlannedQuery {
-    plan: ProjectionPlan,
+struct PlannedQuery<'a> {
+    plan: ProjectionPlan<'a>,
     pending_projection_writes: FxHashMap<TypeId, TypeId>,
     pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
     next_type_param: u32,
@@ -1214,14 +1222,30 @@ struct PlannedQuery {
     first_exhaustion: Option<Exhaustion>,
 }
 
-struct ProjectionPlanner<'a, L: PublishedClassLookup + ?Sized> {
-    interner: &'a mut Interner,
-    published: &'a L,
-    durable_projection_memo: &'a FxHashMap<TypeId, TypeId>,
-    durable_evaluation_memo: &'a FxHashMap<TypeId, TypeId>,
+struct PendingQueryCommit {
+    pending_projection_writes: FxHashMap<TypeId, TypeId>,
+    pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
+    next_type_param: u32,
+}
+
+impl PlannedQuery<'_> {
+    fn into_commit(self) -> PendingQueryCommit {
+        PendingQueryCommit {
+            pending_projection_writes: self.pending_projection_writes,
+            pending_evaluator_writes: self.pending_evaluator_writes,
+            next_type_param: self.next_type_param,
+        }
+    }
+}
+
+struct ProjectionPlanner<'work, 'memo, L: PublishedClassLookup + ?Sized> {
+    interner: &'work mut Interner,
+    published: &'work L,
+    durable_projection_memo: &'work FxHashMap<TypeId, TypeId>,
+    durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
     working_evaluation_memo: FxHashMap<TypeId, TypeId>,
     next_type_param: u32,
-    plan: ProjectionPlan,
+    plan: ProjectionPlan<'memo>,
     pending_projection_writes: FxHashMap<TypeId, TypeId>,
     admitted_applications: FxHashSet<TypeId>,
     visiting: FxHashSet<TypeId>,
@@ -1232,34 +1256,27 @@ struct ProjectionPlanner<'a, L: PublishedClassLookup + ?Sized> {
     evaluation_expansions: u32,
 }
 
-impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
+impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'memo, L> {
     fn new(
-        interner: &'a mut Interner,
-        published: &'a L,
-        durable_projection_memo: &'a FxHashMap<TypeId, TypeId>,
-        durable_evaluation_memo: &'a FxHashMap<TypeId, TypeId>,
+        interner: &'work mut Interner,
+        published: &'work L,
+        durable_projection_memo: &'work FxHashMap<TypeId, TypeId>,
+        durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
         next_type_param: u32,
     ) -> Self {
-        let reusable_evaluations: FxHashMap<TypeId, TypeId> = durable_evaluation_memo
-            .iter()
-            .filter_map(|(&source, &result)| (source != result).then_some((source, result)))
-            .collect();
         #[cfg(test)]
         measure_query_source_cold(|measure| {
             measure.planner_transactions += 1;
-            measure.durable_memo_seed_copy_entries +=
-                u64::try_from(reusable_evaluations.len()).unwrap();
         });
         ProjectionPlanner {
             interner,
             published,
             durable_projection_memo,
             durable_evaluation_memo,
-            working_evaluation_memo: reusable_evaluations.clone(),
+            working_evaluation_memo: FxHashMap::default(),
             next_type_param,
             plan: ProjectionPlan {
-                evaluation_overlay: reusable_evaluations.clone(),
-                resolved_evaluations: reusable_evaluations.keys().copied().collect(),
+                durable_evaluation_memo: Some(durable_evaluation_memo),
                 ..ProjectionPlan::default()
             },
             pending_projection_writes: FxHashMap::default(),
@@ -1273,14 +1290,14 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
         }
     }
 
-    fn plan(mut self, roots: &[TypeId]) -> PlannedQuery {
+    fn plan(mut self, roots: &[TypeId]) -> PlannedQuery<'memo> {
         for &root in roots {
             self.visit(root);
         }
         self.finish()
     }
 
-    fn plan_demand(mut self, root: TypeId) -> PlannedQuery {
+    fn plan_demand(mut self, root: TypeId) -> PlannedQuery<'memo> {
         self.demand_outer_only = true;
         match self.interner.store().tag(root) {
             TypeTag::ClassInstance => {
@@ -1345,7 +1362,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
         }
     }
 
-    fn finish(self) -> PlannedQuery {
+    fn finish(self) -> PlannedQuery<'memo> {
         let pending_evaluator_writes = self
             .working_evaluation_memo
             .iter()
@@ -1547,9 +1564,16 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
     fn evaluate_existing(&mut self, ty: TypeId) -> TypeId {
         #[cfg(test)]
         measure_query_demand(|measure| measure.pending_evaluations += 1);
-        if let Some(&result) = self.durable_evaluation_memo.get(&ty) {
+        let local = self.working_evaluation_memo.get(&ty).copied();
+        let durable = local
+            .is_none()
+            .then(|| self.durable_evaluation_memo.get(&ty).copied())
+            .flatten();
+        if let Some(result) = local.or(durable) {
             #[cfg(test)]
-            measure_query_demand(|measure| measure.durable_evaluation_hits += 1);
+            if durable.is_some() {
+                measure_query_demand(|measure| measure.durable_evaluation_hits += 1);
+            }
             self.record_evaluation(ty, result);
             self.visit_demand_result(result);
             return result;
@@ -1569,9 +1593,10 @@ impl<'a, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'a, L> {
         measure_query_demand(|measure| measure.evaluation_expansions += 1);
 
         let (outcome, exhausted, cycle_detected) = {
-            let mut evaluator = ConditionalEvaluator::new(
+            let mut evaluator = ConditionalEvaluator::with_parent_memo(
                 self.interner,
                 &mut self.next_type_param,
+                self.durable_evaluation_memo,
                 &mut self.working_evaluation_memo,
                 DEFAULT_STEP_BUDGET,
             );

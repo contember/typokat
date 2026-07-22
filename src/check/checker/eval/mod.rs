@@ -183,7 +183,9 @@ pub struct ConditionalEvaluator<'a> {
     /// The module-wide type-parameter counter (advanced when freshening `infer`
     /// binders to transient parameters).
     next_type_param: &'a mut u32,
-    /// Durable evaluation memo `substituted-conditional/instantiation id → result`.
+    /// Optional immutable durable parent consulted after the mutable local memo.
+    parent_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
+    /// Mutable evaluation memo `substituted-conditional/instantiation id → result`.
     memo: &'a mut FxHashMap<TypeId, TypeId>,
     /// Per-run concreteness cache (`id → contains no free type parameter`), so the deep
     /// check types of a recursive descent are classified in `O(total nodes)`, not
@@ -215,6 +217,7 @@ impl<'a> ConditionalEvaluator<'a> {
         ConditionalEvaluator {
             interner,
             next_type_param,
+            parent_memo: None,
             memo,
             concrete: FxHashMap::default(),
             in_flight: FxHashSet::default(),
@@ -225,6 +228,27 @@ impl<'a> ConditionalEvaluator<'a> {
             cycle_detected: false,
             planned_exhaustion: None,
         }
+    }
+
+    pub(crate) fn with_parent_memo(
+        interner: &'a mut Interner,
+        next_type_param: &'a mut u32,
+        parent_memo: &'a FxHashMap<TypeId, TypeId>,
+        memo: &'a mut FxHashMap<TypeId, TypeId>,
+        budget: u32,
+    ) -> Self {
+        let mut evaluator = Self::new(interner, next_type_param, memo, budget);
+        evaluator.parent_memo = Some(parent_memo);
+        evaluator
+    }
+
+    fn memoized(&self, ty: TypeId) -> Option<TypeId> {
+        self.memo.get(&ty).copied().or_else(|| {
+            self.parent_memo
+                .and_then(|memo| memo.get(&ty))
+                .copied()
+                .filter(|result| *result != ty)
+        })
     }
 
     /// Taint every active memo frame after a genuine evaluator cycle. The task stack
@@ -311,7 +335,7 @@ impl<'a> ConditionalEvaluator<'a> {
                             break;
                         }
                     };
-                    if let Some(&cached) = self.memo.get(&ty) {
+                    if let Some(cached) = self.memoized(ty) {
                         values.push(cached);
                         continue;
                     }

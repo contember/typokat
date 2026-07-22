@@ -2560,3 +2560,58 @@ fn mapped_value_rewrite_handles_a_deep_alternating_function_spine() {
     }
     assert_eq!(current, leaf);
 }
+
+#[test]
+fn parent_memo_is_read_only_and_local_entries_win() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let root = interner.intern_conditional(ConditionalType {
+        check: wk.number,
+        extends_ty: wk.number,
+        true_branch: wk.boolean,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+    let parent = FxHashMap::from_iter([(root, wk.number)]);
+    let mut local = FxHashMap::from_iter([(root, root)]);
+    let mut next = 99_000;
+    let mut evaluator = ConditionalEvaluator::with_parent_memo(
+        &mut interner,
+        &mut next,
+        &parent,
+        &mut local,
+        DEFAULT_STEP_BUDGET,
+    );
+    assert_eq!(evaluate_ready(&mut evaluator, root), root);
+    drop(evaluator);
+    assert_eq!(parent.get(&root), Some(&wk.number));
+    assert_eq!(local.get(&root), Some(&root));
+
+    local.clear();
+    let mut evaluator = ConditionalEvaluator::with_parent_memo(
+        &mut interner,
+        &mut next,
+        &parent,
+        &mut local,
+        DEFAULT_STEP_BUDGET,
+    );
+    assert_eq!(evaluate_ready(&mut evaluator, root), wk.number);
+    drop(evaluator);
+    assert!(local.is_empty());
+    assert_eq!(parent.get(&root), Some(&wk.number));
+
+    let identity_parent = FxHashMap::from_iter([(root, root)]);
+    let mut evaluator = ConditionalEvaluator::with_parent_memo(
+        &mut interner,
+        &mut next,
+        &identity_parent,
+        &mut local,
+        DEFAULT_STEP_BUDGET,
+    );
+    assert_eq!(evaluate_ready(&mut evaluator, root), wk.boolean);
+    drop(evaluator);
+    assert_eq!(identity_parent.get(&root), Some(&root));
+    assert_eq!(local.get(&root), Some(&wk.boolean));
+}
