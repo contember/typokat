@@ -644,3 +644,29 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
 - WU4 deliberately does not route collisions. WU5 must preflight before semantic mutation and
   replace the current whole-source private rebuild with an exact combined-universe mechanism whose
   collision and fanout rows meet the 2x gate.
+
+### 2026-07-23 — WU5 private-route decision and RED contract
+
+- The current source-backed full universe measures **2.695 s**: parse **11.7 ms**, bind **17.3 ms**,
+  reserve/fill **267.5 ms**, publication **54.8 ms**, and statement semantics **2.344 s**. A
+  collision-free frozen user check measures **60.6 ms**. The dominant removable work is repeated
+  library semantics, not source loading or binding.
+- Private routing cannot be treated as a rare direct-collision fallback. The B14 matrix is exactly
+  **2 shared / 10 private**. A preliminary conservative census of the pinned 874-case official
+  corpus finds 814 cases with script top-level value contributors and estimates roughly **815 / 874**
+  private projects, while only about 16 directly collide with a frozen root. This is a planning
+  proxy until the production OXC preflight emits the authoritative incidence.
+- ADR `784ca25` accepts a fresh private canonical-snapshot seed plus full 82-file/project parse-bind
+  and selective replay of the authenticated affected-owner reverse closure. ADR `07b2c0a` separates
+  route-unaware semantic-prefix authentication from an exact continuable library-only binder/root
+  checkpoint and requires append-only replacement semantic rows.
+- RED commit `42b14fc` specifies mutation-free exhaustive preflight, value/type/namespace and
+  cross-slot collision routing, unique global-object contributors, full-source semantic/event
+  parity, exact merged slot identities, snapshot-index admission, a calibrated 31+6-family physical
+  work ledger, independent owner/edge closure oracles, O(V+E) scheduler work, the locked production
+  collision, and 32 genuinely independent contending private projects.
+- Three independent RED reviews are PASS after closing self-reported/gameable work counters,
+  incomplete module and cross-slot coverage, an invalid opposite-order identity witness, conflated
+  binder/semantic prefixes, missing ledger parity, in-process RSS, and a one-project fanout loophole.
+  The unchanged production gate passes **1,041 / 0 / 18** plus all integration/conformance/doctest
+  targets; clippy, format, and diff checks are clean.
