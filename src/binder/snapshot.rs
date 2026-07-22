@@ -1,4 +1,4 @@
-//! Test-only deterministic codec for the AST-free binder prefix.
+//! Deterministic codec for the AST-free binder prefix, with test-only encoder support.
 
 use super::bind::Binder;
 use super::declaration::{
@@ -8,7 +8,9 @@ use super::declaration::{
 use super::namespace::*;
 use super::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use super::symbol::{Symbol, SymbolId, SymbolTable};
-use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader, SnapshotWriter};
+#[cfg(test)]
+use crate::snapshot_codec::SnapshotWriter;
+use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal, OriginalModuleOrdinal};
 use crate::span::Span;
 use rustc_hash::FxHashMap;
@@ -205,23 +207,26 @@ fn push_canonical_index_references(
     owner_domain: u8,
     target_domain: u8,
     targets: impl IntoIterator<Item = u32>,
-) {
+) -> Result<(), SnapshotCodecError> {
     for (index, target) in targets.into_iter().enumerate() {
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "canonical index exceeds u32"))?;
         push_reference(
             records,
             owner_domain,
             target_domain,
             CANONICAL_INDEX_TARGET,
-            u32::try_from(index).expect("canonical index fits u32"),
+            owner,
             target,
         );
     }
+    Ok(())
 }
 
 fn canonical_row_indices<T: PartialEq>(
     primary: &[T],
     canonical: impl Iterator<Item = T>,
-) -> Vec<u32> {
+) -> Result<Vec<u32>, SnapshotCodecError> {
     let mut claimed = vec![false; primary.len()];
     canonical
         .map(|row| {
@@ -230,15 +235,20 @@ fn canonical_row_indices<T: PartialEq>(
                 .enumerate()
                 .find(|(index, candidate)| !claimed[*index] && **candidate == row)
                 .map(|(index, _)| index)
-                .expect("canonical row originates in its primary table");
+                .ok_or_else(|| {
+                    SnapshotCodecError::invalid(0, "canonical row is absent from its primary table")
+                })?;
             claimed[index] = true;
-            u32::try_from(index).expect("primary row index fits u32")
+            u32::try_from(index)
+                .map_err(|_| SnapshotCodecError::invalid(0, "primary row index exceeds u32"))
         })
         .collect()
 }
 
 /// Enumerate every typed binder reference without consulting snapshot wire bytes.
-pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<SnapshotReferenceRecord> {
+pub(crate) fn snapshot_reference_records(
+    binder: &Binder,
+) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
     let mut records = Vec::new();
     let root = 0;
     push_reference(
@@ -275,7 +285,8 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
     );
 
     for (index, scope) in binder.graph.snapshot_scopes().iter().enumerate() {
-        let owner = u32::try_from(index).expect("scope index fits u32");
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "scope index exceeds u32"))?;
         if let Some(parent) = scope.parent {
             push_reference(
                 &mut records,
@@ -319,7 +330,8 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
     }
 
     for (index, symbol) in binder.symbols.snapshot_symbols().iter().enumerate() {
-        let owner = u32::try_from(index).expect("symbol index fits u32");
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "symbol index exceeds u32"))?;
         if let Some(value) = symbol.value {
             push_reference(
                 &mut records,
@@ -701,7 +713,8 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
     }
 
     for (index, (placement_owner, _, participants)) in primary.placements.iter().enumerate() {
-        let owner = u32::try_from(index).expect("merge placement index fits u32");
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "merge placement index exceeds u32"))?;
         push_declaration_owner_reference(
             &mut records,
             REF_MERGE_PLACEMENT,
@@ -740,7 +753,8 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
         }
     }
     for (index, merge) in binder.namespaces.merges().enumerate() {
-        let owner = u32::try_from(index).expect("merge placement index fits u32");
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "merge placement index exceeds u32"))?;
         for issue in &merge.placement_issues {
             push_reference(
                 &mut records,
@@ -862,7 +876,8 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
     }
 
     for (index, child) in primary.deferred_children.iter().enumerate() {
-        let owner = u32::try_from(index).expect("deferred child index fits u32");
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "deferred child index exceeds u32"))?;
         push_reference(
             &mut records,
             REF_DEFERRED_CHILD,
@@ -892,7 +907,8 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
     }
 
     for (index, export) in primary.umd_exports.iter().enumerate() {
-        let owner = u32::try_from(index).expect("UMD export index fits u32");
+        let owner = u32::try_from(index)
+            .map_err(|_| SnapshotCodecError::invalid(0, "UMD export index exceeds u32"))?;
         push_reference(
             &mut records,
             REF_UMD_EXPORT,
@@ -981,19 +997,19 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
             .namespaces
             .namespaces()
             .map(|namespace| namespace.id.0),
-    );
+    )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_SOURCE_UNIT_INDEX,
         REF_SOURCE_UNIT,
         binder.namespaces.source_units().map(|unit| unit.source.0),
-    );
+    )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_GLOBAL_INDEX,
         REF_GLOBAL_AUGMENTATION,
         binder.namespaces.globals().map(|global| global.id.0),
-    );
+    )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_DEFERRED_MODULE_INDEX,
@@ -1002,27 +1018,27 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
             .namespaces
             .deferred_modules()
             .map(|module| module.id.0),
-    );
+    )?;
     let canonical_deferred_children = canonical_row_indices(
         &primary.deferred_children,
         binder.namespaces.deferred_children().cloned(),
-    );
+    )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_DEFERRED_CHILD_INDEX,
         REF_DEFERRED_CHILD,
         canonical_deferred_children,
-    );
+    )?;
     let canonical_umd_exports = canonical_row_indices(
         &primary.umd_exports,
         binder.namespaces.umd_exports().cloned(),
-    );
+    )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_UMD_EXPORT_INDEX,
         REF_UMD_EXPORT,
         canonical_umd_exports,
-    );
+    )?;
     push_canonical_index_references(
         &mut records,
         REF_CANONICAL_EXPORT_CONTEXT_INDEX,
@@ -1031,16 +1047,22 @@ pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<Snapsh
             .namespaces
             .export_contexts()
             .map(|context| context.id.0),
-    );
+    )?;
 
     records.sort_unstable();
-    records
+    Ok(records)
+}
+
+#[cfg(test)]
+pub(crate) fn snapshot_reference_records_for_test(binder: &Binder) -> Vec<SnapshotReferenceRecord> {
+    snapshot_reference_records(binder).expect("typed binder references enumerate")
 }
 
 fn invalid(reader: &SnapshotReader<'_>, message: impl Into<String>) -> SnapshotCodecError {
     SnapshotCodecError::invalid(reader.position(), message)
 }
 
+#[cfg(test)]
 fn write_len(writer: &mut SnapshotWriter, len: usize) -> Result<(), SnapshotCodecError> {
     writer.usize(len)
 }
@@ -1049,6 +1071,7 @@ fn read_len(reader: &mut SnapshotReader<'_>) -> Result<usize, SnapshotCodecError
     reader.collection_len(1)
 }
 
+#[cfg(test)]
 fn write_option<T>(
     writer: &mut SnapshotWriter,
     value: Option<T>,
@@ -1072,6 +1095,7 @@ fn read_option<T>(
     }
 }
 
+#[cfg(test)]
 fn write_vec<T>(
     writer: &mut SnapshotWriter,
     values: &[T],
@@ -1092,6 +1116,7 @@ fn read_vec<T>(
     (0..len).map(|_| read(reader)).collect()
 }
 
+#[cfg(test)]
 fn write_scope_id(writer: &mut SnapshotWriter, value: ScopeId) {
     writer.u32(value.0);
 }
@@ -1100,6 +1125,7 @@ fn read_scope_id(reader: &mut SnapshotReader<'_>) -> Result<ScopeId, SnapshotCod
     Ok(ScopeId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_symbol_id(writer: &mut SnapshotWriter, value: SymbolId) {
     writer.u32(value.0);
 }
@@ -1108,6 +1134,7 @@ fn read_symbol_id(reader: &mut SnapshotReader<'_>) -> Result<SymbolId, SnapshotC
     Ok(SymbolId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_decl_id(writer: &mut SnapshotWriter, value: DeclId) {
     writer.u32(value.0);
 }
@@ -1116,6 +1143,7 @@ fn read_decl_id(reader: &mut SnapshotReader<'_>) -> Result<DeclId, SnapshotCodec
     Ok(DeclId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_type_group_id(writer: &mut SnapshotWriter, value: TypeGroupId) {
     writer.u32(value.0);
 }
@@ -1124,6 +1152,7 @@ fn read_type_group_id(reader: &mut SnapshotReader<'_>) -> Result<TypeGroupId, Sn
     Ok(TypeGroupId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_value_storage_id(writer: &mut SnapshotWriter, value: ValueStorageId) {
     writer.u32(value.0);
 }
@@ -1134,6 +1163,7 @@ fn read_value_storage_id(
     Ok(ValueStorageId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_span(writer: &mut SnapshotWriter, value: Span) {
     writer.u32(value.start);
     writer.u32(value.end);
@@ -1148,6 +1178,7 @@ fn read_span(reader: &mut SnapshotReader<'_>) -> Result<Span, SnapshotCodecError
     Ok(Span::new(start, end))
 }
 
+#[cfg(test)]
 fn write_source_key(writer: &mut SnapshotWriter, value: SourceUnitKey) {
     writer.u32(value.0);
 }
@@ -1156,6 +1187,7 @@ fn read_source_key(reader: &mut SnapshotReader<'_>) -> Result<SourceUnitKey, Sna
     Ok(SourceUnitKey(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_origin(writer: &mut SnapshotWriter, value: CompilationOrigin) {
     match value {
         CompilationOrigin::User(ordinal) => {
@@ -1182,6 +1214,7 @@ fn read_origin(reader: &mut SnapshotReader<'_>) -> Result<CompilationOrigin, Sna
 
 macro_rules! fieldless_enum_codec {
     ($write:ident, $read:ident, $ty:ty, [$($variant:path => $tag:expr),+ $(,)?]) => {
+        #[cfg(test)]
         fn $write(writer: &mut SnapshotWriter, value: $ty) {
             let tag = match value {
                 $($variant => $tag),+
@@ -1231,6 +1264,7 @@ fieldless_enum_codec!(write_fragment_kind, read_fragment_kind, TypeFragmentKind,
     TypeFragmentKind::Class => 2,
 ]);
 
+#[cfg(test)]
 fn encode_scopes(
     writer: &mut SnapshotWriter,
     graph: &ScopeGraph,
@@ -1283,6 +1317,7 @@ fn decode_scopes(reader: &mut SnapshotReader<'_>) -> Result<ScopeGraph, Snapshot
     Ok(graph)
 }
 
+#[cfg(test)]
 fn encode_symbols(
     writer: &mut SnapshotWriter,
     symbols: &SymbolTable,
@@ -1338,6 +1373,7 @@ fn decode_symbols(reader: &mut SnapshotReader<'_>) -> Result<SymbolTable, Snapsh
     Ok(symbols)
 }
 
+#[cfg(test)]
 fn write_declaration_site(
     writer: &mut SnapshotWriter,
     site: DeclarationSite,
@@ -1363,6 +1399,7 @@ fn read_declaration_site(
     })
 }
 
+#[cfg(test)]
 fn encode_declarations(
     writer: &mut SnapshotWriter,
     table: &DeclarationTable,
@@ -1403,6 +1440,7 @@ fn decode_declarations(
     DeclarationTable::from_snapshot(rows).map_err(|message| invalid(reader, message))
 }
 
+#[cfg(test)]
 fn encode_type_groups(
     writer: &mut SnapshotWriter,
     table: &TypeGroupTable,
@@ -1531,6 +1569,7 @@ fieldless_enum_codec!(write_umd_context, read_umd_context, UmdContext, [
     UmdContext::DeferredValidBacklog15 => 3,
 ]);
 
+#[cfg(test)]
 fn write_namespace_owner(writer: &mut SnapshotWriter, value: NamespaceOwner) {
     match value {
         NamespaceOwner::Lexical(scope) => {
@@ -1563,6 +1602,7 @@ fn read_namespace_owner(
     }
 }
 
+#[cfg(test)]
 fn write_declaration_owner(writer: &mut SnapshotWriter, value: DeclarationOwner) {
     match value {
         DeclarationOwner::Lexical(scope) => {
@@ -1604,6 +1644,7 @@ fn read_declaration_owner(
     }
 }
 
+#[cfg(test)]
 fn write_member_owner(writer: &mut SnapshotWriter, value: NamespaceMemberOwner) {
     match value {
         NamespaceMemberOwner::Fragment(id) => {
@@ -1638,6 +1679,7 @@ fn read_member_owner(
     }
 }
 
+#[cfg(test)]
 fn write_metadata_name(
     writer: &mut SnapshotWriter,
     value: &MetadataName,
@@ -1663,6 +1705,7 @@ fn read_metadata_name(reader: &mut SnapshotReader<'_>) -> Result<MetadataName, S
     }
 }
 
+#[cfg(test)]
 fn write_import_facts(writer: &mut SnapshotWriter, facts: ImportSyntaxFacts) {
     write_import_form(writer, facts.form);
     writer.bool(facts.outer_type_only);
@@ -1683,6 +1726,7 @@ fn read_import_facts(
     })
 }
 
+#[cfg(test)]
 fn write_syntax_facts(writer: &mut SnapshotWriter, facts: DeclarationSyntaxFacts) {
     match facts {
         DeclarationSyntaxFacts::None => writer.u8(0),
@@ -1717,6 +1761,7 @@ fn read_syntax_facts(
     }
 }
 
+#[cfg(test)]
 fn write_spaces(writer: &mut SnapshotWriter, spaces: DeclarationSpaces) {
     writer.bool(spaces.value);
     writer.bool(spaces.r#type);
@@ -1731,6 +1776,7 @@ fn read_spaces(reader: &mut SnapshotReader<'_>) -> Result<DeclarationSpaces, Sna
     })
 }
 
+#[cfg(test)]
 fn write_source_file_kind(writer: &mut SnapshotWriter, kind: SourceFileKind) {
     let tag = match kind {
         SourceFileKind::ImplementationTs => 0,
@@ -1757,6 +1803,7 @@ fn read_source_file_kind(
     }
 }
 
+#[cfg(test)]
 fn write_global_owner(writer: &mut SnapshotWriter, owner: GlobalOwner) {
     match owner {
         GlobalOwner::Lexical(scope) => {
@@ -1787,6 +1834,7 @@ fn read_global_owner(reader: &mut SnapshotReader<'_>) -> Result<GlobalOwner, Sna
     }
 }
 
+#[cfg(test)]
 fn write_export_owner(writer: &mut SnapshotWriter, owner: ExportContextOwner) {
     match owner {
         ExportContextOwner::NamespaceFragment(id) => {
@@ -1821,6 +1869,7 @@ fn read_export_owner(
     }
 }
 
+#[cfg(test)]
 fn write_namespace(writer: &mut SnapshotWriter, row: &Namespace) -> Result<(), SnapshotCodecError> {
     writer.u32(row.id.0);
     write_namespace_owner(writer, row.owner);
@@ -1844,6 +1893,7 @@ fn read_namespace(reader: &mut SnapshotReader<'_>) -> Result<Namespace, Snapshot
     })
 }
 
+#[cfg(test)]
 fn write_fragment(
     writer: &mut SnapshotWriter,
     row: &NamespaceFragment,
@@ -1886,6 +1936,7 @@ fn read_fragment(reader: &mut SnapshotReader<'_>) -> Result<NamespaceFragment, S
     })
 }
 
+#[cfg(test)]
 fn write_member(
     writer: &mut SnapshotWriter,
     row: &NamespaceMember,
@@ -1984,6 +2035,7 @@ fn read_member(reader: &mut SnapshotReader<'_>) -> Result<NamespaceMember, Snaps
     })
 }
 
+#[cfg(test)]
 fn write_participant(
     writer: &mut SnapshotWriter,
     row: &MergeParticipant,
@@ -2026,6 +2078,7 @@ fn read_participant(
     })
 }
 
+#[cfg(test)]
 fn write_global(
     writer: &mut SnapshotWriter,
     row: &GlobalAugmentation,
@@ -2071,6 +2124,7 @@ fn read_global(reader: &mut SnapshotReader<'_>) -> Result<GlobalAugmentation, Sn
     })
 }
 
+#[cfg(test)]
 fn write_deferred_module(
     writer: &mut SnapshotWriter,
     row: &DeferredAmbientModule,
@@ -2103,6 +2157,7 @@ fn read_deferred_module(
     })
 }
 
+#[cfg(test)]
 fn write_deferred_child(
     writer: &mut SnapshotWriter,
     row: &DeferredAmbientChild,
@@ -2139,6 +2194,7 @@ fn read_deferred_child(
     })
 }
 
+#[cfg(test)]
 fn write_umd(
     writer: &mut SnapshotWriter,
     row: &UmdNamespaceExport,
@@ -2167,6 +2223,7 @@ fn read_umd(reader: &mut SnapshotReader<'_>) -> Result<UmdNamespaceExport, Snaps
     })
 }
 
+#[cfg(test)]
 fn write_export_context(
     writer: &mut SnapshotWriter,
     row: &ExportContext,
@@ -2203,6 +2260,7 @@ fn read_export_context(
     })
 }
 
+#[cfg(test)]
 fn write_source_unit(
     writer: &mut SnapshotWriter,
     row: &SourceUnitRecord,
@@ -2229,6 +2287,7 @@ fn read_source_unit(
     })
 }
 
+#[cfg(test)]
 fn encode_namespaces(
     writer: &mut SnapshotWriter,
     table: &NamespaceTable,
@@ -2889,6 +2948,7 @@ fn validate_binder(binder: &Binder, offset: usize) -> Result<(), SnapshotCodecEr
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn encode_binder_snapshot(binder: &Binder) -> Result<Vec<u8>, SnapshotCodecError> {
     validate_binder(binder, 0)?;
     let mut writer = SnapshotWriter::new();
@@ -3328,7 +3388,8 @@ mod tests {
             REF_CANONICAL_NAMESPACE_INDEX,
             REF_NAMESPACE,
             targets.iter().copied(),
-        );
+        )
+        .expect("canonical index references enumerate");
         targets.swap(0, 1);
         let mut swapped = Vec::new();
         push_canonical_index_references(
@@ -3336,7 +3397,8 @@ mod tests {
             REF_CANONICAL_NAMESPACE_INDEX,
             REF_NAMESPACE,
             targets.iter().copied(),
-        );
+        )
+        .expect("canonical index references enumerate");
         assert_eq!(
             canonical,
             vec![

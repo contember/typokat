@@ -97,7 +97,6 @@ impl SymbolTable {
         self.symbols.get_mut(id.index())
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot_symbols(&self) -> &[Symbol] {
         &self.symbols
     }

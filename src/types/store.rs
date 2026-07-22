@@ -4,14 +4,14 @@
 //! tag-selected side tables. `TypeId`s stay stable for the process lifetime.
 
 #[cfg(test)]
-use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader, SnapshotWriter};
+use crate::snapshot_codec::SnapshotWriter;
+use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::hash::StableHash;
 use crate::types::repr::{
     ArrayType, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, FunctionType,
     InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType, TemplateType,
     TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
-#[cfg(test)]
 use crate::types::repr::{
     GenericTypeParam, ModifierOp, ParameterType, PropertyType, TupleRestType, Visibility,
 };
@@ -597,9 +597,12 @@ impl Store {
     }
 }
 
-#[cfg(test)]
 impl Store {
-    pub(crate) fn snapshot_type_param_constraints_for_test(&self) -> Vec<(TypeParamId, TypeId)> {
+    pub(crate) fn snapshot_type_param_ids(&self) -> impl Iterator<Item = TypeParamId> + '_ {
+        self.type_params.iter().map(|parameter| parameter.id)
+    }
+
+    pub(crate) fn snapshot_type_param_constraints(&self) -> Vec<(TypeParamId, TypeId)> {
         let mut constraints = self
             .type_param_constraints
             .iter()
@@ -609,16 +612,17 @@ impl Store {
         constraints
     }
 
-    pub(crate) fn snapshot_frozen_type_params_for_test(&self) -> Vec<TypeParamId> {
+    pub(crate) fn snapshot_frozen_type_params(&self) -> Vec<TypeParamId> {
         let mut parameters = self.frozen_type_params.iter().copied().collect::<Vec<_>>();
         parameters.sort_unstable();
         parameters
     }
 
-    pub(crate) fn snapshot_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
+    pub(crate) fn snapshot_template_name_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
         self.template_names.keys().copied()
     }
 
+    #[cfg(test)]
     pub(crate) fn write_snapshot_for_test(
         &self,
         writer: &mut SnapshotWriter,
@@ -760,7 +764,7 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn read_snapshot_for_test(
+    pub(crate) fn read_snapshot(
         reader: &mut SnapshotReader<'_>,
     ) -> Result<Self, SnapshotCodecError> {
         let version_offset = reader.position();
@@ -781,10 +785,8 @@ impl Store {
             tag.push(read_type_tag(reader.u8()?, offset)?);
             flags.push(TypeFlags(reader.u32()?));
             payload.push(reader.u32()?);
-            let digest: [u8; 32] = reader
-                .raw(32)?
-                .try_into()
-                .expect("the strict reader returned one stable hash");
+            let mut digest = [0; 32];
+            digest.copy_from_slice(reader.raw(32)?);
             stable_hash.push(StableHash(digest));
         }
 
@@ -1005,11 +1007,11 @@ impl Store {
             template_names,
             stable_hash,
         };
-        store.validate_snapshot_layout_for_test()?;
+        store.validate_snapshot_layout()?;
         Ok(store)
     }
 
-    fn validate_snapshot_layout_for_test(&self) -> Result<(), SnapshotCodecError> {
+    fn validate_snapshot_layout(&self) -> Result<(), SnapshotCodecError> {
         let len = self.len();
         let valid_type = |id: TypeId| id.index() < len;
         let mut payload_counts = [0usize; 14];
@@ -1202,12 +1204,10 @@ impl Store {
     }
 }
 
-#[cfg(test)]
 fn snapshot_validation(message: &'static str) -> SnapshotCodecError {
     SnapshotCodecError::invalid(0, message)
 }
 
-#[cfg(test)]
 fn validate_type_id(id: TypeId, len: usize) -> Result<(), SnapshotCodecError> {
     if id.index() < len {
         Ok(())
@@ -1216,7 +1216,6 @@ fn validate_type_id(id: TypeId, len: usize) -> Result<(), SnapshotCodecError> {
     }
 }
 
-#[cfg(test)]
 fn validate_optional_type_id(id: Option<TypeId>, len: usize) -> Result<(), SnapshotCodecError> {
     if let Some(id) = id {
         validate_type_id(id, len)?;
@@ -1224,7 +1223,6 @@ fn validate_optional_type_id(id: Option<TypeId>, len: usize) -> Result<(), Snaps
     Ok(())
 }
 
-#[cfg(test)]
 fn validate_type_ids(ids: &[TypeId], len: usize) -> Result<(), SnapshotCodecError> {
     for id in ids {
         validate_type_id(*id, len)?;
@@ -1232,7 +1230,6 @@ fn validate_type_ids(ids: &[TypeId], len: usize) -> Result<(), SnapshotCodecErro
     Ok(())
 }
 
-#[cfg(test)]
 fn validate_canonical_set(
     members: &[TypeId],
     len: usize,
@@ -1256,7 +1253,6 @@ fn validate_canonical_set(
     Ok(())
 }
 
-#[cfg(test)]
 fn cold_table_index(tag: TypeTag) -> Option<usize> {
     match tag {
         TypeTag::Literal => Some(0),
@@ -1290,7 +1286,6 @@ fn write_type_ids(writer: &mut SnapshotWriter, ids: &[TypeId]) -> Result<(), Sna
     Ok(())
 }
 
-#[cfg(test)]
 fn read_type_ids(reader: &mut SnapshotReader<'_>) -> Result<Vec<TypeId>, SnapshotCodecError> {
     let count = reader.collection_len(4)?;
     let mut ids = Vec::with_capacity(count);
@@ -1312,7 +1307,6 @@ fn write_type_id_slices(
     Ok(())
 }
 
-#[cfg(test)]
 fn read_type_id_slices(
     reader: &mut SnapshotReader<'_>,
 ) -> Result<Vec<Box<[TypeId]>>, SnapshotCodecError> {
@@ -1332,7 +1326,6 @@ fn write_optional_type_id(writer: &mut SnapshotWriter, id: Option<TypeId>) {
     }
 }
 
-#[cfg(test)]
 fn read_optional_type_id(
     reader: &mut SnapshotReader<'_>,
 ) -> Result<Option<TypeId>, SnapshotCodecError> {
@@ -1372,7 +1365,6 @@ fn write_object(
     write_type_ids(writer, &object.construct_signatures)
 }
 
-#[cfg(test)]
 fn read_object(reader: &mut SnapshotReader<'_>) -> Result<ObjectType, SnapshotCodecError> {
     let property_count = reader.collection_len(16)?;
     let mut properties = Vec::with_capacity(property_count);
@@ -1442,7 +1434,6 @@ fn write_function(
     Ok(())
 }
 
-#[cfg(test)]
 fn read_function(reader: &mut SnapshotReader<'_>) -> Result<FunctionType, SnapshotCodecError> {
     let type_param_count = reader.collection_len(6)?;
     let mut type_params = Vec::with_capacity(type_param_count);
@@ -1482,7 +1473,6 @@ fn modifier_discriminant(modifier: ModifierOp) -> u8 {
     }
 }
 
-#[cfg(test)]
 fn read_modifier(value: u8, offset: usize) -> Result<ModifierOp, SnapshotCodecError> {
     match value {
         0 => Ok(ModifierOp::Keep),
@@ -1495,7 +1485,6 @@ fn read_modifier(value: u8, offset: usize) -> Result<ModifierOp, SnapshotCodecEr
     }
 }
 
-#[cfg(test)]
 fn read_type_tag(value: u8, offset: usize) -> Result<TypeTag, SnapshotCodecError> {
     match value {
         0 => Ok(TypeTag::Intrinsic),

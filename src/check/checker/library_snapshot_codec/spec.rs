@@ -70,8 +70,8 @@ use super::{
     snapshot_decode_strategy_probe_for_test, snapshot_fast_clean_probe_for_test,
     snapshot_regeneration_artifact_for_test, snapshot_scaling_probe_for_test,
     start_decoded_base_route_measure_for_test, start_library_compiler_measure_for_test,
-    validate_snapshot_for_test, CompiledSnapshotForTest, DecodedLibraryBaseForTest,
-    SnapshotArchiveForTest, SnapshotDecodeStrategy, SnapshotErrorStage,
+    validate_snapshot, CompiledSnapshotForTest, DecodedLibraryBase, SnapshotArchiveForTest,
+    SnapshotDecodeStrategy, SnapshotErrorStage,
 };
 use crate::check::checker::library_compiler::InjectedLibrarySource;
 use crate::diagnostics::DiagnosticCode;
@@ -411,10 +411,9 @@ fn compile_exact_profile() -> &'static CompiledSnapshotForTest {
     })
 }
 
-fn decode_exact_profile(strategy: SnapshotDecodeStrategy) -> DecodedLibraryBaseForTest {
+fn decode_exact_profile(strategy: SnapshotDecodeStrategy) -> DecodedLibraryBase {
     let compiled = compile_exact_profile();
-    let validated =
-        validate_snapshot_for_test(compiled.archive().as_bytes()).expect("snapshot validates");
+    let validated = validate_snapshot(compiled.archive().as_bytes()).expect("snapshot validates");
     decode_snapshot_for_test(validated, strategy).expect("snapshot decodes")
 }
 
@@ -593,8 +592,7 @@ fn snapshot_roundtrip_preserves_runtime_projection() {
     let sections = parse_spec_directory(compiled.archive().as_bytes());
     let (_, reference_counts, references, reference_manifest_sha256) =
         parse_reference_manifest(compiled.archive().as_bytes(), &sections);
-    let validated =
-        validate_snapshot_for_test(compiled.archive().as_bytes()).expect("snapshot validates");
+    let validated = validate_snapshot(compiled.archive().as_bytes()).expect("snapshot validates");
     let decoded = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)
         .expect("snapshot decodes");
 
@@ -724,7 +722,7 @@ fn snapshot_roundtrip_preserves_runtime_projection() {
     assert_eq!(decoded.prefix_lengths().namespaces, next.namespaces);
     assert_eq!(decoded.prefix_lengths().value_storages, next.value_storages);
 
-    let error = validate_snapshot_for_test(b"typokat-wu0d-frozen-library-product-v2")
+    let error = validate_snapshot(b"typokat-wu0d-frozen-library-product-v2")
         .expect_err("WU0D evidence projection is not a runtime snapshot");
     assert_eq!(error.stage(), SnapshotErrorStage::HeaderValidation);
 }
@@ -733,8 +731,7 @@ fn snapshot_roundtrip_preserves_runtime_projection() {
 fn snapshot_preserves_nominal_and_structural_identity() {
     let compiled = compile_exact_profile();
     let source = compiled.identity_witness().clone();
-    let validated =
-        validate_snapshot_for_test(compiled.archive().as_bytes()).expect("snapshot validates");
+    let validated = validate_snapshot(compiled.archive().as_bytes()).expect("snapshot validates");
     let decoded = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)
         .expect("snapshot decodes");
 
@@ -792,7 +789,7 @@ fn snapshot_preserves_nominal_and_structural_identity() {
     }];
     let named_function_snapshot = compile_snapshot_for_test(&named_function_library)
         .expect("named function metadata compiles into the snapshot");
-    let validated = validate_snapshot_for_test(named_function_snapshot.archive().as_bytes())
+    let validated = validate_snapshot(named_function_snapshot.archive().as_bytes())
         .expect("named function snapshot validates");
     let decoded = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)
         .expect("named function snapshot decodes");
@@ -945,8 +942,8 @@ fn semantically_relevant_library_mutation_changes_snapshot_identity() {
             .type_group_id("TypokatSnapshotMutation"),
         None
     );
-    let validated = validate_snapshot_for_test(changed.archive().as_bytes())
-        .expect("changed snapshot validates");
+    let validated =
+        validate_snapshot(changed.archive().as_bytes()).expect("changed snapshot validates");
     let decoded = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)
         .expect("changed snapshot decodes");
     assert_eq!(
@@ -1238,18 +1235,16 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         .expect("fast-clean probe boundary");
     let probe_source = &compiler_source[probe_start..probe_end];
     assert_eq!(
-        probe_source
-            .matches("decode_canonical_snapshot_for_test(")
-            .count(),
+        probe_source.matches("decode_canonical_snapshot(").count(),
         1,
         "timed fast-clean route must decode exactly one canonical base"
     );
     assert!(
-        probe_source.contains("validate_canonical_snapshot_for_test(bytes)"),
+        probe_source.contains("validate_canonical_snapshot(bytes)"),
         "timed route must authenticate and transfer ownership of the canonical archive"
     );
     assert!(
-        !probe_source.contains("validate_snapshot_for_test(&bytes)")
+        !probe_source.contains("validate_snapshot(&bytes)")
             && !probe_source.contains("decode_snapshot_for_test("),
         "timed route must not copy or decode through the generic adversarial path"
     );
@@ -1258,7 +1253,7 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         "timed fast-clean route must not execute semantic calibration"
     );
     let canonical_start = compiler_source
-        .find("pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(")
+        .find("pub(in crate::check::checker) fn decode_canonical_snapshot(")
         .expect("canonical decoder entrypoint");
     let canonical_end = compiler_source[canonical_start..]
         .find("pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(")
@@ -1290,7 +1285,7 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
 fn snapshot_base_is_send_sync_static() {
     assert_send_sync_static::<CompiledSnapshotForTest>();
     assert_send_sync_static::<SnapshotArchiveForTest>();
-    assert_send_sync_static::<DecodedLibraryBaseForTest>();
+    assert_send_sync_static::<DecodedLibraryBase>();
 }
 
 #[test]

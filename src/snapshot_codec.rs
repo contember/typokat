@@ -1,4 +1,4 @@
-//! Strict primitives shared by test-only semantic snapshot codecs.
+//! Strict primitives shared by the canonical semantic snapshot codecs.
 
 use std::fmt;
 
@@ -26,10 +26,12 @@ impl fmt::Display for SnapshotCodecError {
 impl std::error::Error for SnapshotCodecError {}
 
 #[derive(Default)]
+#[cfg(test)]
 pub(crate) struct SnapshotWriter {
     bytes: Vec<u8>,
 }
 
+#[cfg(test)]
 impl SnapshotWriter {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -132,26 +134,20 @@ impl<'bytes> SnapshotReader<'bytes> {
     }
 
     pub(crate) fn u16(&mut self) -> Result<u16, SnapshotCodecError> {
-        let value: [u8; 2] = self
-            .take(2)?
-            .try_into()
-            .expect("the strict reader returned two bytes");
+        let mut value = [0; 2];
+        value.copy_from_slice(self.take(2)?);
         Ok(u16::from_be_bytes(value))
     }
 
     pub(crate) fn u32(&mut self) -> Result<u32, SnapshotCodecError> {
-        let value: [u8; 4] = self
-            .take(4)?
-            .try_into()
-            .expect("the strict reader returned four bytes");
+        let mut value = [0; 4];
+        value.copy_from_slice(self.take(4)?);
         Ok(u32::from_be_bytes(value))
     }
 
     pub(crate) fn u64(&mut self) -> Result<u64, SnapshotCodecError> {
-        let value: [u8; 8] = self
-            .take(8)?
-            .try_into()
-            .expect("the strict reader returned eight bytes");
+        let mut value = [0; 8];
+        value.copy_from_slice(self.take(8)?);
         Ok(u64::from_be_bytes(value))
     }
 

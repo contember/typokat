@@ -96,6 +96,21 @@ pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
     pub(in crate::check::checker) source_file_count: u32,
 }
 
+#[cfg(test)]
+pub(in crate::check::checker) struct BorrowedLibraryRuntimeSnapshotParts<'runtime> {
+    pub(in crate::check::checker) interner: &'runtime Interner,
+    pub(in crate::check::checker) binder: &'runtime Binder,
+    pub(in crate::check::checker) published_types:
+        super::type_groups::PublishedTypeEnvironmentSnapshotParts,
+    pub(in crate::check::checker) decl_types: Vec<Option<TypeId>>,
+    pub(in crate::check::checker) semantic_identities:
+        Option<super::library_identities::LibrarySemanticIdentitiesSnapshotParts>,
+    pub(in crate::check::checker) runtime: super::FrozenCheckerRuntimeSnapshotParts,
+    pub(in crate::check::checker) next_type_param: u32,
+    pub(in crate::check::checker) next_class_id: u32,
+    pub(in crate::check::checker) source_file_count: u32,
+}
+
 pub(crate) struct CompiledLibraryRuntimeProduct {
     pub(in crate::check::checker) _parts: OwnedLibraryRuntimeSnapshotParts,
 }
@@ -533,6 +548,43 @@ fn validate_owned_library_snapshot_parts(
 }
 
 impl OwnedLibraryRuntimeState {
+    #[cfg(test)]
+    pub(in crate::check::checker) fn borrowed_snapshot_parts(
+        &self,
+    ) -> Result<BorrowedLibraryRuntimeSnapshotParts<'_>, &'static str> {
+        if self
+            .semantic_identities
+            .as_ref()
+            .is_some_and(|identities| !identities.all_ready())
+        {
+            return Err("snapshot installed semantic identities are not all ready");
+        }
+        Ok(BorrowedLibraryRuntimeSnapshotParts {
+            interner: &self.interner,
+            binder: &self.binder,
+            published_types: self.published_types.snapshot_parts()?,
+            decl_types: self.decl_types.snapshot_slots(),
+            semantic_identities: self
+                .semantic_identities
+                .as_ref()
+                .map(super::library_identities::LibrarySemanticIdentities::snapshot_parts),
+            runtime: self.runtime.snapshot_parts()?,
+            next_type_param: self.next_type_param,
+            next_class_id: self.next_class_id,
+            source_file_count: self.source_file_count,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_file_count(&self) -> u32 {
+        self.source_file_count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn type_count(&self) -> usize {
+        self.interner.store().len()
+    }
+
     pub(in crate::check::checker) fn into_snapshot_parts(
         self,
     ) -> Result<OwnedLibraryRuntimeSnapshotParts, &'static str> {
@@ -561,7 +613,6 @@ impl OwnedLibraryRuntimeState {
         Ok(parts)
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: OwnedLibraryRuntimeSnapshotParts,
     ) -> Result<Self, &'static str> {
@@ -2253,7 +2304,7 @@ impl ReleaseOutcomeLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::checker::library_snapshot_feasibility::profile::load_strict_profile;
+    use crate::check::checker::library_snapshot_codec::profile::load_strict_profile;
     use crate::check::checker::type_groups::PublishedTypeGroup;
     use crate::driver::check_source;
 

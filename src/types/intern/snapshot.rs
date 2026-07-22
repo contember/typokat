@@ -1,7 +1,9 @@
-//! Strict test-only snapshot boundary for the type universe.
+//! Strict snapshot boundary for the type universe, with test-only encoder support.
 
 use super::*;
-use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader, SnapshotWriter};
+#[cfg(test)]
+use crate::snapshot_codec::SnapshotWriter;
+use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::hash::StructuralKey;
 use crate::types::repr::{
     ClassInstanceType, DeferredIndexedAccessType, FunctionType, TemplateType,
@@ -45,7 +47,6 @@ fn reference(
     owner: u32,
     target: u32,
 ) -> SnapshotReferenceRecord {
-    debug_assert!(owner_domain <= 31 && target_domain <= 31 && field <= 31);
     (owner_domain, target_domain, field, owner, target)
 }
 
@@ -94,16 +95,18 @@ impl Interner {
     /// Tuple order is `(owner_domain, target_domain, field, owner, target)`.
     /// The first vector is archive family 1 (Store), the second archive family
     /// 2 (Interner identity). Neither side parses the other side's wire bytes.
-    pub(crate) fn snapshot_reference_records_for_test(
+    pub(crate) fn snapshot_reference_records(
         &self,
-    ) -> (Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>) {
-        let store_references = self.store_snapshot_reference_records_for_test();
+    ) -> Result<(Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>), SnapshotCodecError>
+    {
+        let store_references = self.store_snapshot_reference_records()?;
         let mut interner_references = Vec::new();
 
         let mut buckets = self.dedup.iter().collect::<Vec<_>>();
         buckets.sort_unstable_by_key(|(hash, _)| **hash);
         for (bucket_index, (_, candidates)) in buckets.into_iter().enumerate() {
-            let owner = u32::try_from(bucket_index).expect("snapshot bucket index fits u32");
+            let owner = u32::try_from(bucket_index)
+                .map_err(|_| validation("snapshot bucket index exceeds u32"))?;
             let mut candidates = candidates.iter().copied().collect::<Vec<_>>();
             candidates.sort_unstable();
             interner_references.extend(candidates.into_iter().map(|candidate| {
@@ -119,42 +122,55 @@ impl Interner {
 
         let mut reserved = self.reserved_types.keys().copied().collect::<Vec<_>>();
         reserved.sort_unstable();
-        interner_references.extend(reserved.into_iter().enumerate().map(|(index, id)| {
-            reference(
+        for (index, id) in reserved.into_iter().enumerate() {
+            interner_references.push(reference(
                 CONTAINER_DOMAIN,
                 TYPE_DOMAIN,
                 RESERVED_TYPE_FIELD,
-                u32::try_from(index).expect("snapshot reserved index fits u32"),
+                u32::try_from(index)
+                    .map_err(|_| validation("snapshot reserved index exceeds u32"))?,
                 id.0,
-            )
-        }));
+            ));
+        }
 
-        interner_references.extend(well_known_ids(self.well_known).into_iter().enumerate().map(
-            |(slot, id)| {
-                reference(
-                    CONTAINER_DOMAIN,
-                    TYPE_DOMAIN,
-                    WELL_KNOWN_TYPE_FIELD,
-                    u32::try_from(slot).expect("well-known slot fits u32"),
-                    id.0,
-                )
-            },
-        ));
+        for (slot, id) in well_known_ids(self.well_known).into_iter().enumerate() {
+            interner_references.push(reference(
+                CONTAINER_DOMAIN,
+                TYPE_DOMAIN,
+                WELL_KNOWN_TYPE_FIELD,
+                u32::try_from(slot).map_err(|_| validation("well-known slot exceeds u32"))?,
+                id.0,
+            ));
+        }
 
         interner_references.sort_unstable();
-        (store_references, interner_references)
+        Ok((store_references, interner_references))
     }
 
-    fn store_snapshot_reference_records_for_test(&self) -> Vec<SnapshotReferenceRecord> {
+    #[cfg(test)]
+    pub(crate) fn snapshot_reference_records_for_test(
+        &self,
+    ) -> (Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>) {
+        self.snapshot_reference_records()
+            .expect("typed interner references enumerate")
+    }
+
+    fn store_snapshot_reference_records(
+        &self,
+    ) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
         let store = &self.store;
         let mut references = Vec::new();
         for raw_owner in 0..store.len() {
-            let owner = TypeId(u32::try_from(raw_owner).expect("snapshot TypeId fits u32"));
+            let owner = TypeId(
+                u32::try_from(raw_owner).map_err(|_| validation("snapshot TypeId exceeds u32"))?,
+            );
 
             match store.tag(owner) {
                 TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
                 TypeTag::Object => {
-                    let object = store.object_type(owner).expect("validated object payload");
+                    let object = store
+                        .object_type(owner)
+                        .ok_or_else(|| validation("validated object payload is missing"))?;
                     for property in &object.properties {
                         push_type_operand(&mut references, owner, property.ty);
                         if let Some(write_ty) = property.write_ty {
@@ -183,14 +199,17 @@ impl Interner {
                     }
                 }
                 TypeTag::Union => {
-                    for &member in store.union_members(owner).expect("validated union payload") {
+                    for &member in store
+                        .union_members(owner)
+                        .ok_or_else(|| validation("validated union payload is missing"))?
+                    {
                         push_type_operand(&mut references, owner, member);
                     }
                 }
                 TypeTag::Intersection => {
                     for &member in store
                         .intersection_members(owner)
-                        .expect("validated intersection payload")
+                        .ok_or_else(|| validation("validated intersection payload is missing"))?
                     {
                         push_type_operand(&mut references, owner, member);
                     }
@@ -198,7 +217,7 @@ impl Interner {
                 TypeTag::Function => {
                     let function = store
                         .function_type(owner)
-                        .expect("validated function payload");
+                        .ok_or_else(|| validation("validated function payload is missing"))?;
                     for parameter in &function.type_params {
                         push_type_param_identity(&mut references, owner, parameter.id);
                         if let Some(constraint) = parameter.constraint {
@@ -234,7 +253,9 @@ impl Interner {
                         owner,
                         store
                             .type_param(owner)
-                            .expect("validated type parameter payload")
+                            .ok_or_else(|| {
+                                validation("validated type parameter payload is missing")
+                            })?
                             .id,
                     );
                 }
@@ -244,12 +265,14 @@ impl Interner {
                         owner,
                         store
                             .array_type(owner)
-                            .expect("validated array payload")
+                            .ok_or_else(|| validation("validated array payload is missing"))?
                             .element,
                     );
                 }
                 TypeTag::Tuple => {
-                    let tuple = store.tuple_type(owner).expect("validated tuple payload");
+                    let tuple = store
+                        .tuple_type(owner)
+                        .ok_or_else(|| validation("validated tuple payload is missing"))?;
                     for &element in &tuple.elements {
                         push_type_operand(&mut references, owner, element);
                     }
@@ -263,13 +286,13 @@ impl Interner {
                         owner,
                         store
                             .readonly_operand(owner)
-                            .expect("validated readonly payload"),
+                            .ok_or_else(|| validation("validated readonly payload is missing"))?,
                     );
                 }
                 TypeTag::Conditional => {
                     let conditional = store
                         .conditional_type(owner)
-                        .expect("validated conditional payload");
+                        .ok_or_else(|| validation("validated conditional payload is missing"))?;
                     for target in [
                         conditional.check,
                         conditional.extends_ty,
@@ -282,7 +305,7 @@ impl Interner {
                 TypeTag::Instantiation => {
                     let instantiation = store
                         .instantiation_type(owner)
-                        .expect("validated instantiation payload");
+                        .ok_or_else(|| validation("validated instantiation payload is missing"))?;
                     push_type_operand(&mut references, owner, instantiation.base);
                     for &(parameter, argument) in &instantiation.args {
                         push_type_param_identity(&mut references, owner, parameter);
@@ -290,7 +313,9 @@ impl Interner {
                     }
                 }
                 TypeTag::Mapped => {
-                    let mapped = store.mapped_type(owner).expect("validated mapped payload");
+                    let mapped = store
+                        .mapped_type(owner)
+                        .ok_or_else(|| validation("validated mapped payload is missing"))?;
                     push_type_operand(&mut references, owner, mapped.key_source);
                     push_type_operand(&mut references, owner, mapped.value_template);
                     if let Some(source) = mapped.modifiers_source {
@@ -300,7 +325,7 @@ impl Interner {
                 TypeTag::Template => {
                     for &hole in &store
                         .template_type(owner)
-                        .expect("validated template payload")
+                        .ok_or_else(|| validation("validated template payload is missing"))?
                         .holes
                     {
                         push_type_operand(&mut references, owner, hole);
@@ -310,13 +335,15 @@ impl Interner {
                     push_type_operand(
                         &mut references,
                         owner,
-                        store.keyof_operand(owner).expect("validated keyof payload"),
+                        store
+                            .keyof_operand(owner)
+                            .ok_or_else(|| validation("validated keyof payload is missing"))?,
                     );
                 }
                 TypeTag::ClassInstance => {
                     let instance = store
                         .class_instance_type(owner)
-                        .expect("validated class instance payload");
+                        .ok_or_else(|| validation("validated class instance payload is missing"))?;
                     push_class_identity(
                         &mut references,
                         owner,
@@ -328,9 +355,9 @@ impl Interner {
                     }
                 }
                 TypeTag::DeferredIndexedAccess => {
-                    let access = store
-                        .deferred_indexed_access_type(owner)
-                        .expect("validated deferred indexed access payload");
+                    let access = store.deferred_indexed_access_type(owner).ok_or_else(|| {
+                        validation("validated deferred indexed access payload is missing")
+                    })?;
                     push_type_operand(&mut references, owner, access.object);
                     push_type_operand(&mut references, owner, access.index);
                 }
@@ -338,11 +365,12 @@ impl Interner {
         }
 
         for (index, (parameter, constraint)) in store
-            .snapshot_type_param_constraints_for_test()
+            .snapshot_type_param_constraints()
             .into_iter()
             .enumerate()
         {
-            let owner = u32::try_from(index).expect("constraint row index fits u32");
+            let owner =
+                u32::try_from(index).map_err(|_| validation("constraint row index exceeds u32"))?;
             references.push(reference(
                 CONTAINER_DOMAIN,
                 TYPE_PARAM_DOMAIN,
@@ -358,39 +386,34 @@ impl Interner {
                 constraint.0,
             ));
         }
-        references.extend(
-            store
-                .snapshot_frozen_type_params_for_test()
-                .into_iter()
-                .enumerate()
-                .map(|(index, parameter)| {
-                    reference(
-                        CONTAINER_DOMAIN,
-                        TYPE_PARAM_DOMAIN,
-                        FROZEN_TYPE_PARAM_FIELD,
-                        u32::try_from(index).expect("frozen parameter index fits u32"),
-                        parameter.0,
-                    )
-                }),
-        );
-        let mut template_names = store
-            .snapshot_template_name_ids_for_test()
-            .collect::<Vec<_>>();
+        for (index, parameter) in store.snapshot_frozen_type_params().into_iter().enumerate() {
+            references.push(reference(
+                CONTAINER_DOMAIN,
+                TYPE_PARAM_DOMAIN,
+                FROZEN_TYPE_PARAM_FIELD,
+                u32::try_from(index)
+                    .map_err(|_| validation("frozen parameter index exceeds u32"))?,
+                parameter.0,
+            ));
+        }
+        let mut template_names = store.snapshot_template_name_ids().collect::<Vec<_>>();
         template_names.sort_unstable();
-        references.extend(template_names.into_iter().enumerate().map(|(index, id)| {
-            reference(
+        for (index, id) in template_names.into_iter().enumerate() {
+            references.push(reference(
                 CONTAINER_DOMAIN,
                 TYPE_DOMAIN,
                 TEMPLATE_NAME_TYPE_FIELD,
-                u32::try_from(index).expect("template-name row index fits u32"),
+                u32::try_from(index)
+                    .map_err(|_| validation("template-name row index exceeds u32"))?,
                 id.0,
-            )
-        }));
+            ));
+        }
 
         references.sort_unstable();
-        references
+        Ok(references)
     }
 
+    #[cfg(test)]
     fn write_identity_snapshot_for_test(
         &self,
         writer: &mut SnapshotWriter,
@@ -437,6 +460,7 @@ impl Interner {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn write_snapshot_for_test(
         &self,
         writer: &mut SnapshotWriter,
@@ -446,6 +470,7 @@ impl Interner {
         self.write_identity_snapshot_for_test(writer)
     }
 
+    #[cfg(test)]
     pub(crate) fn encode_split_snapshot_sections_for_test(
         &self,
     ) -> Result<(Vec<u8>, Vec<u8>), SnapshotCodecError> {
@@ -456,6 +481,7 @@ impl Interner {
         Ok((store.into_bytes(), identity.into_bytes()))
     }
 
+    #[cfg(test)]
     pub(crate) fn read_snapshot_for_test(
         reader: &mut SnapshotReader<'_>,
     ) -> Result<Self, SnapshotCodecError> {
@@ -466,7 +492,7 @@ impl Interner {
                 "unsupported interner snapshot version",
             ));
         }
-        let store = Store::read_snapshot_for_test(reader)?;
+        let store = Store::read_snapshot(reader)?;
 
         let identity_version_offset = reader.position();
         if reader.u32()? != VERSION {
@@ -550,11 +576,11 @@ impl Interner {
             reserved_types,
             well_known,
         };
-        interner.validate_snapshot_for_test()?;
+        interner.validate_snapshot()?;
         Ok(interner)
     }
 
-    fn read_identity_snapshot_for_test(
+    fn read_identity_snapshot(
         store: Store,
         reader: &mut SnapshotReader<'_>,
     ) -> Result<Self, SnapshotCodecError> {
@@ -638,29 +664,31 @@ impl Interner {
             reserved_types,
             well_known: well_known_from_ids(ids),
         };
-        interner.validate_snapshot_for_test()?;
+        interner.validate_snapshot()?;
         Ok(interner)
     }
 
-    pub(crate) fn decode_split_snapshot_sections_for_test(
+    pub(crate) fn decode_split_snapshot_sections(
         store_bytes: &[u8],
         identity_bytes: &[u8],
     ) -> Result<Self, SnapshotCodecError> {
         let mut store_reader = SnapshotReader::new(store_bytes);
-        let store = Store::read_snapshot_for_test(&mut store_reader)?;
+        let store = Store::read_snapshot(&mut store_reader)?;
         store_reader.finish()?;
         let mut identity_reader = SnapshotReader::new(identity_bytes);
-        let interner = Self::read_identity_snapshot_for_test(store, &mut identity_reader)?;
+        let interner = Self::read_identity_snapshot(store, &mut identity_reader)?;
         identity_reader.finish()?;
         Ok(interner)
     }
 
+    #[cfg(test)]
     pub(crate) fn encode_snapshot_bytes_for_test(&self) -> Result<Vec<u8>, SnapshotCodecError> {
         let mut writer = SnapshotWriter::new();
         self.write_snapshot_for_test(&mut writer)?;
         Ok(writer.into_bytes())
     }
 
+    #[cfg(test)]
     pub(crate) fn decode_snapshot_bytes_for_test(bytes: &[u8]) -> Result<Self, SnapshotCodecError> {
         let mut reader = SnapshotReader::new(bytes);
         let interner = Self::read_snapshot_for_test(&mut reader)?;
@@ -668,7 +696,7 @@ impl Interner {
         Ok(interner)
     }
 
-    fn validate_snapshot_for_test(&self) -> Result<(), SnapshotCodecError> {
+    fn validate_snapshot(&self) -> Result<(), SnapshotCodecError> {
         let len = self.store.len();
         if len < WELL_KNOWN_COUNT {
             return Err(validation("store is missing canonical intrinsic rows"));
@@ -694,7 +722,7 @@ impl Interner {
                 return Err(validation("reserved kind does not match its store row"));
             }
         }
-        for id in self.store.snapshot_template_name_ids_for_test() {
+        for id in self.store.snapshot_template_name_ids() {
             if !self.reserved_types.contains_key(&id) {
                 return Err(validation(
                     "template display name is not attached to a reservation",
@@ -824,6 +852,7 @@ fn well_known_from_ids(ids: [TypeId; WELL_KNOWN_COUNT]) -> WellKnown {
     }
 }
 
+#[cfg(test)]
 fn reserved_kind_discriminant(kind: ReservedTypeKind) -> u8 {
     match kind {
         ReservedTypeKind::Object => 0,
@@ -1517,7 +1546,7 @@ mod tests {
         let (store, identity) = interner
             .encode_split_snapshot_sections_for_test()
             .expect("split type universe encodes");
-        let decoded = Interner::decode_split_snapshot_sections_for_test(&store, &identity)
+        let decoded = Interner::decode_split_snapshot_sections(&store, &identity)
             .expect("split type universe decodes");
         assert_eq!(
             decoded
@@ -1528,10 +1557,10 @@ mod tests {
 
         let mut bad_store = store.clone();
         bad_store[0] ^= 0xff;
-        assert!(Interner::decode_split_snapshot_sections_for_test(&bad_store, &identity).is_err());
+        assert!(Interner::decode_split_snapshot_sections(&bad_store, &identity).is_err());
         let mut bad_identity = identity;
         bad_identity[0] ^= 0xff;
-        assert!(Interner::decode_split_snapshot_sections_for_test(&store, &bad_identity).is_err());
+        assert!(Interner::decode_split_snapshot_sections(&store, &bad_identity).is_err());
     }
 
     #[test]

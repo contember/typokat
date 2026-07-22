@@ -174,7 +174,6 @@ impl Binder {
         &self.module_sources
     }
 
-    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_snapshot_parts(
         graph: ScopeGraph,

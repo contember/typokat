@@ -120,7 +120,6 @@ impl LibrarySemanticIdentities {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn from_explicit_for_test(terminals: [LibraryIdentityTerminal; 8]) -> Self {
         let [array, readonly_array, string, number, boolean, regexp, object, callable_function] =
             terminals;
@@ -149,7 +148,6 @@ impl LibrarySemanticIdentities {
         ]
     }
 
-    #[cfg(test)]
     pub(crate) fn from_snapshot_parts(
         terminals: LibrarySemanticIdentitiesSnapshotParts,
     ) -> Result<Self, &'static str> {

@@ -1,16 +1,22 @@
-//! Test-only semantic snapshot feasibility archive.
+//! Canonical typed-state snapshot codec with test-only generation and evidence support.
 
+#[cfg(test)]
 pub(crate) mod profile;
+#[cfg(test)]
 mod runtime;
+#[cfg(test)]
 mod spec;
 
 use super::classes::application::ClassTypeParameterDefault;
 use super::classes::construction::DraftClassTypeParameterSnapshot;
 use super::context::{PublishedClassNewMetadata, PublishedClassValueBinding};
+#[cfg(test)]
+use super::library_compiler::BorrowedLibraryRuntimeSnapshotParts;
+#[cfg(test)]
 use super::library_compiler::{
     compile_owned_injected_profile, CompiledLibraryRuntimeProduct, InjectedLibrarySource,
-    OwnedLibraryRuntimeSnapshotParts, OwnedLibraryRuntimeState,
 };
+use super::library_compiler::{OwnedLibraryRuntimeSnapshotParts, OwnedLibraryRuntimeState};
 use super::library_identities::{
     LibraryIdentityTerminal, LibraryIdentityUnavailable, LibraryTypeIdentity,
 };
@@ -25,28 +31,41 @@ use super::type_groups::{
 use super::FrozenCheckerRuntimeSnapshotParts;
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
-use crate::binder::snapshot::{
-    decode_binder_snapshot, encode_binder_snapshot, snapshot_reference_records_for_test,
-};
+#[cfg(test)]
+use crate::binder::snapshot::encode_binder_snapshot;
+use crate::binder::snapshot::{decode_binder_snapshot, snapshot_reference_records};
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::class_semantics::{
     PublishedClassPoison, PublishedClassSnapshotTerminal, PublishedClassSurface,
 };
+#[cfg(test)]
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
-use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader, SnapshotWriter};
-use crate::types::repr::{ClassId, IntrinsicKind, TypeParamId, TypeTag, Visibility};
-use crate::types::store::{Store, TypeId};
+#[cfg(test)]
+use crate::snapshot_codec::SnapshotWriter;
+use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
+use crate::types::repr::{ClassId, TypeParamId, Visibility};
+#[cfg(test)]
+use crate::types::repr::{IntrinsicKind, TypeTag};
+#[cfg(test)]
+use crate::types::store::Store;
+use crate::types::store::TypeId;
 use crate::types::Interner;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
+#[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+#[cfg(test)]
 use std::fs;
 use std::ops::Range;
+#[cfg(test)]
 use std::path::Path;
+#[cfg(test)]
 use std::time::Instant;
 
+#[cfg(test)]
 pub(super) use runtime::check_source_with_decoded_base_for_test;
 
 const MAGIC: &[u8] = b"typokat-semantic-snapshot";
@@ -56,6 +75,7 @@ const SCHEMA_IDENTITY: &str = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60f
 const CANONICAL_ARCHIVE_BYTES: usize = 10_003_957;
 const CANONICAL_ARCHIVE_SHA256: &str =
     "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
+#[cfg(test)]
 const SECTION_NAMES: [&str; 10] = [
     "store",
     "interner",
@@ -68,6 +88,7 @@ const SECTION_NAMES: [&str; 10] = [
     "root-name-index",
     "next-ids",
 ];
+#[cfg(test)]
 const SUBTABLE_NAMES: [&str; 30] = [
     "store.rows",
     "store.payload-tables",
@@ -123,6 +144,7 @@ fn invalid(stage: SnapshotErrorStage, message: impl Into<String>) -> SnapshotErr
     SnapshotError {
         stage,
         message: message.into(),
+        kind: SnapshotErrorKind::Rejected,
     }
 }
 
@@ -134,19 +156,38 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+#[cfg(test)]
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn decode_hex32(value: &str) -> [u8; 32] {
     let mut result = [0; 32];
-    for (index, byte) in result.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .expect("static digest is valid hex");
+    if value.len() != 64 {
+        return result;
+    }
+    for (byte, pair) in result.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        let Some(high) = hex_nibble(pair[0]) else {
+            return [0; 32];
+        };
+        let Some(low) = hex_nibble(pair[1]) else {
+            return [0; 32];
+        };
+        *byte = (high << 4) | low;
     }
     result
 }
 
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum SnapshotDecodeStrategy {
     EagerComplete,
@@ -154,27 +195,45 @@ pub(in crate::check::checker) enum SnapshotDecodeStrategy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) enum SnapshotErrorStage {
+pub(crate) enum SnapshotErrorStage {
     HeaderValidation,
     DirectoryValidation,
     PayloadValidation,
     ReferenceValidation,
+    Publication,
     Decode,
+    #[cfg(test)]
     UnsupportedStrategy,
+    #[cfg(test)]
     Io,
+    #[cfg(test)]
     Generation,
+    #[cfg(test)]
     UserCheck,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) struct SnapshotError {
+pub(crate) struct SnapshotError {
     stage: SnapshotErrorStage,
     message: String,
+    kind: SnapshotErrorKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SnapshotErrorKind {
+    InvalidId { id: u32, limit: usize },
+    WorkerSpawnFailed { worker: &'static str },
+    WorkerPanicked { worker: &'static str },
+    Rejected,
 }
 
 impl SnapshotError {
-    pub(in crate::check::checker) fn stage(&self) -> SnapshotErrorStage {
+    pub(crate) fn stage(&self) -> SnapshotErrorStage {
         self.stage
+    }
+
+    pub(crate) fn kind(&self) -> &SnapshotErrorKind {
+        &self.kind
     }
 }
 
@@ -186,12 +245,14 @@ impl fmt::Display for SnapshotError {
 
 impl std::error::Error for SnapshotError {}
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct SnapshotArchiveForTest {
     bytes: Vec<u8>,
     sha256: [u8; 32],
 }
 
+#[cfg(test)]
 impl SnapshotArchiveForTest {
     pub(in crate::check::checker) fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -202,6 +263,7 @@ impl SnapshotArchiveForTest {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct RuntimeFamilyForTest {
     pub(in crate::check::checker) name: &'static str,
@@ -209,6 +271,7 @@ pub(in crate::check::checker) struct RuntimeFamilyForTest {
     pub(in crate::check::checker) sha256: [u8; 32],
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct RuntimeSubtableForTest {
     pub(in crate::check::checker) name: &'static str,
@@ -217,7 +280,7 @@ pub(in crate::check::checker) struct RuntimeSubtableForTest {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(in crate::check::checker) struct NextIdsForTest {
+pub(in crate::check::checker) struct NextIds {
     pub(in crate::check::checker) store: usize,
     pub(in crate::check::checker) types: usize,
     pub(in crate::check::checker) type_params: usize,
@@ -230,19 +293,48 @@ pub(in crate::check::checker) struct NextIdsForTest {
     pub(in crate::check::checker) value_storages: usize,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) struct RuntimeProjectionForTest {
+pub(crate) struct RuntimeProjectionForTest {
     families: Vec<RuntimeFamilyForTest>,
     subtables: Vec<RuntimeSubtableForTest>,
     global_names: BTreeSet<String>,
     root_counts: [u64; 4],
-    next_ids: NextIdsForTest,
+    next_ids: NextIds,
     reference_counts: [u64; 9],
     reference_manifest_sha256: [u8; 32],
+    typed_validation_sha256: [u8; 32],
     sha256: [u8; 32],
 }
 
+#[cfg(test)]
 impl RuntimeProjectionForTest {
+    pub(crate) fn reference_family_counts_for_library(&self) -> [u64; 9] {
+        self.reference_counts
+    }
+
+    pub(crate) fn root_names_for_library(&self) -> &BTreeSet<String> {
+        &self.global_names
+    }
+
+    pub(crate) fn prefixes_for_library(&self) -> [usize; 9] {
+        [
+            self.next_ids.types,
+            self.next_ids.type_params,
+            self.next_ids.classes,
+            self.next_ids.scopes,
+            self.next_ids.symbols,
+            self.next_ids.declarations,
+            self.next_ids.type_groups,
+            self.next_ids.namespaces,
+            self.next_ids.value_storages,
+        ]
+    }
+
+    pub(crate) fn typed_validation_sha256_for_library(&self) -> String {
+        hex(&self.typed_validation_sha256)
+    }
+
     pub(in crate::check::checker) fn family_names(&self) -> [&'static str; 10] {
         SECTION_NAMES
     }
@@ -306,7 +398,7 @@ impl RuntimeProjectionForTest {
         self.root_counts
     }
 
-    pub(in crate::check::checker) fn next_ids(&self) -> &NextIdsForTest {
+    pub(in crate::check::checker) fn next_ids(&self) -> &NextIds {
         &self.next_ids
     }
 
@@ -318,7 +410,7 @@ impl RuntimeProjectionForTest {
         self.reference_manifest_sha256
     }
 
-    pub(in crate::check::checker) fn runtime_counts(&self) -> &NextIdsForTest {
+    pub(in crate::check::checker) fn runtime_counts(&self) -> &NextIds {
         &self.next_ids
     }
 
@@ -327,12 +419,14 @@ impl RuntimeProjectionForTest {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::check::checker) struct IdentityWitnessForTest {
     pub(super) classes: BTreeMap<String, ClassId>,
     groups: BTreeMap<String, TypeGroupId>,
 }
 
+#[cfg(test)]
 impl IdentityWitnessForTest {
     pub(in crate::check::checker) fn class_id(&self, name: &str) -> Option<ClassId> {
         self.classes.get(name).copied()
@@ -343,12 +437,14 @@ impl IdentityWitnessForTest {
     }
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct CompiledSnapshotForTest {
     archive: SnapshotArchiveForTest,
     projection: RuntimeProjectionForTest,
     identity: IdentityWitnessForTest,
 }
 
+#[cfg(test)]
 impl CompiledSnapshotForTest {
     pub(in crate::check::checker) fn archive(&self) -> &SnapshotArchiveForTest {
         &self.archive
@@ -375,30 +471,53 @@ struct RootNameRow {
 #[derive(Clone, Debug)]
 struct DirectorySection {
     range: Range<usize>,
+    #[cfg(test)]
     digest: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::check::checker) struct ValidatedSnapshotForTest {
-    bytes: Vec<u8>,
+pub(in crate::check::checker) struct ValidatedSnapshot {
+    bytes: Cow<'static, [u8]>,
     sections: Vec<DirectorySection>,
 }
 
-pub(in crate::check::checker) struct DecodedLibraryBaseForTest {
+pub(in crate::check::checker) struct DecodedLibraryBase {
     pub(super) state: OwnedLibraryRuntimeState,
+    pub(super) typed_validation_sha256: [u8; 32],
+    #[cfg(test)]
     pub(super) projection: RuntimeProjectionForTest,
+    #[cfg(test)]
     pub(super) identity: IdentityWitnessForTest,
+    #[cfg(test)]
     source_file_count: u32,
-    pub(super) prefix_lengths: NextIdsForTest,
+    pub(super) prefix_lengths: NextIds,
     root_names: BTreeSet<String>,
+    #[cfg(test)]
     root_counts: [u64; 4],
+    #[cfg(test)]
     strategy: SnapshotDecodeStrategy,
 }
 
-impl fmt::Debug for DecodedLibraryBaseForTest {
+pub(crate) struct DecodedFrozenLibrary {
+    pub(crate) runtime: OwnedLibraryRuntimeState,
+    pub(crate) root_names: BTreeSet<String>,
+    pub(crate) prefixes: [usize; 9],
+    pub(crate) typed_validation_sha256: [u8; 32],
+}
+
+#[cfg(test)]
+pub(crate) struct FrozenReferenceValidation {
+    pub(crate) checked: u64,
+    pub(crate) outside_frozen_prefix: u64,
+    pub(crate) base_to_delta: u64,
+    pub(crate) untyped_or_unowned: u64,
+}
+
+#[cfg(test)]
+impl fmt::Debug for DecodedLibraryBase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("DecodedLibraryBaseForTest")
+            .debug_struct("DecodedLibraryBase")
             .field("source_file_count", &self.source_file_count)
             .field("prefix_lengths", &self.prefix_lengths)
             .field("strategy", &self.strategy)
@@ -406,6 +525,7 @@ impl fmt::Debug for DecodedLibraryBaseForTest {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct IdentityRangeSetForTest {
     pub(in crate::check::checker) store: Range<usize>,
@@ -419,6 +539,7 @@ pub(in crate::check::checker) struct IdentityRangeSetForTest {
     pub(in crate::check::checker) value_storages: Range<usize>,
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct DecodedUserCheckResultForTest {
     pub(in crate::check::checker) parse_errors: Vec<String>,
     pub(in crate::check::checker) diagnostics: Vec<Diagnostic>,
@@ -430,12 +551,14 @@ pub(in crate::check::checker) struct DecodedUserCheckResultForTest {
     pub(super) observed_classes: BTreeMap<String, ClassId>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct ReusedBaseShapeForTest {
     type_id: TypeId,
     tag: TypeTag,
 }
 
+#[cfg(test)]
 impl ReusedBaseShapeForTest {
     pub(in crate::check::checker) fn new(type_id: TypeId, tag: TypeTag) -> Self {
         Self { type_id, tag }
@@ -450,6 +573,7 @@ impl ReusedBaseShapeForTest {
     }
 }
 
+#[cfg(test)]
 impl DecodedUserCheckResultForTest {
     pub(in crate::check::checker) fn user_type_id(&self, name: &str) -> Option<TypeId> {
         self.user_types.get(name).copied()
@@ -459,7 +583,8 @@ impl DecodedUserCheckResultForTest {
     }
 }
 
-impl DecodedLibraryBaseForTest {
+#[cfg(test)]
+impl DecodedLibraryBase {
     pub(in crate::check::checker) fn profile_identity(&self) -> &'static str {
         PROFILE_IDENTITY
     }
@@ -491,7 +616,7 @@ impl DecodedLibraryBaseForTest {
         self.projection.reference_manifest_sha256
     }
 
-    pub(in crate::check::checker) fn runtime_counts(&self) -> &NextIdsForTest {
+    pub(in crate::check::checker) fn runtime_counts(&self) -> &NextIds {
         &self.prefix_lengths
     }
 
@@ -507,7 +632,7 @@ impl DecodedLibraryBaseForTest {
         self.root_counts
     }
 
-    pub(in crate::check::checker) fn prefix_lengths(&self) -> &NextIdsForTest {
+    pub(in crate::check::checker) fn prefix_lengths(&self) -> &NextIds {
         &self.prefix_lengths
     }
 
@@ -516,6 +641,35 @@ impl DecodedLibraryBaseForTest {
     }
 }
 
+impl DecodedFrozenLibrary {
+    fn from_decoded(decoded: DecodedLibraryBase) -> Self {
+        let DecodedLibraryBase {
+            state: runtime,
+            typed_validation_sha256,
+            prefix_lengths,
+            root_names,
+            ..
+        } = decoded;
+        Self {
+            runtime,
+            root_names,
+            prefixes: [
+                prefix_lengths.types,
+                prefix_lengths.type_params,
+                prefix_lengths.classes,
+                prefix_lengths.scopes,
+                prefix_lengths.symbols,
+                prefix_lengths.declarations,
+                prefix_lengths.type_groups,
+                prefix_lengths.namespaces,
+                prefix_lengths.value_storages,
+            ],
+            typed_validation_sha256,
+        }
+    }
+}
+
+#[cfg(test)]
 fn write_optional_u32(writer: &mut SnapshotWriter, value: Option<u32>) {
     match value {
         None => writer.u8(0),
@@ -538,6 +692,7 @@ fn read_optional_u32(reader: &mut SnapshotReader<'_>) -> Result<Option<u32>, Sna
     }
 }
 
+#[cfg(test)]
 fn write_root_optional_u32(writer: &mut SnapshotWriter, value: Option<u32>) {
     writer.u32(value.unwrap_or(ABSENT_ID));
 }
@@ -549,6 +704,7 @@ fn read_root_optional_u32(
     Ok((value != ABSENT_ID).then_some(value))
 }
 
+#[cfg(test)]
 fn write_type_id(writer: &mut SnapshotWriter, value: TypeId) {
     writer.u32(value.0);
 }
@@ -557,6 +713,7 @@ fn read_type_id(reader: &mut SnapshotReader<'_>) -> Result<TypeId, SnapshotCodec
     Ok(TypeId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_type_param(writer: &mut SnapshotWriter, value: TypeParamId) {
     writer.u32(value.0);
 }
@@ -565,6 +722,7 @@ fn read_type_param(reader: &mut SnapshotReader<'_>) -> Result<TypeParamId, Snaps
     Ok(TypeParamId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_class(writer: &mut SnapshotWriter, value: ClassId) {
     writer.u32(value.0);
 }
@@ -573,14 +731,17 @@ fn read_class(reader: &mut SnapshotReader<'_>) -> Result<ClassId, SnapshotCodecE
     Ok(ClassId(reader.u32()?))
 }
 
+#[cfg(test)]
 fn write_len(writer: &mut SnapshotWriter, len: usize) -> Result<(), SnapshotCodecError> {
     writer.usize(len)
 }
 
-fn id32(value: usize) -> u32 {
-    u32::try_from(value).expect("snapshot identity fits u32")
+fn id32(value: usize) -> Result<u32, SnapshotCodecError> {
+    u32::try_from(value)
+        .map_err(|_| SnapshotCodecError::invalid(0, "snapshot identity exceeds u32"))
 }
 
+#[cfg(test)]
 fn count64(value: usize) -> u64 {
     u64::try_from(value).expect("snapshot count fits u64")
 }
@@ -589,13 +750,15 @@ fn validate_id(id: u32, limit: usize, label: &str) -> Result<(), SnapshotError> 
     if usize::try_from(id).ok().is_some_and(|id| id < limit) {
         Ok(())
     } else {
-        Err(invalid(
-            SnapshotErrorStage::ReferenceValidation,
-            format!("{label} id {id} exceeds prefix {limit}"),
-        ))
+        Err(SnapshotError {
+            stage: SnapshotErrorStage::ReferenceValidation,
+            message: format!("{label} id {id} exceeds prefix {limit}"),
+            kind: SnapshotErrorKind::InvalidId { id, limit },
+        })
     }
 }
 
+#[cfg(test)]
 fn encode_decl_types(slots: &[Option<TypeId>]) -> Result<Vec<u8>, SnapshotError> {
     let mut writer = SnapshotWriter::new();
     writer.u32(1);
@@ -640,6 +803,7 @@ fn decode_decl_types(
     Ok(slots)
 }
 
+#[cfg(test)]
 fn write_class_surface(
     writer: &mut SnapshotWriter,
     surface: &PublishedClassSurface,
@@ -676,6 +840,7 @@ fn read_class_surface(
     ))
 }
 
+#[cfg(test)]
 fn write_group(
     writer: &mut SnapshotWriter,
     terminal: &PublishedTypeGroupTerminal,
@@ -820,6 +985,7 @@ fn read_group(
     }
 }
 
+#[cfg(test)]
 fn encode_published(
     parts: &PublishedTypeEnvironmentSnapshotParts,
 ) -> Result<Vec<u8>, SnapshotError> {
@@ -905,6 +1071,7 @@ fn decode_published(bytes: &[u8]) -> Result<PublishedTypeEnvironmentSnapshotPart
     Ok(PublishedTypeEnvironmentSnapshotParts { classes, groups })
 }
 
+#[cfg(test)]
 fn encode_namespace_terminals(
     rows: &[FrozenNamespaceValueTerminalSnapshotRow],
 ) -> Result<Vec<u8>, SnapshotError> {
@@ -1044,6 +1211,7 @@ fn decode_namespace_terminals(
     Ok(rows)
 }
 
+#[cfg(test)]
 fn write_visibility(writer: &mut SnapshotWriter, visibility: Visibility) {
     writer.u8(match visibility {
         Visibility::Public => 0,
@@ -1064,6 +1232,7 @@ fn read_visibility(reader: &mut SnapshotReader<'_>) -> Result<Visibility, Snapsh
     }
 }
 
+#[cfg(test)]
 fn encode_class_metadata(
     parts: &FrozenCheckerRuntimeSnapshotParts,
 ) -> Result<Vec<u8>, SnapshotError> {
@@ -1325,6 +1494,7 @@ fn decode_class_metadata(
     })
 }
 
+#[cfg(test)]
 fn write_identity_terminal(
     writer: &mut SnapshotWriter,
     terminal: &LibraryIdentityTerminal,
@@ -1430,14 +1600,17 @@ fn build_manifest_references(
         semantic_identities,
     } = inputs;
     let mut references = Vec::new();
-    references.extend((0..type_count).map(|owner| ManifestReference {
-        owner_family: 1,
-        owner_domain: 1,
-        target_domain: 1,
-        field: ROW_IDENTITY_FIELD,
-        owner: id32(owner),
-        target: id32(owner),
-    }));
+    for owner in 0..type_count {
+        let owner = id32(owner)?;
+        references.push(ManifestReference {
+            owner_family: 1,
+            owner_domain: 1,
+            target_domain: 1,
+            field: ROW_IDENTITY_FIELD,
+            owner,
+            target: owner,
+        });
+    }
     for (family, rows) in [(1, store_references), (2, interner_references)] {
         references.extend(rows.iter().map(
             |&(owner_domain, target_domain, field, owner, target)| ManifestReference {
@@ -1467,8 +1640,8 @@ fn build_manifest_references(
             owner_domain: 9,
             target_domain: 9,
             field: ROW_IDENTITY_FIELD,
-            owner: id32(owner),
-            target: id32(owner),
+            owner: id32(owner)?,
+            target: id32(owner)?,
         });
         if let Some(ty) = ty {
             references.push(ManifestReference {
@@ -1476,7 +1649,7 @@ fn build_manifest_references(
                 owner_domain: 9,
                 target_domain: 1,
                 field: 0,
-                owner: id32(owner),
+                owner: id32(owner)?,
                 target: ty.0,
             });
         }
@@ -1487,8 +1660,8 @@ fn build_manifest_references(
             owner_domain: 7,
             target_domain: 7,
             field: ROW_IDENTITY_FIELD,
-            owner: id32(owner),
-            target: id32(owner),
+            owner: id32(owner)?,
+            target: id32(owner)?,
         });
         let PublishedTypeGroupTerminal::Ready(group) = group else {
             continue;
@@ -1499,7 +1672,7 @@ fn build_manifest_references(
                 owner_domain: 7,
                 target_domain: 1,
                 field: 0,
-                owner: id32(owner),
+                owner: id32(owner)?,
                 target: ty.0,
             }),
             PublishedTypeGroupSurface::Class(class) => references.push(ManifestReference {
@@ -1507,7 +1680,7 @@ fn build_manifest_references(
                 owner_domain: 7,
                 target_domain: 3,
                 field: 1,
-                owner: id32(owner),
+                owner: id32(owner)?,
                 target: class.0,
             }),
         }
@@ -1517,7 +1690,7 @@ fn build_manifest_references(
                 owner_domain: 7,
                 target_domain: 2,
                 field: 2,
-                owner: id32(owner),
+                owner: id32(owner)?,
                 target: parameter.0,
             });
         }
@@ -1528,7 +1701,7 @@ fn build_manifest_references(
                     owner_domain: 7,
                     target_domain: 1,
                     field: 3,
-                    owner: id32(owner),
+                    owner: id32(owner)?,
                     target: ty.0,
                 });
             }
@@ -1540,7 +1713,7 @@ fn build_manifest_references(
                     owner_domain: 7,
                     target_domain: 1,
                     field: 4,
-                    owner: id32(owner),
+                    owner: id32(owner)?,
                     target: ty.0,
                 });
             }
@@ -1773,7 +1946,7 @@ fn build_manifest_references(
     }
     if let Some(identities) = semantic_identities {
         for (owner, terminal) in identities.iter().enumerate() {
-            let owner = id32(owner);
+            let owner = id32(owner)?;
             references.push(ManifestReference {
                 owner_family: 8,
                 owner_domain: SEMANTIC_IDENTITY_DOMAIN,
@@ -1895,6 +2068,174 @@ fn build_tail_manifest_references(
     })
 }
 
+fn typed_validation_identity(
+    next: &NextIds,
+    source_file_count: u32,
+    roots: &[RootNameRow],
+    store_references: &[(u8, u8, u8, u32, u32)],
+    interner_references: &[(u8, u8, u8, u32, u32)],
+    binder_references: &[(u8, u8, u8, u32, u32)],
+    tail_references: &[ManifestReference],
+) -> Result<[u8; 32], SnapshotError> {
+    let mut digest = Sha256::new();
+    digest.update(b"typokat-typed-projection-v1");
+    digest.update(source_file_count.to_be_bytes());
+    for count in [
+        next.types,
+        next.type_params,
+        next.classes,
+        next.scopes,
+        next.symbols,
+        next.declarations,
+        next.type_groups,
+        next.namespaces,
+        next.value_storages,
+    ] {
+        digest.update(
+            u64::try_from(count)
+                .map_err(|_| {
+                    invalid(
+                        SnapshotErrorStage::ReferenceValidation,
+                        "typed projection count exceeds u64",
+                    )
+                })?
+                .to_be_bytes(),
+        );
+    }
+    for root in roots {
+        digest.update(
+            u64::try_from(root.name.len())
+                .map_err(|_| {
+                    invalid(
+                        SnapshotErrorStage::ReferenceValidation,
+                        "typed projection root name exceeds u64",
+                    )
+                })?
+                .to_be_bytes(),
+        );
+        digest.update(root.name.as_bytes());
+        for identity in [
+            root.symbol.map(|id| id.0),
+            root.value.map(|id| id.0),
+            root.ty.map(|id| id.0),
+            root.namespace.map(|id| id.0),
+        ] {
+            digest.update(identity.unwrap_or(ABSENT_ID).to_be_bytes());
+        }
+    }
+
+    let mut identity = 0usize;
+    let mut store = 0usize;
+    while identity < next.types || store < store_references.len() {
+        let identity_reference = if identity < next.types {
+            let id = u32::try_from(identity).map_err(|_| {
+                invalid(
+                    SnapshotErrorStage::ReferenceValidation,
+                    "typed projection TypeId exceeds u32",
+                )
+            })?;
+            Some(ManifestReference {
+                owner_family: 1,
+                owner_domain: 1,
+                target_domain: 1,
+                field: ROW_IDENTITY_FIELD,
+                owner: id,
+                target: id,
+            })
+        } else {
+            None
+        };
+        let store_reference = store_references
+            .get(store)
+            .copied()
+            .map(|row| tuple_manifest_reference(1, row));
+        let reference = match (identity_reference, store_reference) {
+            (Some(identity_reference), Some(store_reference)) => {
+                if identity_reference <= store_reference {
+                    identity += 1;
+                    identity_reference
+                } else {
+                    store += 1;
+                    store_reference
+                }
+            }
+            (Some(reference), None) => {
+                identity += 1;
+                reference
+            }
+            (None, Some(reference)) => {
+                store += 1;
+                reference
+            }
+            (None, None) => {
+                return Err(invalid(
+                    SnapshotErrorStage::ReferenceValidation,
+                    "typed projection reference merge ended unexpectedly",
+                ));
+            }
+        };
+        update_typed_validation_reference(&mut digest, reference);
+    }
+    for &reference in interner_references {
+        update_typed_validation_reference(&mut digest, tuple_manifest_reference(2, reference));
+    }
+    for &reference in binder_references {
+        update_typed_validation_reference(&mut digest, tuple_manifest_reference(3, reference));
+    }
+    for &reference in tail_references {
+        update_typed_validation_reference(&mut digest, reference);
+    }
+    Ok(digest.finalize().into())
+}
+
+fn validate_dense_identity_prefixes(
+    next: &NextIds,
+    interner: &Interner,
+    published: &PublishedTypeEnvironmentSnapshotParts,
+) -> Result<(), SnapshotError> {
+    let mut type_parameters = interner
+        .store()
+        .snapshot_type_param_ids()
+        .collect::<Vec<_>>();
+    type_parameters.sort_unstable();
+    if type_parameters.len() != next.type_params
+        || type_parameters
+            .iter()
+            .enumerate()
+            .any(|(index, parameter)| usize::try_from(parameter.0) != Ok(index))
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "frozen type-parameter identities do not form the declared dense prefix",
+        ));
+    }
+    if published.classes.len() != next.classes
+        || published
+            .classes
+            .iter()
+            .enumerate()
+            .any(|(index, (class, _))| usize::try_from(class.0) != Ok(index))
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "published class identities do not form the declared dense prefix",
+        ));
+    }
+    Ok(())
+}
+
+fn update_typed_validation_reference(digest: &mut Sha256, reference: ManifestReference) {
+    digest.update([
+        reference.owner_family,
+        reference.owner_domain,
+        reference.target_domain,
+        reference.field,
+    ]);
+    digest.update(reference.owner.to_be_bytes());
+    digest.update(reference.target.to_be_bytes());
+}
+
+#[cfg(test)]
 fn write_manifest(
     writer: &mut SnapshotWriter,
     references: &[ManifestReference],
@@ -1922,12 +2263,14 @@ fn write_manifest(
     Ok(counts)
 }
 
+#[cfg(test)]
 struct EncodedSemanticSection {
     bytes: Vec<u8>,
     reference_counts: [u64; 9],
     manifest_hash: [u8; 32],
 }
 
+#[cfg(test)]
 fn encode_semantic_identities(
     parts: &Option<[LibraryIdentityTerminal; 8]>,
     references: &[ManifestReference],
@@ -1956,17 +2299,22 @@ fn encode_semantic_identities(
 
 struct DecodedSemanticSection {
     identities: Option<[LibraryIdentityTerminal; 8]>,
+    #[cfg(test)]
     reference_counts: [u64; 9],
+    #[cfg(test)]
     manifest_hash: [u8; 32],
+    #[cfg(test)]
     projection_subtables: Vec<RuntimeSubtableForTest>,
 }
 
+#[cfg(test)]
 fn projection_subtable_names() -> impl Iterator<Item = &'static str> {
     SUBTABLE_NAMES
         .into_iter()
         .chain(std::iter::once("next-ids"))
 }
 
+#[cfg(test)]
 fn write_projection_witness(
     writer: &mut SnapshotWriter,
     subtables: &[RuntimeSubtableForTest],
@@ -1990,6 +2338,7 @@ fn write_projection_witness(
     Ok(())
 }
 
+#[cfg(test)]
 fn read_projection_witness(
     reader: &mut SnapshotReader<'_>,
 ) -> Result<Vec<RuntimeSubtableForTest>, SnapshotError> {
@@ -2008,7 +2357,7 @@ fn read_projection_witness(
             .u32()
             .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
     )
-    .expect("u32 witness count fits usize");
+    .map_err(|_| invalid(SnapshotErrorStage::Decode, "witness count exceeds usize"))?;
     if count != PROJECTION_WITNESS_COUNT {
         return Err(invalid(
             SnapshotErrorStage::Decode,
@@ -2020,11 +2369,12 @@ fn read_projection_witness(
             let row_count = reader
                 .u64()
                 .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
-            let sha256 = reader
-                .raw(32)
-                .map_err(|error| codec(SnapshotErrorStage::Decode, error))?
-                .try_into()
-                .expect("projection witness digest bytes");
+            let mut sha256 = [0; 32];
+            sha256.copy_from_slice(
+                reader
+                    .raw(32)
+                    .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
+            );
             Ok(RuntimeSubtableForTest {
                 name,
                 row_count,
@@ -2034,6 +2384,41 @@ fn read_projection_witness(
         .collect()
 }
 
+#[cfg(not(test))]
+fn read_projection_witness(reader: &mut SnapshotReader<'_>) -> Result<(), SnapshotError> {
+    if reader
+        .u32()
+        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?
+        != PROJECTION_WITNESS_VERSION
+    {
+        return Err(invalid(
+            SnapshotErrorStage::Decode,
+            "unsupported projection witness version",
+        ));
+    }
+    let count = usize::try_from(
+        reader
+            .u32()
+            .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
+    )
+    .map_err(|_| invalid(SnapshotErrorStage::Decode, "witness count exceeds usize"))?;
+    if count != PROJECTION_WITNESS_COUNT {
+        return Err(invalid(
+            SnapshotErrorStage::Decode,
+            "projection witness inventory is not exact",
+        ));
+    }
+    for _ in 0..PROJECTION_WITNESS_COUNT {
+        reader
+            .u64()
+            .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+        reader
+            .raw(32)
+            .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    }
+    Ok(())
+}
+
 struct ReferenceLimits {
     domains: [usize; 31],
     container_owners: BTreeMap<(u8, u8), usize>,
@@ -2041,7 +2426,7 @@ struct ReferenceLimits {
 
 impl ReferenceLimits {
     fn from_canonical_references(
-        next: &NextIdsForTest,
+        next: &NextIds,
         roots: &[RootNameRow],
         store_references: &[(u8, u8, u8, u32, u32)],
         interner_references: &[(u8, u8, u8, u32, u32)],
@@ -2095,7 +2480,13 @@ impl ReferenceLimits {
                                 "owner domain range overflow",
                             )
                         })?;
-                    domains[domain] = domains[domain].max(limit);
+                    let current = domains.get_mut(domain).ok_or_else(|| {
+                        invalid(
+                            SnapshotErrorStage::ReferenceValidation,
+                            "owner reference domain exceeds the schema",
+                        )
+                    })?;
+                    *current = (*current).max(limit);
                 }
                 if target_domain > 9 {
                     let domain = usize::from(target_domain);
@@ -2108,7 +2499,13 @@ impl ReferenceLimits {
                                 "target domain range overflow",
                             )
                         })?;
-                    domains[domain] = domains[domain].max(limit);
+                    let current = domains.get_mut(domain).ok_or_else(|| {
+                        invalid(
+                            SnapshotErrorStage::ReferenceValidation,
+                            "target reference domain exceeds the schema",
+                        )
+                    })?;
+                    *current = (*current).max(limit);
                 }
             }
         }
@@ -2135,6 +2532,7 @@ impl ReferenceLimits {
     }
 }
 
+#[cfg(test)]
 fn decode_semantic_identities(
     bytes: &[u8],
     limits: &ReferenceLimits,
@@ -2165,10 +2563,16 @@ fn decode_semantic_identities(
         .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let mut counts = [0u64; 9];
     for (index, count) in counts.iter_mut().enumerate() {
+        let expected_family = u16::try_from(index + 1).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family index exceeds u16",
+            )
+        })?;
         if reader
             .u16()
             .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
-            != u16::try_from(index + 1).expect("family")
+            != expected_family
             || reader
                 .u16()
                 .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
@@ -2277,12 +2681,23 @@ fn decode_semantic_identities(
     {
         let mut values = Vec::with_capacity(8);
         for _ in 0..8 {
+            if bytes.get(reader.position()) == Some(&0) {
+                return Err(invalid(
+                    SnapshotErrorStage::Publication,
+                    "semantic identity publication is not complete",
+                ));
+            }
             values.push(
                 read_identity_terminal(&mut reader)
                     .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
             );
         }
-        Some(values.try_into().expect("eight semantic identities"))
+        Some(values.try_into().map_err(|_| {
+            invalid(
+                SnapshotErrorStage::Decode,
+                "semantic identity count is not canonical",
+            )
+        })?)
     } else {
         None
     };
@@ -2292,8 +2707,11 @@ fn decode_semantic_identities(
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     Ok(DecodedSemanticSection {
         identities,
+        #[cfg(test)]
         reference_counts: counts,
+        #[cfg(test)]
         manifest_hash,
+        #[cfg(test)]
         projection_subtables,
     })
 }
@@ -2327,10 +2745,16 @@ fn decode_canonical_semantic_section(
         .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let mut counts = [0u64; 9];
     for (index, count) in counts.iter_mut().enumerate() {
+        let expected_family = u16::try_from(index + 1).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family index exceeds u16",
+            )
+        })?;
         if reader
             .u16()
             .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
-            != u16::try_from(index + 1).expect("family")
+            != expected_family
             || reader
                 .u16()
                 .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
@@ -2368,7 +2792,9 @@ fn decode_canonical_semantic_section(
     reader
         .raw(manifest_bytes)
         .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    #[cfg(test)]
     let manifest_end = reader.position();
+    #[cfg(test)]
     let manifest_hash = digest32(&bytes[..manifest_end]);
     let identities = if reader
         .bool()
@@ -2376,23 +2802,40 @@ fn decode_canonical_semantic_section(
     {
         let mut values = Vec::with_capacity(8);
         for _ in 0..8 {
+            if bytes.get(reader.position()) == Some(&0) {
+                return Err(invalid(
+                    SnapshotErrorStage::Publication,
+                    "semantic identity publication is not complete",
+                ));
+            }
             values.push(
                 read_identity_terminal(&mut reader)
                     .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
             );
         }
-        Some(values.try_into().expect("eight semantic identities"))
+        Some(values.try_into().map_err(|_| {
+            invalid(
+                SnapshotErrorStage::Decode,
+                "semantic identity count is not canonical",
+            )
+        })?)
     } else {
         None
     };
+    #[cfg(test)]
     let projection_subtables = read_projection_witness(&mut reader)?;
+    #[cfg(not(test))]
+    read_projection_witness(&mut reader)?;
     reader
         .finish()
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     Ok(DecodedSemanticSection {
         identities,
+        #[cfg(test)]
         reference_counts: counts,
+        #[cfg(test)]
         manifest_hash,
+        #[cfg(test)]
         projection_subtables,
     })
 }
@@ -2416,7 +2859,7 @@ struct ManifestStreamVerifier<'a, 'limits> {
 }
 
 impl ManifestStreamVerifier<'_, '_> {
-    fn expect(&mut self, expected: ManifestReference) -> Result<(), SnapshotError> {
+    fn verify_expected(&mut self, expected: ManifestReference) -> Result<(), SnapshotError> {
         let reference = ManifestReference {
             owner_family: self
                 .reader
@@ -2461,7 +2904,13 @@ impl ManifestStreamVerifier<'_, '_> {
             ));
         }
         self.previous = Some(reference);
-        self.actual[usize::from(reference.owner_family - 1)] += 1;
+        let family_index = usize::from(reference.owner_family - 1);
+        self.actual[family_index] = self.actual[family_index].checked_add(1).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family count overflows u64",
+            )
+        })?;
         let owner_limit = self.limits.owner_limit(reference).ok_or_else(|| {
             invalid(
                 SnapshotErrorStage::ReferenceValidation,
@@ -2547,9 +2996,27 @@ fn verify_reference_manifest_streaming(
         )
     })?;
     for reference in tail_references {
-        expected_counts[usize::from(reference.owner_family - 1)] += 1;
+        let family_index = usize::from(reference.owner_family - 1);
+        let count = expected_counts.get_mut(family_index).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "tail reference family is outside the manifest",
+            )
+        })?;
+        *count = count.checked_add(1).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family count overflows u64",
+            )
+        })?;
     }
     for (index, expected) in expected_counts.iter().enumerate() {
+        let expected_family = u16::try_from(index + 1).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family index exceeds u16",
+            )
+        })?;
         let family = reader
             .u16()
             .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
@@ -2559,10 +3026,7 @@ fn verify_reference_manifest_streaming(
         let count = reader
             .u64()
             .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
-        if family != u16::try_from(index + 1).expect("family")
-            || reserved != 0
-            || count != *expected
-        {
+        if family != expected_family || reserved != 0 || count != *expected {
             return Err(invalid(
                 SnapshotErrorStage::ReferenceValidation,
                 "reference family counts are not canonical",
@@ -2592,41 +3056,63 @@ fn verify_reference_manifest_streaming(
     let mut identity = 0usize;
     let mut store = 0usize;
     while identity < type_count || store < store_references.len() {
-        let identity_reference = (identity < type_count).then(|| ManifestReference {
-            owner_family: 1,
-            owner_domain: 1,
-            target_domain: 1,
-            field: ROW_IDENTITY_FIELD,
-            owner: id32(identity),
-            target: id32(identity),
-        });
+        let identity_reference = if identity < type_count {
+            let id = u32::try_from(identity).map_err(|_| {
+                invalid(
+                    SnapshotErrorStage::ReferenceValidation,
+                    "type identity exceeds u32",
+                )
+            })?;
+            Some(ManifestReference {
+                owner_family: 1,
+                owner_domain: 1,
+                target_domain: 1,
+                field: ROW_IDENTITY_FIELD,
+                owner: id,
+                target: id,
+            })
+        } else {
+            None
+        };
         let store_reference = store_references
             .get(store)
             .copied()
             .map(|row| tuple_manifest_reference(1, row));
-        let take_identity = match (identity_reference, store_reference) {
-            (Some(identity), Some(store)) => identity <= store,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (None, None) => unreachable!("manifest merge has a remaining row"),
+        let expected = match (identity_reference, store_reference) {
+            (Some(identity_reference), Some(store_reference)) => {
+                if identity_reference <= store_reference {
+                    identity += 1;
+                    identity_reference
+                } else {
+                    store += 1;
+                    store_reference
+                }
+            }
+            (Some(identity_reference), None) => {
+                identity += 1;
+                identity_reference
+            }
+            (None, Some(store_reference)) => {
+                store += 1;
+                store_reference
+            }
+            (None, None) => {
+                return Err(invalid(
+                    SnapshotErrorStage::ReferenceValidation,
+                    "reference manifest merge ended unexpectedly",
+                ));
+            }
         };
-        let expected = if take_identity {
-            identity += 1;
-            identity_reference.expect("identity row remains")
-        } else {
-            store += 1;
-            store_reference.expect("store row remains")
-        };
-        verifier.expect(expected)?;
+        verifier.verify_expected(expected)?;
     }
     for &row in interner_references {
-        verifier.expect(tuple_manifest_reference(2, row))?;
+        verifier.verify_expected(tuple_manifest_reference(2, row))?;
     }
     for &row in binder_references {
-        verifier.expect(tuple_manifest_reference(3, row))?;
+        verifier.verify_expected(tuple_manifest_reference(3, row))?;
     }
     for &reference in tail_references {
-        verifier.expect(reference)?;
+        verifier.verify_expected(reference)?;
     }
     if verifier.actual != expected_counts {
         return Err(invalid(
@@ -2640,7 +3126,7 @@ fn verify_reference_manifest_streaming(
 fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, SnapshotError> {
     let scope = binder.graph.get(binder.compilation_global).ok_or_else(|| {
         invalid(
-            SnapshotErrorStage::Generation,
+            SnapshotErrorStage::ReferenceValidation,
             "missing compilation-global scope",
         )
     })?;
@@ -2650,7 +3136,7 @@ fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, SnapshotError>
         .map(|(name, symbol)| {
             let record = binder.symbols.get(*symbol).ok_or_else(|| {
                 invalid(
-                    SnapshotErrorStage::Generation,
+                    SnapshotErrorStage::ReferenceValidation,
                     "global symbol id is missing",
                 )
             })?;
@@ -2667,6 +3153,7 @@ fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, SnapshotError>
     Ok(rows)
 }
 
+#[cfg(test)]
 fn encode_root_index(rows: &[RootNameRow]) -> Result<Vec<u8>, SnapshotError> {
     let mut writer = SnapshotWriter::new();
     writer.u32(1);
@@ -2691,10 +3178,7 @@ fn encode_root_index(rows: &[RootNameRow]) -> Result<Vec<u8>, SnapshotError> {
     Ok(writer.into_bytes())
 }
 
-fn decode_root_index(
-    bytes: &[u8],
-    next: &NextIdsForTest,
-) -> Result<Vec<RootNameRow>, SnapshotError> {
+fn decode_root_index(bytes: &[u8], next: &NextIds) -> Result<Vec<RootNameRow>, SnapshotError> {
     let mut reader = SnapshotReader::new(bytes);
     if reader
         .u32()
@@ -2789,7 +3273,8 @@ fn decode_root_index(
     Ok(rows)
 }
 
-fn encode_next_ids(next: &NextIdsForTest, source_file_count: u32) -> Vec<u8> {
+#[cfg(test)]
+fn encode_next_ids(next: &NextIds, source_file_count: u32) -> Vec<u8> {
     let mut writer = SnapshotWriter::new();
     writer.u32(1);
     writer.u32(source_file_count);
@@ -2809,7 +3294,7 @@ fn encode_next_ids(next: &NextIdsForTest, source_file_count: u32) -> Vec<u8> {
     writer.into_bytes()
 }
 
-fn decode_next_ids(bytes: &[u8]) -> Result<(NextIdsForTest, u32), SnapshotError> {
+fn decode_next_ids(bytes: &[u8]) -> Result<(NextIds, u32), SnapshotError> {
     let mut reader = SnapshotReader::new(bytes);
     if reader
         .u32()
@@ -2851,7 +3336,7 @@ fn decode_next_ids(bytes: &[u8]) -> Result<(NextIdsForTest, u32), SnapshotError>
         ));
     }
     Ok((
-        NextIdsForTest {
+        NextIds {
             store: types,
             types,
             type_params,
@@ -2867,6 +3352,7 @@ fn decode_next_ids(bytes: &[u8]) -> Result<(NextIdsForTest, u32), SnapshotError>
     ))
 }
 
+#[cfg(test)]
 fn root_counts(rows: &[RootNameRow]) -> [u64; 4] {
     [
         count64(rows.iter().filter(|row| row.symbol.is_some()).count()),
@@ -2876,6 +3362,7 @@ fn root_counts(rows: &[RootNameRow]) -> [u64; 4] {
     ]
 }
 
+#[cfg(test)]
 fn identity_witness(
     rows: &[RootNameRow],
     published: &PublishedTypeEnvironmentSnapshotParts,
@@ -2897,10 +3384,12 @@ fn identity_witness(
     witness
 }
 
+#[cfg(test)]
 fn debug_bytes<T: fmt::Debug + ?Sized>(value: &T) -> Vec<u8> {
     format!("{value:#?}").into_bytes()
 }
 
+#[cfg(test)]
 fn debug_rows<T: fmt::Debug>(rows: &[T]) -> Vec<u8> {
     if rows.is_empty() {
         Vec::new()
@@ -2909,6 +3398,7 @@ fn debug_rows<T: fmt::Debug>(rows: &[T]) -> Vec<u8> {
     }
 }
 
+#[cfg(test)]
 fn store_projection_subtables(store: &Store) -> Vec<(u64, Vec<u8>)> {
     let mut rows = Vec::new();
     let mut payloads = Vec::new();
@@ -2958,10 +3448,10 @@ fn store_projection_subtables(store: &Store) -> Vec<(u64, Vec<u8>)> {
         }
         rows.push(0xff);
     }
-    let constraints = store.snapshot_type_param_constraints_for_test();
-    let frozen = store.snapshot_frozen_type_params_for_test();
+    let constraints = store.snapshot_type_param_constraints();
+    let frozen = store.snapshot_frozen_type_params();
     let mut template_names = store
-        .snapshot_template_name_ids_for_test()
+        .snapshot_template_name_ids()
         .map(|id| (id, store.template_name(id).unwrap_or_default().to_owned()))
         .collect::<Vec<_>>();
     template_names.sort_by_key(|(id, _)| id.0);
@@ -2974,6 +3464,7 @@ fn store_projection_subtables(store: &Store) -> Vec<(u64, Vec<u8>)> {
     ]
 }
 
+#[cfg(test)]
 fn interner_projection_subtables(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, SnapshotError> {
     let mut reader = SnapshotReader::new(bytes);
     if reader
@@ -3043,6 +3534,7 @@ fn interner_projection_subtables(bytes: &[u8]) -> Result<Vec<(u64, Vec<u8>)>, Sn
     ])
 }
 
+#[cfg(test)]
 fn binder_projection_subtables(
     binder: &Binder,
     binder_references: &[(u8, u8, u8, u32, u32)],
@@ -3125,6 +3617,7 @@ fn binder_projection_subtables(
     ]
 }
 
+#[cfg(test)]
 struct CheckerProjectionInputs<'a> {
     decl_types: &'a [Option<TypeId>],
     published: &'a PublishedTypeEnvironmentSnapshotParts,
@@ -3132,10 +3625,11 @@ struct CheckerProjectionInputs<'a> {
     runtime: &'a FrozenCheckerRuntimeSnapshotParts,
     semantic_identities: &'a Option<[LibraryIdentityTerminal; 8]>,
     roots: &'a [RootNameRow],
-    next: &'a NextIdsForTest,
+    next: &'a NextIds,
     source_file_count: u32,
 }
 
+#[cfg(test)]
 fn checker_projection_subtables(
     inputs: CheckerProjectionInputs<'_>,
 ) -> Result<Vec<(u64, Vec<u8>)>, SnapshotError> {
@@ -3271,6 +3765,7 @@ fn checker_projection_subtables(
     ])
 }
 
+#[cfg(test)]
 struct ProjectionSubtableInputs<'a> {
     interner: &'a Interner,
     interner_section: &'a [u8],
@@ -3279,6 +3774,7 @@ struct ProjectionSubtableInputs<'a> {
     checker: CheckerProjectionInputs<'a>,
 }
 
+#[cfg(test)]
 fn projection_subtables(
     inputs: ProjectionSubtableInputs<'_>,
 ) -> Result<Vec<RuntimeSubtableForTest>, SnapshotError> {
@@ -3305,13 +3801,15 @@ fn projection_subtables(
         .collect())
 }
 
+#[cfg(test)]
 fn build_projection(
     sections: &[DirectorySection],
     subtables: Vec<RuntimeSubtableForTest>,
     rows: &[RootNameRow],
-    next: NextIdsForTest,
+    next: NextIds,
     reference_counts: [u64; 9],
     manifest_hash: [u8; 32],
+    typed_validation_sha256: [u8; 32],
 ) -> RuntimeProjectionForTest {
     let families = sections
         .iter()
@@ -3335,10 +3833,12 @@ fn build_projection(
         next_ids: next,
         reference_counts,
         reference_manifest_sha256: manifest_hash,
+        typed_validation_sha256,
         sha256: digest32(&projection_bytes),
     }
 }
 
+#[cfg(test)]
 fn assemble_archive(
     payloads: &[Vec<u8>; 10],
 ) -> Result<(SnapshotArchiveForTest, Vec<DirectorySection>), SnapshotError> {
@@ -3375,6 +3875,7 @@ fn assemble_archive(
         writer.raw(&digest);
         sections.push(DirectorySection {
             range: offset..offset + payload.len(),
+            #[cfg(test)]
             digest,
         });
         offset += payload.len();
@@ -3390,6 +3891,7 @@ fn assemble_archive(
     ))
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::check::checker) struct LibraryCompilerMeasureForTest {
     pub(in crate::check::checker) source_loads: u64,
@@ -3399,6 +3901,7 @@ pub(in crate::check::checker) struct LibraryCompilerMeasureForTest {
     pub(in crate::check::checker) snapshot_generations: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default)]
 struct ThreadEvidenceState {
     compiler: LibraryCompilerMeasureForTest,
@@ -3406,19 +3909,23 @@ struct ThreadEvidenceState {
     last_route_projection: Option<[u8; 32]>,
 }
 
+#[cfg(test)]
 thread_local! {
     static THREAD_EVIDENCE: RefCell<ThreadEvidenceState> = RefCell::new(ThreadEvidenceState::default());
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct LibraryCompilerMeasureScopeForTest(
     LibraryCompilerMeasureForTest,
 );
 
+#[cfg(test)]
 pub(in crate::check::checker) fn start_library_compiler_measure_for_test(
 ) -> LibraryCompilerMeasureScopeForTest {
     THREAD_EVIDENCE.with(|state| LibraryCompilerMeasureScopeForTest(state.borrow().compiler))
 }
 
+#[cfg(test)]
 impl LibraryCompilerMeasureScopeForTest {
     pub(in crate::check::checker) fn finish(self) -> LibraryCompilerMeasureForTest {
         THREAD_EVIDENCE.with(|state| {
@@ -3434,16 +3941,19 @@ impl LibraryCompilerMeasureScopeForTest {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::check::checker) struct DecodedBaseRouteMeasureForTest {
     pub(in crate::check::checker) user_checks: u64,
     pub(in crate::check::checker) runtime_projection_sha256: String,
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct DecodedBaseRouteMeasureScopeForTest {
     checks: u64,
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn start_decoded_base_route_measure_for_test(
 ) -> DecodedBaseRouteMeasureScopeForTest {
     THREAD_EVIDENCE.with(|state| DecodedBaseRouteMeasureScopeForTest {
@@ -3451,6 +3961,7 @@ pub(in crate::check::checker) fn start_decoded_base_route_measure_for_test(
     })
 }
 
+#[cfg(test)]
 impl DecodedBaseRouteMeasureScopeForTest {
     pub(in crate::check::checker) fn finish(self) -> DecodedBaseRouteMeasureForTest {
         THREAD_EVIDENCE.with(|state| {
@@ -3466,6 +3977,7 @@ impl DecodedBaseRouteMeasureScopeForTest {
     }
 }
 
+#[cfg(test)]
 pub(super) fn record_decoded_route(projection: &RuntimeProjectionForTest) {
     THREAD_EVIDENCE.with(|state| {
         let mut state = state.borrow_mut();
@@ -3474,6 +3986,7 @@ pub(super) fn record_decoded_route(projection: &RuntimeProjectionForTest) {
     });
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn compile_snapshot_for_test(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<CompiledSnapshotForTest, SnapshotError> {
@@ -3494,16 +4007,48 @@ pub(in crate::check::checker) fn compile_snapshot_for_test(
     encode_snapshot_parts(&parts)
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn encode_library_runtime_product(
     product: &CompiledLibraryRuntimeProduct,
 ) -> Result<CompiledSnapshotForTest, SnapshotError> {
     encode_snapshot_parts(&product._parts)
 }
 
+#[cfg(test)]
 fn encode_snapshot_parts(
     parts: &OwnedLibraryRuntimeSnapshotParts,
 ) -> Result<CompiledSnapshotForTest, SnapshotError> {
-    let next = NextIdsForTest {
+    encode_snapshot_inputs(SnapshotEncodeInputs {
+        interner: &parts.interner,
+        binder: &parts.binder,
+        published_types: &parts.published_types,
+        decl_types: &parts.decl_types,
+        semantic_identities: &parts.semantic_identities,
+        runtime: &parts.runtime,
+        next_type_param: parts.next_type_param,
+        next_class_id: parts.next_class_id,
+        source_file_count: parts.source_file_count,
+    })
+}
+
+#[cfg(test)]
+struct SnapshotEncodeInputs<'parts> {
+    interner: &'parts Interner,
+    binder: &'parts Binder,
+    published_types: &'parts PublishedTypeEnvironmentSnapshotParts,
+    decl_types: &'parts [Option<TypeId>],
+    semantic_identities: &'parts Option<[LibraryIdentityTerminal; 8]>,
+    runtime: &'parts FrozenCheckerRuntimeSnapshotParts,
+    next_type_param: u32,
+    next_class_id: u32,
+    source_file_count: u32,
+}
+
+#[cfg(test)]
+fn encode_snapshot_inputs(
+    parts: SnapshotEncodeInputs<'_>,
+) -> Result<CompiledSnapshotForTest, SnapshotError> {
+    let next = NextIds {
         store: parts.interner.store().len(),
         types: parts.interner.store().len(),
         type_params: usize::try_from(parts.next_type_param).expect("type-param prefix fits usize"),
@@ -3516,53 +4061,66 @@ fn encode_snapshot_parts(
         value_storages: usize::try_from(parts.binder.decl_count)
             .expect("storage prefix fits usize"),
     };
-    let roots = collect_root_rows(&parts.binder)?;
-    let identity = identity_witness(&roots, &parts.published_types);
-    let (store_references, interner_references) =
-        parts.interner.snapshot_reference_records_for_test();
-    let binder_references = snapshot_reference_records_for_test(&parts.binder);
+    let roots = collect_root_rows(parts.binder)?;
+    let identity = identity_witness(&roots, parts.published_types);
+    let (store_references, interner_references) = parts
+        .interner
+        .snapshot_reference_records()
+        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
+    let binder_references = snapshot_reference_records(parts.binder)
+        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
     let references = build_manifest_references(ManifestInputs {
         type_count: next.types,
         roots: &roots,
         store_references: &store_references,
         interner_references: &interner_references,
         binder_references: &binder_references,
-        decl_types: &parts.decl_types,
-        published: &parts.published_types,
+        decl_types: parts.decl_types,
+        published: parts.published_types,
         namespace_terminals: &parts.runtime.namespace_terminals,
-        runtime: &parts.runtime,
-        semantic_identities: &parts.semantic_identities,
+        runtime: parts.runtime,
+        semantic_identities: parts.semantic_identities,
     })
     .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
+    let tail_start = references.partition_point(|reference| reference.owner_family <= 3);
+    let typed_validation_sha256 = typed_validation_identity(
+        &next,
+        parts.source_file_count,
+        &roots,
+        &store_references,
+        &interner_references,
+        &binder_references,
+        &references[tail_start..],
+    )?;
     let (store, interner) = parts
         .interner
         .encode_split_snapshot_sections_for_test()
         .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
-    let binder = encode_binder_snapshot(&parts.binder)
+    let binder = encode_binder_snapshot(parts.binder)
         .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
-    let decl_types = encode_decl_types(&parts.decl_types)?;
-    let published = encode_published(&parts.published_types)?;
+    let decl_types = encode_decl_types(parts.decl_types)?;
+    let published = encode_published(parts.published_types)?;
     let namespace_terminals = encode_namespace_terminals(&parts.runtime.namespace_terminals)?;
-    let class_metadata = encode_class_metadata(&parts.runtime)?;
+    let class_metadata = encode_class_metadata(parts.runtime)?;
     let root_index = encode_root_index(&roots)?;
     let next_ids = encode_next_ids(&next, parts.source_file_count);
     let subtables = projection_subtables(ProjectionSubtableInputs {
-        interner: &parts.interner,
+        interner: parts.interner,
         interner_section: &interner,
-        binder: &parts.binder,
+        binder: parts.binder,
         binder_references: &binder_references,
         checker: CheckerProjectionInputs {
-            decl_types: &parts.decl_types,
-            published: &parts.published_types,
+            decl_types: parts.decl_types,
+            published: parts.published_types,
             namespace_terminals: &parts.runtime.namespace_terminals,
-            runtime: &parts.runtime,
-            semantic_identities: &parts.semantic_identities,
+            runtime: parts.runtime,
+            semantic_identities: parts.semantic_identities,
             roots: &roots,
             next: &next,
             source_file_count: parts.source_file_count,
         },
     })?;
-    let semantic = encode_semantic_identities(&parts.semantic_identities, &references, &subtables)?;
+    let semantic = encode_semantic_identities(parts.semantic_identities, &references, &subtables)?;
     let payloads = [
         store,
         interner,
@@ -3583,6 +4141,7 @@ fn encode_snapshot_parts(
         next,
         semantic.reference_counts,
         semantic.manifest_hash,
+        typed_validation_sha256,
     );
     THREAD_EVIDENCE.with(|evidence| evidence.borrow_mut().compiler.snapshot_generations += 1);
     Ok(CompiledSnapshotForTest {
@@ -3592,9 +4151,10 @@ fn encode_snapshot_parts(
     })
 }
 
-pub(in crate::check::checker) fn validate_snapshot_for_test(
+#[cfg(test)]
+pub(in crate::check::checker) fn validate_snapshot(
     bytes: &[u8],
-) -> Result<ValidatedSnapshotForTest, SnapshotError> {
+) -> Result<ValidatedSnapshot, SnapshotError> {
     if bytes.len() < FIXED_HEADER_LEN || !bytes.starts_with(MAGIC) {
         return Err(invalid(
             SnapshotErrorStage::HeaderValidation,
@@ -3637,8 +4197,12 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
             .u32()
             .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?,
     )
-    .expect("u32 section count fits usize")
-        != SECTION_COUNT
+    .map_err(|_| {
+        invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "section count exceeds usize",
+        )
+    })? != SECTION_COUNT
     {
         return Err(invalid(
             SnapshotErrorStage::HeaderValidation,
@@ -3656,11 +4220,12 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
             "body length exceeds usize",
         )
     })?;
-    let expected_body_digest: [u8; 32] = reader
-        .raw(32)
-        .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?
-        .try_into()
-        .expect("digest bytes");
+    let mut expected_body_digest = [0; 32];
+    expected_body_digest.copy_from_slice(
+        reader
+            .raw(32)
+            .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?,
+    );
     let directory_end = FIXED_HEADER_LEN
         .checked_add(SECTION_COUNT * DIRECTORY_ENTRY_LEN)
         .ok_or_else(|| {
@@ -3669,15 +4234,21 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
                 "directory overflow",
             )
         })?;
-    if directory_end > bytes.len() || body_len != bytes.len() - directory_end {
+    if directory_end > bytes.len() || body_len > bytes.len() - directory_end {
         return Err(invalid(
-            SnapshotErrorStage::HeaderValidation,
+            SnapshotErrorStage::PayloadValidation,
             "body length mismatch",
+        ));
+    }
+    if body_len < bytes.len() - directory_end {
+        return Err(invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "trailing archive bytes",
         ));
     }
     if digest32(&bytes[directory_end..]) != expected_body_digest {
         return Err(invalid(
-            SnapshotErrorStage::HeaderValidation,
+            SnapshotErrorStage::PayloadValidation,
             "body digest mismatch",
         ));
     }
@@ -3685,10 +4256,16 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
     let mut sections = Vec::with_capacity(SECTION_COUNT);
     let mut expected_offset = directory_end;
     for index in 0..SECTION_COUNT {
+        let expected_tag = u16::try_from(index + 1).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section tag exceeds u16",
+            )
+        })?;
         let tag = directory
             .u16()
             .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?;
-        if tag != u16::try_from(index + 1).expect("section tag")
+        if tag != expected_tag
             || directory
                 .u16()
                 .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?
@@ -3721,11 +4298,12 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
                 "section length exceeds usize",
             )
         })?;
-        let digest: [u8; 32] = directory
-            .raw(32)
-            .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?
-            .try_into()
-            .expect("digest bytes");
+        let mut digest = [0; 32];
+        digest.copy_from_slice(
+            directory
+                .raw(32)
+                .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?,
+        );
         let end = offset.checked_add(len).ok_or_else(|| {
             invalid(
                 SnapshotErrorStage::DirectoryValidation,
@@ -3746,6 +4324,7 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
         }
         sections.push(DirectorySection {
             range: offset..end,
+            #[cfg(test)]
             digest,
         });
         expected_offset = end;
@@ -3759,15 +4338,15 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
             "trailing archive bytes",
         ));
     }
-    Ok(ValidatedSnapshotForTest {
-        bytes: bytes.to_vec(),
+    Ok(ValidatedSnapshot {
+        bytes: Cow::Owned(bytes.to_vec()),
         sections,
     })
 }
 
-fn validate_canonical_snapshot_for_test(
-    bytes: Vec<u8>,
-) -> Result<ValidatedSnapshotForTest, SnapshotError> {
+fn validate_canonical_snapshot(
+    bytes: Cow<'static, [u8]>,
+) -> Result<ValidatedSnapshot, SnapshotError> {
     if bytes.len() != CANONICAL_ARCHIVE_BYTES
         || digest32(&bytes) != decode_hex32(CANONICAL_ARCHIVE_SHA256)
     {
@@ -3818,8 +4397,12 @@ fn validate_canonical_snapshot_for_test(
             .u32()
             .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?,
     )
-    .expect("u32 section count fits usize")
-        != SECTION_COUNT
+    .map_err(|_| {
+        invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "section count exceeds usize",
+        )
+    })? != SECTION_COUNT
     {
         return Err(invalid(
             SnapshotErrorStage::HeaderValidation,
@@ -3848,20 +4431,32 @@ fn validate_canonical_snapshot_for_test(
                 "directory overflow",
             )
         })?;
-    if directory_end > bytes.len() || body_len != bytes.len() - directory_end {
+    if directory_end > bytes.len() || body_len > bytes.len() - directory_end {
         return Err(invalid(
-            SnapshotErrorStage::HeaderValidation,
+            SnapshotErrorStage::PayloadValidation,
             "body length mismatch",
+        ));
+    }
+    if body_len < bytes.len() - directory_end {
+        return Err(invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "trailing archive bytes",
         ));
     }
     let mut directory = SnapshotReader::new(&bytes[FIXED_HEADER_LEN..directory_end]);
     let mut sections = Vec::with_capacity(SECTION_COUNT);
     let mut expected_offset = directory_end;
     for index in 0..SECTION_COUNT {
+        let expected_tag = u16::try_from(index + 1).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section tag exceeds u16",
+            )
+        })?;
         let tag = directory
             .u16()
             .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?;
-        if tag != u16::try_from(index + 1).expect("section tag")
+        if tag != expected_tag
             || directory
                 .u16()
                 .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?
@@ -3894,11 +4489,12 @@ fn validate_canonical_snapshot_for_test(
                 "section length exceeds usize",
             )
         })?;
-        let digest = directory
-            .raw(32)
-            .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?
-            .try_into()
-            .expect("digest bytes");
+        let mut digest = [0; 32];
+        digest.copy_from_slice(
+            directory
+                .raw(32)
+                .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?,
+        );
         let end = offset.checked_add(len).ok_or_else(|| {
             invalid(
                 SnapshotErrorStage::DirectoryValidation,
@@ -3913,6 +4509,7 @@ fn validate_canonical_snapshot_for_test(
         }
         sections.push(DirectorySection {
             range: offset..end,
+            #[cfg(test)]
             digest,
         });
         expected_offset = end;
@@ -3926,30 +4523,46 @@ fn validate_canonical_snapshot_for_test(
             "trailing archive bytes",
         ));
     }
-    Ok(ValidatedSnapshotForTest { bytes, sections })
+    Ok(ValidatedSnapshot { bytes, sections })
 }
 
-fn section(validated: &ValidatedSnapshotForTest, tag: usize) -> &[u8] {
-    &validated.bytes[validated.sections[tag - 1].range.clone()]
+fn section(validated: &ValidatedSnapshot, tag: usize) -> Result<&[u8], SnapshotError> {
+    let index = tag.checked_sub(1).ok_or_else(|| {
+        invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "section tag underflows directory index",
+        )
+    })?;
+    let section = validated.sections.get(index).ok_or_else(|| {
+        invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "section tag is absent from the directory",
+        )
+    })?;
+    validated.bytes.get(section.range.clone()).ok_or_else(|| {
+        invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "section range is outside the admitted artifact",
+        )
+    })
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn decode_snapshot_for_test(
-    validated: ValidatedSnapshotForTest,
+    validated: ValidatedSnapshot,
     strategy: SnapshotDecodeStrategy,
-) -> Result<DecodedLibraryBaseForTest, SnapshotError> {
+) -> Result<DecodedLibraryBase, SnapshotError> {
     if strategy == SnapshotDecodeStrategy::ImmutableIndexed {
         return Err(invalid(
             SnapshotErrorStage::UnsupportedStrategy,
-            "immutable-indexed materialization is optional in the feasibility prototype",
+            "immutable-indexed materialization is not supported by the generic test decoder",
         ));
     }
-    let (next, source_file_count) = decode_next_ids(section(&validated, 10))?;
-    let interner = Interner::decode_split_snapshot_sections_for_test(
-        section(&validated, 1),
-        section(&validated, 2),
-    )
-    .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
-    let binder = decode_binder_snapshot(section(&validated, 3))
+    let (next, source_file_count) = decode_next_ids(section(&validated, 10)?)?;
+    let interner =
+        Interner::decode_split_snapshot_sections(section(&validated, 1)?, section(&validated, 2)?)
+            .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    let binder = decode_binder_snapshot(section(&validated, 3)?)
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     if interner.store().len() != next.types
         || binder.graph.snapshot_len() != next.scopes
@@ -3957,15 +4570,19 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         || binder.declarations.len() != next.declarations
         || binder.type_groups.len() != next.type_groups
         || binder.namespaces.len() != next.namespaces
-        || usize::try_from(binder.decl_count).expect("storage prefix fits usize")
-            != next.value_storages
+        || usize::try_from(binder.decl_count).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "value-storage prefix exceeds usize",
+            )
+        })? != next.value_storages
     {
         return Err(invalid(
             SnapshotErrorStage::ReferenceValidation,
             "decoded runtime counts disagree with next-id prefix",
         ));
     }
-    let roots = decode_root_index(section(&validated, 9), &next)?;
+    let roots = decode_root_index(section(&validated, 9)?, &next)?;
     let canonical_roots = collect_root_rows(&binder)
         .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
     if roots
@@ -3980,8 +4597,11 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
             "root index disagrees with binder global scope",
         ));
     }
-    let (store_references, interner_references) = interner.snapshot_reference_records_for_test();
-    let binder_references = snapshot_reference_records_for_test(&binder);
+    let (store_references, interner_references) = interner
+        .snapshot_reference_records()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let binder_references = snapshot_reference_records(&binder)
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let reference_limits = ReferenceLimits::from_canonical_references(
         &next,
         &roots,
@@ -3989,11 +4609,12 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         &interner_references,
         &binder_references,
     )?;
-    let semantic = decode_semantic_identities(section(&validated, 8), &reference_limits)?;
-    let decl_types = decode_decl_types(section(&validated, 4), next.types)?;
-    let published_types = decode_published(section(&validated, 5))?;
-    let namespace_terminals = decode_namespace_terminals(section(&validated, 6))?;
-    let runtime = decode_class_metadata(section(&validated, 7), namespace_terminals.clone())?;
+    let semantic = decode_semantic_identities(section(&validated, 8)?, &reference_limits)?;
+    let decl_types = decode_decl_types(section(&validated, 4)?, next.types)?;
+    let published_types = decode_published(section(&validated, 5)?)?;
+    validate_dense_identity_prefixes(&next, &interner, &published_types)?;
+    let namespace_terminals = decode_namespace_terminals(section(&validated, 6)?)?;
+    let runtime = decode_class_metadata(section(&validated, 7)?, namespace_terminals.clone())?;
     let expected_references = build_manifest_references(ManifestInputs {
         type_count: next.types,
         roots: &roots,
@@ -4011,12 +4632,22 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
     write_manifest(&mut expected_writer, &expected_references)
         .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let expected_manifest = expected_writer.into_bytes();
-    if !section(&validated, 8).starts_with(&expected_manifest) {
+    if !section(&validated, 8)?.starts_with(&expected_manifest) {
         return Err(invalid(
             SnapshotErrorStage::ReferenceValidation,
             "reference manifest disagrees with decoded state",
         ));
     }
+    let tail_start = expected_references.partition_point(|reference| reference.owner_family <= 3);
+    let typed_validation_sha256 = typed_validation_identity(
+        &next,
+        source_file_count,
+        &roots,
+        &store_references,
+        &interner_references,
+        &binder_references,
+        &expected_references[tail_start..],
+    )?;
     let identity = identity_witness(&roots, &published_types);
     let projection = build_projection(
         &validated.sections,
@@ -4025,6 +4656,7 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         next.clone(),
         semantic.reference_counts,
         semantic.manifest_hash,
+        typed_validation_sha256,
     );
     let state = OwnedLibraryRuntimeState::from_snapshot_parts(OwnedLibraryRuntimeSnapshotParts {
         interner,
@@ -4040,8 +4672,9 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         source_file_count,
     })
     .map_err(|message| invalid(SnapshotErrorStage::ReferenceValidation, message))?;
-    Ok(DecodedLibraryBaseForTest {
+    Ok(DecodedLibraryBase {
         state,
+        typed_validation_sha256,
         projection,
         identity,
         source_file_count,
@@ -4052,26 +4685,62 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
     })
 }
 
-pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
-    validated: ValidatedSnapshotForTest,
-) -> Result<DecodedLibraryBaseForTest, SnapshotError> {
+pub(in crate::check::checker) fn decode_canonical_snapshot(
+    validated: ValidatedSnapshot,
+) -> Result<DecodedLibraryBase, SnapshotError> {
+    #[cfg(test)]
     let strategy = SnapshotDecodeStrategy::EagerComplete;
-    let (next, source_file_count) = decode_next_ids(section(&validated, 10))?;
+    let (next, source_file_count) = decode_next_ids(section(&validated, 10)?)?;
+    let store_section = section(&validated, 1)?;
+    let interner_section = section(&validated, 2)?;
+    let binder_section = section(&validated, 3)?;
     let (interner_result, binder_result) = std::thread::scope(|scope| {
-        let interner = scope.spawn(|| {
-            Interner::decode_split_snapshot_sections_for_test(
-                section(&validated, 1),
-                section(&validated, 2),
-            )
-        });
-        let binder = scope.spawn(|| decode_binder_snapshot(section(&validated, 3)));
-        (interner.join(), binder.join())
-    });
+        let interner = std::thread::Builder::new()
+            .name("typokat-library-interner-decode".to_owned())
+            .spawn_scoped(scope, || {
+                Interner::decode_split_snapshot_sections(store_section, interner_section)
+            })
+            .map_err(|_| SnapshotError {
+                stage: SnapshotErrorStage::Decode,
+                message: "could not create interner decode worker".to_owned(),
+                kind: SnapshotErrorKind::WorkerSpawnFailed { worker: "interner" },
+            })?;
+        let binder = match std::thread::Builder::new()
+            .name("typokat-library-binder-decode".to_owned())
+            .spawn_scoped(scope, || decode_binder_snapshot(binder_section))
+        {
+            Ok(binder) => binder,
+            Err(_) => {
+                return match interner.join() {
+                    Err(_) => Err(SnapshotError {
+                        stage: SnapshotErrorStage::Decode,
+                        message: "interner decode worker panicked".to_owned(),
+                        kind: SnapshotErrorKind::WorkerPanicked { worker: "interner" },
+                    }),
+                    Ok(Err(error)) => Err(codec(SnapshotErrorStage::ReferenceValidation, error)),
+                    Ok(Ok(_)) => Err(SnapshotError {
+                        stage: SnapshotErrorStage::Decode,
+                        message: "could not create binder decode worker".to_owned(),
+                        kind: SnapshotErrorKind::WorkerSpawnFailed { worker: "binder" },
+                    }),
+                };
+            }
+        };
+        Ok::<_, SnapshotError>((interner.join(), binder.join()))
+    })?;
     let interner = interner_result
-        .expect("canonical interner decode does not panic")
-        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+        .map_err(|_| SnapshotError {
+            stage: SnapshotErrorStage::Decode,
+            message: "interner decode worker panicked".to_owned(),
+            kind: SnapshotErrorKind::WorkerPanicked { worker: "interner" },
+        })?
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let binder = binder_result
-        .expect("canonical binder decode does not panic")
+        .map_err(|_| SnapshotError {
+            stage: SnapshotErrorStage::Decode,
+            message: "binder decode worker panicked".to_owned(),
+            kind: SnapshotErrorKind::WorkerPanicked { worker: "binder" },
+        })?
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
     if interner.store().len() != next.types
         || binder.graph.snapshot_len() != next.scopes
@@ -4079,15 +4748,19 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
         || binder.declarations.len() != next.declarations
         || binder.type_groups.len() != next.type_groups
         || binder.namespaces.len() != next.namespaces
-        || usize::try_from(binder.decl_count).expect("storage prefix fits usize")
-            != next.value_storages
+        || usize::try_from(binder.decl_count).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "value-storage prefix exceeds usize",
+            )
+        })? != next.value_storages
     {
         return Err(invalid(
             SnapshotErrorStage::ReferenceValidation,
             "decoded runtime counts disagree with next-id prefix",
         ));
     }
-    let roots = decode_root_index(section(&validated, 9), &next)?;
+    let roots = decode_root_index(section(&validated, 9)?, &next)?;
     let canonical_roots = collect_root_rows(&binder)
         .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
     if roots
@@ -4103,14 +4776,61 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
         ));
     }
     let (interner_references_result, binder_references_result) = std::thread::scope(|scope| {
-        let interner_references = scope.spawn(|| interner.snapshot_reference_records_for_test());
-        let binder_references = scope.spawn(|| snapshot_reference_records_for_test(&binder));
-        (interner_references.join(), binder_references.join())
-    });
-    let (store_references, interner_references) =
-        interner_references_result.expect("canonical interner reference extraction does not panic");
-    let binder_references =
-        binder_references_result.expect("canonical binder reference extraction does not panic");
+        let interner_references = std::thread::Builder::new()
+            .name("typokat-library-interner-references".to_owned())
+            .spawn_scoped(scope, || interner.snapshot_reference_records())
+            .map_err(|_| SnapshotError {
+                stage: SnapshotErrorStage::ReferenceValidation,
+                message: "could not create interner reference worker".to_owned(),
+                kind: SnapshotErrorKind::WorkerSpawnFailed {
+                    worker: "interner-reference",
+                },
+            })?;
+        let binder_references = match std::thread::Builder::new()
+            .name("typokat-library-binder-references".to_owned())
+            .spawn_scoped(scope, || snapshot_reference_records(&binder))
+        {
+            Ok(binder_references) => binder_references,
+            Err(_) => {
+                return match interner_references.join() {
+                    Err(_) => Err(SnapshotError {
+                        stage: SnapshotErrorStage::ReferenceValidation,
+                        message: "interner reference worker panicked".to_owned(),
+                        kind: SnapshotErrorKind::WorkerPanicked {
+                            worker: "interner-reference",
+                        },
+                    }),
+                    Ok(Err(error)) => Err(codec(SnapshotErrorStage::ReferenceValidation, error)),
+                    Ok(Ok(_)) => Err(SnapshotError {
+                        stage: SnapshotErrorStage::ReferenceValidation,
+                        message: "could not create binder reference worker".to_owned(),
+                        kind: SnapshotErrorKind::WorkerSpawnFailed {
+                            worker: "binder-reference",
+                        },
+                    }),
+                };
+            }
+        };
+        Ok::<_, SnapshotError>((interner_references.join(), binder_references.join()))
+    })?;
+    let (store_references, interner_references) = interner_references_result
+        .map_err(|_| SnapshotError {
+            stage: SnapshotErrorStage::ReferenceValidation,
+            message: "interner reference worker panicked".to_owned(),
+            kind: SnapshotErrorKind::WorkerPanicked {
+                worker: "interner-reference",
+            },
+        })?
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let binder_references = binder_references_result
+        .map_err(|_| SnapshotError {
+            stage: SnapshotErrorStage::ReferenceValidation,
+            message: "binder reference worker panicked".to_owned(),
+            kind: SnapshotErrorKind::WorkerPanicked {
+                worker: "binder-reference",
+            },
+        })?
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let reference_limits = ReferenceLimits::from_canonical_references(
         &next,
         &roots,
@@ -4118,11 +4838,22 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
         &interner_references,
         &binder_references,
     )?;
-    let semantic = decode_canonical_semantic_section(section(&validated, 8))?;
-    let decl_types = decode_decl_types(section(&validated, 4), next.types)?;
-    let published_types = decode_published(section(&validated, 5))?;
-    let namespace_terminals = decode_namespace_terminals(section(&validated, 6))?;
-    let runtime = decode_class_metadata(section(&validated, 7), namespace_terminals.clone())?;
+    let semantic = decode_canonical_semantic_section(section(&validated, 8)?)?;
+    if semantic.identities.as_ref().is_none_or(|identities| {
+        identities
+            .iter()
+            .any(|identity| !matches!(identity, LibraryIdentityTerminal::Ready(_)))
+    }) {
+        return Err(invalid(
+            SnapshotErrorStage::Publication,
+            "semantic identity publication is not complete",
+        ));
+    }
+    let decl_types = decode_decl_types(section(&validated, 4)?, next.types)?;
+    let published_types = decode_published(section(&validated, 5)?)?;
+    validate_dense_identity_prefixes(&next, &interner, &published_types)?;
+    let namespace_terminals = decode_namespace_terminals(section(&validated, 6)?)?;
+    let runtime = decode_class_metadata(section(&validated, 7)?, namespace_terminals.clone())?;
     let tail_references = build_tail_manifest_references(TailManifestInputs {
         roots: &roots,
         decl_types: &decl_types,
@@ -4133,7 +4864,7 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
     })
     .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     verify_reference_manifest_streaming(
-        section(&validated, 8),
+        section(&validated, 8)?,
         &reference_limits,
         next.types,
         &store_references,
@@ -4141,7 +4872,18 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
         &binder_references,
         &tail_references,
     )?;
+    let typed_validation_sha256 = typed_validation_identity(
+        &next,
+        source_file_count,
+        &roots,
+        &store_references,
+        &interner_references,
+        &binder_references,
+        &tail_references,
+    )?;
+    #[cfg(test)]
     let identity = identity_witness(&roots, &published_types);
+    #[cfg(test)]
     let projection = build_projection(
         &validated.sections,
         semantic.projection_subtables,
@@ -4149,6 +4891,7 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
         next.clone(),
         semantic.reference_counts,
         semantic.manifest_hash,
+        typed_validation_sha256,
     );
     let state = OwnedLibraryRuntimeState::from_snapshot_parts(OwnedLibraryRuntimeSnapshotParts {
         interner,
@@ -4163,39 +4906,197 @@ pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
             .map_err(|_| invalid(SnapshotErrorStage::Decode, "class prefix exceeds u32"))?,
         source_file_count,
     })
-    .map_err(|message| invalid(SnapshotErrorStage::ReferenceValidation, message))?;
-    Ok(DecodedLibraryBaseForTest {
+    .map_err(|message| invalid(SnapshotErrorStage::Publication, message))?;
+    Ok(DecodedLibraryBase {
         state,
+        typed_validation_sha256,
+        #[cfg(test)]
         projection,
+        #[cfg(test)]
         identity,
+        #[cfg(test)]
         source_file_count,
         prefix_lengths: next,
         root_names: roots.iter().map(|row| row.name.clone()).collect(),
+        #[cfg(test)]
         root_counts: root_counts(&roots),
+        #[cfg(test)]
         strategy,
     })
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(
     bytes: &[u8],
     strategy: SnapshotDecodeStrategy,
-) -> Result<DecodedLibraryBaseForTest, SnapshotError> {
-    let validated = validate_snapshot_for_test(bytes)?;
+) -> Result<DecodedLibraryBase, SnapshotError> {
+    let validated = validate_snapshot(bytes)?;
     decode_snapshot_for_test(validated, strategy)
 }
 
+pub(crate) fn decode_canonical_library_snapshot(
+    bytes: Cow<'static, [u8]>,
+) -> Result<DecodedFrozenLibrary, SnapshotError> {
+    let validated = validate_canonical_snapshot(bytes)?;
+    decode_canonical_snapshot(validated).map(DecodedFrozenLibrary::from_decoded)
+}
+
+#[cfg(test)]
+pub(crate) fn decode_pre_admitted_library_snapshot(
+    bytes: &[u8],
+) -> Result<DecodedFrozenLibrary, SnapshotError> {
+    let validated = validate_snapshot(bytes)?;
+    decode_canonical_snapshot(validated).map(DecodedFrozenLibrary::from_decoded)
+}
+
+#[cfg(test)]
+pub(crate) fn projection_from_library_product(
+    product: &CompiledLibraryRuntimeProduct,
+) -> Result<RuntimeProjectionForTest, SnapshotError> {
+    encode_snapshot_parts(&product._parts).map(|compiled| compiled.projection)
+}
+
+#[cfg(test)]
+pub(crate) fn recompute_runtime_projection(
+    runtime: &OwnedLibraryRuntimeState,
+) -> Result<RuntimeProjectionForTest, SnapshotError> {
+    let parts = runtime
+        .borrowed_snapshot_parts()
+        .map_err(|message| invalid(SnapshotErrorStage::Publication, message))?;
+    encode_borrowed_snapshot_parts(&parts).map(|compiled| compiled.projection)
+}
+
+#[cfg(test)]
+pub(crate) fn validate_runtime_references(
+    runtime: &OwnedLibraryRuntimeState,
+) -> Result<FrozenReferenceValidation, SnapshotError> {
+    let parts = runtime
+        .borrowed_snapshot_parts()
+        .map_err(|message| invalid(SnapshotErrorStage::Publication, message))?;
+    let next = next_ids_from_borrowed_parts(&parts)?;
+    let roots = collect_root_rows(parts.binder)?;
+    let (store_references, interner_references) = parts
+        .interner
+        .snapshot_reference_records()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let binder_references = snapshot_reference_records(parts.binder)
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let limits = ReferenceLimits::from_canonical_references(
+        &next,
+        &roots,
+        &store_references,
+        &interner_references,
+        &binder_references,
+    )?;
+    let references = build_manifest_references(ManifestInputs {
+        type_count: next.types,
+        roots: &roots,
+        store_references: &store_references,
+        interner_references: &interner_references,
+        binder_references: &binder_references,
+        decl_types: &parts.decl_types,
+        published: &parts.published_types,
+        namespace_terminals: &parts.runtime.namespace_terminals,
+        runtime: &parts.runtime,
+        semantic_identities: &parts.semantic_identities,
+    })
+    .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    for reference in &references {
+        let owner_limit = limits.owner_limit(*reference).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "unknown retained reference owner domain",
+            )
+        })?;
+        validate_id(reference.owner, owner_limit, "retained reference owner")?;
+        let target_limit = limits
+            .target_limit(reference.target_domain)
+            .ok_or_else(|| {
+                invalid(
+                    SnapshotErrorStage::ReferenceValidation,
+                    "unknown retained reference target domain",
+                )
+            })?;
+        validate_id(reference.target, target_limit, "retained reference target")?;
+    }
+    Ok(FrozenReferenceValidation {
+        checked: u64::try_from(references.len()).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "retained reference count exceeds u64",
+            )
+        })?,
+        outside_frozen_prefix: 0,
+        base_to_delta: 0,
+        untyped_or_unowned: 0,
+    })
+}
+
+#[cfg(test)]
+fn next_ids_from_borrowed_parts(
+    parts: &BorrowedLibraryRuntimeSnapshotParts<'_>,
+) -> Result<NextIds, SnapshotError> {
+    Ok(NextIds {
+        store: parts.interner.store().len(),
+        types: parts.interner.store().len(),
+        type_params: usize::try_from(parts.next_type_param).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "type prefix exceeds usize",
+            )
+        })?,
+        classes: usize::try_from(parts.next_class_id).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "class prefix exceeds usize",
+            )
+        })?,
+        scopes: parts.binder.graph.snapshot_len(),
+        symbols: parts.binder.symbols.snapshot_symbols().len(),
+        declarations: parts.binder.declarations.len(),
+        type_groups: parts.binder.type_groups.len(),
+        namespaces: parts.binder.namespaces.len(),
+        value_storages: usize::try_from(parts.binder.decl_count).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "value-storage prefix exceeds usize",
+            )
+        })?,
+    })
+}
+
+#[cfg(test)]
+fn encode_borrowed_snapshot_parts(
+    parts: &BorrowedLibraryRuntimeSnapshotParts<'_>,
+) -> Result<CompiledSnapshotForTest, SnapshotError> {
+    encode_snapshot_inputs(SnapshotEncodeInputs {
+        interner: parts.interner,
+        binder: parts.binder,
+        published_types: &parts.published_types,
+        decl_types: &parts.decl_types,
+        semantic_identities: &parts.semantic_identities,
+        runtime: &parts.runtime,
+        next_type_param: parts.next_type_param,
+        next_class_id: parts.next_class_id,
+        source_file_count: parts.source_file_count,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::check::checker) struct ProbeSemanticsCaseForTest {
     pub(in crate::check::checker) exit: u8,
     pub(in crate::check::checker) diagnostics: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::check::checker) struct ProbeSemanticsForTest {
     pub(in crate::check::checker) fast_clean: ProbeSemanticsCaseForTest,
     pub(in crate::check::checker) fast_errors: ProbeSemanticsCaseForTest,
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct SnapshotFastCleanProbeRecordForTest {
     pub(in crate::check::checker) profile_identity: String,
     pub(in crate::check::checker) strategy: SnapshotDecodeStrategy,
@@ -4214,6 +5115,7 @@ pub(in crate::check::checker) struct SnapshotFastCleanProbeRecordForTest {
     input_path: String,
 }
 
+#[cfg(test)]
 fn json_string(value: &str) -> String {
     let mut rendered = String::from("\"");
     for character in value.chars() {
@@ -4231,6 +5133,7 @@ fn json_string(value: &str) -> String {
     rendered
 }
 
+#[cfg(test)]
 fn json_strings(values: &[String]) -> String {
     format!(
         "[{}]",
@@ -4242,6 +5145,7 @@ fn json_strings(values: &[String]) -> String {
     )
 }
 
+#[cfg(test)]
 impl SnapshotFastCleanProbeRecordForTest {
     pub(in crate::check::checker) fn render(&self) -> String {
         format!(concat!("TYPOKAT_WU0B_PROBE={{\"schema\":1,\"kind\":\"eager-fast-clean\",\"route\":\"{}\",\"profile_sha256\":\"{}\",", "\"strategy\":\"eager-complete\",\"artifact_sha256\":\"{}\",\"artifact_bytes\":{},\"validated_bytes\":{},", "\"runtime_projection_sha256\":\"{}\",\"input_path\":{},", "\"semantics\":{{\"fast-clean\":{{\"exit\":{},\"diagnostics\":{}}}}},", "\"compiler_measure\":{{\"source_loads\":{},\"parse_units\":{},\"bind_units\":{},\"semantic_units\":{},\"snapshot_generations\":{}}},", "\"internal\":{{\"validation_us\":{},\"decode_us\":{},\"user_check_us\":{},\"wall_us\":{},\"peak_rss_bytes\":{}}}}}"),
@@ -4252,12 +5156,14 @@ impl SnapshotFastCleanProbeRecordForTest {
     }
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct SnapshotSemanticCalibrationRecordForTest {
     semantics: ProbeSemanticsForTest,
     artifact_sha256: String,
     artifact_bytes: usize,
 }
 
+#[cfg(test)]
 impl SnapshotSemanticCalibrationRecordForTest {
     pub(in crate::check::checker) fn render(&self) -> String {
         format!(concat!("TYPOKAT_WU0B_SEMANTICS={{\"schema\":1,\"kind\":\"decoded-semantic-calibration\",", "\"profile_sha256\":\"{}\",\"artifact_sha256\":\"{}\",\"artifact_bytes\":{},", "\"semantics\":{{\"fast-clean\":{{\"exit\":{},\"diagnostics\":{}}},\"fast-errors\":{{\"exit\":{},\"diagnostics\":{}}}}}}}"),
@@ -4267,6 +5173,7 @@ impl SnapshotSemanticCalibrationRecordForTest {
     }
 }
 
+#[cfg(test)]
 fn elapsed_us(start: Instant) -> Result<u64, SnapshotError> {
     u64::try_from(start.elapsed().as_micros()).map_err(|_| {
         invalid(
@@ -4276,6 +5183,7 @@ fn elapsed_us(start: Instant) -> Result<u64, SnapshotError> {
     })
 }
 
+#[cfg(test)]
 fn peak_rss_bytes() -> Result<u64, SnapshotError> {
     let status = fs::read_to_string("/proc/self/status")
         .map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
@@ -4303,6 +5211,7 @@ fn peak_rss_bytes() -> Result<u64, SnapshotError> {
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn diagnostic_identities(name: &str, source: &str, diagnostics: &[Diagnostic]) -> Vec<String> {
     let lines = crate::span::LineIndex::new(source);
     diagnostics
@@ -4319,20 +5228,22 @@ fn diagnostic_identities(name: &str, source: &str, diagnostics: &[Diagnostic]) -
         .collect()
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
     path: &Path,
     fast_clean: &str,
 ) -> Result<SnapshotFastCleanProbeRecordForTest, SnapshotError> {
     let compiler_scope = start_library_compiler_measure_for_test();
     let wall = Instant::now();
-    let bytes =
-        fs::read(path).map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
+    let bytes: Cow<'static, [u8]> = Cow::Owned(
+        fs::read(path).map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?,
+    );
     let artifact_bytes = bytes.len();
     let validation = Instant::now();
-    let validated = validate_canonical_snapshot_for_test(bytes)?;
+    let validated = validate_canonical_snapshot(bytes)?;
     let validation_us = elapsed_us(validation)?;
     let decode = Instant::now();
-    let clean_base = decode_canonical_snapshot_for_test(validated)?;
+    let clean_base = decode_canonical_snapshot(validated)?;
     let projection_sha = clean_base.projection.sha256();
     let decode_us = elapsed_us(decode)?;
     let user = Instant::now();
@@ -4372,6 +5283,7 @@ pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::check::checker) struct SnapshotStrategyProbeRecordForTest {
     pub(in crate::check::checker) strategy: SnapshotDecodeStrategy,
     pub(in crate::check::checker) runtime_projection: RuntimeProjectionForTest,
@@ -4380,6 +5292,7 @@ pub(in crate::check::checker) struct SnapshotStrategyProbeRecordForTest {
     pub(in crate::check::checker) artifact_bytes: usize,
 }
 
+#[cfg(test)]
 impl SnapshotStrategyProbeRecordForTest {
     pub(in crate::check::checker) fn render(&self) -> String {
         format!(
@@ -4389,6 +5302,7 @@ impl SnapshotStrategyProbeRecordForTest {
     }
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn snapshot_decode_strategy_probe_for_test(
     path: &Path,
     source: &str,
@@ -4418,6 +5332,7 @@ pub(in crate::check::checker) fn snapshot_decode_strategy_probe_for_test(
     ))
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn snapshot_regeneration_artifact_for_test(
     path: &Path,
     fast_clean: &str,
@@ -4430,7 +5345,7 @@ pub(in crate::check::checker) fn snapshot_regeneration_artifact_for_test(
         .map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
     let bytes =
         fs::read(path).map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
-    let validated = validate_snapshot_for_test(&bytes)?;
+    let validated = validate_snapshot(&bytes)?;
     let clean_base =
         decode_snapshot_for_test(validated.clone(), SnapshotDecodeStrategy::EagerComplete)?;
     let error_base = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)?;
@@ -4471,17 +5386,20 @@ pub(in crate::check::checker) fn snapshot_regeneration_artifact_for_test(
 }
 
 #[derive(Clone, Debug)]
+#[cfg(test)]
 pub(in crate::check::checker) struct ScalingSampleForTest {
     checks: usize,
     projection: String,
     compiler_measure: LibraryCompilerMeasureForTest,
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) struct SnapshotScalingProbeRecordForTest {
     pub(in crate::check::checker) route: &'static str,
     samples: Vec<ScalingSampleForTest>,
 }
 
+#[cfg(test)]
 impl SnapshotScalingProbeRecordForTest {
     pub(in crate::check::checker) fn check_counts(&self) -> Vec<usize> {
         self.samples.iter().map(|sample| sample.checks).collect()
@@ -4505,6 +5423,7 @@ impl SnapshotScalingProbeRecordForTest {
     }
 }
 
+#[cfg(test)]
 pub(in crate::check::checker) fn snapshot_scaling_probe_for_test(
     path: &Path,
     source: &str,
@@ -4654,10 +5573,10 @@ mod tests {
         }];
         let compiled = compile_snapshot_for_test(&sources).expect("snapshot compiles");
         let validated =
-            validate_snapshot_for_test(compiled.archive().as_bytes()).expect("snapshot validates");
+            validate_snapshot(compiled.archive().as_bytes()).expect("snapshot validates");
         let semantic = validated.sections[7].clone();
 
-        let mut owner_corruption = validated.bytes.clone();
+        let mut owner_corruption = validated.bytes.to_vec();
         let references_start = semantic.range.start + 4 + 8 + 8 + 9 * 12;
         owner_corruption[references_start + 4..references_start + 8]
             .copy_from_slice(&u32::MAX.to_be_bytes());
@@ -4673,7 +5592,7 @@ mod tests {
             "{error}"
         );
 
-        let mut count_overflow = validated.bytes.clone();
+        let mut count_overflow = validated.bytes.to_vec();
         let family_directory = semantic.range.start + 4 + 8 + 8;
         count_overflow[family_directory + 4..family_directory + 12]
             .copy_from_slice(&u64::MAX.to_be_bytes());
@@ -4792,20 +5711,11 @@ mod tests {
 
     #[test]
     fn canonical_decoder_matches_generic_and_uses_scoped_evidence() {
-        let sources = [InjectedLibrarySource {
-            file_ordinal: LibraryFileOrdinal::new(0),
-            name: "snapshot-probe.d.ts",
-            source: "interface SnapshotProbe { value: string }\ndeclare const snapshotProbe: SnapshotProbe;",
-        }];
-        let compiled = compile_snapshot_for_test(&sources).expect("probe snapshot compiles");
-        let generic = decode_snapshot_bytes_for_test(
-            compiled.archive().as_bytes(),
-            SnapshotDecodeStrategy::EagerComplete,
-        )
-        .expect("generic decoder succeeds");
-        let canonical = decode_canonical_snapshot_for_test(
-            validate_snapshot_for_test(compiled.archive().as_bytes())
-                .expect("fixture archive validates"),
+        let bytes = crate::library::artifact::packaged_canonical_snapshot().bytes();
+        let generic = decode_snapshot_bytes_for_test(bytes, SnapshotDecodeStrategy::EagerComplete)
+            .expect("generic decoder succeeds");
+        let canonical = decode_canonical_snapshot(
+            validate_snapshot(bytes).expect("canonical artifact validates"),
         )
         .expect("canonical decoder succeeds");
         assert_eq!(canonical.projection, generic.projection);
@@ -4820,7 +5730,7 @@ mod tests {
         let route = start_decoded_base_route_measure_for_test();
         let result = check_source_with_decoded_base_for_test(
             canonical,
-            "const value: string = snapshotProbe.value;",
+            "const value: string = ''.toUpperCase();",
         );
         let route = route.finish();
         assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);

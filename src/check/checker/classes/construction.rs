@@ -140,7 +140,6 @@ impl DraftClassTypeParameter<()> {
         }
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: DraftClassTypeParameterSnapshot,
     ) -> Self {

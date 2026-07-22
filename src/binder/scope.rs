@@ -101,12 +101,10 @@ impl ScopeGraph {
         self.scopes.get_mut(id.index())
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot_len(&self) -> usize {
         self.scopes.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot_scopes(&self) -> &[Scope] {
         &self.scopes
     }

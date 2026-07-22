@@ -53,8 +53,7 @@ mod lexical_events_user;
 pub(crate) mod library_compiler;
 mod library_identities;
 pub(crate) mod library_reporting;
-#[cfg(test)]
-pub(crate) mod library_snapshot_feasibility;
+pub(crate) mod library_snapshot_codec;
 mod namespace_values;
 mod narrowing;
 pub(crate) mod reporting_record;
@@ -65,7 +64,7 @@ mod type_groups;
 pub(crate) fn generate_library_snapshot_archive(
     product: &library_compiler::CompiledLibraryRuntimeProduct,
 ) -> Result<Vec<u8>, String> {
-    library_snapshot_feasibility::encode_library_runtime_product(product)
+    library_snapshot_codec::encode_library_runtime_product(product)
         .map(|compiled| compiled.archive().as_bytes().to_vec())
         .map_err(|error| error.to_string())
 }
@@ -323,7 +322,6 @@ impl FrozenCheckerRuntimeMetadata {
         })
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: FrozenCheckerRuntimeSnapshotParts,
     ) -> Result<Self, &'static str> {

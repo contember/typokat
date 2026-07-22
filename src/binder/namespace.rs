@@ -838,7 +838,6 @@ pub struct NamespaceTable {
     library_shared_globals: bool,
 }
 
-#[cfg(test)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct NamespaceSnapshotPrimary {
     pub(crate) namespaces: Vec<Namespace>,
@@ -925,7 +924,6 @@ impl NamespaceTable {
         issues.into_iter()
     }
 
-    #[cfg(test)]
     pub(crate) fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
         self.canonical_source_units
             .iter()
@@ -1051,14 +1049,12 @@ impl NamespaceTable {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
         self.canonical_deferred_modules
             .iter()
             .filter_map(|id| self.deferred_modules.get(id.index()))
     }
 
-    #[cfg(test)]
     pub(crate) fn deferred_children(&self) -> impl Iterator<Item = &DeferredAmbientChild> {
         self.canonical_deferred_children
             .iter()
@@ -1085,7 +1081,6 @@ impl NamespaceTable {
         self.namespaces.is_empty()
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot_primary(&self) -> NamespaceSnapshotPrimary {
         NamespaceSnapshotPrimary {
             namespaces: self.namespaces.clone(),
@@ -1109,7 +1104,6 @@ impl NamespaceTable {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn from_snapshot_primary(
         primary: NamespaceSnapshotPrimary,
     ) -> Result<Self, &'static str> {
@@ -1213,7 +1207,6 @@ impl NamespaceTable {
         Ok(table)
     }
 
-    #[cfg(test)]
     fn validate_snapshot_primary_for_classification(
         primary: &NamespaceSnapshotPrimary,
     ) -> Result<(), &'static str> {
@@ -1302,7 +1295,6 @@ impl NamespaceTable {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn validate_snapshot_canonical(&self) -> Result<(), &'static str> {
         let primary = self.snapshot_primary();
         let rebuilt = Self::from_snapshot_primary(primary.clone())?;

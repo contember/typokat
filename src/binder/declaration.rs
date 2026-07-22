@@ -275,7 +275,6 @@ impl DeclarationTable {
         self.declarations.is_empty()
     }
 
-    #[cfg(test)]
     pub(crate) fn from_snapshot(
         declarations: Vec<LexicalDeclaration>,
     ) -> Result<Self, &'static str> {
@@ -365,7 +364,6 @@ impl TypeGroupTable {
         self.groups.iter()
     }
 
-    #[cfg(test)]
     pub(crate) fn from_snapshot(groups: Vec<TypeGroup>) -> Result<Self, &'static str> {
         if groups
             .iter()

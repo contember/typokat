@@ -2,12 +2,12 @@
 
 use super::super::library_compiler::check_caller_certified_collision_free_source_with_owned_library;
 use super::{
-    record_decoded_route, DecodedLibraryBaseForTest, DecodedUserCheckResultForTest,
+    record_decoded_route, DecodedLibraryBase, DecodedUserCheckResultForTest,
     IdentityRangeSetForTest, ReusedBaseShapeForTest,
 };
 
 pub(in crate::check::checker) fn check_source_with_decoded_base_for_test(
-    base: DecodedLibraryBaseForTest,
+    base: DecodedLibraryBase,
     source: &str,
 ) -> DecodedUserCheckResultForTest {
     let projection = base.projection.clone();

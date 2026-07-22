@@ -184,7 +184,6 @@ impl PublishedClasses {
         })
     }
 
-    #[cfg(test)]
     pub(crate) fn from_snapshot_terminals(
         terminals: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
     ) -> Result<Self, &'static str> {

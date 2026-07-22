@@ -5,8 +5,7 @@
 //! and user checking belong to later work and must not be pulled into this boundary.
 
 use super::artifact::{
-    measure_generation_for_test, packaged_canonical_snapshot, CANONICAL_SNAPSHOT_BYTES,
-    CANONICAL_SNAPSHOT_SHA256,
+    measure_generation_for_test, CANONICAL_SNAPSHOT_BYTES, CANONICAL_SNAPSHOT_SHA256,
 };
 use super::base::FrozenLibraryBase;
 use super::compiler::LibraryCompiler;
@@ -177,8 +176,19 @@ fn source_compiled_and_decoded_bases_have_identical_canonical_projection() {
     let decoded_projection = decoded
         .recompute_canonical_projection_for_test()
         .expect("projection recomputed from decoded typed tables");
+    let timed_projection_sha256 = provider
+        .typed_validation_sha256_for_test()
+        .expect("typed projection identity is published with the base");
 
     assert_eq!(decoded_projection, source_projection);
+    assert_eq!(
+        timed_projection_sha256,
+        decoded_projection.typed_validation_sha256()
+    );
+    assert_eq!(
+        timed_projection_sha256,
+        source_projection.typed_validation_sha256()
+    );
     assert_eq!(source_projection.runtime_families().len(), 10);
     assert_eq!(source_projection.subtables().len(), 31);
     assert_eq!(
@@ -223,33 +233,37 @@ fn provider_returns_one_pointer_identical_base_to_1_2_32_callers() {
 
 #[test]
 fn provider_caches_one_pointer_identical_typed_initialization_failure() {
-    let snapshot = pre_admitted_snapshot_case_for_test(SnapshotTestMutation::DanglingReference {
-        family: 0,
-        endpoint: ReferenceEndpoint::First,
-    })
-    .expect("digest-valid dangling-reference fixture");
-    let provider = Arc::new(LibraryBaseProvider::with_pre_admitted_snapshot_for_test(
-        snapshot,
-    ));
-    let acquired = concurrent_acquire(Arc::clone(&provider), 32);
-    let errors = acquired
-        .into_iter()
-        .map(|result| result.expect_err("corrupt base must not publish"))
-        .collect::<Vec<_>>();
-    let first = errors.first().expect("at least one caller");
+    for callers in [1, 2, 32] {
+        let snapshot =
+            pre_admitted_snapshot_case_for_test(SnapshotTestMutation::DanglingReference {
+                family: 0,
+                endpoint: ReferenceEndpoint::First,
+            })
+            .expect("digest-valid dangling-reference fixture");
+        let provider = Arc::new(LibraryBaseProvider::with_pre_admitted_snapshot_for_test(
+            snapshot,
+        ));
+        let acquired = concurrent_acquire(Arc::clone(&provider), callers);
+        let errors = acquired
+            .into_iter()
+            .map(|result| result.expect_err("corrupt base must not publish"))
+            .collect::<Vec<_>>();
+        let first = errors.first().expect("at least one caller");
 
-    assert!(errors.iter().all(|error| Arc::ptr_eq(first, error)));
-    assert_eq!(first.stage(), LibraryInitStage::ReferenceValidation);
-    assert!(matches!(first.cause(), LibraryInitCause::InvalidId { .. }));
-    let later = acquire(&provider).expect_err("cached failure must not retry");
-    assert!(Arc::ptr_eq(first, &later));
-    assert_eq!(
-        provider.measurement_for_test(),
-        InitializationMeasurement {
-            attempts: 1,
-            publications: 0,
-        }
-    );
+        assert!(errors.iter().all(|error| Arc::ptr_eq(first, error)));
+        assert_eq!(first.stage(), LibraryInitStage::ReferenceValidation);
+        assert!(matches!(first.cause(), LibraryInitCause::InvalidId { .. }));
+        let later = acquire(&provider).expect_err("cached failure must not retry");
+        assert!(Arc::ptr_eq(first, &later));
+        assert_eq!(
+            provider.measurement_for_test(),
+            InitializationMeasurement {
+                attempts: 1,
+                publications: 0,
+            },
+            "caller count {callers}"
+        );
+    }
 }
 
 #[test]
@@ -351,6 +365,14 @@ fn pre_admitted_decoder_rejects_deep_structural_corruption_before_publication() 
         ),
         (
             SnapshotTestMutation::NextIdMismatch,
+            LibraryInitStage::ReferenceValidation,
+        ),
+        (
+            SnapshotTestMutation::NextTypeParamIdMismatch,
+            LibraryInitStage::ReferenceValidation,
+        ),
+        (
+            SnapshotTestMutation::NextClassIdMismatch,
             LibraryInitStage::ReferenceValidation,
         ),
         (
@@ -528,7 +550,7 @@ fn frozen_library_base_release_probe_once() {
     assert!(record.validation_us > 0);
     assert!(record.decode_us > 0);
     assert!(record.publication_us > 0);
-    assert!(!record.canonical_projection_sha256.is_empty());
+    assert!(!record.typed_validation_sha256.is_empty());
     let framed = record.render();
     assert!(framed.starts_with("TYPOKAT_LIBRARY_BASE_PROBE={"));
     assert_eq!(framed.matches("TYPOKAT_LIBRARY_BASE_PROBE=").count(), 1);

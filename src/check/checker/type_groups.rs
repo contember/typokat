@@ -259,7 +259,6 @@ impl PublishedTypeEnvironment {
         })
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: PublishedTypeEnvironmentSnapshotParts,
     ) -> Result<Self, &'static str> {

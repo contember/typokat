@@ -1,12 +1,19 @@
 pub mod artifact;
+mod base;
 pub mod compiler;
 pub mod profile;
+mod provider;
+mod snapshot;
 
 pub use crate::source::LibraryFileOrdinal;
+pub use base::FrozenLibraryBase;
+pub use provider::{
+    LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage,
+    LibrarySnapshotViolation,
+};
 
 #[cfg(test)]
-mod wu2_spec;
+mod artifact_spec;
 
-// Activate after the production strict decoder and immutable base provider exist.
-// #[cfg(test)]
-// mod snapshot_base_spec;
+#[cfg(test)]
+mod snapshot_base_spec;

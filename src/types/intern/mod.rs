@@ -5,7 +5,6 @@
 
 mod composites;
 mod operators;
-#[cfg(test)]
 mod snapshot;
 #[cfg(test)]
 mod tests;
