@@ -558,3 +558,39 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   `EventMap[K]`, recursive receivers, overloads, heritage, and a wide shared hub) and pin traversal,
   exhaustion, memo-copy, semantic-order, and scaling bounds. Snapshot-backed and source-cold
   results remain separate claims throughout the sprint.
+
+### 2026-07-22 — source-cold semantic hot-path repairs
+
+- `41585cc` added the missing recursive DOM listener-map/shared-heritage synthetic witness. Its
+  exact 82-file source-cold baseline was **4.8278 s** total / **4.3737 s** semantic; parse and bind
+  remained below one percent each, locating the regression in semantic query work rather than
+  library I/O or front-end construction.
+- `ac9c1e9` caches publication-clean traversals without changing poison-first ordering or mutation
+  invalidation. Publication edge visits fell from **15,450 / 61,338** at the two witness sizes to
+  **85 / 85**, while the exact source-cold compile fell to **3.5211 s** total / **3.0675 s**
+  semantic. `8a2c4ee` then replaced per-query durable evaluator-memo copies with a borrowed parent
+  plus local delta; the witness's durable seed copies fell from **1,025 to zero**.
+- `bf2fb24` held the type graph fixed while scaling repeated identical failures. Before the next
+  repair, 96 additional assignments caused **+384** clean zero-write planner transactions,
+  **+384** durable false-reason rebuilds, and **+4,320** uncached relation frames, with no graph
+  growth, taint, or exhaustion. The spec review found that fixed-graph identity/cardinality was
+  inferred rather than asserted; the final RED added the explicit equality guard before commit.
+- `831c0c3` adds pass-local completed top-level relation outcomes, second-touch admission for
+  negative reason chains, and shared invalidation with Store/publication identity. The fixed-graph
+  deltas are now zero: both sizes retain **2** negative certificates while cache hits rise from
+  **28 to 124**. Independent review kept unions out of the ordinary-demand fast path because they
+  can carry durable evaluator normalization and added a production-path regression. It also found
+  a HIGH stale-durable-true risk after Store/publication identity changes; refresh now runs at every
+  coordinator entry and clears projection, evaluation, relation, publication, certificate, and
+  admission state, with constraint Yes-to-No, publication replacement, and non-relation demand
+  regressions. Telemetry now includes certificate/admission fork writes, and one-shot negative
+  outcomes use second-touch admission: 128 unique failures retain zero reason chains. Final
+  independent review is PASS with no unresolved HIGH or MEDIUM findings; the semantic/full gate
+  passes **991 / 0 / 18**.
+- Lazy standard-library semantics is not the next fix: the measured parse/bind share is below one
+  percent, while the accepted product is one complete immutable 82-file ambient universe.
+  Parallelism remains valuable after the frozen base and identity-preserving private deltas allow
+  independent user files to share it, but it cannot substitute for removing the redundant
+  serialized semantic work exposed here.
+- Absolute source-cold timing after `831c0c3` is **pending**. The available host was ineligible due
+  to unrelated heavy load, so no post-fix wall-time or TypeScript 7 speedup claim is recorded yet.
