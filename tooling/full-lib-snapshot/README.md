@@ -71,6 +71,14 @@ version, profile and schema digests, ten ordered tags with zero reserved bits,
 nonempty contiguous sections, exact body length, no trailing bytes, and valid
 body/section SHA-256 values. An archive must be between 1 MiB and 32 MiB.
 
+The 31 projection-subtable witnesses are computed once during untimed snapshot
+generation and stored as a versioned, fixed-order row-count/digest inventory in
+the semantic section. Startup decodes that compact inventory directly instead
+of reconstructing Debug projections from the eager semantic state. These
+witnesses are projection evidence and metadata, not semantic authority:
+completeness remains enforced by the decoded typed state and full reference
+manifest validation.
+
 Each timing record must identify the route as `decoded-base-user-check`, carry a
 nonempty runtime-projection SHA-256, and report the exact compiler measurement
 object with zero source loads, parse units, bind units, semantic units, and

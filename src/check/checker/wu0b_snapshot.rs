@@ -48,7 +48,7 @@ pub(super) use super::wu0b_snapshot_runtime::check_source_with_decoded_base_for_
 const MAGIC: &[u8] = b"typokat-semantic-snapshot";
 const VERSION: u32 = 1;
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SCHEMA_IDENTITY: &str = "b7f9c947fd684e45da2ef8f351f9d09c71d1d8330e7f52b7953bb80ef128a311";
+const SCHEMA_IDENTITY: &str = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
 const SECTION_NAMES: [&str; 10] = [
     "store",
     "interner",
@@ -97,6 +97,8 @@ const SUBTABLE_NAMES: [&str; 30] = [
 const FIXED_HEADER_LEN: usize = MAGIC.len() + 4 + 32 + 32 + 4 + 8 + 32;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const SECTION_COUNT: usize = 10;
+const PROJECTION_WITNESS_VERSION: u32 = 1;
+const PROJECTION_WITNESS_COUNT: usize = 31;
 const ABSENT_ID: u32 = u32::MAX;
 const MAX_REFERENCE_DOMAIN: u8 = 30;
 const SEMANTIC_IDENTITY_DOMAIN: u8 = 30;
@@ -1896,6 +1898,7 @@ struct EncodedSemanticSection {
 fn encode_semantic_identities(
     parts: &Option<[LibraryIdentityTerminal; 8]>,
     references: &[ManifestReference],
+    projection_subtables: &[RuntimeSubtableForTest],
 ) -> Result<EncodedSemanticSection, SnapshotError> {
     let mut writer = SnapshotWriter::new();
     let counts = write_manifest(&mut writer, references)
@@ -1908,6 +1911,7 @@ fn encode_semantic_identities(
                 .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
         }
     }
+    write_projection_witness(&mut writer, projection_subtables)?;
     let bytes = writer.into_bytes();
     let manifest_hash = digest32(&bytes[..manifest_len]);
     Ok(EncodedSemanticSection {
@@ -1921,6 +1925,80 @@ struct DecodedSemanticSection {
     identities: Option<[LibraryIdentityTerminal; 8]>,
     reference_counts: [u64; 9],
     manifest_hash: [u8; 32],
+    projection_subtables: Vec<RuntimeSubtableForTest>,
+}
+
+fn projection_subtable_names() -> impl Iterator<Item = &'static str> {
+    SUBTABLE_NAMES
+        .into_iter()
+        .chain(std::iter::once("next-ids"))
+}
+
+fn write_projection_witness(
+    writer: &mut SnapshotWriter,
+    subtables: &[RuntimeSubtableForTest],
+) -> Result<(), SnapshotError> {
+    if subtables.len() != PROJECTION_WITNESS_COUNT
+        || projection_subtable_names()
+            .zip(subtables)
+            .any(|(expected, actual)| expected != actual.name)
+    {
+        return Err(invalid(
+            SnapshotErrorStage::Generation,
+            "projection witness inventory is not exact",
+        ));
+    }
+    writer.u32(PROJECTION_WITNESS_VERSION);
+    writer.u32(u32::try_from(PROJECTION_WITNESS_COUNT).expect("witness count fits u32"));
+    for subtable in subtables {
+        writer.u64(subtable.row_count);
+        writer.raw(&subtable.sha256);
+    }
+    Ok(())
+}
+
+fn read_projection_witness(
+    reader: &mut SnapshotReader<'_>,
+) -> Result<Vec<RuntimeSubtableForTest>, SnapshotError> {
+    if reader
+        .u32()
+        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?
+        != PROJECTION_WITNESS_VERSION
+    {
+        return Err(invalid(
+            SnapshotErrorStage::Decode,
+            "unsupported projection witness version",
+        ));
+    }
+    let count = usize::try_from(
+        reader
+            .u32()
+            .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
+    )
+    .expect("u32 witness count fits usize");
+    if count != PROJECTION_WITNESS_COUNT {
+        return Err(invalid(
+            SnapshotErrorStage::Decode,
+            "projection witness inventory is not exact",
+        ));
+    }
+    projection_subtable_names()
+        .map(|name| {
+            let row_count = reader
+                .u64()
+                .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+            let sha256 = reader
+                .raw(32)
+                .map_err(|error| codec(SnapshotErrorStage::Decode, error))?
+                .try_into()
+                .expect("projection witness digest bytes");
+            Ok(RuntimeSubtableForTest {
+                name,
+                row_count,
+                sha256,
+            })
+        })
+        .collect()
 }
 
 struct ReferenceLimits {
@@ -2175,6 +2253,7 @@ fn decode_semantic_identities(
     } else {
         None
     };
+    let projection_subtables = read_projection_witness(&mut reader)?;
     reader
         .finish()
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
@@ -2182,6 +2261,7 @@ fn decode_semantic_identities(
         identities,
         reference_counts: counts,
         manifest_hash,
+        projection_subtables,
     })
 }
 
@@ -2843,9 +2923,7 @@ fn projection_subtables(
             "projection subtable inventory is not exact",
         ));
     }
-    Ok(SUBTABLE_NAMES
-        .into_iter()
-        .chain(std::iter::once("next-ids"))
+    Ok(projection_subtable_names()
         .zip(values)
         .map(|(name, (row_count, bytes))| RuntimeSubtableForTest {
             name,
@@ -3082,25 +3160,11 @@ pub(in crate::check::checker) fn compile_snapshot_for_test(
     let published = encode_published(&parts.published_types)?;
     let namespace_terminals = encode_namespace_terminals(&parts.runtime.namespace_terminals)?;
     let class_metadata = encode_class_metadata(&parts.runtime)?;
-    let semantic = encode_semantic_identities(&parts.semantic_identities, &references)?;
     let root_index = encode_root_index(&roots)?;
     let next_ids = encode_next_ids(&next, parts.source_file_count);
-    let payloads = [
-        store,
-        interner,
-        binder,
-        decl_types,
-        published,
-        namespace_terminals,
-        class_metadata,
-        semantic.bytes,
-        root_index,
-        next_ids,
-    ];
-    let (archive, sections) = assemble_archive(&payloads)?;
     let subtables = projection_subtables(ProjectionSubtableInputs {
         interner: &parts.interner,
-        interner_section: &payloads[1],
+        interner_section: &interner,
         binder: &parts.binder,
         binder_references: &binder_references,
         checker: CheckerProjectionInputs {
@@ -3114,6 +3178,20 @@ pub(in crate::check::checker) fn compile_snapshot_for_test(
             source_file_count: parts.source_file_count,
         },
     })?;
+    let semantic = encode_semantic_identities(&parts.semantic_identities, &references, &subtables)?;
+    let payloads = [
+        store,
+        interner,
+        binder,
+        decl_types,
+        published,
+        namespace_terminals,
+        class_metadata,
+        semantic.bytes,
+        root_index,
+        next_ids,
+    ];
+    let (archive, sections) = assemble_archive(&payloads)?;
     let projection = build_projection(
         &sections,
         subtables,
@@ -3392,25 +3470,9 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         ));
     }
     let identity = identity_witness(&roots, &published_types);
-    let subtables = projection_subtables(ProjectionSubtableInputs {
-        interner: &interner,
-        interner_section: section(&validated, 2),
-        binder: &binder,
-        binder_references: &binder_references,
-        checker: CheckerProjectionInputs {
-            decl_types: &decl_types,
-            published: &published_types,
-            namespace_terminals: &namespace_terminals,
-            runtime: &runtime,
-            semantic_identities: &semantic.identities,
-            roots: &roots,
-            next: &next,
-            source_file_count,
-        },
-    })?;
     let projection = build_projection(
         &validated.sections,
-        subtables,
+        semantic.projection_subtables,
         &roots,
         next.clone(),
         semantic.reference_counts,
@@ -3823,6 +3885,7 @@ mod tests {
             SnapshotDecodeStrategy::EagerComplete,
         )
         .expect("small snapshot decodes");
+        assert_eq!(decoded.runtime_projection(), compiled.runtime_projection());
         let result = check_source_with_decoded_base_for_test(
             decoded,
             "const value: string = snapshotSmall.value;",
@@ -3844,6 +3907,30 @@ mod tests {
                 .expect("small projection subtable");
             assert_eq!(subtable.row_count, 0, "{name}");
             assert_eq!(subtable.sha256, empty_digest, "{name}");
+        }
+    }
+
+    #[test]
+    fn projection_witness_codec_is_versioned_and_fixed_order() {
+        let subtables = projection_subtable_names()
+            .enumerate()
+            .map(|(index, name)| RuntimeSubtableForTest {
+                name,
+                row_count: count64(index),
+                sha256: digest32(name.as_bytes()),
+            })
+            .collect::<Vec<_>>();
+        let mut writer = SnapshotWriter::new();
+        write_projection_witness(&mut writer, &subtables).expect("projection witness encodes");
+        let bytes = writer.into_bytes();
+        let mut reader = SnapshotReader::new(&bytes);
+        assert_eq!(read_projection_witness(&mut reader).unwrap(), subtables);
+        assert!(reader.finish().is_ok());
+
+        for (offset, replacement) in [(0, 2u32), (4, 30u32)] {
+            let mut corrupt = bytes.clone();
+            corrupt[offset..offset + 4].copy_from_slice(&replacement.to_be_bytes());
+            assert!(read_projection_witness(&mut SnapshotReader::new(&corrupt)).is_err());
         }
     }
 

@@ -41,8 +41,8 @@ HARNESS_ZERO = re.compile(
 STRATEGY = "eager-complete"
 RECORD_KIND = "eager-fast-clean"
 SCHEMA_IDENTITY = hashlib.sha256(
-    b"0dcb6c65d3586eab7d667a819baa560f77ea22524b8fdbf15af759590abe7a45"
-    b"|function-groups.symbols-v1"
+    b"b7f9c947fd684e45da2ef8f351f9d09c71d1d8330e7f52b7953bb80ef128a311"
+    b"|projection-witness-v1"
 ).hexdigest()
 
 
