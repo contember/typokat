@@ -18,7 +18,7 @@ const USER_SOURCE: &str = r#"export namespace DeltaSpace {
     export type LocalShapeB = { value: string };
     export const label = "delta";
 }
-export type ExistingBaseShape = string | number | symbol;
+export type ExistingBaseShape = "arraybuffer" | "blob";
 export type RunSentinel = DeltaSpace.LocalShapeA;
 
 const good: DeltaSpace.Box<string> = new DeltaSpace.Box("ok");
@@ -191,9 +191,9 @@ fn collision_free_external_module_uses_dense_local_suffixes_and_real_interning()
     let base_pointer = Arc::as_ptr(&base);
     let base_identity = base.storage_identity_for_test();
     let frozen = base.prefixes_for_test().clone();
-    let property_key = base
-        .named_type_for_test("PropertyKey")
-        .expect("lib.es5 PropertyKey is frozen in the canonical base");
+    let binary_type = base
+        .named_type_for_test("BinaryType")
+        .expect("lib.dom BinaryType is frozen in the canonical base");
     let base_shape = base
         .nonterminal_structural_type_probe_for_test()
         .expect("canonical base has a frozen nonterminal structural type");
@@ -216,8 +216,8 @@ fn collision_free_external_module_uses_dense_local_suffixes_and_real_interning()
         .interning
         .named_alias_types
         .get("ExistingBaseShape")
-        .expect("PropertyKey-shaped user alias resolves");
-    assert_eq!(existing, property_key);
+        .expect("BinaryType-shaped user alias resolves");
+    assert_eq!(existing, binary_type);
     assert!(existing.index() < frozen.types);
     assert!(!receipt.ranges.types.range.contains(&existing.index()));
 
