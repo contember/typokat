@@ -89,10 +89,8 @@ impl SourceUnitKey {
     pub(crate) const SINGLE_SOURCE: Self = Self(1);
 }
 
-#[cfg(test)]
 pub(crate) type ExactKey = SourceUnitKey;
 
-#[cfg(test)]
 pub(crate) const fn exact_key(index: u32) -> ExactKey {
     SourceUnitKey(index)
 }
@@ -837,7 +835,6 @@ pub struct NamespaceTable {
     canonical_export_contexts: Vec<ExportContextId>,
     compilation_global: Option<ScopeId>,
     script_namespace_root: Option<ScopeId>,
-    #[cfg(test)]
     library_shared_globals: bool,
 }
 
@@ -867,14 +864,7 @@ impl NamespaceTable {
     }
 
     fn uses_library_shared_globals(&self) -> bool {
-        #[cfg(test)]
-        {
-            self.library_shared_globals
-        }
-        #[cfg(not(test))]
-        {
-            false
-        }
+        self.library_shared_globals
     }
 
     pub fn get(&self, id: NamespaceId) -> Option<&Namespace> {
@@ -916,7 +906,6 @@ impl NamespaceTable {
         self.fragments.iter()
     }
 
-    #[cfg(test)]
     pub(crate) fn members(&self) -> impl Iterator<Item = &NamespaceMember> {
         self.members.iter()
     }
@@ -1082,7 +1071,6 @@ impl NamespaceTable {
             .filter_map(|index| self.umd_exports.get(*index))
     }
 
-    #[cfg(test)]
     pub(crate) fn export_contexts(&self) -> impl Iterator<Item = &ExportContext> {
         self.canonical_export_contexts
             .iter()
@@ -2824,7 +2812,6 @@ impl WalkContext {
 #[derive(Copy, Clone)]
 pub(super) enum NamespaceMetadataRoot {
     Module,
-    #[cfg(test)]
     LibrarySharedGlobal,
 }
 
@@ -2846,17 +2833,14 @@ pub(super) fn collect_namespace_metadata(
     });
     state.namespaces.compilation_global = Some(compilation_global);
     state.namespaces.script_namespace_root = Some(script_namespace_root);
-    #[cfg(test)]
     if matches!(root, NamespaceMetadataRoot::LibrarySharedGlobal) {
         state.namespaces.library_shared_globals = true;
     }
     let (owner, lexical_scope) = match root {
         NamespaceMetadataRoot::Module => (DeclarationOwner::Lexical(module), module),
-        #[cfg(test)]
         NamespaceMetadataRoot::LibrarySharedGlobal if unit.binding.external_module => {
             (DeclarationOwner::Lexical(module), module)
         }
-        #[cfg(test)]
         NamespaceMetadataRoot::LibrarySharedGlobal => {
             (DeclarationOwner::CompilationGlobal, compilation_global)
         }

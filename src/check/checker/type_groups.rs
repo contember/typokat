@@ -1,6 +1,5 @@
 use super::context::{ConstructionDrafts, Pass, TypeDecl};
 use crate::binder::declaration::TypeGroupId;
-#[cfg(test)]
 use crate::class_semantics::PublishedClassSnapshotTerminal;
 use crate::class_semantics::PublishedClasses;
 use crate::types::repr::{ClassId, TypeParamId};
@@ -90,7 +89,6 @@ pub(in crate::check::checker) struct PublishedTypeEnvironment {
     groups: PublishedTypeGroups,
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct PublishedTypeEnvironmentSnapshotParts {
     pub(in crate::check::checker) classes: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
@@ -249,7 +247,6 @@ impl PublishedTypeEnvironment {
         (declarations, resolved)
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn snapshot_parts(
         &self,
     ) -> Result<PublishedTypeEnvironmentSnapshotParts, &'static str> {

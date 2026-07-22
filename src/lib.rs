@@ -8,6 +8,7 @@ pub mod check;
 mod class_semantics;
 pub mod diagnostics;
 pub mod driver;
+pub mod library;
 pub mod relate;
 #[cfg(test)]
 pub(crate) mod snapshot_codec;

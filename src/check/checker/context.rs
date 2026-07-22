@@ -334,7 +334,6 @@ impl DeclTypes {
         self.types.len()
     }
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn snapshot_slots(&self) -> Vec<Option<TypeId>> {
         self.types.clone()
     }

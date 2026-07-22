@@ -43,17 +43,15 @@ impl OriginalModuleOrdinal {
 }
 
 /// A library file's position in the pinned default-library profile.
-#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LibraryFileOrdinal(usize);
+pub struct LibraryFileOrdinal(usize);
 
-#[cfg(test)]
 impl LibraryFileOrdinal {
     pub(crate) const fn new(index: usize) -> Self {
         Self(index)
     }
 
-    pub(crate) const fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self.0
     }
 }
@@ -62,7 +60,6 @@ impl LibraryFileOrdinal {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum CompilationOrigin {
     User(OriginalModuleOrdinal),
-    #[cfg(test)]
     Library(LibraryFileOrdinal),
 }
 
@@ -70,7 +67,6 @@ pub(crate) enum CompilationOrigin {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum SourceOrdinal {
     User(ModuleOrdinal),
-    #[cfg(test)]
     Library(LibraryFileOrdinal),
 }
 
@@ -81,6 +77,7 @@ pub(crate) enum SourceUnit {
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
     },
-    #[cfg(test)]
-    Library { file_ordinal: LibraryFileOrdinal },
+    Library {
+        file_ordinal: LibraryFileOrdinal,
+    },
 }

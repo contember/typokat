@@ -12,14 +12,12 @@ use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
     NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
 };
-#[cfg(test)]
 use crate::binder::namespace::{
     collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
     NamespaceMetadataRoot,
 };
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
-#[cfg(test)]
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
 use oxc_ast::ast::{
@@ -29,6 +27,73 @@ use oxc_ast::ast::{
     TryStatement, VariableDeclarationKind, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LibraryBinderError {
+    EmptyBatch,
+    NonEmptyPrelude,
+    NonLibraryUnit {
+        input_index: usize,
+    },
+    PreludeSourceKey {
+        input_index: usize,
+    },
+    DuplicateSourceKey {
+        input_index: usize,
+    },
+    DuplicateFileOrdinal {
+        input_index: usize,
+    },
+    #[cfg(test)]
+    RequiresPristineBuilder,
+    AlreadyAdded,
+    #[cfg(test)]
+    FollowsContinuation,
+}
+
+impl fmt::Display for LibraryBinderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyBatch => formatter.write_str("library binder requires at least one unit"),
+            Self::NonEmptyPrelude => {
+                formatter.write_str("library batch requires a fresh empty prelude")
+            }
+            Self::NonLibraryUnit { input_index } => {
+                write!(
+                    formatter,
+                    "library unit {input_index} has a non-library origin"
+                )
+            }
+            Self::PreludeSourceKey { input_index } => {
+                write!(
+                    formatter,
+                    "library unit {input_index} uses the prelude source key"
+                )
+            }
+            Self::DuplicateSourceKey { input_index } => {
+                write!(formatter, "library unit {input_index} repeats a source key")
+            }
+            Self::DuplicateFileOrdinal { input_index } => {
+                write!(
+                    formatter,
+                    "library unit {input_index} repeats a file ordinal"
+                )
+            }
+            #[cfg(test)]
+            Self::RequiresPristineBuilder => {
+                formatter.write_str("library batch requires a pristine project builder")
+            }
+            Self::AlreadyAdded => formatter.write_str("library batch is one-shot"),
+            #[cfg(test)]
+            Self::FollowsContinuation => {
+                formatter.write_str("library batch cannot follow a frozen continuation")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LibraryBinderError {}
 
 /// The binder's output for one file: the scope graph, the symbol table, the
 /// module scope id, source declarations, and the per-function scope map.
@@ -102,7 +167,6 @@ impl Binder {
             .expect("binder retains at least the prelude source key")
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot_module_sources(&self) -> &FxHashMap<ScopeId, SourceUnitKey> {
         &self.module_sources
     }
@@ -331,7 +395,6 @@ pub(crate) struct BindState {
     pub(crate) namespaces: NamespaceTable,
     /// Stable source ownership for every module scope, including the prelude.
     module_sources: FxHashMap<ScopeId, SourceUnitKey>,
-    #[cfg(test)]
     library_module_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
@@ -428,7 +491,6 @@ impl BindState {
         if let Some(row) = self.symbols.get_mut(symbol) {
             if !row.declarations.contains(&declaration) {
                 row.declarations.push(declaration);
-                #[cfg(test)]
                 if !self.library_module_ordinals.is_empty() {
                     row.declarations.sort_by_key(|id| {
                         let declaration = self
@@ -471,20 +533,19 @@ pub(crate) struct ProjectBinderBuilder {
     compilation_global: ScopeId,
     script_namespace_root: ScopeId,
     prelude_type_group_count: u32,
-    #[cfg(test)]
     use_mode: BuilderUseMode,
-    #[cfg(test)]
     empty_prelude: bool,
     #[cfg(test)]
     frozen_global_augmentation_count: Option<usize>,
 }
 
-#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum BuilderUseMode {
     Pristine,
+    #[cfg(test)]
     Project,
     Library,
+    #[cfg(test)]
     Continuation,
 }
 
@@ -498,7 +559,6 @@ impl ProjectBinderBuilder {
             type_groups: TypeGroupTable::default(),
             namespaces: NamespaceTable::default(),
             module_sources: FxHashMap::default(),
-            #[cfg(test)]
             library_module_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
@@ -531,9 +591,7 @@ impl ProjectBinderBuilder {
             compilation_global,
             script_namespace_root,
             prelude_type_group_count,
-            #[cfg(test)]
             use_mode: BuilderUseMode::Pristine,
-            #[cfg(test)]
             empty_prelude: prelude.body.is_empty(),
             #[cfg(test)]
             frozen_global_augmentation_count: None,
@@ -655,48 +713,42 @@ impl ProjectBinderBuilder {
     }
 
     /// Bind declaration-library files into one shared global identity domain.
-    #[cfg(test)]
-    pub(crate) fn add_library_modules<'ast>(
+    pub(crate) fn try_add_library_modules<'ast>(
         &mut self,
         units: &[(&'ast Program<'ast>, CompilationUnit)],
-    ) -> Vec<ScopeId> {
-        assert!(
-            !units.is_empty(),
-            "library binder requires at least one unit"
-        );
-        assert!(
-            self.empty_prelude,
-            "library batch requires a fresh empty prelude"
-        );
+    ) -> Result<Vec<ScopeId>, LibraryBinderError> {
+        if units.is_empty() {
+            return Err(LibraryBinderError::EmptyBatch);
+        }
+        if !self.empty_prelude {
+            return Err(LibraryBinderError::NonEmptyPrelude);
+        }
         let mut sources = rustc_hash::FxHashSet::default();
         let mut origins = rustc_hash::FxHashSet::default();
         let mut canonical_units = Vec::with_capacity(units.len());
         for (input_index, (program, unit)) in units.iter().enumerate() {
             let CompilationOrigin::Library(file_ordinal) = unit.origin else {
-                panic!("library binder accepts only library compilation units")
+                return Err(LibraryBinderError::NonLibraryUnit { input_index });
             };
-            assert_ne!(
-                unit.source,
-                SourceUnitKey::PRELUDE,
-                "library source key cannot be the prelude key"
-            );
-            assert!(sources.insert(unit.source), "library source key is unique");
-            assert!(
-                origins.insert(unit.origin),
-                "library file ordinal is unique"
-            );
+            if unit.source == SourceUnitKey::PRELUDE {
+                return Err(LibraryBinderError::PreludeSourceKey { input_index });
+            }
+            if !sources.insert(unit.source) {
+                return Err(LibraryBinderError::DuplicateSourceKey { input_index });
+            }
+            if !origins.insert(unit.origin) {
+                return Err(LibraryBinderError::DuplicateFileOrdinal { input_index });
+            }
             canonical_units.push((file_ordinal, input_index, *program, *unit));
         }
         canonical_units.sort_by_key(|(file_ordinal, _, _, _)| *file_ordinal);
         match self.use_mode {
             BuilderUseMode::Pristine => self.use_mode = BuilderUseMode::Library,
-            BuilderUseMode::Project => {
-                panic!("library batch requires a pristine project builder")
-            }
-            BuilderUseMode::Library => panic!("library batch is one-shot"),
-            BuilderUseMode::Continuation => {
-                panic!("library batch cannot follow a frozen continuation")
-            }
+            #[cfg(test)]
+            BuilderUseMode::Project => return Err(LibraryBinderError::RequiresPristineBuilder),
+            BuilderUseMode::Library => return Err(LibraryBinderError::AlreadyAdded),
+            #[cfg(test)]
+            BuilderUseMode::Continuation => return Err(LibraryBinderError::FollowsContinuation),
         }
 
         let mut bound_units = Vec::with_capacity(canonical_units.len());
@@ -740,10 +792,19 @@ impl ProjectBinderBuilder {
             fill_namespace_value_attachments(&mut self.state, program);
         }
         bound_units.sort_by_key(|(input_index, _, _)| *input_index);
-        bound_units
+        Ok(bound_units
             .into_iter()
             .map(|(_, _, module)| module)
-            .collect()
+            .collect())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_library_modules<'ast>(
+        &mut self,
+        units: &[(&'ast Program<'ast>, CompilationUnit)],
+    ) -> Vec<ScopeId> {
+        self.try_add_library_modules(units)
+            .expect("test library batch is valid")
     }
 
     pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
@@ -905,7 +966,6 @@ impl ProjectBinderBuilder {
     }
 }
 
-#[cfg(test)]
 fn bind_library_statements(
     state: &mut BindState,
     scope: ScopeId,
@@ -1618,7 +1678,6 @@ pub(super) fn declare_type(
             .get_mut(group)
             .expect("allocated type group exists")
             .fragments;
-        #[cfg(test)]
         if !state.library_module_ordinals.is_empty() {
             fragments.sort_by_key(|fragment| {
                 (

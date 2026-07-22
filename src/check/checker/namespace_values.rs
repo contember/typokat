@@ -81,24 +81,20 @@ pub(in crate::check::checker) enum NamespaceValueUnavailableCause {
     ClassValueSurfaceUnavailable = 21,
 }
 
-#[cfg(test)]
 pub(in crate::check::checker) type FrozenNamespaceUnavailableCause = NamespaceValueUnavailableCause;
 
-#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum FrozenNamespaceValueTerminalSnapshot {
     Ready { storage: ValueStorageId, ty: TypeId },
     Unavailable(FrozenNamespaceUnavailableCause),
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct FrozenNamespaceValueTerminalSnapshotRow {
     pub(in crate::check::checker) namespace: NamespaceId,
     pub(in crate::check::checker) terminal: FrozenNamespaceValueTerminalSnapshot,
 }
 
-#[cfg(test)]
 pub(in crate::check::checker) type FrozenNamespaceValueTerminalsSnapshotParts =
     Vec<FrozenNamespaceValueTerminalSnapshotRow>;
 
@@ -340,17 +336,19 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
 }
 
 impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
-    #[cfg(test)]
-    pub(in crate::check::checker) fn freeze_terminals(&self) -> FrozenNamespaceValueTerminals {
-        assert!(
-            self.standalone_terminals
-                .values()
-                .all(|terminal| !matches!(terminal, StandaloneNamespaceTerminal::Planned)),
-            "frozen namespace terminals are complete"
-        );
-        FrozenNamespaceValueTerminals {
-            standalone: self.standalone_terminals.clone(),
+    pub(in crate::check::checker) fn try_freeze_terminals(
+        &self,
+    ) -> Result<FrozenNamespaceValueTerminals, &'static str> {
+        if self
+            .standalone_terminals
+            .values()
+            .any(|terminal| matches!(terminal, StandaloneNamespaceTerminal::Planned))
+        {
+            return Err("frozen namespace terminals are incomplete");
         }
+        Ok(FrozenNamespaceValueTerminals {
+            standalone: self.standalone_terminals.clone(),
+        })
     }
 
     pub(in crate::check::checker) fn install_frozen_terminals(
@@ -531,7 +529,6 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
     }
 }
 
-#[cfg(test)]
 impl FrozenNamespaceValueTerminals {
     pub(in crate::check::checker) fn snapshot_parts(
         &self,
@@ -561,6 +558,7 @@ impl FrozenNamespaceValueTerminals {
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         rows: FrozenNamespaceValueTerminalsSnapshotParts,
     ) -> Result<Self, &'static str> {

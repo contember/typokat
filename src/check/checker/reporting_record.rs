@@ -7,3 +7,9 @@ pub(crate) enum CheckerRecord {
     Diagnostic(Diagnostic),
     Incomplete(IncompleteSurface),
 }
+
+impl CheckerRecord {
+    pub(crate) const fn is_diagnostic(&self) -> bool {
+        matches!(self, Self::Diagnostic(_))
+    }
+}

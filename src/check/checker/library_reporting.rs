@@ -127,7 +127,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                     vec![CheckerRecord::Incomplete(IncompleteSurface::new(
                         "library/export-context/future-tk1319",
                         context.span,
-                        "library export-context TK1319 reporting is deferred beyond WU0B",
+                        "library export-context TK1319 reporting is deferred beyond snapshot feasibility",
                     ))]
                 }
                 ExportSyntaxDisposition::Valid
@@ -357,7 +357,7 @@ mod tests {
                 family: LibraryReportingFamily::ExportContext,
                 expected: ExpectedEmission::Incomplete {
                     id: "library/export-context/future-tk1319",
-                    context: "library export-context TK1319 reporting is deferred beyond WU0B",
+                    context: "library export-context TK1319 reporting is deferred beyond snapshot feasibility",
                 },
             },
             Case {

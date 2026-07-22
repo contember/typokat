@@ -1,3 +1,8 @@
-// WU2 activates `wu2_spec` only after the production library boundary exists.
-// #[cfg(test)]
-// mod wu2_spec;
+pub mod artifact;
+pub mod compiler;
+pub mod profile;
+
+pub use crate::source::LibraryFileOrdinal;
+
+#[cfg(test)]
+mod wu2_spec;

@@ -8,7 +8,7 @@
 //! drop. `substitution_measure()` clones a snapshot: `None` means disabled, while
 //! `Some` means the current scope is enabled even when all counters are still zero.
 //!
-//! This boundary keeps the exact WU0B fresh-process probe free of substitution
+//! This boundary keeps the exact fresh-process library probe free of substitution
 //! telemetry unless that probe explicitly opts in.
 //!
 //! ## Binding implementation contract
@@ -152,7 +152,7 @@ fn in_fresh_thread(body: impl FnOnce() + Send + 'static) {
 }
 
 #[test]
-fn fresh_thread_keeps_unscoped_substitution_measurement_disabled_for_wu0b() {
+fn fresh_thread_keeps_unscoped_substitution_measurement_disabled_for_library_probe() {
     const FANOUT: usize = 64;
 
     in_fresh_thread(|| {

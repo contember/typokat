@@ -15,9 +15,11 @@ pub(crate) const fn library_unit(file_ordinal: LibraryFileOrdinal) -> ExactUnit 
     SourceUnit::Library { file_ordinal }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LibraryLexicalEvidence(Vec<SourceUnit>);
 
+#[cfg(test)]
 impl LibraryLexicalEvidence {
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -81,6 +83,7 @@ impl LexicalReservations<LibraryRecordTicket> {
         tickets
     }
 
+    #[cfg(test)]
     pub(crate) fn library_lexical_evidence(&self) -> LibraryLexicalEvidence {
         LibraryLexicalEvidence(self.retained_source_units())
     }

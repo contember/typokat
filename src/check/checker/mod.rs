@@ -42,34 +42,33 @@ mod context;
 mod decls;
 pub(in crate::check) mod eval;
 pub(crate) mod events;
-#[cfg(test)]
 pub(crate) mod events_library;
 mod expr;
 mod flowgraph;
 mod function_groups;
 mod indexed_access;
 pub(crate) mod lexical_events;
-#[cfg(test)]
 pub(crate) mod lexical_events_library;
 mod lexical_events_user;
+pub(crate) mod library_compiler;
 mod library_identities;
-#[cfg(test)]
 pub(crate) mod library_reporting;
+#[cfg(test)]
+pub(crate) mod library_snapshot_feasibility;
 mod namespace_values;
 mod narrowing;
 pub(crate) mod reporting_record;
 mod statements;
 mod type_groups;
+
 #[cfg(test)]
-pub(crate) mod wu0b_library;
-#[cfg(test)]
-pub(crate) mod wu0b_profile;
-#[cfg(test)]
-mod wu0b_snapshot;
-#[cfg(test)]
-mod wu0b_snapshot_runtime;
-#[cfg(test)]
-mod wu0b_snapshot_spec;
+pub(crate) fn generate_library_snapshot_archive(
+    product: &library_compiler::CompiledLibraryRuntimeProduct,
+) -> Result<Vec<u8>, String> {
+    library_snapshot_feasibility::encode_library_runtime_product(product)
+        .map(|compiled| compiled.archive().as_bytes().to_vec())
+        .map_err(|error| error.to_string())
+}
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
@@ -102,7 +101,6 @@ struct UserReportingAdapter {
 fn user_original_module(origin: CompilationOrigin) -> Option<OriginalModuleOrdinal> {
     match origin {
         CompilationOrigin::User(original_module) => Some(original_module),
-        #[cfg(test)]
         CompilationOrigin::Library(_) => None,
     }
 }
@@ -112,7 +110,6 @@ fn source_ordinal_from_origin(origin: CompilationOrigin) -> SourceOrdinal {
         CompilationOrigin::User(original_module) => {
             SourceOrdinal::User(ModuleOrdinal::new(original_module.index()))
         }
-        #[cfg(test)]
         CompilationOrigin::Library(file_ordinal) => SourceOrdinal::Library(file_ordinal),
     }
 }
@@ -235,7 +232,6 @@ pub(in crate::check::checker) struct FrozenCheckerRuntimeMetadata {
     named_function_symbols: FxHashSet<SymbolId>,
 }
 
-#[cfg(test)]
 pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
     pub(in crate::check::checker) class_application_parameters: Vec<(
         ClassId,
@@ -255,7 +251,6 @@ pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
     pub(in crate::check::checker) named_function_symbols: Vec<SymbolId>,
 }
 
-#[cfg(test)]
 impl FrozenCheckerRuntimeMetadata {
     pub(in crate::check::checker) fn snapshot_parts(
         &self,
@@ -328,6 +323,7 @@ impl FrozenCheckerRuntimeMetadata {
         })
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: FrozenCheckerRuntimeSnapshotParts,
     ) -> Result<Self, &'static str> {

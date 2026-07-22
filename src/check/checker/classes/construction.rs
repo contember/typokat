@@ -67,7 +67,6 @@ pub(in crate::check::checker) struct DraftClassTypeParameter<Ticket> {
     constraint: Option<TypeId>,
 }
 
-#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) struct DraftClassTypeParameterSnapshot {
     pub(in crate::check::checker) id: TypeParamId,
@@ -132,7 +131,6 @@ impl<Ticket> DraftClassTypeParameter<Ticket> {
     }
 }
 
-#[cfg(test)]
 impl DraftClassTypeParameter<()> {
     pub(in crate::check::checker) fn snapshot_parts(self) -> DraftClassTypeParameterSnapshot {
         DraftClassTypeParameterSnapshot {
@@ -142,6 +140,7 @@ impl DraftClassTypeParameter<()> {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: DraftClassTypeParameterSnapshot,
     ) -> Self {

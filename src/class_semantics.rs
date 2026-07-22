@@ -131,7 +131,6 @@ pub(crate) enum PublishedClassPoison {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg(test)]
 pub(crate) enum CanonicalPublishedClassTerminal<'a> {
     Ready(&'a PublishedClassSurface),
     HeritagePoison,
@@ -140,7 +139,6 @@ pub(crate) enum CanonicalPublishedClassTerminal<'a> {
 }
 
 /// Lifetime-free class publication row used by the semantic snapshot prototype.
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PublishedClassSnapshotTerminal {
     Ready(PublishedClassSurface),
@@ -157,7 +155,6 @@ pub(crate) struct PublishedClasses {
 }
 
 impl PublishedClasses {
-    #[cfg(test)]
     pub(crate) fn snapshot_terminals(
         &self,
     ) -> Option<Vec<(ClassId, PublishedClassSnapshotTerminal)>> {
@@ -216,7 +213,6 @@ impl PublishedClasses {
             .ok_or("snapshot class publication is not terminal")
     }
 
-    #[cfg(test)]
     pub(crate) fn canonical_terminals(
         &self,
     ) -> Option<Vec<(ClassId, CanonicalPublishedClassTerminal<'_>)>> {

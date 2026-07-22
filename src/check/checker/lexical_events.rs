@@ -58,7 +58,6 @@ impl SourceSite {
 pub(crate) const fn source_ordinal(source: SourceUnit) -> SourceOrdinal {
     match source {
         SourceUnit::User { module_ordinal, .. } => SourceOrdinal::User(module_ordinal),
-        #[cfg(test)]
         SourceUnit::Library { file_ordinal } => SourceOrdinal::Library(file_ordinal),
     }
 }
@@ -125,7 +124,6 @@ struct InterfaceOccurrenceReservation<Ticket: Copy = UserRecordTicket> {
     owner: Ticket,
 }
 
-#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct SourceAnchorReservation<Ticket: Copy = UserRecordTicket> {
     source: SourceSite,
@@ -252,7 +250,6 @@ pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     expression_site_tickets: Vec<SiteTickets<Ticket>>,
     #[cfg(test)]
     expression_sources: Vec<SourceSite>,
-    #[cfg(test)]
     source_anchors: Vec<SourceAnchorReservation<Ticket>>,
     declarations: Vec<DeclarationReservation<Ticket>>,
     export_aliases: Vec<ExportAliasReservation<Ticket>>,
@@ -280,7 +277,6 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             expression_site_tickets: Vec::new(),
             #[cfg(test)]
             expression_sources: Vec::new(),
-            #[cfg(test)]
             source_anchors: Vec::new(),
             declarations: Vec::new(),
             export_aliases: Vec::new(),
@@ -1408,13 +1404,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             .map(|initializer| initializer.owner)
     }
 
-    #[cfg(test)]
     pub(crate) fn retain_source_anchor(&mut self, source: SourceSite, owner: Ticket) {
         self.source_anchors
             .push(SourceAnchorReservation { source, owner });
     }
 
-    #[cfg(test)]
     pub(crate) fn source_anchor_tickets(&self) -> Vec<Ticket> {
         self.source_anchors
             .iter()

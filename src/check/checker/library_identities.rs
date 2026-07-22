@@ -48,13 +48,11 @@ pub(crate) struct LibrarySemanticIdentities {
     callable_function: LibraryIdentityTerminal,
 }
 
-#[cfg(test)]
 pub(crate) type LibrarySemanticIdentitiesSnapshotParts = [LibraryIdentityTerminal; 8];
 
 impl LibrarySemanticIdentities {
     /// Select roots once from the library compilation-global scope. Consumer scopes
     /// never participate, so same-named user declarations cannot hijack native syntax.
-    #[cfg(test)]
     pub(in crate::check::checker) fn select(
         binder: &Binder,
         published: &PublishedTypeEnvironment,
@@ -138,7 +136,6 @@ impl LibrarySemanticIdentities {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn snapshot_parts(&self) -> LibrarySemanticIdentitiesSnapshotParts {
         [
             self.array.clone(),
