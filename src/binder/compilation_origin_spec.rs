@@ -1,7 +1,4 @@
-//! Disabled WU0B RED spec for binder compilation-origin provenance.
-//!
-//! Activate with `#[cfg(test)] mod wu0b_compilation_origin_spec;` in `binder/mod.rs`
-//! after `crate::source` and origin-aware binder records exist.
+//! Binder compilation-origin provenance contract.
 //!
 //! | Contract | Executable or review witness |
 //! | --- | --- |
@@ -14,9 +11,8 @@
 //! augmentation issue, UMD export/context, export context, namespace member, and standalone
 //! namespace value member.
 //!
-//! These origin-bearing records intentionally become crate-private. WU0B is authorized to clean
-//! up internal binder visibility so crate-private neutral provenance never leaks through public
-//! fields; the public driver/checker APIs and default behavior remain unchanged.
+//! These origin-bearing records remain crate-private so neutral provenance never leaks through
+//! public fields; the public driver/checker APIs and default behavior remain unchanged.
 
 use super::bind::{Binder, ProjectBinderBuilder};
 use super::namespace::{

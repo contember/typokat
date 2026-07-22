@@ -70,10 +70,6 @@ mod wu0b_snapshot;
 mod wu0b_snapshot_runtime;
 #[cfg(test)]
 mod wu0b_snapshot_spec;
-#[cfg(test)]
-mod wu0d_candidate_release;
-#[cfg(test)]
-mod wu0d_candidate_release_spec;
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,

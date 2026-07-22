@@ -26,30 +26,25 @@ performance GO before production work proceeds.
 - ✔ Production still parses and checks `src/prelude.ts` inside every run through
   `PRELUDE_SOURCE` and `bootstrap_trusted_prelude`; there is no production `FrozenLibraryBase` —
   `src/check/checker/mod.rs:139-149`, `src/check/checker/mod.rs:210-224`.
-- ✔ The full-library compiler, profile loader, library reporting, and WU0D candidate runner are
+- ✔ The full-library compiler, profile loader, library reporting, and snapshot feasibility gate are
   all `#[cfg(test)]`; ordinary `check_source` creates `Interner::with_intrinsics()` and calls the
-  prelude-backed checker — `src/check/checker/mod.rs:45-69`, `src/driver.rs:87-119`.
-- ✔ The test-only injected pipeline parses all 82 units and builds owned semantic evidence, but its
-  returned `InjectedProfileRun` is not a reusable production base; its follow-up tiny source is
-  checked independently through the old prelude path — `src/check/checker/wu0b_library.rs:261-273`,
-  `src/check/checker/wu0b_library.rs:1184-1215`,
-  `src/check/checker/wu0b_library.rs:2041-2079`.
-- ✔ The canonical WU0D product is an 8.45 MB evidence projection with source records, type-store
-  rows, publications, values, namespaces, and class terminals. It is useful as a semantic oracle,
-  but no complete production decoder exists — `src/check/checker/wu0b_library.rs:624-842`,
-  `src/check/checker/wu0b_library.rs:967-1008`.
+  prelude-backed checker. The superseded WU0D candidate runner was removed after ADR-0012 accepted
+  the canonical snapshot — `src/check/checker/mod.rs`, `src/driver.rs`.
+- ✔ The test-only injected pipeline parses all 82 units and returns both evidence and an owned
+  runtime state. Its follow-up route is valid only for a caller-certified non-colliding source; it
+  is neither the production base/provider nor WU5's private collision route —
+  `src/check/checker/wu0b_library.rs:1165-1175`,
+  `src/check/checker/wu0b_library.rs:1496-1518`.
+- ✔ The obsolete 8.45 MB WU0D evidence projection and its release coordinator were removed after
+  the canonical ten-section snapshot superseded them. ADR-0012 records the accepted snapshot
+  artifact identity; the archived predecessor sprint retains the historical WU0D measurements.
 - ✔ The B14 single-file and project corpora remain disabled — `tests/conformance.rs:175-179`.
-- ⚠ On HEAD, the exact release WU0B profile completes rather than hangs: one fresh run measured
+- ⚠ Before the obsolete WU0D projection was removed, the exact release WU0B profile completed
+  rather than hanging: one fresh run measured
   10,784,008 us internally / 10.94 s externally / 72,904 KiB RSS. The phase split was registry
   36,618 us, parse 17,087 us, bind 27,650 us, reserve/fill 793,025 us,
-  publication/validation 68,090 us, and statement-check/evidence 9,833,246 us. The current
-  WU0D 5-second coordinator still correctly reports NO-GO because it kills the process before that
-  result exists — `src/check/checker/wu0b_library.rs:2030-2111`,
-  `tooling/wu0d-release/run.pl:15-20`.
-- ✔ The unrestricted WU0D primary probe completes all 82 files and emits stable owned identities,
-  but this remains test-only evidence, not a loaded user universe —
-  `src/check/checker/wu0d_candidate_release.rs:1257-1270`,
-  `src/check/checker/wu0d_candidate_release.rs:1314-1320`.
+  publication/validation 68,090 us, and statement-check/evidence 9,833,246 us. The historical WU0D
+  5-second gate therefore reported NO-GO; ADR-0012's decoded-snapshot route supersedes that gate.
 - ✔ The current stable comparator is `typescript@7.0.2`; npm reports integrity
   `sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==`.
   Exploratory direct-native runs on this host checked the normal 83-file ES2025 graph in
@@ -508,3 +503,12 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
 - V1 binds the exact eager archive and bounded initialization parallelism. Semantic lazy loading
   remains rejected. Production must replace prototype panics with typed initialization errors, and
   the WU0B non-collision continuation must not be promoted as WU5's private combined universe.
+
+### 2026-07-22 — obsolete WU0 cleanup
+
+- Removed the superseded WU0D candidate runner, its external coordinator, and the unused seven-
+  section evidence projection from the WU0B source compiler. Removed the disconnected WU0B
+  reporting RED fixtures; active reporting and provenance tests remain.
+- Renamed the active binder provenance test by behavior. The five active WU0B compiler/profile/
+  snapshot files retain their evidence-bound names until WU2/WU3 production replacements satisfy
+  the existing parity and preflight contracts.
