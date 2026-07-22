@@ -472,6 +472,18 @@ class SnapshotCoordinatorTests(unittest.TestCase):
                     "adversarial",
                 )
 
+    def test_prefixed_record_accepts_libtest_final_blank_line(self) -> None:
+        stdout = (
+            'PREFIX={"schema":1}\n'
+            "ok\n\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+            "993 filtered out; finished in 4.57s\n\n"
+        )
+        self.assertEqual(
+            snapshot.extract_prefixed_record(stdout, "PREFIX=", "regeneration"),
+            {"schema": 1},
+        )
+
     def test_stale_or_wrong_libtest_identity_is_rejected(self) -> None:
         sample = self.evidence["windows"][2]["recorded"][4]
         sample["binary_before"] = copy.deepcopy(sample["binary_before"])
