@@ -1275,6 +1275,11 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         canonical_source.contains("verify_reference_manifest_streaming("),
         "canonical decoder must compare every decoded reference to the wire stream"
     );
+    assert_eq!(
+        canonical_source.matches("std::thread::scope(").count(),
+        2,
+        "canonical decode must overlap independent state decoding and reference extraction"
+    );
     for redundant in [
         "build_manifest_references(",
         "write_manifest(",

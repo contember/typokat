@@ -80,7 +80,10 @@ The timed route authenticates that complete identity while taking ownership of
 the input bytes. It still compares every decoded reference with the canonical
 wire manifest, but does so as a stream instead of allocating, globally sorting,
 and serializing a second complete manifest. Generic/adversarial decoders retain
-their independent section and reference reconstruction.
+their independent section and reference reconstruction. Canonical startup
+overlaps the independent interner/binder decode and their immutable reference
+enumeration in two scoped joins; results and errors are consumed in fixed order,
+so this does not change semantic ordering or claim parallel user checking.
 
 The 31 projection-subtable witnesses are computed once during untimed snapshot
 generation and stored as a versioned, fixed-order row-count/digest inventory in
