@@ -29,3 +29,4 @@ a commit message suffices.
 - [`0011`](0011-freeze-pinned-default-library-base.md) — freeze the pinned TypeScript 6.0.3 default library as a shared semantic base with private collision rebuilds — accepted (2026-07-16)
 - [`0012`](0012-ship-the-canonical-default-library-snapshot.md) — ship the canonical default-library semantic snapshot as ADR-0011's startup realization — accepted (2026-07-22)
 - [`0013`](0013-replay-private-library-collision-closures.md) — seed private collision universes from the canonical snapshot and replay only affected semantic owners — accepted (2026-07-23)
+- [`0014`](0014-authenticate-private-replay-prefixes-at-separate-boundaries.md) — authenticate semantic decode and the continuable library binder at separate private-replay boundaries — accepted (2026-07-23)

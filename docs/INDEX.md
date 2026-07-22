@@ -41,7 +41,9 @@ decisions → reference → archive.
   TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,
   and a same-pipeline private universe for global collisions;
   [`ADR-0013`](decisions/0013-replay-private-library-collision-closures.md) now seeds that universe
-  from the canonical snapshot and replays the authenticated affected-owner closure. The earlier
+  from the canonical snapshot and replays the authenticated affected-owner closure, while
+  [`ADR-0014`](decisions/0014-authenticate-private-replay-prefixes-at-separate-boundaries.md)
+  separates semantic-prefix decode from the pre-user binder-prefix checkpoint. The earlier
   [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the first
   substitution and rendering barriers. The
   [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now owns a
