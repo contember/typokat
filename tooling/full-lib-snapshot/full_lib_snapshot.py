@@ -211,8 +211,15 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         raise ContractError("probe record prefix differs")
     if data["libtest"]["semantic_record_prefix"] != "TYPOKAT_WU0B_SEMANTICS=":
         raise ContractError("semantic calibration record prefix differs")
-    exact_keys(data["artifact"], {"maximum_bytes", "minimum_bytes", "regenerations", "schema"}, "contract.artifact")
-    if data["artifact"] != {"maximum_bytes": 32 * 1024 * 1024, "minimum_bytes": 1024 * 1024, "regenerations": 2, "schema": 1}:
+    exact_keys(data["artifact"], {"maximum_bytes", "minimum_bytes", "regenerations", "schema", "canonical_bytes", "canonical_sha256"}, "contract.artifact")
+    if data["artifact"] != {
+        "maximum_bytes": 32 * 1024 * 1024,
+        "minimum_bytes": 1024 * 1024,
+        "regenerations": 2,
+        "schema": 1,
+        "canonical_bytes": 10_003_957,
+        "canonical_sha256": "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0",
+    }:
         raise ContractError("artifact contract differs")
     exact_keys(data["wire"], {"magic", "version", "schema_sha256", "section_names", "section_tags"}, "contract.wire")
     if data["wire"] != {
@@ -882,6 +889,8 @@ def collect_generations(binaries: list[Path], source_roots: list[Path], contract
         if entries != [output.name]:
             raise ContractError("regeneration child wrote outside its exact artifact path")
         identity = file_identity(output)
+        if identity["bytes"] != contract["artifact"]["canonical_bytes"] or identity["sha256"] != contract["artifact"]["canonical_sha256"]:
+            raise ContractError("regeneration differs from the canonical snapshot identity")
         wire = parse_snapshot_wire(output, contract)
         semantic_calibration = extract_semantic_calibration(
             record["process"]["stdout"], contract, identity
@@ -1156,6 +1165,8 @@ def validate_evidence(evidence: Any, contract: dict[str, Any]) -> dict[str, Any]
     validate_identity({key: artifact[key] for key in ("path", "bytes", "sha256")}, "artifact file identity")
     if not contract["artifact"]["minimum_bytes"] <= artifact["bytes"] <= contract["artifact"]["maximum_bytes"]:
         raise ContractError("artifact identity or size is ineligible")
+    if artifact["bytes"] != contract["artifact"]["canonical_bytes"] or artifact["sha256"] != contract["artifact"]["canonical_sha256"]:
+        raise ContractError("artifact does not match the canonical snapshot identity")
     validate_wire_record(artifact["wire"], artifact["bytes"], contract)
     generations = evidence["generations"]
     if not isinstance(generations, list) or len(generations) != 2:

@@ -49,6 +49,9 @@ const MAGIC: &[u8] = b"typokat-semantic-snapshot";
 const VERSION: u32 = 1;
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const SCHEMA_IDENTITY: &str = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
+const CANONICAL_ARCHIVE_BYTES: usize = 10_003_957;
+const CANONICAL_ARCHIVE_SHA256: &str =
+    "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
 const SECTION_NAMES: [&str; 10] = [
     "store",
     "interner",
@@ -1862,6 +1865,32 @@ fn build_manifest_references(
     Ok(references)
 }
 
+struct TailManifestInputs<'a> {
+    roots: &'a [RootNameRow],
+    decl_types: &'a [Option<TypeId>],
+    published: &'a PublishedTypeEnvironmentSnapshotParts,
+    namespace_terminals: &'a [FrozenNamespaceValueTerminalSnapshotRow],
+    runtime: &'a FrozenCheckerRuntimeSnapshotParts,
+    semantic_identities: &'a Option<[LibraryIdentityTerminal; 8]>,
+}
+
+fn build_tail_manifest_references(
+    inputs: TailManifestInputs<'_>,
+) -> Result<Vec<ManifestReference>, SnapshotCodecError> {
+    build_manifest_references(ManifestInputs {
+        type_count: 0,
+        roots: inputs.roots,
+        store_references: &[],
+        interner_references: &[],
+        binder_references: &[],
+        decl_types: inputs.decl_types,
+        published: inputs.published,
+        namespace_terminals: inputs.namespace_terminals,
+        runtime: inputs.runtime,
+        semantic_identities: inputs.semantic_identities,
+    })
+}
+
 fn write_manifest(
     writer: &mut SnapshotWriter,
     references: &[ManifestReference],
@@ -2263,6 +2292,345 @@ fn decode_semantic_identities(
         manifest_hash,
         projection_subtables,
     })
+}
+
+fn decode_canonical_semantic_section(
+    bytes: &[u8],
+) -> Result<DecodedSemanticSection, SnapshotError> {
+    let mut reader = SnapshotReader::new(bytes);
+    if reader
+        .u32()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
+        != 1
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "unsupported manifest version",
+        ));
+    }
+    if reader
+        .u64()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
+        != 9
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "wrong reference family count",
+        ));
+    }
+    let reference_count = reader
+        .usize()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let mut counts = [0u64; 9];
+    for (index, count) in counts.iter_mut().enumerate() {
+        if reader
+            .u16()
+            .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
+            != u16::try_from(index + 1).expect("family")
+            || reader
+                .u16()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
+                != 0
+        {
+            return Err(invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "invalid reference family directory",
+            ));
+        }
+        *count = reader
+            .u64()
+            .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    }
+    let family_total = counts.iter().try_fold(0u64, |total, count| {
+        total.checked_add(*count).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family count sum overflow",
+            )
+        })
+    })?;
+    if family_total != u64::try_from(reference_count).unwrap_or(u64::MAX) {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "reference counts disagree",
+        ));
+    }
+    let manifest_bytes = reference_count.checked_mul(12).ok_or_else(|| {
+        invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "reference manifest length overflow",
+        )
+    })?;
+    reader
+        .raw(manifest_bytes)
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let manifest_end = reader.position();
+    let manifest_hash = digest32(&bytes[..manifest_end]);
+    let identities = if reader
+        .bool()
+        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?
+    {
+        let mut values = Vec::with_capacity(8);
+        for _ in 0..8 {
+            values.push(
+                read_identity_terminal(&mut reader)
+                    .map_err(|error| codec(SnapshotErrorStage::Decode, error))?,
+            );
+        }
+        Some(values.try_into().expect("eight semantic identities"))
+    } else {
+        None
+    };
+    let projection_subtables = read_projection_witness(&mut reader)?;
+    reader
+        .finish()
+        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    Ok(DecodedSemanticSection {
+        identities,
+        reference_counts: counts,
+        manifest_hash,
+        projection_subtables,
+    })
+}
+
+fn tuple_manifest_reference(family: u8, row: (u8, u8, u8, u32, u32)) -> ManifestReference {
+    ManifestReference {
+        owner_family: family,
+        owner_domain: row.0,
+        target_domain: row.1,
+        field: row.2,
+        owner: row.3,
+        target: row.4,
+    }
+}
+
+struct ManifestStreamVerifier<'a, 'limits> {
+    reader: SnapshotReader<'a>,
+    limits: &'limits ReferenceLimits,
+    previous: Option<ManifestReference>,
+    actual: [u64; 9],
+}
+
+impl ManifestStreamVerifier<'_, '_> {
+    fn expect(&mut self, expected: ManifestReference) -> Result<(), SnapshotError> {
+        let reference = ManifestReference {
+            owner_family: self
+                .reader
+                .u8()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?,
+            owner_domain: self
+                .reader
+                .u8()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?,
+            target_domain: self
+                .reader
+                .u8()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?,
+            field: self
+                .reader
+                .u8()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?,
+            owner: self
+                .reader
+                .u32()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?,
+            target: self
+                .reader
+                .u32()
+                .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?,
+        };
+        if !(1..=9).contains(&reference.owner_family)
+            || reference.owner_domain > MAX_REFERENCE_DOMAIN
+            || reference.target_domain == 0
+            || reference.target_domain > MAX_REFERENCE_DOMAIN
+            || reference.field > 31
+        {
+            return Err(invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "invalid reference discriminant",
+            ));
+        }
+        if self.previous.is_some_and(|previous| previous > reference) {
+            return Err(invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference manifest is not sorted",
+            ));
+        }
+        self.previous = Some(reference);
+        self.actual[usize::from(reference.owner_family - 1)] += 1;
+        let owner_limit = self.limits.owner_limit(reference).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "unknown manifest owner domain",
+            )
+        })?;
+        validate_id(reference.owner, owner_limit, "manifest owner")?;
+        let target_limit = self
+            .limits
+            .target_limit(reference.target_domain)
+            .ok_or_else(|| {
+                invalid(
+                    SnapshotErrorStage::ReferenceValidation,
+                    "unknown manifest target domain",
+                )
+            })?;
+        validate_id(reference.target, target_limit, "manifest target")?;
+        if reference != expected {
+            return Err(invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference manifest disagrees with decoded state",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn verify_reference_manifest_streaming(
+    bytes: &[u8],
+    limits: &ReferenceLimits,
+    type_count: usize,
+    store_references: &[(u8, u8, u8, u32, u32)],
+    interner_references: &[(u8, u8, u8, u32, u32)],
+    binder_references: &[(u8, u8, u8, u32, u32)],
+    tail_references: &[ManifestReference],
+) -> Result<(), SnapshotError> {
+    for references in [store_references, interner_references, binder_references] {
+        if references.windows(2).any(|rows| rows[0] > rows[1]) {
+            return Err(invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "decoded reference records are not sorted",
+            ));
+        }
+    }
+    let mut reader = SnapshotReader::new(bytes);
+    if reader
+        .u32()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
+        != 1
+        || reader
+            .u64()
+            .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?
+            != 9
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "unsupported reference manifest header",
+        ));
+    }
+    let reference_count = reader
+        .usize()
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let mut expected_counts = [0u64; 9];
+    expected_counts[0] = u64::try_from(type_count)
+        .ok()
+        .and_then(|count| count.checked_add(u64::try_from(store_references.len()).ok()?))
+        .ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family count overflow",
+            )
+        })?;
+    expected_counts[1] = u64::try_from(interner_references.len()).map_err(|_| {
+        invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "reference family count overflow",
+        )
+    })?;
+    expected_counts[2] = u64::try_from(binder_references.len()).map_err(|_| {
+        invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "reference family count overflow",
+        )
+    })?;
+    for reference in tail_references {
+        expected_counts[usize::from(reference.owner_family - 1)] += 1;
+    }
+    for (index, expected) in expected_counts.iter().enumerate() {
+        let family = reader
+            .u16()
+            .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+        let reserved = reader
+            .u16()
+            .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+        let count = reader
+            .u64()
+            .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+        if family != u16::try_from(index + 1).expect("family")
+            || reserved != 0
+            || count != *expected
+        {
+            return Err(invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference family counts are not canonical",
+            ));
+        }
+    }
+    let expected_total = expected_counts.iter().try_fold(0u64, |total, count| {
+        total.checked_add(*count).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::ReferenceValidation,
+                "reference count overflow",
+            )
+        })
+    })?;
+    if usize::try_from(expected_total).ok() != Some(reference_count) {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "reference counts disagree",
+        ));
+    }
+    let mut verifier = ManifestStreamVerifier {
+        reader,
+        limits,
+        previous: None,
+        actual: [0; 9],
+    };
+    let mut identity = 0usize;
+    let mut store = 0usize;
+    while identity < type_count || store < store_references.len() {
+        let identity_reference = (identity < type_count).then(|| ManifestReference {
+            owner_family: 1,
+            owner_domain: 1,
+            target_domain: 1,
+            field: ROW_IDENTITY_FIELD,
+            owner: id32(identity),
+            target: id32(identity),
+        });
+        let store_reference = store_references
+            .get(store)
+            .copied()
+            .map(|row| tuple_manifest_reference(1, row));
+        let take_identity = match (identity_reference, store_reference) {
+            (Some(identity), Some(store)) => identity <= store,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => unreachable!("manifest merge has a remaining row"),
+        };
+        let expected = if take_identity {
+            identity += 1;
+            identity_reference.expect("identity row remains")
+        } else {
+            store += 1;
+            store_reference.expect("store row remains")
+        };
+        verifier.expect(expected)?;
+    }
+    for &row in interner_references {
+        verifier.expect(tuple_manifest_reference(2, row))?;
+    }
+    for &row in binder_references {
+        verifier.expect(tuple_manifest_reference(3, row))?;
+    }
+    for &reference in tail_references {
+        verifier.expect(reference)?;
+    }
+    if verifier.actual != expected_counts {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "reference family counts are not canonical",
+        ));
+    }
+    Ok(())
 }
 
 fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, SnapshotError> {
@@ -3381,6 +3749,170 @@ pub(in crate::check::checker) fn validate_snapshot_for_test(
     })
 }
 
+fn validate_canonical_snapshot_for_test(
+    bytes: Vec<u8>,
+) -> Result<ValidatedSnapshotForTest, SnapshotError> {
+    if bytes.len() != CANONICAL_ARCHIVE_BYTES
+        || digest32(&bytes) != decode_hex32(CANONICAL_ARCHIVE_SHA256)
+    {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "canonical snapshot identity mismatch",
+        ));
+    }
+    if bytes.len() < FIXED_HEADER_LEN || !bytes.starts_with(MAGIC) {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "invalid snapshot magic or truncated header",
+        ));
+    }
+    let mut reader = SnapshotReader::new(&bytes[MAGIC.len()..]);
+    if reader
+        .u32()
+        .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?
+        != VERSION
+    {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "unsupported snapshot version",
+        ));
+    }
+    if reader
+        .raw(32)
+        .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?
+        != decode_hex32(PROFILE_IDENTITY)
+    {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "profile identity mismatch",
+        ));
+    }
+    if reader
+        .raw(32)
+        .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?
+        != decode_hex32(SCHEMA_IDENTITY)
+    {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "schema identity mismatch",
+        ));
+    }
+    if usize::try_from(
+        reader
+            .u32()
+            .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?,
+    )
+    .expect("u32 section count fits usize")
+        != SECTION_COUNT
+    {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "wrong section count",
+        ));
+    }
+    let body_len = usize::try_from(
+        reader
+            .u64()
+            .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?,
+    )
+    .map_err(|_| {
+        invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "body length exceeds usize",
+        )
+    })?;
+    reader
+        .raw(32)
+        .map_err(|error| codec(SnapshotErrorStage::HeaderValidation, error))?;
+    let directory_end = FIXED_HEADER_LEN
+        .checked_add(SECTION_COUNT * DIRECTORY_ENTRY_LEN)
+        .ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "directory overflow",
+            )
+        })?;
+    if directory_end > bytes.len() || body_len != bytes.len() - directory_end {
+        return Err(invalid(
+            SnapshotErrorStage::HeaderValidation,
+            "body length mismatch",
+        ));
+    }
+    let mut directory = SnapshotReader::new(&bytes[FIXED_HEADER_LEN..directory_end]);
+    let mut sections = Vec::with_capacity(SECTION_COUNT);
+    let mut expected_offset = directory_end;
+    for index in 0..SECTION_COUNT {
+        let tag = directory
+            .u16()
+            .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?;
+        if tag != u16::try_from(index + 1).expect("section tag")
+            || directory
+                .u16()
+                .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?
+                != 0
+        {
+            return Err(invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section tags are not canonical",
+            ));
+        }
+        let offset = usize::try_from(
+            directory
+                .u64()
+                .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?,
+        )
+        .map_err(|_| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section offset exceeds usize",
+            )
+        })?;
+        let len = usize::try_from(
+            directory
+                .u64()
+                .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?,
+        )
+        .map_err(|_| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section length exceeds usize",
+            )
+        })?;
+        let digest = directory
+            .raw(32)
+            .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?
+            .try_into()
+            .expect("digest bytes");
+        let end = offset.checked_add(len).ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section range overflow",
+            )
+        })?;
+        if offset != expected_offset || end > bytes.len() || len == 0 {
+            return Err(invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section ranges are not contiguous",
+            ));
+        }
+        sections.push(DirectorySection {
+            range: offset..end,
+            digest,
+        });
+        expected_offset = end;
+    }
+    directory
+        .finish()
+        .map_err(|error| codec(SnapshotErrorStage::DirectoryValidation, error))?;
+    if expected_offset != bytes.len() {
+        return Err(invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "trailing archive bytes",
+        ));
+    }
+    Ok(ValidatedSnapshotForTest { bytes, sections })
+}
+
 fn section(validated: &ValidatedSnapshotForTest, tag: usize) -> &[u8] {
     &validated.bytes[validated.sections[tag - 1].range.clone()]
 }
@@ -3469,6 +4001,114 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
             "reference manifest disagrees with decoded state",
         ));
     }
+    let identity = identity_witness(&roots, &published_types);
+    let projection = build_projection(
+        &validated.sections,
+        semantic.projection_subtables,
+        &roots,
+        next.clone(),
+        semantic.reference_counts,
+        semantic.manifest_hash,
+    );
+    let state = OwnedLibraryRuntimeState::from_snapshot_parts(OwnedLibraryRuntimeSnapshotParts {
+        interner,
+        binder,
+        published_types,
+        decl_types,
+        semantic_identities: semantic.identities,
+        runtime,
+        next_type_param: u32::try_from(next.type_params)
+            .map_err(|_| invalid(SnapshotErrorStage::Decode, "type-param prefix exceeds u32"))?,
+        next_class_id: u32::try_from(next.classes)
+            .map_err(|_| invalid(SnapshotErrorStage::Decode, "class prefix exceeds u32"))?,
+        source_file_count,
+    })
+    .map_err(|message| invalid(SnapshotErrorStage::ReferenceValidation, message))?;
+    Ok(DecodedLibraryBaseForTest {
+        state,
+        projection,
+        identity,
+        source_file_count,
+        prefix_lengths: next,
+        root_names: roots.iter().map(|row| row.name.clone()).collect(),
+        root_counts: root_counts(&roots),
+        strategy,
+    })
+}
+
+pub(in crate::check::checker) fn decode_canonical_snapshot_for_test(
+    validated: ValidatedSnapshotForTest,
+) -> Result<DecodedLibraryBaseForTest, SnapshotError> {
+    let strategy = SnapshotDecodeStrategy::EagerComplete;
+    let (next, source_file_count) = decode_next_ids(section(&validated, 10))?;
+    let interner = Interner::decode_split_snapshot_sections_for_test(
+        section(&validated, 1),
+        section(&validated, 2),
+    )
+    .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    let binder = decode_binder_snapshot(section(&validated, 3))
+        .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    if interner.store().len() != next.types
+        || binder.graph.snapshot_len() != next.scopes
+        || binder.symbols.snapshot_symbols().len() != next.symbols
+        || binder.declarations.len() != next.declarations
+        || binder.type_groups.len() != next.type_groups
+        || binder.namespaces.len() != next.namespaces
+        || usize::try_from(binder.decl_count).expect("storage prefix fits usize")
+            != next.value_storages
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "decoded runtime counts disagree with next-id prefix",
+        ));
+    }
+    let roots = decode_root_index(section(&validated, 9), &next)?;
+    let canonical_roots = collect_root_rows(&binder)
+        .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
+    if roots
+        .iter()
+        .map(|row| (&row.name, row.symbol, row.value, row.ty, row.namespace))
+        .ne(canonical_roots
+            .iter()
+            .map(|row| (&row.name, row.symbol, row.value, row.ty, row.namespace)))
+    {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "root index disagrees with binder global scope",
+        ));
+    }
+    let (store_references, interner_references) = interner.snapshot_reference_records_for_test();
+    let binder_references = snapshot_reference_records_for_test(&binder);
+    let reference_limits = ReferenceLimits::from_canonical_references(
+        &next,
+        &roots,
+        &store_references,
+        &interner_references,
+        &binder_references,
+    )?;
+    let semantic = decode_canonical_semantic_section(section(&validated, 8))?;
+    let decl_types = decode_decl_types(section(&validated, 4), next.types)?;
+    let published_types = decode_published(section(&validated, 5))?;
+    let namespace_terminals = decode_namespace_terminals(section(&validated, 6))?;
+    let runtime = decode_class_metadata(section(&validated, 7), namespace_terminals.clone())?;
+    let tail_references = build_tail_manifest_references(TailManifestInputs {
+        roots: &roots,
+        decl_types: &decl_types,
+        published: &published_types,
+        namespace_terminals: &namespace_terminals,
+        runtime: &runtime,
+        semantic_identities: &semantic.identities,
+    })
+    .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    verify_reference_manifest_streaming(
+        section(&validated, 8),
+        &reference_limits,
+        next.types,
+        &store_references,
+        &interner_references,
+        &binder_references,
+        &tail_references,
+    )?;
     let identity = identity_witness(&roots, &published_types);
     let projection = build_projection(
         &validated.sections,
@@ -3655,11 +4295,12 @@ pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
     let wall = Instant::now();
     let bytes =
         fs::read(path).map_err(|error| invalid(SnapshotErrorStage::Io, error.to_string()))?;
+    let artifact_bytes = bytes.len();
     let validation = Instant::now();
-    let validated = validate_snapshot_for_test(&bytes)?;
+    let validated = validate_canonical_snapshot_for_test(bytes)?;
     let validation_us = elapsed_us(validation)?;
     let decode = Instant::now();
-    let clean_base = decode_snapshot_for_test(validated, SnapshotDecodeStrategy::EagerComplete)?;
+    let clean_base = decode_canonical_snapshot_for_test(validated)?;
     let projection_sha = clean_base.projection.sha256();
     let decode_us = elapsed_us(decode)?;
     let user = Instant::now();
@@ -3676,8 +4317,8 @@ pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
         profile_identity: PROFILE_IDENTITY.to_owned(),
         strategy: SnapshotDecodeStrategy::EagerComplete,
         route: "decoded-base-user-check",
-        artifact_bytes: bytes.len(),
-        validated_bytes: bytes.len(),
+        artifact_bytes,
+        validated_bytes: artifact_bytes,
         compiler_measure,
         runtime_projection_sha256: projection_sha,
         semantics: ProbeSemanticsCaseForTest {
@@ -3693,7 +4334,7 @@ pub(in crate::check::checker) fn snapshot_fast_clean_probe_for_test(
         user_check_us,
         wall_us: elapsed_us(wall)?,
         peak_rss_bytes: peak_rss_bytes()?,
-        artifact_sha256: hex(&digest32(&bytes)),
+        artifact_sha256: CANONICAL_ARCHIVE_SHA256.to_owned(),
         input_path: path.to_string_lossy().into_owned(),
     })
 }
@@ -4118,41 +4759,43 @@ mod tests {
     }
 
     #[test]
-    fn probe_uses_scoped_thread_local_evidence() {
+    fn canonical_decoder_matches_generic_and_uses_scoped_evidence() {
         let sources = [InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
             name: "snapshot-probe.d.ts",
             source: "interface SnapshotProbe { value: string }\ndeclare const snapshotProbe: SnapshotProbe;",
         }];
         let compiled = compile_snapshot_for_test(&sources).expect("probe snapshot compiles");
-        let path = std::env::temp_dir().join(format!(
-            "typokat-wu0b-probe-{}-{}.bin",
-            std::process::id(),
-            compiled.archive().sha256()[0]
-        ));
-        fs::write(&path, compiled.archive().as_bytes()).expect("write probe artifact");
+        let generic = decode_snapshot_bytes_for_test(
+            compiled.archive().as_bytes(),
+            SnapshotDecodeStrategy::EagerComplete,
+        )
+        .expect("generic decoder succeeds");
+        let canonical = decode_canonical_snapshot_for_test(
+            validate_snapshot_for_test(compiled.archive().as_bytes())
+                .expect("fixture archive validates"),
+        )
+        .expect("canonical decoder succeeds");
+        assert_eq!(canonical.projection, generic.projection);
+        assert_eq!(canonical.identity, generic.identity);
+        assert_eq!(canonical.source_file_count, generic.source_file_count);
+        assert_eq!(canonical.prefix_lengths, generic.prefix_lengths);
+        assert_eq!(canonical.root_names, generic.root_names);
+        assert_eq!(canonical.root_counts, generic.root_counts);
+        assert_eq!(canonical.strategy, generic.strategy);
+        let projection_sha256 = canonical.projection.sha256();
         let compiler = start_library_compiler_measure_for_test();
         let route = start_decoded_base_route_measure_for_test();
-        let record =
-            snapshot_fast_clean_probe_for_test(&path, "const value: string = snapshotProbe.value;")
-                .expect("probe succeeds");
+        let result = check_source_with_decoded_base_for_test(
+            canonical,
+            "const value: string = snapshotProbe.value;",
+        );
         let route = route.finish();
+        assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
         assert_eq!(compiler.finish(), LibraryCompilerMeasureForTest::default());
-        assert_eq!(
-            record.compiler_measure,
-            LibraryCompilerMeasureForTest::default()
-        );
         assert_eq!(route.user_checks, 1);
-        assert_eq!(
-            route.runtime_projection_sha256,
-            record.runtime_projection_sha256
-        );
-        assert!(record.peak_rss_bytes > 0);
-        let rendered = record.render();
-        assert!(rendered.contains("\"fast-clean\""));
-        assert!(!rendered.contains("\"fast-errors\""));
-        assert!(!rendered.contains("\"fast_clean\""));
-        assert!(!rendered.contains("\"fast_errors\""));
-        fs::remove_file(path).expect("remove probe artifact");
+        assert_eq!(route.runtime_projection_sha256, projection_sha256);
     }
 }
