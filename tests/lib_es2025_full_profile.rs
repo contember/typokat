@@ -464,6 +464,7 @@ fn verify_tree_membership(
         "README.md",
         "THIRD_PARTY_NOTICE.md",
         "ThirdPartyNoticeText.txt",
+        "canonical.snapshot",
         "profile.toml",
     ]
     .into_iter()
@@ -1009,6 +1010,34 @@ fn exact_key_validation_rejects_manifest_shape_mutations() {
     table.insert("extra".to_owned(), Value::Integer(2));
     assert!(exact_keys(&table, &["required"], "fixture").is_err());
     assert!(exact_keys(&Table::new(), &["required"], "fixture").is_err());
+}
+
+#[test]
+fn exact_tree_membership_requires_the_canonical_snapshot_and_rejects_other_extras() {
+    let names = BTreeSet::from(["lib.es5.d.ts".to_owned()]);
+    let dirs = BTreeSet::from(["lib".to_owned()]);
+    let mut files: BTreeSet<String> = [
+        ".gitattributes",
+        "LICENSE.txt",
+        "README.md",
+        "THIRD_PARTY_NOTICE.md",
+        "ThirdPartyNoticeText.txt",
+        "canonical.snapshot",
+        "profile.toml",
+        "lib/lib.es5.d.ts",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+
+    assert!(verify_tree_membership(&files, &dirs, &names).is_ok());
+
+    files.remove("canonical.snapshot");
+    assert!(verify_tree_membership(&files, &dirs, &names).is_err());
+
+    files.insert("canonical.snapshot".to_owned());
+    files.insert("unexpected.snapshot".to_owned());
+    assert!(verify_tree_membership(&files, &dirs, &names).is_err());
 }
 
 #[test]
