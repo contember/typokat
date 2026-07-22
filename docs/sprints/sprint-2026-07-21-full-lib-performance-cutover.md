@@ -620,3 +620,27 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   yet cut over to the provider, and WU8 still owns the official cross-tool collector and claim.
   Snapshot-provider startup remains roughly **96-97 ms**; the next implementation step is WU4's
   identity-preserving user delta, not further source-cold tuning.
+
+### 2026-07-23 — WU4 identity-preserving user delta
+
+- RED commits `e01dece` and `b0233b1` specify a private single/project delta, exact cross-file
+  identity, deterministic diagnostics, physical work receipts, and allocation/traversal invariance
+  between a 2-row and 4,098-row synthetic base. Follow-up specs `a8b1f30` and `8f75bc2` preserve a
+  supported frozen alias and the canonical project diagnostic display.
+- Implementation commit `53ad026` gives Store, interner, binder, and checker state an immutable
+  shared prefix plus mutable local suffix. Existing shapes retain exact frozen IDs, new IDs stay
+  dense after the base counters, and two sequential, 32 parallel, and project checks share no user
+  rows. All 31 post-Pass state families retain their `Arc` or scalar base identities.
+- The adversarial scan audit also removed continuation-time whole-prefix work from namespace
+  attachment/materialization, merge and declaration-site lookup, source-key and symbol counts,
+  placement/global/UMD reporting guards, reference enumeration, and direct borrowed iteration.
+  The physical work ledger reports no base-sized copy, remap, or traversal on the accepted user
+  route; local row counts and the 2-versus-4,098 sentinel remain constant.
+- Independent type-layer and checker/binder reviews are PASS with no unresolved HIGH, MEDIUM, or
+  LOW findings. The full gate passes **1,041 / 0 / 18** library tests plus every integration,
+  conformance, and doctest target; clippy, format, and diff checks are clean. Authoritative double
+  generation remains byte-identical to the 10,003,957-byte packaged snapshot (`af97017...`), and
+  the diagnostic evidence digest remains `34cc5c...` without repinning.
+- WU4 deliberately does not route collisions. WU5 must preflight before semantic mutation and
+  replace the current whole-source private rebuild with an exact combined-universe mechanism whose
+  collision and fanout rows meet the 2x gate.
