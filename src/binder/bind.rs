@@ -68,16 +68,19 @@ impl fmt::Display for LibraryBinderError {
             Self::PreludeSourceKey { input_index } => {
                 write!(
                     formatter,
-                    "library unit {input_index} uses the prelude source key"
+                    "library source key cannot be the prelude key (unit {input_index})"
                 )
             }
             Self::DuplicateSourceKey { input_index } => {
-                write!(formatter, "library unit {input_index} repeats a source key")
+                write!(
+                    formatter,
+                    "library source key is unique (repeated by unit {input_index})"
+                )
             }
             Self::DuplicateFileOrdinal { input_index } => {
                 write!(
                     formatter,
-                    "library unit {input_index} repeats a file ordinal"
+                    "library file ordinal is unique (repeated by unit {input_index})"
                 )
             }
             #[cfg(test)]
@@ -804,7 +807,7 @@ impl ProjectBinderBuilder {
         units: &[(&'ast Program<'ast>, CompilationUnit)],
     ) -> Vec<ScopeId> {
         self.try_add_library_modules(units)
-            .expect("test library batch is valid")
+            .unwrap_or_else(|error| panic!("{error}"))
     }
 
     pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
