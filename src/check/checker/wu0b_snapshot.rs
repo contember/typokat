@@ -4026,6 +4026,11 @@ mod tests {
             record.runtime_projection_sha256
         );
         assert!(record.peak_rss_bytes > 0);
+        let rendered = record.render();
+        assert!(rendered.contains("\"fast-clean\""));
+        assert!(rendered.contains("\"fast-errors\""));
+        assert!(!rendered.contains("\"fast_clean\""));
+        assert!(!rendered.contains("\"fast_errors\""));
         fs::remove_file(path).expect("remove probe artifact");
     }
 }
