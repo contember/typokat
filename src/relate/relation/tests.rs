@@ -115,6 +115,65 @@ fn measure_relation_counts_actual_empty_context_key_and_property_scans() {
     );
 }
 
+fn measure_wide_generic_signature_environment(width: usize) -> RelationMeasure {
+    use crate::types::repr::{GenericTypeParam, TypeParamId};
+
+    fn signature(interner: &mut Interner, parameter: TypeParamId, width: usize) -> TypeId {
+        let parameter_type = interner.intern_type_param(parameter, "T");
+        let payload = interner.intern_object(ObjectType {
+            properties: vec![prop("value", parameter_type)],
+            ..Default::default()
+        });
+        let input = interner.intern_object(ObjectType {
+            properties: (0..width)
+                .map(|index| prop(&format!("event{index:04}"), payload))
+                .collect(),
+            ..Default::default()
+        });
+        interner.intern_function(FunctionType {
+            type_params: vec![GenericTypeParam {
+                id: parameter,
+                constraint: None,
+                default: None,
+            }],
+            receiver: None,
+            params: vec![ParameterType::required("events", input)],
+            ret: interner.well_known().void,
+        })
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = signature(&mut interner, TypeParamId(91_001), width);
+    let target = signature(&mut interner, TypeParamId(91_002), width);
+    reset_relation_measure();
+    let mut relater = Relater::new(interner.store(), wk);
+    assert!(relater.is_assignable(source, target).is_yes());
+    assert!(relater.is_assignable(target, source).is_yes());
+    relation_measure()
+}
+
+#[test]
+fn wide_generic_signature_reuses_its_effective_binder_environment() {
+    const SMALL_WIDTH: usize = 16;
+    const LARGE_WIDTH: usize = 256;
+
+    let small = measure_wide_generic_signature_environment(SMALL_WIDTH);
+    let large = measure_wide_generic_signature_environment(LARGE_WIDTH);
+    assert!(
+        large.object_target_properties >= 8 * small.object_target_properties,
+        "witness did not scale outer structural work: small={small:?}, large={large:?}"
+    );
+    assert!(
+        large.flattened_environment_entries <= small.flattened_environment_entries + 16,
+        "binder environments were rebuilt per relation frame: small={small:?}, large={large:?}"
+    );
+    assert!(
+        large.environment_sort_items <= small.environment_sort_items + 8,
+        "binder environments were re-sorted per relation frame: small={small:?}, large={large:?}"
+    );
+}
+
 #[test]
 fn measure_relation_keeps_first_target_failure_order() {
     let mut interner = Interner::with_intrinsics();
