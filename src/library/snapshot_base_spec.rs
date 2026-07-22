@@ -1,0 +1,404 @@
+//! Disabled RED contract for strict canonical-snapshot decoding and atomic base publication.
+//!
+//! This spec ends at an immutable, pointer-identical `FrozenLibraryBase`. User deltas,
+//! collision routing, semantic bridges, the process-wide singleton, driver/CLI cutover,
+//! and user checking belong to later work and must not be pulled into this boundary.
+
+use super::artifact::{
+    measure_generation_for_test, packaged_canonical_snapshot, CANONICAL_SNAPSHOT_BYTES,
+    CANONICAL_SNAPSHOT_SHA256,
+};
+use super::base::FrozenLibraryBase;
+use super::compiler::LibraryCompiler;
+use super::profile::ExactLibraryProfile;
+use super::provider::{
+    InitializationMeasurement, LibraryBaseProvider, LibraryInitCause, LibraryInitError,
+    LibraryInitStage,
+};
+use super::snapshot::test_support::{
+    canonical_bytes_with_mutation_for_test, canonical_projection_from_compiled_for_test,
+    pre_admitted_snapshot_case_for_test, ReferenceEndpoint, SnapshotTestMutation,
+};
+use std::sync::{Arc, Barrier};
+
+const PROFILE_IDENTITY: &str =
+    "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+const SCHEMA_IDENTITY: &str =
+    "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
+const EXPECTED_COMPONENTS: [&str; 10] = [
+    "store",
+    "interner",
+    "binder",
+    "declaration-types",
+    "published-types",
+    "namespace-terminals",
+    "class-metadata",
+    "semantic-identities",
+    "root-name-index",
+    "id-prefixes",
+];
+
+fn assert_send_sync_static<T: Send + Sync + 'static>() {}
+
+fn acquire(
+    provider: &LibraryBaseProvider,
+) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
+    provider.get()
+}
+
+fn concurrent_acquire(
+    provider: Arc<LibraryBaseProvider>,
+    callers: usize,
+) -> Vec<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>> {
+    let barrier = Arc::new(Barrier::new(callers));
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(callers);
+        for _ in 0..callers {
+            let provider = Arc::clone(&provider);
+            let barrier = Arc::clone(&barrier);
+            handles.push(scope.spawn(move || {
+                barrier.wait();
+                acquire(&provider)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("test acquisition thread"))
+            .collect()
+    })
+}
+
+#[test]
+fn canonical_snapshot_decodes_to_complete_frozen_library_base() {
+    let provider = LibraryBaseProvider::new();
+    let base = acquire(&provider).expect("canonical frozen library base");
+    let identity = base.identity();
+    let inventory = base.inventory_for_test();
+
+    assert_send_sync_static::<FrozenLibraryBase>();
+    assert_send_sync_static::<Arc<FrozenLibraryBase>>();
+    assert_send_sync_static::<LibraryBaseProvider>();
+    assert_send_sync_static::<LibraryInitError>();
+
+    assert_eq!(identity.profile_sha256(), PROFILE_IDENTITY);
+    assert_eq!(identity.schema_sha256(), SCHEMA_IDENTITY);
+    assert_eq!(identity.artifact_sha256(), CANONICAL_SNAPSHOT_SHA256);
+    assert_eq!(identity.artifact_bytes(), CANONICAL_SNAPSHOT_BYTES);
+    assert_eq!(inventory.source_file_count(), 82);
+    assert_eq!(inventory.reference_count(), 296_414);
+    assert_eq!(inventory.runtime_family_count(), 10);
+    assert_eq!(inventory.projection_subtable_count(), 31);
+    assert_eq!(inventory.component_names(), EXPECTED_COMPONENTS);
+    assert_eq!(inventory.root_name_count(), base.root_names_for_test().len());
+    assert_eq!(inventory.prefixes().types, base.type_count_for_test());
+    assert!(inventory.prefixes().types > 0);
+    assert!(inventory.prefixes().type_params > 0);
+    assert!(inventory.prefixes().classes > 0);
+    assert!(inventory.prefixes().scopes > 0);
+    assert!(inventory.prefixes().symbols > 0);
+    assert!(inventory.prefixes().declarations > 0);
+    assert!(inventory.prefixes().type_groups > 0);
+    assert!(inventory.prefixes().namespaces > 0);
+    assert!(inventory.prefixes().value_storages > 0);
+    assert_eq!(
+        provider.measurement_for_test(),
+        InitializationMeasurement {
+            attempts: 1,
+            publications: 1,
+        }
+    );
+}
+
+#[test]
+fn source_compiled_and_decoded_bases_have_identical_canonical_projection() {
+    let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
+    let compiled = LibraryCompiler::new()
+        .compile(&profile)
+        .expect("complete source-backed compilation");
+    let source_projection = canonical_projection_from_compiled_for_test(&compiled)
+        .expect("source runtime projection");
+    let provider = LibraryBaseProvider::new();
+    let decoded = acquire(&provider).expect("decoded canonical base");
+    let decoded_projection = decoded
+        .recompute_canonical_projection_for_test()
+        .expect("projection recomputed from decoded typed tables");
+
+    assert_eq!(decoded_projection, source_projection);
+    assert_eq!(source_projection.runtime_families().len(), 10);
+    assert_eq!(source_projection.subtables().len(), 31);
+    assert_eq!(
+        source_projection
+            .reference_family_counts()
+            .iter()
+            .sum::<u64>(),
+        296_414
+    );
+    assert_eq!(
+        source_projection.root_names(),
+        decoded.root_names_for_test()
+    );
+    assert_eq!(source_projection.prefixes(), decoded.prefixes_for_test());
+}
+
+#[test]
+fn provider_returns_one_pointer_identical_base_to_1_2_32_callers() {
+    for callers in [1, 2, 32] {
+        let provider = Arc::new(LibraryBaseProvider::new());
+        let acquired = concurrent_acquire(Arc::clone(&provider), callers);
+        let bases = acquired
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("every caller receives the base");
+        let first = bases.first().expect("at least one caller");
+        assert!(bases.iter().all(|base| Arc::ptr_eq(first, base)));
+        assert!(Arc::ptr_eq(
+            first,
+            &acquire(&provider).expect("subsequent cached acquisition")
+        ));
+        assert_eq!(
+            provider.measurement_for_test(),
+            InitializationMeasurement {
+                attempts: 1,
+                publications: 1,
+            },
+            "caller count {callers}"
+        );
+    }
+}
+
+#[test]
+fn provider_caches_one_pointer_identical_typed_initialization_failure() {
+    let snapshot = pre_admitted_snapshot_case_for_test(SnapshotTestMutation::DanglingReference {
+        family: 0,
+        endpoint: ReferenceEndpoint::First,
+    })
+        .expect("digest-valid dangling-reference fixture");
+    let provider = Arc::new(LibraryBaseProvider::with_pre_admitted_snapshot_for_test(
+        snapshot,
+    ));
+    let acquired = concurrent_acquire(Arc::clone(&provider), 32);
+    let errors = acquired
+        .into_iter()
+        .map(|result| result.expect_err("corrupt base must not publish"))
+        .collect::<Vec<_>>();
+    let first = errors.first().expect("at least one caller");
+
+    assert!(errors.iter().all(|error| Arc::ptr_eq(first, error)));
+    assert_eq!(first.stage(), LibraryInitStage::ReferenceValidation);
+    assert!(matches!(first.cause(), LibraryInitCause::InvalidId { .. }));
+    let later = acquire(&provider).expect_err("cached failure must not retry");
+    assert!(Arc::ptr_eq(first, &later));
+    assert_eq!(
+        provider.measurement_for_test(),
+        InitializationMeasurement {
+            attempts: 1,
+            publications: 0,
+        }
+    );
+}
+
+#[test]
+fn canonical_provider_rejects_every_changed_byte_at_artifact_admission() {
+    for mutation in [
+        SnapshotTestMutation::BadMagic,
+        SnapshotTestMutation::UnknownVersion,
+        SnapshotTestMutation::WrongProfileIdentity,
+        SnapshotTestMutation::WrongSchemaIdentity,
+        SnapshotTestMutation::WrongBodyDigest,
+        SnapshotTestMutation::WrongSectionDigest,
+        SnapshotTestMutation::UnknownSectionTag,
+        SnapshotTestMutation::ReorderedSections,
+        SnapshotTestMutation::TruncatedPayload,
+        SnapshotTestMutation::TrailingBytes,
+    ] {
+        let bytes = canonical_bytes_with_mutation_for_test(mutation)
+            .expect("independent canonical mutation fixture");
+        let provider = LibraryBaseProvider::with_canonical_bytes_for_test(bytes);
+        let error = acquire(&provider).expect_err("changed canonical bytes must fail closed");
+        assert_eq!(
+            error.stage(),
+            LibraryInitStage::ArtifactAdmission,
+            "mutation {mutation:?}"
+        );
+        assert!(matches!(
+            error.cause(),
+            LibraryInitCause::ArtifactIdentity { .. }
+        ));
+        assert_eq!(
+            provider.measurement_for_test(),
+            InitializationMeasurement {
+                attempts: 1,
+                publications: 0,
+            },
+            "mutation {mutation:?}"
+        );
+    }
+}
+
+#[test]
+fn pre_admitted_decoder_rejects_deep_structural_corruption_before_publication() {
+    let cases = [
+        (SnapshotTestMutation::UnknownVersion, LibraryInitStage::Header),
+        (
+            SnapshotTestMutation::WrongProfileIdentity,
+            LibraryInitStage::Header,
+        ),
+        (
+            SnapshotTestMutation::WrongSchemaIdentity,
+            LibraryInitStage::Header,
+        ),
+        (
+            SnapshotTestMutation::WrongBodyDigest,
+            LibraryInitStage::Payload,
+        ),
+        (
+            SnapshotTestMutation::WrongSectionDigest,
+            LibraryInitStage::Payload,
+        ),
+        (
+            SnapshotTestMutation::UnknownSectionTag,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::DuplicateSectionTag,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::ReorderedSections,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::NonZeroReservedDirectoryField,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::OverlappingSection,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::GappedSection,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::LengthOverflow,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::TruncatedPayload,
+            LibraryInitStage::Payload,
+        ),
+        (
+            SnapshotTestMutation::TrailingBytes,
+            LibraryInitStage::Directory,
+        ),
+        (
+            SnapshotTestMutation::NextIdMismatch,
+            LibraryInitStage::ReferenceValidation,
+        ),
+        (
+            SnapshotTestMutation::InternerBucketMismatch,
+            LibraryInitStage::ReferenceValidation,
+        ),
+        (
+            SnapshotTestMutation::RootIndexBinderMismatch,
+            LibraryInitStage::ReferenceValidation,
+        ),
+        (
+            SnapshotTestMutation::NonTerminalPublication,
+            LibraryInitStage::Publication,
+        ),
+    ];
+
+    for (mutation, expected_stage) in cases {
+        let snapshot = pre_admitted_snapshot_case_for_test(mutation)
+            .expect("independently rehashed structural corruption fixture");
+        let provider = LibraryBaseProvider::with_pre_admitted_snapshot_for_test(snapshot);
+        let error = acquire(&provider).expect_err("structural corruption must fail closed");
+        assert_eq!(error.stage(), expected_stage, "mutation {mutation:?}");
+        assert_eq!(provider.measurement_for_test().publications, 0);
+    }
+
+    for family in 0..9 {
+        for endpoint in [ReferenceEndpoint::First, ReferenceEndpoint::Last] {
+            let mutation = SnapshotTestMutation::DanglingReference { family, endpoint };
+            let snapshot = pre_admitted_snapshot_case_for_test(mutation)
+                .expect("digest-valid per-family dangling reference");
+            let provider = LibraryBaseProvider::with_pre_admitted_snapshot_for_test(snapshot);
+            let error = acquire(&provider).expect_err("dangling reference must fail closed");
+            assert_eq!(error.stage(), LibraryInitStage::ReferenceValidation);
+            assert_eq!(provider.measurement_for_test().publications, 0);
+        }
+    }
+
+    for mutation in [
+        SnapshotTestMutation::InvalidReferenceOwner,
+        SnapshotTestMutation::InvalidReferenceDomain,
+        SnapshotTestMutation::InvalidReferenceField,
+    ] {
+        let snapshot = pre_admitted_snapshot_case_for_test(mutation)
+            .expect("digest-valid reference discriminant corruption");
+        let provider = LibraryBaseProvider::with_pre_admitted_snapshot_for_test(snapshot);
+        let error = acquire(&provider).expect_err("invalid discriminant must fail closed");
+        assert_eq!(error.stage(), LibraryInitStage::ReferenceValidation);
+        assert_eq!(provider.measurement_for_test().publications, 0);
+    }
+}
+
+#[test]
+fn frozen_library_base_retains_only_ast_free_semantic_state() {
+    let provider = LibraryBaseProvider::new();
+    let base = acquire(&provider).expect("canonical frozen base");
+    let inventory = base.inventory_for_test();
+    let references = base
+        .validate_frozen_reference_boundaries_for_test()
+        .expect("every retained typed reference stays inside the frozen prefixes");
+
+    assert_eq!(inventory.component_names(), EXPECTED_COMPONENTS);
+    assert_eq!(references.checked, 296_414);
+    assert_eq!(references.outside_frozen_prefix, 0);
+    assert_eq!(references.base_to_delta, 0);
+    assert_eq!(references.untyped_or_unowned, 0);
+    assert_eq!(base.retained_source_bytes_for_test(), 0);
+    assert_eq!(base.retained_archive_bytes_for_test(), 0);
+    assert_eq!(base.retained_projection_witnesses_for_test(), 0);
+}
+
+#[test]
+fn provider_acquisition_performs_no_source_compilation_or_generation() {
+    let measurement = measure_generation_for_test();
+    let provider = LibraryBaseProvider::new();
+    let first = acquire(&provider).expect("first acquisition");
+    let second = acquire(&provider).expect("cached acquisition");
+    let observed = measurement.finish();
+
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(observed.compiler_invocations, 0);
+    assert_eq!(observed.generator_invocations, 0);
+    assert_eq!(observed.source_bytes_read, 0);
+}
+
+#[test]
+#[ignore = "fresh-process release evidence probe for the production frozen base"]
+fn frozen_library_base_release_probe_once() {
+    let record = super::provider::frozen_library_base_release_probe_for_test()
+        .expect("production frozen-base probe");
+
+    assert_eq!(record.route, "production-frozen-library-base");
+    assert_eq!(record.profile_sha256, PROFILE_IDENTITY);
+    assert_eq!(record.schema_sha256, SCHEMA_IDENTITY);
+    assert_eq!(record.artifact_sha256, CANONICAL_SNAPSHOT_SHA256);
+    assert_eq!(record.artifact_bytes, CANONICAL_SNAPSHOT_BYTES);
+    assert_eq!(record.initializations, 1);
+    assert_eq!(record.publications, 1);
+    assert_eq!(record.compiler_invocations, 0);
+    assert_eq!(record.generator_invocations, 0);
+    assert_eq!(record.source_bytes_read, 0);
+    assert!(record.validation_us > 0);
+    assert!(record.decode_us > 0);
+    assert!(record.publication_us > 0);
+    assert!(!record.canonical_projection_sha256.is_empty());
+    let framed = record.render();
+    assert!(framed.starts_with("TYPOKAT_LIBRARY_BASE_PROBE={"));
+    assert_eq!(framed.matches("TYPOKAT_LIBRARY_BASE_PROBE=").count(), 1);
+    println!("{framed}");
+}
