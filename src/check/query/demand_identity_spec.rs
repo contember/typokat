@@ -104,10 +104,9 @@ fn mismatch_around_recursive_sibling(
     (left, right)
 }
 
-fn independent_deferred_siblings(interner: &mut Interner, width: usize) -> (TypeId, TypeId) {
+fn independent_deferred_pairs(interner: &mut Interner, width: usize) -> Vec<(TypeId, TypeId)> {
     let wk = interner.well_known();
-    let mut left_properties = Vec::with_capacity(width);
-    let mut right_properties = Vec::with_capacity(width);
+    let mut pairs = Vec::with_capacity(width);
     for index in 0..width {
         let left_check = interner.intern_literal(LiteralValue::Number((index * 2) as f64));
         let right_check = interner.intern_literal(LiteralValue::Number((index * 2 + 1) as f64));
@@ -129,6 +128,18 @@ fn independent_deferred_siblings(interner: &mut Interner, width: usize) -> (Type
             distributive: false,
             poisoned: false,
         });
+        pairs.push((left, right));
+    }
+    pairs
+}
+
+fn independent_deferred_siblings(interner: &mut Interner, width: usize) -> (TypeId, TypeId) {
+    let mut left_properties = Vec::with_capacity(width);
+    let mut right_properties = Vec::with_capacity(width);
+    for (index, (left, right)) in independent_deferred_pairs(interner, width)
+        .into_iter()
+        .enumerate()
+    {
         let name = format!("property{index:03}");
         left_properties.push(PropertyType::public(name.clone(), left));
         right_properties.push(PropertyType::public(name, right));
@@ -144,9 +155,90 @@ fn independent_deferred_siblings(interner: &mut Interner, width: usize) -> (Type
     (left, right)
 }
 
+fn recursive_then_independent_siblings(interner: &mut Interner, width: usize) -> (TypeId, TypeId) {
+    let left_recursive = interner.reserve_object();
+    let right_recursive = interner.reserve_object();
+    interner.fill_object(
+        left_recursive,
+        ObjectType {
+            properties: vec![PropertyType::public("next", left_recursive)],
+            ..Default::default()
+        },
+    );
+    interner.fill_object(
+        right_recursive,
+        ObjectType {
+            properties: vec![PropertyType::public("next", right_recursive)],
+            ..Default::default()
+        },
+    );
+    let mut left_properties = vec![PropertyType::public("recursive", left_recursive)];
+    let mut right_properties = vec![PropertyType::public("recursive", right_recursive)];
+    for (index, (left, right)) in independent_deferred_pairs(interner, width)
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("property{index:03}");
+        left_properties.push(PropertyType::public(name.clone(), left));
+        right_properties.push(PropertyType::public(name, right));
+    }
+    let left = interner.intern_object(ObjectType {
+        properties: left_properties,
+        ..Default::default()
+    });
+    let right = interner.intern_object(ObjectType {
+        properties: right_properties,
+        ..Default::default()
+    });
+    (left, right)
+}
+
+fn independent_deferred_parameters(interner: &mut Interner, width: usize) -> (TypeId, TypeId) {
+    let wk = interner.well_known();
+    let mut left_params = Vec::with_capacity(width);
+    let mut right_params = Vec::with_capacity(width);
+    for (index, (left, right)) in independent_deferred_pairs(interner, width)
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("parameter{index:03}");
+        left_params.push(ParameterType::required(name.clone(), left));
+        right_params.push(ParameterType::required(name, right));
+    }
+    let left = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: left_params,
+        ret: wk.void,
+    });
+    let right = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: right_params,
+        ret: wk.void,
+    });
+    (left, right)
+}
+
 fn measure_independent_siblings(width: usize) -> IdentityWork {
     let mut interner = Interner::with_intrinsics();
     let (left, right) = independent_deferred_siblings(&mut interner, width);
+    let (outcome, work) = measured(|| check_identity(&mut interner, left, right));
+    assert_eq!(outcome, DemandOutcome::Ready(true));
+    work
+}
+
+fn measure_recursive_then_independent_siblings(width: usize) -> IdentityWork {
+    let mut interner = Interner::with_intrinsics();
+    let (left, right) = recursive_then_independent_siblings(&mut interner, width);
+    let (outcome, work) = measured(|| check_identity(&mut interner, left, right));
+    assert_eq!(outcome, DemandOutcome::Ready(true));
+    work
+}
+
+fn measure_independent_parameters(width: usize) -> IdentityWork {
+    let mut interner = Interner::with_intrinsics();
+    let (left, right) = independent_deferred_parameters(&mut interner, width);
     let (outcome, work) = measured(|| check_identity(&mut interner, left, right));
     assert_eq!(outcome, DemandOutcome::Ready(true));
     work
@@ -232,6 +324,30 @@ fn independent_deferred_siblings_do_not_rewalk_a_quadratic_prefix() {
         large.source_cold.identity_recursive_calls
             <= small.source_cold.identity_recursive_calls * 3,
         "doubling independent deferred siblings must remain near-linear: small={small:#?}, large={large:#?}"
+    );
+}
+
+#[test]
+fn a_recursive_first_property_does_not_disable_bounded_sibling_retries() {
+    let small = measure_recursive_then_independent_siblings(INDEPENDENT_SMALL);
+    let large = measure_recursive_then_independent_siblings(INDEPENDENT_LARGE);
+
+    assert!(
+        large.source_cold.identity_recursive_calls
+            <= small.source_cold.identity_recursive_calls * 3,
+        "a coinductive first property must not make later independent siblings quadratic: small={small:#?}, large={large:#?}"
+    );
+}
+
+#[test]
+fn independent_deferred_function_parameters_do_not_rewalk_a_quadratic_prefix() {
+    let small = measure_independent_parameters(INDEPENDENT_SMALL);
+    let large = measure_independent_parameters(INDEPENDENT_LARGE);
+
+    assert!(
+        large.source_cold.identity_recursive_calls
+            <= small.source_cold.identity_recursive_calls * 3,
+        "doubling independent function parameters must remain near-linear: small={small:#?}, large={large:#?}"
     );
 }
 
