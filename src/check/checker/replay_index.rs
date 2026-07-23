@@ -11,6 +11,7 @@ use crate::source::LibraryFileOrdinal;
 use crate::span::Span;
 use crate::types::repr::ClassId;
 use sha2::{Digest, Sha256};
+use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -150,7 +151,7 @@ pub(crate) struct ReplayRootConsumer {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReplayScc {
     pub(crate) replay_ordinal: u32,
-    pub(crate) owners: Vec<ReplayOwner>,
+    pub(crate) owners: SmallVec<[ReplayOwner; 1]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -726,7 +727,7 @@ impl ReplayDependencyTrace {
                 Ok(ReplayScc {
                     replay_ordinal: u32::try_from(index)
                         .map_err(|_| ReplayIndexGenerationError::IntegerOverflow)?,
-                    owners,
+                    owners: owners.into_iter().collect(),
                 })
             })
             .collect::<Result<Vec<_>, ReplayIndexGenerationError>>()?;
@@ -973,8 +974,9 @@ pub(crate) struct DecodedCollisionReplayIndex {
     canonical_manifest_len: usize,
 }
 
-pub(crate) fn decode_collision_replay_index(
+fn decode_collision_replay_index_with_sha256(
     bytes: &[u8],
+    canonical_manifest_sha256: [u8; 32],
 ) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
     let mut reader = SnapshotReader::new(bytes);
     if reader
@@ -1050,7 +1052,7 @@ pub(crate) fn decode_collision_replay_index(
     for _ in 0..scc_count {
         let replay_ordinal = reader.u32().map_err(invalid_encoding)?;
         let count = bounded_collection_len(&mut reader, 1)?;
-        let mut owners = Vec::with_capacity(count);
+        let mut owners = SmallVec::<[ReplayOwner; 1]>::with_capacity(count);
         for _ in 0..count {
             owners.push(read_owner(&mut reader)?);
         }
@@ -1104,7 +1106,7 @@ pub(crate) fn decode_collision_replay_index(
         noncanonical_edge_count,
         typed_reference_coverage_misses,
         canonical_manifest_bytes: Vec::new(),
-        canonical_manifest_sha256: Sha256::digest(bytes).into(),
+        canonical_manifest_sha256,
     };
     // A successful parse already proves the unique wire form: integers and lengths are
     // fixed-width big-endian, every discriminant is exact, UTF-8 bytes are retained by
@@ -1114,6 +1116,27 @@ pub(crate) fn decode_collision_replay_index(
         index: decoded,
         canonical_manifest_len: bytes.len(),
     })
+}
+
+#[cfg(test)]
+pub(crate) fn decode_collision_replay_index(
+    bytes: &[u8],
+) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
+    let decoded = decode_collision_replay_index_with_sha256(bytes, [0; 32])?;
+    Ok(DecodedCollisionReplayIndex {
+        index: CollisionReplayIndex {
+            canonical_manifest_sha256: Sha256::digest(bytes).into(),
+            ..decoded.index
+        },
+        canonical_manifest_len: decoded.canonical_manifest_len,
+    })
+}
+
+pub(in crate::check::checker) fn decode_authenticated_collision_replay_index(
+    bytes: &[u8],
+    authenticated_sha256: [u8; 32],
+) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
+    decode_collision_replay_index_with_sha256(bytes, authenticated_sha256)
 }
 
 #[cfg(test)]
@@ -1653,9 +1676,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(index.scc_membership.len(), owners.len());
-        assert_eq!(index.scc_membership[0].owners, [owners[0]]);
+        assert_eq!(index.scc_membership[0].owners.as_slice(), [owners[0]]);
         assert_eq!(
-            index.scc_membership.last().unwrap().owners,
+            index.scc_membership.last().unwrap().owners.as_slice(),
             [*owners.last().unwrap()]
         );
     }

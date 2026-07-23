@@ -26,8 +26,8 @@ use super::namespace_values::{
 #[cfg(test)]
 use super::replay_index::admit_collision_replay_index;
 use super::replay_index::{
-    admit_decoded_collision_replay_index, decode_collision_replay_index, ReplayIndexAdmissionError,
-    ReplayIndexAdmissionLimits, COLLISION_REPLAY_MANIFEST_SHA256,
+    admit_decoded_collision_replay_index, decode_authenticated_collision_replay_index,
+    ReplayIndexAdmissionError, ReplayIndexAdmissionLimits, COLLISION_REPLAY_MANIFEST_SHA256,
 };
 use super::type_groups::{
     InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeEnvironmentSnapshotParts,
@@ -488,7 +488,6 @@ pub(in crate::check::checker) struct RootNameRow {
 #[derive(Clone, Debug)]
 struct DirectorySection {
     range: Range<usize>,
-    #[cfg(test)]
     digest: [u8; 32],
 }
 
@@ -3894,7 +3893,6 @@ fn assemble_archive(
         writer.raw(&digest);
         sections.push(DirectorySection {
             range: offset..offset + payload.len(),
-            #[cfg(test)]
             digest,
         });
         offset += payload.len();
@@ -4352,7 +4350,6 @@ pub(in crate::check::checker) fn validate_snapshot(
         }
         sections.push(DirectorySection {
             range: offset..end,
-            #[cfg(test)]
             digest,
         });
         expected_offset = end;
@@ -4537,7 +4534,6 @@ fn validate_canonical_snapshot(
         }
         sections.push(DirectorySection {
             range: offset..end,
-            #[cfg(test)]
             digest,
         });
         expected_offset = end;
@@ -4573,6 +4569,25 @@ fn section(validated: &ValidatedSnapshot, tag: usize) -> Result<&[u8], SnapshotE
             "section range is outside the admitted artifact",
         )
     })
+}
+
+fn section_digest(validated: &ValidatedSnapshot, tag: usize) -> Result<[u8; 32], SnapshotError> {
+    let index = tag.checked_sub(1).ok_or_else(|| {
+        invalid(
+            SnapshotErrorStage::DirectoryValidation,
+            "section tag underflows directory index",
+        )
+    })?;
+    validated
+        .sections
+        .get(index)
+        .map(|section| section.digest)
+        .ok_or_else(|| {
+            invalid(
+                SnapshotErrorStage::DirectoryValidation,
+                "section tag exceeds directory",
+            )
+        })
 }
 
 #[cfg(test)]
@@ -4749,6 +4764,7 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
     let interner_section = section(&validated, 2)?;
     let binder_section = section(&validated, 3)?;
     let replay_section = section(&validated, 11)?;
+    let replay_digest = section_digest(&validated, 11)?;
     let (interner_result, binder_result, replay_decode_result) = std::thread::scope(|scope| {
         let interner = std::thread::Builder::new()
             .name("typokat-library-interner-decode".to_owned())
@@ -4783,8 +4799,9 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
         };
         let replay = match std::thread::Builder::new()
             .name("typokat-library-replay-decode".to_owned())
-            .spawn_scoped(scope, || decode_collision_replay_index(replay_section))
-        {
+            .spawn_scoped(scope, || {
+                decode_authenticated_collision_replay_index(replay_section, replay_digest)
+            }) {
             Ok(replay) => replay,
             Err(_) => {
                 let interner_result = interner.join();
