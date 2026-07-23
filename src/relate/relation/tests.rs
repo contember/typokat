@@ -436,27 +436,27 @@ fn completed_contextual_yes_is_scoped_to_one_top_level_relation() {
     assert_eq!(measure.object_target_properties, 2);
 }
 
+struct TaintedNormalization {
+    demand: Option<TypeId>,
+    exhaustion: Option<TypeId>,
+}
+
+impl RelationNormalization for TaintedNormalization {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+        if self.exhaustion == Some(ty) {
+            Err(Exhaustion::ClassProjectionBudget)
+        } else {
+            Ok(ty)
+        }
+    }
+
+    fn relation_demand(&self, _store: &Store, ty: TypeId) -> Option<RelationDemand> {
+        (self.demand == Some(ty)).then_some(RelationDemand::ClassProjection(ty))
+    }
+}
+
 #[test]
 fn contextual_yes_memo_rejects_demand_and_exhaustion_tainted_frames() {
-    struct TaintedNormalization {
-        demand: Option<TypeId>,
-        exhaustion: Option<TypeId>,
-    }
-
-    impl RelationNormalization for TaintedNormalization {
-        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
-            if self.exhaustion == Some(ty) {
-                Err(Exhaustion::ClassProjectionBudget)
-            } else {
-                Ok(ty)
-            }
-        }
-
-        fn relation_demand(&self, _store: &Store, ty: TypeId) -> Option<RelationDemand> {
-            (self.demand == Some(ty)).then_some(RelationDemand::ClassProjection(ty))
-        }
-    }
-
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let source = interner.reserve_object();
@@ -566,6 +566,68 @@ fn contextual_yes_memo_rejects_demand_and_exhaustion_tainted_frames() {
         assert!(!relater.completed_contextual_yes.contains(&root_key));
     });
     assert_eq!(relation_measure().completed_contextual_yes_admissions, 0);
+}
+
+#[test]
+fn exact_union_member_fast_path_preserves_planned_normalization_exhaustion() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let unrelated = interner.intern_object(ObjectType {
+        properties: vec![prop("unrelated", wk.number)],
+        ..Default::default()
+    });
+    let exhausted = interner.intern_object(ObjectType {
+        properties: vec![prop("shared_a", wk.number)],
+        ..Default::default()
+    });
+    let shared = interner.intern_object(ObjectType {
+        properties: vec![prop("shared_b", wk.number)],
+        ..Default::default()
+    });
+    let source = interner.union(vec![exhausted, shared]);
+    let target = interner.union(vec![unrelated, exhausted, shared]);
+    let normalization = TaintedNormalization {
+        demand: None,
+        exhaustion: Some(exhausted),
+    };
+    let mut relater = Relater::planned(interner.store(), wk, RelationCache::new(), &normalization);
+
+    assert!(matches!(
+        relater.is_assignable_attempt(source, target),
+        RelationAttempt::Decided(RelationOutcome::Exhausted(
+            Exhaustion::ClassProjectionBudget
+        ))
+    ));
+}
+
+#[test]
+fn exact_union_member_fast_path_skips_unrelated_target_demand() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let demanded = interner.intern_object(ObjectType {
+        properties: vec![prop("unrelated", wk.number)],
+        ..Default::default()
+    });
+    let shared_a = interner.intern_object(ObjectType {
+        properties: vec![prop("shared_a", wk.number)],
+        ..Default::default()
+    });
+    let shared_b = interner.intern_object(ObjectType {
+        properties: vec![prop("shared_b", wk.number)],
+        ..Default::default()
+    });
+    let source = interner.union(vec![shared_a, shared_b]);
+    let target = interner.union(vec![demanded, shared_a, shared_b]);
+    let normalization = TaintedNormalization {
+        demand: Some(demanded),
+        exhaustion: None,
+    };
+    let mut relater = Relater::planned(interner.store(), wk, RelationCache::new(), &normalization);
+
+    assert!(matches!(
+        relater.is_assignable_attempt(source, target),
+        RelationAttempt::Decided(RelationOutcome::Yes)
+    ));
 }
 
 #[test]
