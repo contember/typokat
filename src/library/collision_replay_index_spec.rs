@@ -112,25 +112,74 @@ fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
 #[test]
 fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
     let source = include_str!("../check/checker/replay_index.rs");
+    let wire_fields = [
+        "schema",
+        "owner_partition",
+        "root_slots",
+        "owner_sites",
+        "reverse_edges",
+        "root_slot_consumers",
+        "scc_membership",
+        "statement_owners",
+        "baseline_records",
+        "unowned_demand_count",
+        "invalid_owner_site_count",
+        "noncanonical_edge_count",
+        "typed_reference_coverage_misses",
+    ];
     assert_eq!(
-        exact_struct_field_names(source, "pub(crate) struct AdmittedCollisionReplayIndex"),
+        exact_struct_field_names(source, "pub(crate) struct CollisionReplayIndex"),
         [
-            "schema",
-            "owner_partition",
-            "root_slots",
-            "owner_sites",
-            "reverse_edges",
-            "root_slot_consumers",
-            "scc_membership",
-            "statement_owners",
-            "baseline_records",
-            "unowned_demand_count",
-            "invalid_owner_site_count",
-            "noncanonical_edge_count",
-            "typed_reference_coverage_misses",
-            "canonical_manifest_len",
-            "canonical_manifest_sha256",
+            wire_fields.as_slice(),
+            &["canonical_manifest_bytes", "canonical_manifest_sha256",],
         ]
+        .concat()
+    );
+
+    let admitted_fields =
+        exact_struct_field_names(source, "pub(crate) struct AdmittedCollisionReplayIndex");
+    assert_eq!(
+        admitted_fields
+            .iter()
+            .filter(|field| wire_fields.contains(&field.as_str()))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        wire_fields
+    );
+    let admitted_identity_fields = ["canonical_manifest_len", "canonical_manifest_sha256"];
+    let required_compact_runtime_indexes = [
+        "owner_to_scc",
+        "scc_owner_ranges",
+        "scc_owners",
+        "reverse_scc_offsets",
+        "reverse_scc_edges",
+        "root_slot_lookup",
+        "owner_site_ranges",
+        "baseline_record_ranges",
+    ];
+    assert_eq!(
+        admitted_fields
+            .iter()
+            .filter(|field| required_compact_runtime_indexes.contains(&field.as_str()))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        required_compact_runtime_indexes
+    );
+    assert!(
+        admitted_fields.iter().all(|field| {
+            wire_fields.contains(&field.as_str())
+                || admitted_identity_fields.contains(&field.as_str())
+                || required_compact_runtime_indexes.contains(&field.as_str())
+        }),
+        "admission must retain only authenticated wire rows, identity evidence, and required compact runtime indexes: {admitted_fields:#?}"
+    );
+    assert_eq!(
+        admitted_fields
+            .iter()
+            .filter(|field| admitted_identity_fields.contains(&field.as_str()))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        admitted_identity_fields
     );
     let declaration = source
         .split_once("pub(crate) struct AdmittedCollisionReplayIndex")
@@ -139,6 +188,10 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
         .split_once("\n}")
         .expect("admitted replay index body")
         .0;
+    assert!(
+        !declaration.contains("#[cfg(test)]"),
+        "admitted runtime indexes must exist in production"
+    );
     assert!(!declaration.contains("Vec<u8>"));
     assert!(!declaration.contains("canonical_manifest_bytes"));
 }
