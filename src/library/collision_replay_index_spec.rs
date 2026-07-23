@@ -999,8 +999,12 @@ declare namespace Intl {
         "the lexical Array fragment must extend the authenticated global identity"
     );
 
-    let function_start = u32::try_from(SOURCE.find("function parseInt").expect("function start"))
-        .expect("function offset fits u32");
+    let function_start = u32::try_from(
+        SOURCE
+            .find("declare function parseInt")
+            .expect("function start"),
+    )
+    .expect("function offset fits u32");
     let function_scope = binder
         .fn_scopes
         .get(&(module, function_start))
