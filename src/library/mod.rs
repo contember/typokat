@@ -1,5 +1,6 @@
 pub mod artifact;
 mod base;
+mod collision_preflight;
 pub mod compiler;
 pub mod profile;
 mod provider;
@@ -19,7 +20,7 @@ pub use provider::{
     LibrarySnapshotViolation,
 };
 
-pub(crate) struct CollisionFreeUserDeltaCapability(());
+pub(crate) use collision_preflight::CollisionFreeUserDeltaCapability;
 
 #[cfg(test)]
 mod artifact_spec;
@@ -33,13 +34,16 @@ mod user_delta_spec;
 #[cfg(test)]
 mod user_delta_project_scale_spec;
 
-// Activate after the WU5 collision preflight implementation lands.
-// #[cfg(test)]
-// mod collision_preflight_spec;
+#[cfg(test)]
+mod collision_preflight_spec;
 
 // Activate after the WU5 private combined-universe implementation lands.
 // #[cfg(test)]
 // mod private_combined_universe_spec;
+
+// Activate after the WU5 authenticated replay index lands.
+// #[cfg(test)]
+// mod collision_replay_index_spec;
 
 // Activate after the WU5 replay index and work receipts land.
 // #[cfg(test)]

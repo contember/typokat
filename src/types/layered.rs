@@ -1,7 +1,6 @@
 //! Immutable-prefix containers with an isolated mutable suffix.
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use std::ops::Index;
 use std::sync::Arc;
@@ -29,6 +28,82 @@ pub(crate) struct BaseWorkLedgerForTest {
 #[cfg(test)]
 thread_local! {
     static BASE_WORK_LEDGER: RefCell<Option<BaseWorkLedgerForTest>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOCAL_ROW_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_local_row_allocation_for_test() {
+    LOCAL_ROW_ALLOCATIONS.set(LOCAL_ROW_ALLOCATIONS.get().saturating_add(1));
+}
+
+#[cfg(test)]
+pub(crate) struct LocalRowAllocationScopeForTest(u64);
+
+#[cfg(test)]
+impl LocalRowAllocationScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(LOCAL_ROW_ALLOCATIONS.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        LOCAL_ROW_ALLOCATIONS.get().saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LocalRowAllocationCalibrationForTest {
+    pub(crate) vector_push: u64,
+    pub(crate) map_insert: u64,
+    pub(crate) set_insert: u64,
+    pub(crate) map_vacant_insert: u64,
+}
+
+#[cfg(test)]
+impl LocalRowAllocationCalibrationForTest {
+    pub(crate) fn total(self) -> u64 {
+        self.vector_push
+            .saturating_add(self.map_insert)
+            .saturating_add(self.set_insert)
+            .saturating_add(self.map_vacant_insert)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn calibrate_local_row_allocations_for_test() -> LocalRowAllocationCalibrationForTest {
+    let vector_scope = LocalRowAllocationScopeForTest::start();
+    let mut rows = LayeredVec::default();
+    rows.push_local(1_u8);
+    let vector_push = vector_scope.finish();
+
+    let map_scope = LocalRowAllocationScopeForTest::start();
+    let mut map = LayeredMap::default();
+    map.insert_local(1_u8, 1_u8)
+        .expect("calibration map row inserts");
+    let map_insert = map_scope.finish();
+
+    let set_scope = LocalRowAllocationScopeForTest::start();
+    let mut set = LayeredSet::default();
+    set.insert_local(1_u8).expect("calibration set row inserts");
+    let set_insert = set_scope.finish();
+
+    let vacant_scope = LocalRowAllocationScopeForTest::start();
+    let mut vacant_map = LayeredMap::default();
+    let _ = vacant_map
+        .get_or_insert_local_with(1_u8, || 1_u8)
+        .expect("calibration vacant map row inserts");
+    let map_vacant_insert = vacant_scope.finish();
+
+    LocalRowAllocationCalibrationForTest {
+        vector_push,
+        map_insert,
+        set_insert,
+        map_vacant_insert,
+    }
 }
 
 #[cfg(test)]
@@ -247,6 +322,8 @@ impl<T> LayeredVec<T> {
     pub(crate) fn push_local(&mut self, value: T) -> usize {
         let index = self.len();
         self.local.push(value);
+        #[cfg(test)]
+        record_local_row_allocation_for_test();
         index
     }
 
@@ -382,7 +459,12 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
             record_base_write_attempt_for_test();
             return Err("layered map cannot replace a sealed entry");
         }
-        Ok(self.local.insert(key, value))
+        let previous = self.local.insert(key, value);
+        #[cfg(test)]
+        if previous.is_none() {
+            record_local_row_allocation_for_test();
+        }
+        Ok(previous)
     }
 
     pub(crate) fn remove_local(&mut self, key: &K) -> Result<Option<V>, &'static str> {
@@ -394,13 +476,25 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         Ok(self.local.remove(key))
     }
 
-    pub(crate) fn entry_local(&mut self, key: K) -> Result<Entry<'_, K, V>, &'static str> {
+    pub(crate) fn get_or_insert_local_with(
+        &mut self,
+        key: K,
+        default: impl FnOnce() -> V,
+    ) -> Result<&mut V, &'static str> {
         if self.base.contains_key(&key) {
             #[cfg(test)]
             record_base_write_attempt_for_test();
             return Err("layered map cannot replace a sealed entry");
         }
-        Ok(self.local.entry(key))
+        match self.local.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let value = entry.insert(default());
+                #[cfg(test)]
+                record_local_row_allocation_for_test();
+                Ok(value)
+            }
+        }
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
@@ -527,7 +621,12 @@ impl<T: Eq + Hash> LayeredSet<T> {
             record_base_write_attempt_for_test();
             return Err("layered set cannot replace a sealed entry");
         }
-        Ok(self.local.insert(value))
+        let inserted = self.local.insert(value);
+        #[cfg(test)]
+        if inserted {
+            record_local_row_allocation_for_test();
+        }
+        Ok(inserted)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
@@ -596,6 +695,19 @@ impl<'a, T> IntoIterator for &'a LayeredSet<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_row_calibration_exercises_every_physical_insertion_hook() {
+        assert_eq!(
+            calibrate_local_row_allocations_for_test(),
+            LocalRowAllocationCalibrationForTest {
+                vector_push: 1,
+                map_insert: 1,
+                set_insert: 1,
+                map_vacant_insert: 1,
+            }
+        );
+    }
 
     #[test]
     fn vector_clone_shares_base_and_isolates_local_suffix() {

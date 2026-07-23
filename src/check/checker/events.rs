@@ -7,6 +7,64 @@ use crate::diagnostics::IncompleteSurface;
 use crate::source::ModuleOrdinal;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! {
+    static USER_EVENT_RESERVATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_user_event_reservation_for_test() {
+    USER_EVENT_RESERVATIONS.set(USER_EVENT_RESERVATIONS.get().saturating_add(1));
+}
+
+#[cfg(test)]
+pub(crate) struct UserEventReservationScopeForTest(u64);
+
+#[cfg(test)]
+impl UserEventReservationScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(USER_EVENT_RESERVATIONS.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        USER_EVENT_RESERVATIONS.get().saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UserEventReservationCalibrationForTest {
+    pub(crate) event: u64,
+    pub(crate) record: u64,
+}
+
+#[cfg(test)]
+impl UserEventReservationCalibrationForTest {
+    pub(crate) fn total(self) -> u64 {
+        self.event.saturating_add(self.record)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn calibrate_user_event_reservations_for_test() -> UserEventReservationCalibrationForTest
+{
+    let event_scope = UserEventReservationScopeForTest::start();
+    let mut store = EventStore::default();
+    let event = store.reserve_event(ModuleOrdinal::new(0), 0);
+    let event_count = event_scope.finish();
+
+    let record_scope = UserEventReservationScopeForTest::start();
+    store
+        .reserve_record(event.id)
+        .expect("calibration secondary record reserves");
+    let record = record_scope.finish();
+
+    UserEventReservationCalibrationForTest {
+        event: event_count,
+        record,
+    }
+}
+
 /// Stable identity of one lexically reserved event.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct EventId(usize);
@@ -82,6 +140,8 @@ impl EventStore {
         module_ordinal: ModuleOrdinal,
         source_start: u32,
     ) -> ReservedEvent {
+        #[cfg(test)]
+        record_user_event_reservation_for_test();
         let event_ordinal = self.next_event_ordinal.entry(module_ordinal).or_insert(0);
         let id = EventId(self.events.len());
         let primary = UserRecordTicket {
@@ -113,6 +173,9 @@ impl EventStore {
         let Some(meta) = self.events.get_mut(event.index()) else {
             return Err(EventStoreError::UnknownEvent(event));
         };
+        // Secondary record positions are semantic reservations too.
+        #[cfg(test)]
+        record_user_event_reservation_for_test();
         let ticket = UserRecordTicket {
             event,
             record_ordinal: meta.next_record_ordinal,
@@ -260,6 +323,17 @@ mod tests {
     use super::*;
     use crate::diagnostics::DiagnosticCode;
     use crate::span::Span;
+
+    #[test]
+    fn reservation_calibration_exercises_event_and_secondary_record_hooks() {
+        assert_eq!(
+            calibrate_user_event_reservations_for_test(),
+            UserEventReservationCalibrationForTest {
+                event: 1,
+                record: 1,
+            }
+        );
+    }
 
     fn diagnostic(name: &str, start: u32) -> CheckerRecord {
         CheckerRecord::Diagnostic(Diagnostic::cannot_find_name(

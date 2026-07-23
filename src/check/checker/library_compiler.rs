@@ -38,8 +38,8 @@ use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 #[cfg(test)]
 use crate::binder::namespace::MergeDeclarationKind;
 use crate::binder::namespace::{
-    exact_key, CompilationUnit, ExactKey, ExportContextKind, ExportSyntaxDisposition,
-    ModuleBindingContext, SourceFileKind,
+    exact_key, source_file_kind, CompilationUnit, ExactKey, ExportContextKind,
+    ExportSyntaxDisposition, ModuleBindingContext, SourceFileKind,
 };
 use crate::binder::scope::ScopeId;
 #[cfg(test)]
@@ -594,12 +594,14 @@ impl OwnedLibraryRuntimeState {
     )]
     pub(crate) fn fork_collision_free_user_delta(
         &self,
-        _capability: &crate::library::CollisionFreeUserDeltaCapability,
+        _capability: crate::library::CollisionFreeUserDeltaCapability,
     ) -> Result<Self, &'static str> {
         self.fork_user_delta()
     }
 
     fn fork_user_delta(&self) -> Result<Self, &'static str> {
+        #[cfg(test)]
+        USER_DELTA_FORKS.set(USER_DELTA_FORKS.get().saturating_add(1));
         Ok(Self {
             interner: self.interner.fork_delta()?,
             binder: self.binder.fork_delta()?,
@@ -1004,6 +1006,21 @@ thread_local! {
     static USER_SOURCE_PARSE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_SOURCE_BIND_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_SOURCE_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static USER_DELTA_FORKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) struct UserDeltaForkScopeForTest(u64);
+
+#[cfg(test)]
+impl UserDeltaForkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(USER_DELTA_FORKS.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        USER_DELTA_FORKS.get().saturating_sub(self.0)
+    }
 }
 
 #[cfg(test)]
@@ -2861,22 +2878,6 @@ fn canonical_inputs<'source>(
             })
         })
         .collect()
-}
-
-fn source_file_kind(name: &str) -> SourceFileKind {
-    if name.ends_with(".d.mts") {
-        SourceFileKind::DeclarationMts
-    } else if name.ends_with(".d.cts") {
-        SourceFileKind::DeclarationCts
-    } else if name.ends_with(".d.ts") {
-        SourceFileKind::DeclarationTs
-    } else if name.ends_with(".mts") {
-        SourceFileKind::ImplementationMts
-    } else if name.ends_with(".cts") {
-        SourceFileKind::ImplementationCts
-    } else {
-        SourceFileKind::ImplementationTs
-    }
 }
 
 #[cfg(test)]

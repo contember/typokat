@@ -4,7 +4,7 @@
 //! `Interner`, keeping borrowed parser data inside the parse/check call.
 
 use crate::binder::namespace::{
-    CompilationUnit, ModuleBindingContext, SourceFileKind, SourceUnitKey,
+    source_file_kind, CompilationUnit, ModuleBindingContext, SourceUnitKey,
 };
 #[cfg(test)]
 use crate::check::checker::{
@@ -477,22 +477,6 @@ fn stable_source_keys(paths: &[PathBuf]) -> Vec<SourceUnitKey> {
         }
     }
     keys
-}
-
-fn source_file_kind(name: &str) -> SourceFileKind {
-    if name.ends_with(".d.mts") {
-        SourceFileKind::DeclarationMts
-    } else if name.ends_with(".d.cts") {
-        SourceFileKind::DeclarationCts
-    } else if name.ends_with(".d.ts") {
-        SourceFileKind::DeclarationTs
-    } else if name.ends_with(".mts") {
-        SourceFileKind::ImplementationMts
-    } else if name.ends_with(".cts") {
-        SourceFileKind::ImplementationCts
-    } else {
-        SourceFileKind::ImplementationTs
-    }
 }
 
 fn resolve_local_import(importer_path: &Path, specifier: &str) -> Option<PathBuf> {

@@ -298,6 +298,23 @@ impl SourceFileKind {
     }
 }
 
+/// Canonical filename classifier shared by parsing, binding, and source-only preflight.
+pub(crate) fn source_file_kind(name: &str) -> SourceFileKind {
+    if name.ends_with(".d.mts") {
+        SourceFileKind::DeclarationMts
+    } else if name.ends_with(".d.cts") {
+        SourceFileKind::DeclarationCts
+    } else if name.ends_with(".d.ts") {
+        SourceFileKind::DeclarationTs
+    } else if name.ends_with(".mts") {
+        SourceFileKind::ImplementationMts
+    } else if name.ends_with(".cts") {
+        SourceFileKind::ImplementationCts
+    } else {
+        SourceFileKind::ImplementationTs
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ModuleBindingContext {
     pub source_file_kind: SourceFileKind,
@@ -5857,13 +5874,15 @@ fn push_placement(
         namespace_fragment: None,
         namespace_instance: None,
     };
-    let Ok(entries) = state.namespaces.placements.entry_local(MergeKey {
-        owner,
-        name: name.to_string(),
-    }) else {
+    let Ok(entries) = state.namespaces.placements.get_or_insert_local_with(
+        MergeKey {
+            owner,
+            name: name.to_string(),
+        },
+        Vec::new,
+    ) else {
         return;
     };
-    let entries = entries.or_default();
     if !entries.iter().any(|entry| entry.declaration == declaration) {
         entries.push(participant);
     }

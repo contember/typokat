@@ -112,9 +112,9 @@ struct LayeredUserDelta {
 #[cfg(test)]
 impl LayeredUserDelta {
     fn new(base: &FrozenLibraryBase) -> Result<Self, &'static str> {
-        let capability = super::CollisionFreeUserDeltaCapability(());
+        let capability = super::collision_preflight::issue_caller_certified_capability_for_test();
         let discarded = Arc::new(AtomicBool::new(false));
-        let mut runtime = base.runtime.fork_collision_free_user_delta(&capability)?;
+        let mut runtime = base.runtime.fork_collision_free_user_delta(capability)?;
         runtime.install_user_delta_drop_witness_for_test(Arc::clone(&discarded));
         Ok(Self {
             runtime: Some(runtime),
@@ -224,6 +224,78 @@ pub(super) struct UserDeltaCheckReceiptForTest {
 pub(super) struct UserDeltaProjectInputForTest<'source> {
     pub(super) path: &'source str,
     pub(super) source: &'source str,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum PreflightSlotForTest {
+    Value,
+    Type,
+    Namespace,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ModuleClassificationForTest {
+    Script,
+    External,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ModuleClassificationEntryForTest {
+    pub(super) path: String,
+    pub(super) classification: ModuleClassificationForTest,
+}
+
+#[cfg(test)]
+impl PartialEq<(&str, ModuleClassificationForTest)> for ModuleClassificationEntryForTest {
+    fn eq(&self, other: &(&str, ModuleClassificationForTest)) -> bool {
+        self.path == other.0 && self.classification == other.1
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CollisionRouteForTest {
+    SharedDelta,
+    PrivateCombined,
+    RejectedBeforeSemantics,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CollisionCandidateForTest {
+    pub(super) name: String,
+    pub(super) slots: BTreeSet<PreflightSlotForTest>,
+    pub(super) global_object_contributor: bool,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct CollisionPreflightWorkForTest {
+    pub(super) parse_units: u64,
+    pub(super) source_nodes_visited: u64,
+    pub(super) binding_leaves_visited: u64,
+    pub(super) frozen_name_probes: u64,
+    pub(super) delta_forks: u64,
+    pub(super) delta_local_rows: u64,
+    pub(super) user_event_reservations: u64,
+    pub(super) durable_evaluator_cache_writes: u64,
+    pub(super) durable_projection_cache_writes: u64,
+    pub(super) relation_cache_writes: u64,
+    pub(super) private_library_compiles: u64,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CollisionPreflightReceiptForTest {
+    pub(super) route: CollisionRouteForTest,
+    pub(super) capability_issued: bool,
+    pub(super) module_classifications: Vec<ModuleClassificationEntryForTest>,
+    pub(super) candidates: Vec<CollisionCandidateForTest>,
+    pub(super) reasons: BTreeSet<String>,
+    pub(super) work: CollisionPreflightWorkForTest,
 }
 
 #[cfg(test)]
@@ -366,6 +438,91 @@ impl fmt::Debug for FrozenLibraryBase {
 }
 
 impl FrozenLibraryBase {
+    #[cfg(test)]
+    pub(super) fn preflight_user_project_for_test(
+        &self,
+        inputs: &[UserDeltaProjectInputForTest<'_>],
+    ) -> Result<CollisionPreflightReceiptForTest, String> {
+        self.preflight_user_project_measured_for_test(inputs, false)
+    }
+
+    #[cfg(test)]
+    pub(super) fn preflight_user_project_with_uncertainty_for_test(
+        &self,
+        inputs: &[UserDeltaProjectInputForTest<'_>],
+    ) -> Result<CollisionPreflightReceiptForTest, String> {
+        self.preflight_user_project_measured_for_test(inputs, true)
+    }
+
+    #[cfg(test)]
+    fn preflight_user_project_measured_for_test(
+        &self,
+        inputs: &[UserDeltaProjectInputForTest<'_>],
+        inject_uncertainty: bool,
+    ) -> Result<CollisionPreflightReceiptForTest, String> {
+        let delta_fork_scope =
+            crate::check::checker::library_compiler::UserDeltaForkScopeForTest::start();
+        let local_row_scope = crate::types::layered::LocalRowAllocationScopeForTest::start();
+        let event_scope = crate::check::checker::events::UserEventReservationScopeForTest::start();
+        let query_scope = crate::check::query::QueryCacheWriteScopeForTest::start();
+        let relation_scope = crate::relate::cache::RelationCacheWriteScopeForTest::start();
+        let compiler_scope = super::compiler::LibraryCompilerWorkScopeForTest::start();
+        let mut receipt = super::collision_preflight::preflight_for_test(
+            &self.root_names,
+            inputs,
+            inject_uncertainty,
+        );
+        let compiler_work = compiler_scope.finish();
+        receipt.work.delta_forks = delta_fork_scope.finish();
+        receipt.work.delta_local_rows = local_row_scope.finish();
+        receipt.work.user_event_reservations = event_scope.finish();
+        let query_work = query_scope.finish();
+        receipt.work.durable_evaluator_cache_writes = query_work.evaluator;
+        receipt.work.durable_projection_cache_writes = query_work.projection;
+        receipt.work.relation_cache_writes = relation_scope.finish();
+        receipt.work.private_library_compiles = compiler_work.compiles;
+        Ok(receipt)
+    }
+
+    #[cfg(test)]
+    pub(super) fn calibrate_preflight_work_receipt_for_test(
+        &self,
+    ) -> Result<CollisionPreflightWorkForTest, String> {
+        let delta_fork_scope =
+            crate::check::checker::library_compiler::UserDeltaForkScopeForTest::start();
+        let capability = super::collision_preflight::issue_caller_certified_capability_for_test();
+        let delta = self
+            .runtime
+            .fork_collision_free_user_delta(capability)
+            .map_err(str::to_owned)?;
+        drop(delta);
+        let delta_forks = delta_fork_scope.finish();
+        let delta_local_rows = crate::types::layered::calibrate_local_row_allocations_for_test();
+        let user_event_reservations =
+            crate::check::checker::events::calibrate_user_event_reservations_for_test();
+        let query = crate::check::query::calibrate_query_cache_writes_for_test();
+        let relation_cache_writes =
+            crate::relate::cache::calibrate_relation_cache_writes_for_test();
+        let compiler_scope = super::compiler::LibraryCompilerWorkScopeForTest::start();
+        let profile = super::profile::ExactLibraryProfile::load_packaged()
+            .map_err(|error| error.to_string())?;
+        let compiled = super::compiler::LibraryCompiler::new()
+            .compile(&profile)
+            .map_err(|error| error.to_string())?;
+        drop(compiled);
+        let compiler_work = compiler_scope.finish();
+        Ok(CollisionPreflightWorkForTest {
+            delta_forks,
+            delta_local_rows: delta_local_rows.total(),
+            user_event_reservations: user_event_reservations.total(),
+            durable_evaluator_cache_writes: query.evaluator,
+            durable_projection_cache_writes: query.projection,
+            relation_cache_writes: relation_cache_writes.total(),
+            private_library_compiles: compiler_work.compiles,
+            ..CollisionPreflightWorkForTest::default()
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn compare_user_delta_cost_across_base_sizes_for_test(
         source: &str,

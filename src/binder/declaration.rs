@@ -1,14 +1,17 @@
 //! Source declaration identities and dormant type-group metadata.
 
-use crate::binder::namespace::NamespaceId;
-use crate::binder::namespace::SourceUnitKey;
+use crate::binder::namespace::{ModuleBindingContext, NamespaceId, SourceUnitKey};
 use crate::binder::scope::ScopeId;
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredVec};
-use oxc_ast::ast::{Program, TSModuleDeclarationName};
+use oxc_ast::ast::{
+    ClassType, Declaration, ImportOrExportKind, ModuleDeclaration, Program, Statement,
+    TSModuleDeclarationName, VariableDeclarationKind,
+};
 use oxc_ast::AstKind;
-use oxc_ast_visit::Visit;
+use oxc_ast_visit::{walk, Visit};
 use rustc_hash::FxHashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Unified lexical identity of one source declaration occurrence.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -79,32 +82,105 @@ pub(crate) struct SourceDeclarationOccurrence {
     pub binding_span: Span,
 }
 
-/// Walk every source declaration occurrence without consulting binder semantics.
+/// Global binding projection from the exhaustive visitor shared with semantic binding.
+pub(crate) fn source_global_binding_census(
+    program: &Program<'_>,
+    context: ModuleBindingContext,
+) -> SourceGlobalBindingCensus {
+    let mut visitor = SourceDeclarationVisitor::with_global_census(context);
+    visitor.visit_program(program);
+    visitor
+        .global_census
+        .expect("global census projection is enabled")
+        .result
+}
+
 pub(crate) fn source_declaration_occurrences(
     program: &Program<'_>,
 ) -> Vec<SourceDeclarationOccurrence> {
-    let mut visitor = SourceDeclarationVisitor::default();
+    let mut visitor = SourceDeclarationVisitor::occurrences_only();
     visitor.visit_program(program);
-    visitor.occurrences
+    visitor
+        .occurrences
+        .expect("declaration occurrence projection is enabled")
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SourceBindingSlot {
+    Value,
+    Type,
+    Namespace,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SourceGlobalBindingCandidate {
+    pub(crate) slots: BTreeSet<SourceBindingSlot>,
+    pub(crate) global_object_contributor: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SourceGlobalBindingCensus {
+    pub(crate) candidates: BTreeMap<String, SourceGlobalBindingCandidate>,
+    pub(crate) explicit_global_this: bool,
+    pub(crate) umd_global: bool,
+    pub(crate) uncertain_relevant_syntax: bool,
+    pub(crate) source_nodes_visited: u64,
+    pub(crate) binding_leaves_visited: u64,
+}
+
 struct SourceDeclarationVisitor {
-    occurrences: Vec<SourceDeclarationOccurrence>,
+    occurrences: Option<Vec<SourceDeclarationOccurrence>>,
+    global_census: Option<SourceGlobalCensusProjection>,
+}
+
+struct SourceGlobalCensusProjection {
+    result: SourceGlobalBindingCensus,
+    context: ModuleBindingContext,
+    function_depth: usize,
+    class_depth: usize,
+    module_depth: usize,
+    statement_nesting_depth: usize,
+    variable_kinds: Vec<VariableDeclarationKind>,
+    global_boundaries: Vec<(usize, usize, usize, usize)>,
 }
 
 impl SourceDeclarationVisitor {
+    fn occurrences_only() -> Self {
+        Self {
+            occurrences: Some(Vec::new()),
+            global_census: None,
+        }
+    }
+
+    fn with_global_census(context: ModuleBindingContext) -> Self {
+        Self {
+            occurrences: None,
+            global_census: Some(SourceGlobalCensusProjection {
+                result: SourceGlobalBindingCensus::default(),
+                context,
+                function_depth: 0,
+                class_depth: 0,
+                module_depth: 0,
+                statement_nesting_depth: 0,
+                variable_kinds: Vec::new(),
+                global_boundaries: Vec::new(),
+            }),
+        }
+    }
+
     fn push(
         &mut self,
         kind: DeclarationKind,
         declaration_span: oxc_span::Span,
         binding_span: oxc_span::Span,
     ) {
-        self.occurrences.push(SourceDeclarationOccurrence {
-            kind,
-            declaration_span: Span::from_oxc(declaration_span),
-            binding_span: Span::from_oxc(binding_span),
-        });
+        if let Some(occurrences) = self.occurrences.as_mut() {
+            occurrences.push(SourceDeclarationOccurrence {
+                kind,
+                declaration_span: Span::from_oxc(declaration_span),
+                binding_span: Span::from_oxc(binding_span),
+            });
+        }
     }
 
     fn push_pattern(
@@ -113,26 +189,225 @@ impl SourceDeclarationVisitor {
         declaration_span: oxc_span::Span,
         pattern: &oxc_ast::ast::BindingPattern<'_>,
     ) {
+        let Some(occurrences) = self.occurrences.as_mut() else {
+            return;
+        };
         for identifier in pattern.get_binding_identifiers() {
-            self.push(kind, declaration_span, identifier.span);
+            occurrences.push(SourceDeclarationOccurrence {
+                kind,
+                declaration_span: Span::from_oxc(declaration_span),
+                binding_span: Span::from_oxc(identifier.span),
+            });
         }
+    }
+
+    fn root_placement(&self) -> Option<GlobalRootPlacement> {
+        let census = self.global_census.as_ref()?;
+        if let Some(&(function_depth, class_depth, module_depth, statement_nesting_depth)) =
+            census.global_boundaries.last()
+        {
+            if census.function_depth == function_depth
+                && census.class_depth == class_depth
+                && census.module_depth == module_depth
+            {
+                return Some(GlobalRootPlacement {
+                    direct_lexical: census.statement_nesting_depth == statement_nesting_depth,
+                });
+            }
+            return None;
+        }
+        (!census.context.external_module
+            && census.function_depth == 0
+            && census.class_depth == 0
+            && census.module_depth == 0)
+            .then_some(GlobalRootPlacement {
+                direct_lexical: census.statement_nesting_depth == 0,
+            })
+    }
+
+    fn candidate(
+        &mut self,
+        name: &str,
+        slots: &[SourceBindingSlot],
+        global_object_contributor: bool,
+    ) {
+        let Some(census) = self.global_census.as_mut() else {
+            return;
+        };
+        let candidate = census.result.candidates.entry(name.to_owned()).or_default();
+        candidate.slots.extend(slots.iter().copied());
+        candidate.global_object_contributor |= global_object_contributor;
+        census.result.binding_leaves_visited =
+            census.result.binding_leaves_visited.saturating_add(1);
+    }
+
+    fn candidate_pattern(
+        &mut self,
+        pattern: &oxc_ast::ast::BindingPattern<'_>,
+        global_object_contributor: bool,
+    ) {
+        for identifier in pattern.get_binding_identifiers() {
+            self.candidate(
+                identifier.name.as_str(),
+                &[SourceBindingSlot::Value],
+                global_object_contributor,
+            );
+        }
+    }
+
+    fn global_placement_is_legal(&self) -> bool {
+        let Some(census) = self.global_census.as_ref() else {
+            return false;
+        };
+        census.context.external_module
+            && census.global_boundaries.is_empty()
+            && census.function_depth == 0
+            && census.class_depth == 0
+            && census.module_depth == 0
+            && census.statement_nesting_depth == 0
     }
 }
 
+#[derive(Clone, Copy)]
+struct GlobalRootPlacement {
+    direct_lexical: bool,
+}
+
 impl<'a> Visit<'a> for SourceDeclarationVisitor {
+    fn visit_statement(&mut self, statement: &Statement<'a>) {
+        let nested_placement = match statement {
+            Statement::BlockStatement(_)
+            | Statement::DoWhileStatement(_)
+            | Statement::ForInStatement(_)
+            | Statement::ForOfStatement(_)
+            | Statement::ForStatement(_)
+            | Statement::IfStatement(_)
+            | Statement::LabeledStatement(_)
+            | Statement::SwitchStatement(_)
+            | Statement::TryStatement(_)
+            | Statement::WhileStatement(_)
+            | Statement::WithStatement(_) => true,
+            Statement::BreakStatement(_)
+            | Statement::ContinueStatement(_)
+            | Statement::DebuggerStatement(_)
+            | Statement::EmptyStatement(_)
+            | Statement::ExpressionStatement(_)
+            | Statement::ReturnStatement(_)
+            | Statement::ThrowStatement(_)
+            | Statement::VariableDeclaration(_)
+            | Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_)
+            | Statement::TSTypeAliasDeclaration(_)
+            | Statement::TSInterfaceDeclaration(_)
+            | Statement::TSEnumDeclaration(_)
+            | Statement::TSModuleDeclaration(_)
+            | Statement::TSGlobalDeclaration(_)
+            | Statement::TSImportEqualsDeclaration(_)
+            | Statement::ImportDeclaration(_)
+            | Statement::ExportAllDeclaration(_)
+            | Statement::ExportDefaultDeclaration(_)
+            | Statement::ExportNamedDeclaration(_)
+            | Statement::TSExportAssignment(_)
+            | Statement::TSNamespaceExportDeclaration(_) => false,
+        };
+        if nested_placement {
+            if let Some(census) = self.global_census.as_mut() {
+                census.statement_nesting_depth = census.statement_nesting_depth.saturating_add(1);
+            }
+        }
+        walk::walk_statement(self, statement);
+        if nested_placement {
+            if let Some(census) = self.global_census.as_mut() {
+                census.statement_nesting_depth = census.statement_nesting_depth.saturating_sub(1);
+            }
+        }
+    }
+
+    fn visit_declaration(&mut self, declaration: &Declaration<'a>) {
+        match declaration {
+            Declaration::VariableDeclaration(_)
+            | Declaration::FunctionDeclaration(_)
+            | Declaration::ClassDeclaration(_)
+            | Declaration::TSTypeAliasDeclaration(_)
+            | Declaration::TSInterfaceDeclaration(_)
+            | Declaration::TSEnumDeclaration(_)
+            | Declaration::TSModuleDeclaration(_)
+            | Declaration::TSGlobalDeclaration(_)
+            | Declaration::TSImportEqualsDeclaration(_) => {}
+        }
+        walk::walk_declaration(self, declaration);
+    }
+
+    fn visit_module_declaration(&mut self, declaration: &ModuleDeclaration<'a>) {
+        match declaration {
+            ModuleDeclaration::ImportDeclaration(_)
+            | ModuleDeclaration::ExportAllDeclaration(_)
+            | ModuleDeclaration::ExportDefaultDeclaration(_)
+            | ModuleDeclaration::ExportNamedDeclaration(_)
+            | ModuleDeclaration::TSExportAssignment(_)
+            | ModuleDeclaration::TSNamespaceExportDeclaration(_) => {}
+        }
+        walk::walk_module_declaration(self, declaration);
+    }
+
     fn enter_node(&mut self, kind: AstKind<'a>) {
+        if let Some(census) = self.global_census.as_mut() {
+            census.result.source_nodes_visited =
+                census.result.source_nodes_visited.saturating_add(1);
+        }
         match kind {
+            AstKind::VariableDeclaration(declaration) => {
+                if let Some(census) = self.global_census.as_mut() {
+                    census.variable_kinds.push(declaration.kind);
+                }
+            }
             AstKind::VariableDeclarator(declaration) => {
-                self.push_pattern(DeclarationKind::Variable, declaration.span, &declaration.id)
+                self.push_pattern(DeclarationKind::Variable, declaration.span, &declaration.id);
+                if let Some(root) = self.root_placement() {
+                    let kind = self
+                        .global_census
+                        .as_ref()
+                        .and_then(|census| census.variable_kinds.last().copied());
+                    let admitted =
+                        root.direct_lexical || kind.is_some_and(VariableDeclarationKind::is_var);
+                    if admitted {
+                        let contributor = kind.is_some_and(VariableDeclarationKind::is_var);
+                        self.candidate_pattern(&declaration.id, contributor);
+                    }
+                }
             }
             AstKind::Function(function) => {
                 if let Some(identifier) = &function.id {
                     self.push(DeclarationKind::Function, function.span, identifier.span);
+                    if function.is_declaration()
+                        && self
+                            .root_placement()
+                            .is_some_and(|placement| placement.direct_lexical)
+                    {
+                        self.candidate(identifier.name.as_str(), &[SourceBindingSlot::Value], true);
+                    }
+                }
+                if let Some(census) = self.global_census.as_mut() {
+                    census.function_depth = census.function_depth.saturating_add(1);
                 }
             }
             AstKind::Class(class) => {
                 if let Some(identifier) = &class.id {
                     self.push(DeclarationKind::Class, class.span, identifier.span);
+                    if class.r#type == ClassType::ClassDeclaration
+                        && self
+                            .root_placement()
+                            .is_some_and(|placement| placement.direct_lexical)
+                    {
+                        self.candidate(
+                            identifier.name.as_str(),
+                            &[SourceBindingSlot::Value, SourceBindingSlot::Type],
+                            false,
+                        );
+                    }
+                }
+                if let Some(census) = self.global_census.as_mut() {
+                    census.class_depth = census.class_depth.saturating_add(1);
                 }
             }
             AstKind::FormalParameter(parameter) => self.push_pattern(
@@ -165,18 +440,52 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
                     }
                 }
             }
-            AstKind::TSTypeAliasDeclaration(declaration) => self.push(
-                DeclarationKind::TypeAlias,
-                declaration.span,
-                declaration.id.span,
-            ),
-            AstKind::TSInterfaceDeclaration(declaration) => self.push(
-                DeclarationKind::Interface,
-                declaration.span,
-                declaration.id.span,
-            ),
+            AstKind::TSTypeAliasDeclaration(declaration) => {
+                self.push(
+                    DeclarationKind::TypeAlias,
+                    declaration.span,
+                    declaration.id.span,
+                );
+                if self
+                    .root_placement()
+                    .is_some_and(|placement| placement.direct_lexical)
+                {
+                    self.candidate(
+                        declaration.id.name.as_str(),
+                        &[SourceBindingSlot::Type],
+                        false,
+                    );
+                }
+            }
+            AstKind::TSInterfaceDeclaration(declaration) => {
+                self.push(
+                    DeclarationKind::Interface,
+                    declaration.span,
+                    declaration.id.span,
+                );
+                if self
+                    .root_placement()
+                    .is_some_and(|placement| placement.direct_lexical)
+                {
+                    self.candidate(
+                        declaration.id.name.as_str(),
+                        &[SourceBindingSlot::Type],
+                        false,
+                    );
+                }
+            }
             AstKind::TSEnumDeclaration(declaration) => {
-                self.push(DeclarationKind::Enum, declaration.span, declaration.id.span)
+                self.push(DeclarationKind::Enum, declaration.span, declaration.id.span);
+                if self
+                    .root_placement()
+                    .is_some_and(|placement| placement.direct_lexical)
+                {
+                    self.candidate(
+                        declaration.id.name.as_str(),
+                        &[SourceBindingSlot::Value, SourceBindingSlot::Type],
+                        false,
+                    );
+                }
             }
             AstKind::TSModuleDeclaration(declaration) => {
                 let binding_span = match &declaration.id {
@@ -184,22 +493,108 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
                     TSModuleDeclarationName::StringLiteral(literal) => literal.span,
                 };
                 self.push(DeclarationKind::Namespace, declaration.span, binding_span);
+                if let TSModuleDeclarationName::Identifier(identifier) = &declaration.id {
+                    if self
+                        .root_placement()
+                        .is_some_and(|placement| placement.direct_lexical)
+                    {
+                        if identifier.name == "globalThis" {
+                            self.global_census
+                                .as_mut()
+                                .expect("root placement requires the census projection")
+                                .result
+                                .explicit_global_this = true;
+                        }
+                        self.candidate(
+                            identifier.name.as_str(),
+                            &[SourceBindingSlot::Value, SourceBindingSlot::Namespace],
+                            true,
+                        );
+                    }
+                }
+                if let Some(census) = self.global_census.as_mut() {
+                    census.module_depth = census.module_depth.saturating_add(1);
+                }
             }
-            AstKind::TSImportEqualsDeclaration(declaration) => self.push(
-                DeclarationKind::ImportEquals,
-                declaration.span,
-                declaration.id.span,
-            ),
-            AstKind::TSNamespaceExportDeclaration(declaration) => self.push(
-                DeclarationKind::NamespaceExport,
-                declaration.span,
-                declaration.id.span,
-            ),
-            AstKind::TSGlobalDeclaration(declaration) => self.push(
-                DeclarationKind::Global,
-                declaration.span,
-                declaration.global_span,
-            ),
+            AstKind::TSImportEqualsDeclaration(declaration) => {
+                self.push(
+                    DeclarationKind::ImportEquals,
+                    declaration.span,
+                    declaration.id.span,
+                );
+                if self
+                    .root_placement()
+                    .is_some_and(|placement| placement.direct_lexical)
+                {
+                    let slots: &[SourceBindingSlot] = match declaration.import_kind {
+                        ImportOrExportKind::Value => &[
+                            SourceBindingSlot::Value,
+                            SourceBindingSlot::Type,
+                            SourceBindingSlot::Namespace,
+                        ],
+                        ImportOrExportKind::Type => &[SourceBindingSlot::Type],
+                    };
+                    self.candidate(declaration.id.name.as_str(), slots, false);
+                }
+            }
+            AstKind::TSNamespaceExportDeclaration(declaration) => {
+                self.push(
+                    DeclarationKind::NamespaceExport,
+                    declaration.span,
+                    declaration.id.span,
+                );
+                if let Some(census) = self.global_census.as_mut() {
+                    census.result.umd_global = true;
+                }
+            }
+            AstKind::TSGlobalDeclaration(declaration) => {
+                self.push(
+                    DeclarationKind::Global,
+                    declaration.span,
+                    declaration.global_span,
+                );
+                let placement_is_legal = self.global_placement_is_legal();
+                if let Some(census) = self.global_census.as_mut() {
+                    if !placement_is_legal {
+                        census.result.uncertain_relevant_syntax = true;
+                    }
+                    census.global_boundaries.push((
+                        census.function_depth,
+                        census.class_depth,
+                        census.module_depth,
+                        census.statement_nesting_depth,
+                    ));
+                }
+            }
+            AstKind::ArrowFunctionExpression(_) => {
+                if let Some(census) = self.global_census.as_mut() {
+                    census.function_depth = census.function_depth.saturating_add(1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn leave_node(&mut self, kind: AstKind<'a>) {
+        let Some(census) = self.global_census.as_mut() else {
+            return;
+        };
+        match kind {
+            AstKind::VariableDeclaration(_) => {
+                census.variable_kinds.pop();
+            }
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                census.function_depth = census.function_depth.saturating_sub(1);
+            }
+            AstKind::Class(_) => {
+                census.class_depth = census.class_depth.saturating_sub(1);
+            }
+            AstKind::TSModuleDeclaration(_) => {
+                census.module_depth = census.module_depth.saturating_sub(1);
+            }
+            AstKind::TSGlobalDeclaration(_) => {
+                census.global_boundaries.pop();
+            }
             _ => {}
         }
     }
@@ -553,5 +948,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["nested", "deep"]
         );
+    }
+
+    #[test]
+    fn occurrence_only_projection_allocates_no_global_census_state() {
+        let source = "declare var globalValue: number; interface GlobalType {} declare global { namespace Nested {} }";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::d_ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+        let mut occurrence_only = SourceDeclarationVisitor::occurrences_only();
+        occurrence_only.visit_program(&parsed.program);
+        assert!(occurrence_only.global_census.is_none());
+        let occurrences = occurrence_only
+            .occurrences
+            .expect("occurrence-only projection owns occurrence rows");
+
+        let census = source_global_binding_census(
+            &parsed.program,
+            ModuleBindingContext::for_program(
+                &parsed.program,
+                crate::binder::namespace::SourceFileKind::DeclarationTs,
+            ),
+        );
+        assert_eq!(occurrences, source_declaration_occurrences(&parsed.program));
+        assert!(census.source_nodes_visited > 0);
+        assert!(!census.candidates.is_empty());
     }
 }

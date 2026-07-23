@@ -79,6 +79,92 @@ thread_local! {
     static PUBLICATION_UNIQUE_EDGES: std::cell::RefCell<FxHashSet<(TypeId, TypeId)>> =
         std::cell::RefCell::new(FxHashSet::default());
     static QUERY_SOURCE_COLD_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PROJECTION_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static EVALUATOR_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QueryCacheWritesForTest {
+    pub(crate) projection: u64,
+    pub(crate) evaluator: u64,
+}
+
+#[cfg(test)]
+pub(crate) struct QueryCacheWriteScopeForTest(QueryCacheWritesForTest);
+
+#[cfg(test)]
+impl QueryCacheWriteScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(QueryCacheWritesForTest {
+            projection: PROJECTION_CACHE_WRITES.get(),
+            evaluator: EVALUATOR_CACHE_WRITES.get(),
+        })
+    }
+
+    pub(crate) fn finish(self) -> QueryCacheWritesForTest {
+        QueryCacheWritesForTest {
+            projection: PROJECTION_CACHE_WRITES
+                .get()
+                .saturating_sub(self.0.projection),
+            evaluator: EVALUATOR_CACHE_WRITES
+                .get()
+                .saturating_sub(self.0.evaluator),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn calibrate_query_cache_writes_for_test() -> QueryCacheWritesForTest {
+    let scope = QueryCacheWriteScopeForTest::start();
+    let mut projection = FxHashMap::default();
+    let mut evaluator = FxHashMap::default();
+    commit_query_cache_entries(
+        &mut projection,
+        &mut evaluator,
+        FxHashMap::from_iter([(TypeId(1), TypeId(2))]),
+        FxHashMap::from_iter([(TypeId(3), TypeId(4))]),
+    );
+    scope.finish()
+}
+
+fn commit_query_cache_entries(
+    projection: &mut FxHashMap<TypeId, TypeId>,
+    evaluator: &mut FxHashMap<TypeId, TypeId>,
+    pending_projection: FxHashMap<TypeId, TypeId>,
+    pending_evaluator: FxHashMap<TypeId, TypeId>,
+) {
+    #[cfg(test)]
+    {
+        PROJECTION_CACHE_WRITES.set(
+            PROJECTION_CACHE_WRITES
+                .get()
+                .saturating_add(u64::try_from(pending_projection.len()).unwrap_or(u64::MAX)),
+        );
+        EVALUATOR_CACHE_WRITES.set(
+            EVALUATOR_CACHE_WRITES
+                .get()
+                .saturating_add(u64::try_from(pending_evaluator.len()).unwrap_or(u64::MAX)),
+        );
+    }
+    projection.extend(pending_projection);
+    evaluator.extend(pending_evaluator);
+}
+
+#[cfg(test)]
+mod cache_write_calibration_tests {
+    use super::*;
+
+    #[test]
+    fn calibration_exercises_projection_and_evaluator_commit_hooks() {
+        assert_eq!(
+            calibrate_query_cache_writes_for_test(),
+            QueryCacheWritesForTest {
+                projection: 1,
+                evaluator: 1,
+            }
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1245,12 +1331,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             measure.durable_evaluation_inserts +=
                 u64::try_from(transaction.pending_evaluator_writes.len()).unwrap();
         });
-        self.state
-            .projection_memo
-            .extend(transaction.pending_projection_writes);
-        self.state
-            .evaluation_memo
-            .extend(transaction.pending_evaluator_writes);
+        commit_query_cache_entries(
+            &mut self.state.projection_memo,
+            &mut self.state.evaluation_memo,
+            transaction.pending_projection_writes,
+            transaction.pending_evaluator_writes,
+        );
         *self.next_type_param = transaction.next_type_param;
     }
 
