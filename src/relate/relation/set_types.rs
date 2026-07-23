@@ -20,11 +20,24 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
         let members: Vec<TypeId> = members.to_vec();
+        let target_members = self.store.union_members(tgt).map(<[TypeId]>::to_vec);
+        let mut target_index = 0;
 
         // "Every member relates" (AND): each member's assumptions genuinely
         // contribute to the union's Yes, so they all flow up through `assumed`.
         for member in members {
-            if let Relation::No(child) = self.relate(member, tgt, kind, assumed) {
+            let exact_target = target_members.as_ref().is_some_and(|target_members| {
+                while target_index < target_members.len() && target_members[target_index] < member {
+                    target_index += 1;
+                }
+                target_members.get(target_index) == Some(&member)
+            });
+            let relation = if exact_target {
+                self.relate(member, member, kind, assumed)
+            } else {
+                self.relate(member, tgt, kind, assumed)
+            };
+            if let Relation::No(child) = relation {
                 return Relation::No(ReasonChain::of(Reason::UnionSourceMember {
                     member,
                     src,
