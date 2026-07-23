@@ -16,7 +16,9 @@
 //! The tests use deterministic visit counters, never elapsed time.
 
 use super::*;
-use crate::types::repr::{FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType};
+use crate::types::repr::{
+    ConditionalType, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
+};
 use std::sync::Arc;
 
 fn prop(name: impl Into<String>, ty: TypeId) -> PropertyType {
@@ -303,5 +305,44 @@ fn stack_dependent_cycle_results_never_leak_between_fresh_runs() {
     assert!(
         after_second.cycle_reentries > after_first.cycle_reentries,
         "the second run must observe its own raw-id cycle cut"
+    );
+}
+
+#[test]
+fn lazy_conditional_result_does_not_depend_on_the_first_retained_mapper() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let relevant_id = TypeParamId(99_260);
+    let retained_id = TypeParamId(99_261);
+    let relevant = interner.intern_type_param(relevant_id, "T");
+    let union = interner.union(vec![wk.number, wk.string]);
+    let source = interner.intern_conditional(ConditionalType {
+        check: relevant,
+        extends_ty: wk.unknown,
+        true_branch: relevant,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let number_map =
+        FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.number)]);
+    let string_map =
+        FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.string)]);
+
+    let number_result = substitute(&mut interner, source, &number_map);
+
+    let mutation = interner.reserve_object();
+    interner.fill_object(mutation, ObjectType::default());
+
+    let string_result = substitute(&mut interner, source, &string_map);
+    assert_ne!(
+        string_result, number_result,
+        "lazy instantiations retain mapper entries outside the source free set"
+    );
+    assert_eq!(
+        substitute(&mut interner, source, &number_map),
+        number_result,
+        "a durable key must distinguish every mapper entry retained in the result"
     );
 }
