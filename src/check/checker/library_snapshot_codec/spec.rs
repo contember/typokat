@@ -1301,6 +1301,54 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
 }
 
 #[test]
+fn canonical_replay_decode_reuses_the_authenticated_section_digest() {
+    let codec_source = include_str!("mod.rs");
+    let replay_source = include_str!("../replay_index.rs");
+    let directory_section = codec_source
+        .split_once("struct DirectorySection {")
+        .expect("directory section declaration")
+        .1
+        .split_once("\n}")
+        .expect("directory section body")
+        .0;
+    assert!(
+        directory_section.contains("digest: [u8; 32],")
+            && !directory_section.contains("#[cfg(test)]"),
+        "validated section digests must survive into the production decoder"
+    );
+
+    let canonical_start = codec_source
+        .find("pub(in crate::check::checker) fn decode_canonical_snapshot(")
+        .expect("canonical decoder entrypoint");
+    let canonical_end = codec_source[canonical_start..]
+        .find("pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(")
+        .map(|offset| canonical_start + offset)
+        .expect("canonical decoder boundary");
+    let canonical_source = &codec_source[canonical_start..canonical_end];
+    assert!(
+        canonical_source.contains("decode_authenticated_collision_replay_index("),
+        "canonical replay decode must consume the digest authenticated by directory validation"
+    );
+
+    let authenticated_start = replay_source
+        .find("fn decode_authenticated_collision_replay_index(")
+        .expect("authenticated replay decoder entrypoint");
+    let authenticated_end = replay_source[authenticated_start..]
+        .find("\npub(crate) fn admit_decoded_collision_replay_index(")
+        .map(|offset| authenticated_start + offset)
+        .expect("authenticated replay decoder boundary");
+    let authenticated_source = &replay_source[authenticated_start..authenticated_end];
+    assert!(
+        !authenticated_source.contains("Sha256::digest(bytes)"),
+        "an already-authenticated replay section must not be hashed a second time"
+    );
+    assert!(
+        replay_source.contains("canonical_manifest_sha256: Sha256::digest(bytes).into()"),
+        "the generic adversarial decoder must still authenticate untrusted replay bytes itself"
+    );
+}
+
+#[test]
 fn snapshot_base_is_send_sync_static() {
     assert_send_sync_static::<CompiledSnapshotForTest>();
     assert_send_sync_static::<SnapshotArchiveForTest>();

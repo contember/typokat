@@ -112,6 +112,27 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
 }
 
 #[test]
+fn singleton_scc_owner_rows_use_inline_storage_without_changing_the_wire_model() {
+    let source = include_str!("../check/checker/replay_index.rs");
+    let declaration = source
+        .split_once("pub(crate) struct ReplayScc")
+        .expect("replay SCC declaration")
+        .1
+        .split_once("\n}")
+        .expect("replay SCC body")
+        .0;
+    let normalized = declaration.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalized.contains("owners: SmallVec<[ReplayOwner; 1]>,"),
+        "the overwhelmingly singleton SCC partition must not allocate one owner Vec per row"
+    );
+    assert!(
+        source.contains("pub(crate) scc_membership: Vec<ReplayScc>,"),
+        "inline owner storage must preserve the ordered retained SCC row model"
+    );
+}
+
+#[test]
 fn canonical_replay_index_is_an_authenticated_eleventh_snapshot_section() {
     let compiler = LibraryCompilerWorkScopeForTest::start();
     let generation = measure_generation_for_test();
