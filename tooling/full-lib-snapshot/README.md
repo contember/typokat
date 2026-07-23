@@ -74,8 +74,8 @@ version, profile and schema digests, eleven ordered tags with zero reserved bits
 nonempty contiguous sections, exact body length, no trailing bytes, and valid
 body/section SHA-256 values. An archive must be between 1 MiB and 32 MiB.
 The regenerated archive must additionally match the contract's exact canonical
-21,000,266-byte identity
-`539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960`.
+21,003,926-byte identity
+`47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f`.
 The timed route authenticates that complete identity while taking ownership of
 the input bytes. It still compares every decoded reference with the canonical
 wire manifest, but does so as a stream instead of allocating, globally sorting,

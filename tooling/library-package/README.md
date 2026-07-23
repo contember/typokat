@@ -3,7 +3,7 @@
 `verify.py` is the release gate for the source compiler and canonical
 snapshot. It refuses a dirty repository, clones the committed revision into two
 distinct clean roots, generates one snapshot in each root, and requires the two
-outputs to equal the pinned 21,000,266-byte artifact byte-for-byte.
+outputs to equal the pinned 21,003,926-byte artifact byte-for-byte.
 
 Each clean root is then packaged independently. The coordinator validates
 the source and normalized package manifests plus Cargo metadata, requires zero

@@ -13,9 +13,9 @@ use std::fmt;
 #[cfg(test)]
 use std::path::PathBuf;
 
-pub const CANONICAL_SNAPSHOT_BYTES: usize = 21_000_266;
+pub const CANONICAL_SNAPSHOT_BYTES: usize = 21_003_926;
 pub const CANONICAL_SNAPSHOT_SHA256: &str =
-    "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
+    "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f";
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const DIAGNOSTICS_IDENTITY: &str =
     "34cc5c2c11c7d4199dd1230f88691e97b5afb09f319153d9e56d1a45f3220c86";

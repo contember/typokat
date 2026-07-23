@@ -1269,8 +1269,8 @@ impl NamespaceTable {
                 .expect("compilation-global scope exists");
             let mut blocked_names = Vec::new();
             for name in unsafe_names {
-                if global.symbols.remove(&name).is_some() {
-                    blocked_names.push(name);
+                if let Some(previous) = global.symbols.remove(&name) {
+                    blocked_names.push((name, previous));
                 }
             }
             (
@@ -1286,12 +1286,12 @@ impl NamespaceTable {
         // Prevent deferred globals from falling through to module-local names.
         let blocked_symbols = blocked_names
             .into_iter()
-            .map(|name| {
+            .map(|(name, previous)| {
                 let mut symbol = Symbol::new(name.clone());
                 symbol.blocks_type_lookup = true;
                 symbol.blocks_value_lookup = true;
                 symbol.blocks_namespace_lookup = true;
-                (name, symbols.push(symbol))
+                (name, previous, symbols.push(symbol))
             })
             .collect::<Vec<_>>();
 
@@ -1302,16 +1302,17 @@ impl NamespaceTable {
         {
             for (name, symbol) in &safe_symbols {
                 let replaced = graph.declare(global.overlay_scope, name.clone(), *symbol);
-                assert!(
-                    replaced.is_none(),
-                    "global overlay is populated only at freeze"
+                assert_idempotent_overlay_publication(
+                    replaced,
+                    *symbol,
+                    "global overlay cannot replace a different frozen symbol",
                 );
             }
-            for (name, symbol) in &blocked_symbols {
+            for (name, previous, symbol) in &blocked_symbols {
                 let replaced = graph.declare(global.overlay_scope, name.clone(), *symbol);
                 assert!(
-                    replaced.is_none(),
-                    "global overlay blockers are frozen once"
+                    replaced.is_none_or(|existing| existing == *symbol || existing == *previous),
+                    "global overlay blocker cannot replace an unrelated symbol"
                 );
             }
         }
@@ -2688,6 +2689,17 @@ impl NamespaceTable {
     }
 }
 
+fn assert_idempotent_overlay_publication(
+    replaced: Option<SymbolId>,
+    intended: SymbolId,
+    message: &'static str,
+) {
+    assert!(
+        replaced.is_none_or(|existing| existing == intended),
+        "{message}"
+    );
+}
+
 /// Append dormant namespace-owned slots after all lexical storage allocation.
 pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
     let candidates = state
@@ -3928,8 +3940,49 @@ pub(crate) fn bind_namespace_metadata(
         script_namespace_root,
         NamespaceMetadataRoot::Module,
     );
+    publish_continuation_hoisted_variables(state, unit);
     finalize_namespace_metadata(state);
     fill_namespace_value_attachments(state, program);
+}
+
+fn publish_continuation_hoisted_variables(state: &mut BindState, unit: CompilationUnit) {
+    for (binding_start, name) in state.continuation_publication_sites() {
+        let Some(declaration) = state.source_decl_at(binding_start, DeclarationKind::Variable)
+        else {
+            continue;
+        };
+        let key = MergeKey {
+            owner: DeclarationOwner::CompilationGlobal,
+            name: name.clone(),
+        };
+        if state
+            .namespaces
+            .placements
+            .get(&key)
+            .is_some_and(|participants| {
+                participants
+                    .iter()
+                    .any(|participant| participant.declaration == declaration)
+            })
+        {
+            continue;
+        }
+        push_placement(
+            state,
+            DeclarationOwner::CompilationGlobal,
+            &name,
+            declaration,
+            MergeDeclarationKind::Variable,
+            DeclarationSpaces::VALUE,
+            unit.binding.declaration_file(),
+            unit,
+        );
+        set_placement_syntax(
+            state,
+            declaration,
+            DeclarationSyntaxFacts::Variable(VariableKind::Var),
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -4754,10 +4807,14 @@ fn bind_named_declaration_with_syntax(
     unit: CompilationUnit,
     syntax: DeclarationSyntaxFacts,
 ) {
+    let continuation_global = state.continuation_compilation_global_for(binding_start);
     let declaration =
         state.attach_declaration_scope(binding_start, declaration_kind, context.lexical_scope);
     let publication = context.publication(explicit);
-    let owner = context.declaration_owner(publication);
+    let owner = continuation_global.map_or_else(
+        || context.declaration_owner(publication),
+        |_| DeclarationOwner::CompilationGlobal,
+    );
     let ambient = context.ambient || declared_ambient;
     let syntax = match syntax {
         DeclarationSyntaxFacts::Import(mut facts) => {
@@ -4861,8 +4918,13 @@ fn bind_module_declaration(
     let Some(mut owner) = context.namespace_owner(publication) else {
         return;
     };
+    let continuation_global = state.continuation_compilation_global_for(identifier.span.start);
+    if continuation_global.is_some() {
+        owner = NamespaceOwner::CompilationGlobal;
+    }
     if context.direct_top_level
         && !unit.binding.external_module
+        && continuation_global.is_none()
         && matches!(owner, NamespaceOwner::Lexical(scope) if scope == context.lexical_scope)
     {
         let occupied_local = state
@@ -6199,6 +6261,24 @@ mod tests {
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
+
+    #[test]
+    fn frozen_global_overlay_republication_accepts_only_the_same_symbol() {
+        assert_idempotent_overlay_publication(None, SymbolId(7), "first publication is admitted");
+        assert_idempotent_overlay_publication(
+            Some(SymbolId(7)),
+            SymbolId(7),
+            "same-id continuation is idempotent",
+        );
+        let conflict = std::panic::catch_unwind(|| {
+            assert_idempotent_overlay_publication(
+                Some(SymbolId(8)),
+                SymbolId(7),
+                "different-id continuation is rejected",
+            );
+        });
+        assert!(conflict.is_err());
+    }
 
     #[test]
     fn namespace_base_sharing_witness_covers_every_layered_field() {

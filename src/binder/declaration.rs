@@ -106,6 +106,9 @@ pub(crate) fn source_global_binding_census_with_provenance(
         .expect("global census provenance projection is enabled");
     SourceGlobalBindingProvenance {
         census: projection.result,
+        binding_sites: projection
+            .binding_sites
+            .expect("binding-site provenance is enabled"),
         contributor_sites: projection
             .contributor_sites
             .expect("contributor provenance is enabled"),
@@ -151,8 +154,15 @@ pub(crate) struct SourceGlobalBindingCensus {
 
 pub(crate) struct SourceGlobalBindingProvenance {
     pub(crate) census: SourceGlobalBindingCensus,
+    pub(crate) binding_sites: Vec<SourceGlobalBindingSite>,
     pub(crate) contributor_sites: Vec<SourceGlobalContributorSite>,
     pub(crate) explicit_global_this_sites: Vec<Span>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceGlobalBindingSite {
+    pub(crate) name: String,
+    pub(crate) span: Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +192,7 @@ struct SourceGlobalCensusProjection {
     statement_nesting_depth: usize,
     variable_kinds: Vec<VariableDeclarationKind>,
     global_boundaries: Vec<(usize, usize, usize, usize, GlobalBoundaryDisposition)>,
+    binding_sites: Option<Vec<SourceGlobalBindingSite>>,
     contributor_sites: Option<Vec<SourceGlobalContributorSite>>,
     explicit_global_this_sites: Option<Vec<Span>>,
 }
@@ -213,6 +224,7 @@ impl SourceDeclarationVisitor {
                 statement_nesting_depth: 0,
                 variable_kinds: Vec::new(),
                 global_boundaries: Vec::new(),
+                binding_sites: None,
                 contributor_sites: None,
                 explicit_global_this_sites: None,
             }),
@@ -225,6 +237,7 @@ impl SourceDeclarationVisitor {
             .global_census
             .as_mut()
             .expect("global census projection is enabled");
+        projection.binding_sites = Some(Vec::new());
         projection.contributor_sites = Some(Vec::new());
         projection.explicit_global_this_sites = Some(Vec::new());
         visitor
@@ -321,6 +334,12 @@ impl SourceDeclarationVisitor {
         let candidate = candidates.entry(name.to_owned()).or_default();
         candidate.slots.extend(slots.iter().copied());
         candidate.global_object_contributor |= contributor.is_some();
+        if let Some(sites) = census.binding_sites.as_mut() {
+            sites.push(SourceGlobalBindingSite {
+                name: name.to_owned(),
+                span: Span::from_oxc(binding_span),
+            });
+        }
         if !uncertain {
             if let Some(kind) = contributor {
                 if let Some(sites) = census.contributor_sites.as_mut() {

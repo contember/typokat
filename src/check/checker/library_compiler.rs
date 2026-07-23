@@ -41,7 +41,14 @@ use super::{
 };
 #[cfg(test)]
 use super::{check_bound_user_program_with_final_identity_inspector, BoundUserBase};
-use crate::binder::bind::ProjectBinderBuilder;
+#[cfg(test)]
+use crate::binder::bind::LibraryBinderCheckpointEnds;
+use crate::binder::bind::{
+    AuthenticatedLibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder,
+    UnauthenticatedLibraryBinderCheckpoint,
+};
+#[cfg(test)]
+use crate::binder::declaration::DeclId;
 #[cfg(test)]
 use crate::binder::declaration::TypeFragmentKind;
 use crate::binder::declaration::{
@@ -78,7 +85,7 @@ use crate::types::store::Store;
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
-use oxc_parser::Parser;
+use oxc_parser::{Parser, ParserReturn};
 use oxc_span::SourceType;
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -1805,6 +1812,77 @@ struct CanonicalInput<'source> {
     source_key: ExactKey,
 }
 
+struct CanonicalLibraryFrontend<'source, 'ast> {
+    canonical: Vec<CanonicalInput<'source>>,
+    parsed: Vec<ParserReturn<'ast>>,
+    binder: Binder,
+    module_scopes: Vec<ScopeId>,
+    semantic_scopes: Vec<ScopeId>,
+    #[cfg(test)]
+    parse_elapsed: Duration,
+    #[cfg(test)]
+    bind_elapsed: Duration,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CANONICAL_FRONTEND_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CANONICAL_FRONTEND_PARSE_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CANONICAL_FRONTEND_BIND_BATCHES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CANONICAL_FRONTEND_BIND_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CANONICAL_FRONTEND_FULL_PRODUCTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CanonicalLibraryFrontendWorkForTest {
+    pub(crate) entries: u64,
+    pub(crate) parse_units: u64,
+    pub(crate) bind_batches: u64,
+    pub(crate) bind_units: u64,
+    pub(crate) full_source_products_consumed: u64,
+    pub(crate) checkpoint_products_consumed: u64,
+}
+
+#[cfg(test)]
+fn canonical_library_frontend_work_for_test() -> CanonicalLibraryFrontendWorkForTest {
+    CanonicalLibraryFrontendWorkForTest {
+        entries: CANONICAL_FRONTEND_ENTRIES.get(),
+        parse_units: CANONICAL_FRONTEND_PARSE_UNITS.get(),
+        bind_batches: CANONICAL_FRONTEND_BIND_BATCHES.get(),
+        bind_units: CANONICAL_FRONTEND_BIND_UNITS.get(),
+        full_source_products_consumed: CANONICAL_FRONTEND_FULL_PRODUCTS.get(),
+        checkpoint_products_consumed: CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS.get(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct CanonicalLibraryFrontendWorkScopeForTest(CanonicalLibraryFrontendWorkForTest);
+
+#[cfg(test)]
+impl CanonicalLibraryFrontendWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(canonical_library_frontend_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> CanonicalLibraryFrontendWorkForTest {
+        let end = canonical_library_frontend_work_for_test();
+        CanonicalLibraryFrontendWorkForTest {
+            entries: end.entries.saturating_sub(self.0.entries),
+            parse_units: end.parse_units.saturating_sub(self.0.parse_units),
+            bind_batches: end.bind_batches.saturating_sub(self.0.bind_batches),
+            bind_units: end.bind_units.saturating_sub(self.0.bind_units),
+            full_source_products_consumed: end
+                .full_source_products_consumed
+                .saturating_sub(self.0.full_source_products_consumed),
+            checkpoint_products_consumed: end
+                .checkpoint_products_consumed
+                .saturating_sub(self.0.checkpoint_products_consumed),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ParserExportClaim {
     file_ordinal: LibraryFileOrdinal,
@@ -2840,9 +2918,12 @@ pub(crate) fn run_injected_profile(
     compile_owned_injected_profile(sources).map(|(run, _)| run)
 }
 
-pub(crate) fn compile_owned_injected_profile(
-    sources: &[InjectedLibrarySource<'_>],
-) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+fn with_canonical_library_frontend<'source, Output>(
+    sources: &[InjectedLibrarySource<'source>],
+    consume: impl for<'ast> FnOnce(
+        CanonicalLibraryFrontend<'source, 'ast>,
+    ) -> Result<Output, InjectedProfileError>,
+) -> Result<Output, InjectedProfileError> {
     #[cfg(test)]
     let parse_started = Instant::now();
     let canonical = canonical_inputs(sources)?;
@@ -2873,7 +2954,6 @@ pub(crate) fn compile_owned_injected_profile(
                     },
                 });
             }
-
             let mut claims = Vec::with_capacity(parsed.diagnostics.len());
             for diagnostic in &parsed.diagnostics {
                 let code_is_ts1319 = diagnostic.code.scope.as_deref() == Some("TS")
@@ -2959,6 +3039,57 @@ pub(crate) fn compile_owned_injected_profile(
         .collect::<Vec<_>>();
     #[cfg(test)]
     let bind_elapsed = bind_started.elapsed();
+    #[cfg(test)]
+    {
+        CANONICAL_FRONTEND_ENTRIES.set(CANONICAL_FRONTEND_ENTRIES.get().saturating_add(1));
+        CANONICAL_FRONTEND_PARSE_UNITS.set(
+            CANONICAL_FRONTEND_PARSE_UNITS
+                .get()
+                .saturating_add(u64::try_from(parsed.len()).unwrap_or(u64::MAX)),
+        );
+        CANONICAL_FRONTEND_BIND_BATCHES
+            .set(CANONICAL_FRONTEND_BIND_BATCHES.get().saturating_add(1));
+        CANONICAL_FRONTEND_BIND_UNITS.set(
+            CANONICAL_FRONTEND_BIND_UNITS
+                .get()
+                .saturating_add(u64::try_from(module_scopes.len()).unwrap_or(u64::MAX)),
+        );
+    }
+    consume(CanonicalLibraryFrontend {
+        canonical,
+        parsed,
+        binder,
+        module_scopes,
+        semantic_scopes,
+        #[cfg(test)]
+        parse_elapsed,
+        #[cfg(test)]
+        bind_elapsed,
+    })
+}
+
+pub(crate) fn compile_owned_injected_profile(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    with_canonical_library_frontend(sources, compile_owned_injected_frontend)
+}
+
+fn compile_owned_injected_frontend(
+    frontend: CanonicalLibraryFrontend<'_, '_>,
+) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    let CanonicalLibraryFrontend {
+        canonical,
+        parsed,
+        binder,
+        module_scopes,
+        semantic_scopes,
+        #[cfg(test)]
+        parse_elapsed,
+        #[cfg(test)]
+        bind_elapsed,
+    } = frontend;
+    #[cfg(test)]
+    CANONICAL_FRONTEND_FULL_PRODUCTS.set(CANONICAL_FRONTEND_FULL_PRODUCTS.get().saturating_add(1));
 
     #[cfg(test)]
     let reserve_fill_started = Instant::now();
@@ -3249,6 +3380,277 @@ pub(crate) fn compile_owned_injected_profile(
     Ok((run, runtime_state))
 }
 
+pub(crate) fn compile_library_binder_checkpoint(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<UnauthenticatedLibraryBinderCheckpoint, InjectedProfileError> {
+    with_canonical_library_frontend(sources, |frontend| {
+        #[cfg(test)]
+        CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS.set(
+            CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS
+                .get()
+                .saturating_add(1),
+        );
+        let CanonicalLibraryFrontend {
+            canonical,
+            binder,
+            module_scopes,
+            ..
+        } = frontend;
+        let super::library_snapshot_codec::SourceBinderCheckpointDigests {
+            binder: source_binder_encoding_sha256,
+            roots: source_root_encoding_sha256,
+            retained_scope_maps: retained_scope_maps_sha256,
+        } = super::library_snapshot_codec::source_binder_checkpoint_digests(&binder)
+            .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?;
+        let library_units = canonical
+            .iter()
+            .zip(module_scopes)
+            .map(|(input, module)| LibraryBinderUnit {
+                ordinal: input.file_ordinal,
+                source: input.source_key,
+                module,
+            })
+            .collect();
+        Ok(UnauthenticatedLibraryBinderCheckpoint::new(
+            binder,
+            library_units,
+            source_binder_encoding_sha256,
+            source_root_encoding_sha256,
+            retained_scope_maps_sha256,
+        ))
+    })
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BinderContinuationModuleSourceForTest {
+    pub(crate) module: ScopeId,
+    pub(crate) source: crate::binder::namespace::SourceUnitKey,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct AuthenticatedBinderContinuationForTest {
+    pub(crate) bound: super::BoundProjectBinder,
+    pub(crate) checkpoint_ends: LibraryBinderCheckpointEnds,
+    pub(crate) ends: LibraryBinderCheckpointEnds,
+    pub(crate) array_symbol_before_augmentation: SymbolId,
+    pub(crate) array_type_group_before_augmentation: TypeGroupId,
+    pub(crate) array_symbol_after_augmentation: SymbolId,
+    pub(crate) array_type_group_after_augmentation: TypeGroupId,
+    pub(crate) consumer_array_type_group: TypeGroupId,
+    pub(crate) augmentation_declaration: DeclId,
+    pub(crate) appended_scopes: Vec<ScopeId>,
+    pub(crate) appended_symbols: Vec<SymbolId>,
+    pub(crate) appended_declarations: Vec<DeclId>,
+    pub(crate) appended_type_groups: Vec<TypeGroupId>,
+    pub(crate) appended_namespaces: Vec<NamespaceId>,
+    pub(crate) appended_value_storages: Vec<ValueStorageId>,
+    pub(crate) appended_module_sources: Vec<BinderContinuationModuleSourceForTest>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectBindingLookupForTest {
+    pub(crate) symbol: SymbolId,
+    pub(crate) value: Option<ValueStorageId>,
+    pub(crate) type_group: Option<TypeGroupId>,
+    pub(crate) namespace: Option<NamespaceId>,
+    pub(crate) blocks_type_lookup: bool,
+}
+
+#[cfg(test)]
+impl AuthenticatedBinderContinuationForTest {
+    pub(crate) fn normalized_per_path_binding_shape_for_test(&self) -> Vec<String> {
+        self.bound
+            .normalized
+            .normalized_per_path_binding_shape
+            .clone()
+    }
+
+    pub(crate) fn project_sources_for_test(&self) -> &[super::ProjectSourceBindingRow] {
+        &self.bound.project_sources
+    }
+
+    fn project_module_for_test(&self, path: &str) -> Option<ScopeId> {
+        self.bound
+            .project_sources
+            .iter()
+            .find(|row| row.normalized_path == path)
+            .map(|row| row.module)
+    }
+
+    pub(crate) fn lookup_binding_for_test(
+        &self,
+        path: &str,
+        name: &str,
+    ) -> Option<ProjectBindingLookupForTest> {
+        let module = self.project_module_for_test(path)?;
+        let symbol = self.bound.binder.graph.resolve(module, name)?;
+        let slots = self.bound.binder.symbols.get(symbol)?;
+        Some(ProjectBindingLookupForTest {
+            symbol,
+            value: slots.value,
+            type_group: slots.ty,
+            namespace: slots.ns,
+            blocks_type_lookup: slots.blocks_type_lookup,
+        })
+    }
+
+    pub(crate) fn import_placeholders_for_test(&self, path: &str) -> Vec<ValueStorageId> {
+        let Some(module) = self.project_module_for_test(path) else {
+            return Vec::new();
+        };
+        self.bound
+            .module_scopes
+            .iter()
+            .position(|candidate| *candidate == module)
+            .and_then(|index| self.bound.module_placeholders.get(index))
+            .into_iter()
+            .flatten()
+            .filter_map(|placeholder| placeholder.value)
+            .collect()
+    }
+
+    pub(crate) fn script_namespace_root_reservation_for_test(
+        &self,
+        name: &str,
+    ) -> Option<SymbolId> {
+        self.bound
+            .binder
+            .graph
+            .get(self.bound.binder.script_namespace_root)?
+            .lookup_local(name)
+    }
+
+    pub(crate) fn standalone_namespace_value_storage_for_test(
+        &self,
+        path: &str,
+        name: &str,
+    ) -> Option<ValueStorageId> {
+        let namespace = self.lookup_binding_for_test(path, name)?.namespace?;
+        self.bound
+            .binder
+            .namespaces
+            .standalone_value_storage(namespace)
+    }
+
+    pub(crate) fn attached_namespace_value_disposition_for_test(
+        &self,
+        path: &str,
+        name: &str,
+    ) -> Option<crate::binder::namespace::NamespaceValueAttachmentDisposition> {
+        let module = self.project_module_for_test(path)?;
+        self.bound
+            .binder
+            .namespace_value_attachment(module, name)
+            .map(|attachment| attachment.disposition)
+    }
+}
+
+pub(crate) fn continue_authenticated_library_project_binder(
+    checkpoint: AuthenticatedLibraryBinderCheckpoint,
+    inputs: Vec<crate::driver::FileInput>,
+) -> Result<super::BoundProjectBinder, String> {
+    crate::driver::run_project_frontend(inputs, |_, units| {
+        #[cfg(test)]
+        record_user_source_parses_for_test(units.len());
+        let bound = super::bind_authenticated_project_programs(checkpoint, units)?;
+        #[cfg(test)]
+        {
+            record_user_source_binds_for_test(units.len());
+            super::record_continuation_project_binding_consumed_for_test();
+        }
+        Ok(bound)
+    })
+    .into_product()
+}
+
+#[cfg(test)]
+pub(crate) fn continuation_receipt_for_test(
+    checkpoint_ends: LibraryBinderCheckpointEnds,
+    array_symbol_before_augmentation: SymbolId,
+    array_type_group_before_augmentation: TypeGroupId,
+    bound: super::BoundProjectBinder,
+) -> Result<AuthenticatedBinderContinuationForTest, String> {
+    let binder = &bound.binder;
+    let ends = binder.checkpoint_ends();
+    let array_symbol_after_augmentation =
+        binder
+            .resolve_type(binder.compilation_global, "Array")
+            .ok_or_else(|| "continued binder lost Array".to_owned())?;
+    let array_type_group_after_augmentation = binder
+        .symbols
+        .get(array_symbol_after_augmentation)
+        .and_then(|symbol| symbol.ty)
+        .ok_or_else(|| "continued Array lost its type group".to_owned())?;
+    // Generic project receipts retain the first appended declaration when Array is untouched.
+    let augmentation_declaration = binder
+        .type_groups
+        .get(array_type_group_after_augmentation)
+        .and_then(|group| {
+            group
+                .fragments
+                .iter()
+                .find(|fragment| fragment.declaration.index() >= checkpoint_ends.declarations)
+        })
+        .map(|fragment| fragment.declaration)
+        .or_else(|| {
+            (checkpoint_ends.declarations < ends.declarations).then(|| {
+                DeclId(
+                    u32::try_from(checkpoint_ends.declarations)
+                        .expect("declaration prefix fits u32"),
+                )
+            })
+        })
+        .ok_or_else(|| "continued project appended no declaration".to_owned())?;
+    let consumer_array_type_group = bound
+        .module_scopes
+        .last()
+        .and_then(|module| binder.resolve_type(*module, "Array"))
+        .and_then(|symbol| binder.symbols.get(symbol))
+        .and_then(|symbol| symbol.ty)
+        .ok_or_else(|| "consumer cannot resolve continued Array".to_owned())?;
+    let appended_module_sources = bound
+        .project_sources
+        .iter()
+        .map(|row| BinderContinuationModuleSourceForTest {
+            module: row.module,
+            source: row.source,
+        })
+        .collect();
+    Ok(AuthenticatedBinderContinuationForTest {
+        bound,
+        checkpoint_ends,
+        ends,
+        array_symbol_before_augmentation,
+        array_type_group_before_augmentation,
+        array_symbol_after_augmentation,
+        array_type_group_after_augmentation,
+        consumer_array_type_group,
+        augmentation_declaration,
+        appended_scopes: (checkpoint_ends.scopes..ends.scopes)
+            .map(|id| ScopeId(u32::try_from(id).expect("scope id fits u32")))
+            .collect(),
+        appended_symbols: (checkpoint_ends.symbols..ends.symbols)
+            .map(|id| SymbolId(u32::try_from(id).expect("symbol id fits u32")))
+            .collect(),
+        appended_declarations: (checkpoint_ends.declarations..ends.declarations)
+            .map(|id| DeclId(u32::try_from(id).expect("declaration id fits u32")))
+            .collect(),
+        appended_type_groups: (checkpoint_ends.type_groups..ends.type_groups)
+            .map(|id| TypeGroupId(u32::try_from(id).expect("type-group id fits u32")))
+            .collect(),
+        appended_namespaces: (checkpoint_ends.namespaces..ends.namespaces)
+            .map(|id| NamespaceId(u32::try_from(id).expect("namespace id fits u32")))
+            .collect(),
+        appended_value_storages: (checkpoint_ends.value_storages..ends.value_storages)
+            .map(|id| ValueStorageId(u32::try_from(id).expect("value-storage id fits u32")))
+            .collect(),
+        appended_module_sources,
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
     state: OwnedLibraryRuntimeState,
@@ -3442,6 +3844,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
     let bind_started = Instant::now();
     let (mut builder, source_key) = ProjectBinderBuilder::resume_frozen_library(binder);
     let unit = CompilationUnit::implementation(source_key, &parsed.program);
+    builder.reserve_script_namespace_roots([(&parsed.program, unit)]);
     let (module, _) = builder.add_module(&parsed.program, &[], unit);
     let binder = builder
         .finish_frozen_library_continuation(module)
@@ -4142,6 +4545,9 @@ mod tests {
             0,
             0,
             Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
         );
         let binder = std::mem::replace(&mut parts.binder, placeholder);
         parts.binder = Binder::from_snapshot_parts(
@@ -4157,6 +4563,9 @@ mod tests {
             binder.decl_count,
             binder.prelude_type_group_count,
             module_sources,
+            binder.fn_scopes,
+            binder.fn_decl_ids,
+            binder.block_scopes,
         );
     }
 

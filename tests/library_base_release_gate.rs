@@ -7,7 +7,7 @@ const PYTHON: &str = "/usr/bin/python3";
 const EXPECTED_RECORD: &str = concat!(
     "typokat-library-base-v1 windows=3 samples=30 p95_wall_us_max=120000 ",
     "rss_bytes_max=536870912 route=production-frozen-library-base ",
-    "artifact_sha256=539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960 ",
+    "artifact_sha256=47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f ",
     "typed_validation_identities=1 initializations=1 publications=1 outcome=GO"
 );
 

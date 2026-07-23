@@ -25,14 +25,14 @@ maximum_bytes = 33554432
 minimum_bytes = 1048576
 regenerations = 2
 schema = 1
-canonical_bytes = 21000266
-canonical_sha256 = "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960"
+canonical_bytes = 21003926
+canonical_sha256 = "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f"
 
 [wire]
 magic = "typokat-semantic-snapshot"
 version = 1
-# sha256(previous schema identity + "|collision-replay-index-v1")
-schema_sha256 = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599"
+# sha256(previous schema identity + "|binder-snapshot-v2")
+schema_sha256 = "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0"
 section_names = ["store", "interner", "binder", "decl-types", "published-types", "namespace-terminals", "class-metadata", "semantic-identities", "root-name-index", "next-ids", "collision-replay-index"]
 section_tags = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 

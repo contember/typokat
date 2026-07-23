@@ -21,7 +21,7 @@ use super::snapshot::test_support::{
 use std::sync::{Arc, Barrier};
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SCHEMA_IDENTITY: &str = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
+const SCHEMA_IDENTITY: &str = "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0";
 const EXPECTED_COMPONENTS: [&str; 11] = [
     "store",
     "interner",
@@ -407,7 +407,7 @@ fn canonical_admission_witness_prevents_a_second_full_artifact_digest() {
     let packaged_admission = source_between(
         snapshot_source,
         "pub(super) fn admit_packaged_canonical(",
-        "\npub(super) fn decode_admitted_canonical(",
+        "\npub(super) fn decode_admitted_canonical_with_evidence(",
         "packaged canonical admission",
     );
     assert!(
@@ -429,13 +429,13 @@ fn canonical_admission_witness_prevents_a_second_full_artifact_digest() {
 
     let admitted_decode = source_between(
         snapshot_source,
-        "pub(super) fn decode_admitted_canonical(",
+        "pub(super) fn decode_admitted_canonical_with_evidence(",
         "\n#[cfg(test)]\npub(super) fn admit_canonical_for_test(",
         "admitted canonical decode route",
     );
     assert!(
         admitted_decode.contains("admitted: AdmittedCanonicalSnapshot")
-            && admitted_decode.contains("decode_canonical_library_snapshot(admitted)"),
+            && admitted_decode.contains("decode_canonical_library_snapshot_with_evidence("),
         "the opaque witness must flow intact into the canonical decoder"
     );
     assert!(
@@ -447,8 +447,8 @@ fn canonical_admission_witness_prevents_a_second_full_artifact_digest() {
 
     let canonical_entry = source_between(
         codec_source,
-        "pub(crate) fn decode_canonical_library_snapshot(",
-        "\n#[cfg(test)]\npub(crate) fn decode_pre_admitted_library_snapshot(",
+        "pub(crate) fn decode_canonical_library_snapshot_with_evidence(",
+        "\nfn admitted_library_snapshot_evidence(",
         "canonical snapshot decoder entrypoint",
     );
     assert!(
@@ -470,7 +470,7 @@ fn canonical_admission_witness_prevents_a_second_full_artifact_digest() {
 
     let adversarial_entry = source_between(
         codec_source,
-        "pub(crate) fn decode_pre_admitted_library_snapshot(",
+        "pub(crate) fn decode_pre_admitted_library_snapshot_with_evidence(",
         "\n#[cfg(test)]\npub(crate) fn projection_from_library_product(",
         "generic adversarial snapshot decoder",
     );

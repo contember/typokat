@@ -45,9 +45,12 @@ HARNESS_RECORD_SUFFIX = re.compile(
 )
 STRATEGY = "eager-complete"
 RECORD_KIND = "eager-fast-clean"
-SCHEMA_IDENTITY = hashlib.sha256(
+PREVIOUS_SCHEMA_IDENTITY = hashlib.sha256(
     b"a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65"
     b"|collision-replay-index-v1"
+).hexdigest()
+SCHEMA_IDENTITY = hashlib.sha256(
+    PREVIOUS_SCHEMA_IDENTITY.encode("ascii") + b"|binder-snapshot-v2"
 ).hexdigest()
 
 
@@ -217,8 +220,8 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "minimum_bytes": 1024 * 1024,
         "regenerations": 2,
         "schema": 1,
-        "canonical_bytes": 21_000_266,
-        "canonical_sha256": "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960",
+        "canonical_bytes": 21_003_926,
+        "canonical_sha256": "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f",
     }:
         raise ContractError("artifact contract differs")
     exact_keys(data["wire"], {"magic", "version", "schema_sha256", "section_names", "section_tags"}, "contract.wire")

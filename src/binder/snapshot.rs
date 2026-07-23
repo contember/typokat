@@ -8,7 +8,6 @@ use super::declaration::{
 use super::namespace::*;
 use super::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use super::symbol::{Symbol, SymbolId, SymbolTable};
-#[cfg(test)]
 use crate::snapshot_codec::SnapshotWriter;
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal, OriginalModuleOrdinal};
@@ -16,7 +15,7 @@ use crate::span::Span;
 use rustc_hash::FxHashMap;
 use std::collections::BTreeSet;
 
-const BINDER_SNAPSHOT_VERSION: u32 = 1;
+const BINDER_SNAPSHOT_VERSION: u32 = 2;
 
 type SnapshotReferenceRecord = (u8, u8, u8, u32, u32);
 
@@ -1122,7 +1121,6 @@ fn invalid(reader: &SnapshotReader<'_>, message: impl Into<String>) -> SnapshotC
     SnapshotCodecError::invalid(reader.position(), message)
 }
 
-#[cfg(test)]
 fn write_len(writer: &mut SnapshotWriter, len: usize) -> Result<(), SnapshotCodecError> {
     writer.usize(len)
 }
@@ -1131,7 +1129,6 @@ fn read_len(reader: &mut SnapshotReader<'_>) -> Result<usize, SnapshotCodecError
     reader.collection_len(1)
 }
 
-#[cfg(test)]
 fn write_option<T>(
     writer: &mut SnapshotWriter,
     value: Option<T>,
@@ -1155,7 +1152,6 @@ fn read_option<T>(
     }
 }
 
-#[cfg(test)]
 fn write_vec<T>(
     writer: &mut SnapshotWriter,
     values: &[T],
@@ -1176,7 +1172,6 @@ fn read_vec<T>(
     (0..len).map(|_| read(reader)).collect()
 }
 
-#[cfg(test)]
 fn write_scope_id(writer: &mut SnapshotWriter, value: ScopeId) {
     writer.u32(value.0);
 }
@@ -1185,7 +1180,6 @@ fn read_scope_id(reader: &mut SnapshotReader<'_>) -> Result<ScopeId, SnapshotCod
     Ok(ScopeId(reader.u32()?))
 }
 
-#[cfg(test)]
 fn write_symbol_id(writer: &mut SnapshotWriter, value: SymbolId) {
     writer.u32(value.0);
 }
@@ -1194,7 +1188,6 @@ fn read_symbol_id(reader: &mut SnapshotReader<'_>) -> Result<SymbolId, SnapshotC
     Ok(SymbolId(reader.u32()?))
 }
 
-#[cfg(test)]
 fn write_decl_id(writer: &mut SnapshotWriter, value: DeclId) {
     writer.u32(value.0);
 }
@@ -1203,7 +1196,6 @@ fn read_decl_id(reader: &mut SnapshotReader<'_>) -> Result<DeclId, SnapshotCodec
     Ok(DeclId(reader.u32()?))
 }
 
-#[cfg(test)]
 fn write_type_group_id(writer: &mut SnapshotWriter, value: TypeGroupId) {
     writer.u32(value.0);
 }
@@ -1212,7 +1204,6 @@ fn read_type_group_id(reader: &mut SnapshotReader<'_>) -> Result<TypeGroupId, Sn
     Ok(TypeGroupId(reader.u32()?))
 }
 
-#[cfg(test)]
 fn write_value_storage_id(writer: &mut SnapshotWriter, value: ValueStorageId) {
     writer.u32(value.0);
 }
@@ -1223,7 +1214,6 @@ fn read_value_storage_id(
     Ok(ValueStorageId(reader.u32()?))
 }
 
-#[cfg(test)]
 fn write_span(writer: &mut SnapshotWriter, value: Span) {
     writer.u32(value.start);
     writer.u32(value.end);
@@ -1238,7 +1228,6 @@ fn read_span(reader: &mut SnapshotReader<'_>) -> Result<Span, SnapshotCodecError
     Ok(Span::new(start, end))
 }
 
-#[cfg(test)]
 fn write_source_key(writer: &mut SnapshotWriter, value: SourceUnitKey) {
     writer.u32(value.0);
 }
@@ -1247,7 +1236,6 @@ fn read_source_key(reader: &mut SnapshotReader<'_>) -> Result<SourceUnitKey, Sna
     Ok(SourceUnitKey(reader.u32()?))
 }
 
-#[cfg(test)]
 fn write_origin(writer: &mut SnapshotWriter, value: CompilationOrigin) {
     match value {
         CompilationOrigin::User(ordinal) => {
@@ -1274,7 +1262,6 @@ fn read_origin(reader: &mut SnapshotReader<'_>) -> Result<CompilationOrigin, Sna
 
 macro_rules! fieldless_enum_codec {
     ($write:ident, $read:ident, $ty:ty, [$($variant:path => $tag:expr),+ $(,)?]) => {
-        #[cfg(test)]
         fn $write(writer: &mut SnapshotWriter, value: $ty) {
             let tag = match value {
                 $($variant => $tag),+
@@ -1324,7 +1311,6 @@ fieldless_enum_codec!(write_fragment_kind, read_fragment_kind, TypeFragmentKind,
     TypeFragmentKind::Class => 2,
 ]);
 
-#[cfg(test)]
 fn encode_scopes(
     writer: &mut SnapshotWriter,
     graph: &ScopeGraph,
@@ -1378,7 +1364,6 @@ fn decode_scopes(reader: &mut SnapshotReader<'_>) -> Result<ScopeGraph, Snapshot
     Ok(graph)
 }
 
-#[cfg(test)]
 fn encode_symbols(
     writer: &mut SnapshotWriter,
     symbols: &SymbolTable,
@@ -1436,7 +1421,6 @@ fn decode_symbols(reader: &mut SnapshotReader<'_>) -> Result<SymbolTable, Snapsh
     Ok(symbols)
 }
 
-#[cfg(test)]
 fn write_declaration_site(
     writer: &mut SnapshotWriter,
     site: DeclarationSite,
@@ -1462,7 +1446,6 @@ fn read_declaration_site(
     })
 }
 
-#[cfg(test)]
 fn encode_declarations(
     writer: &mut SnapshotWriter,
     table: &DeclarationTable,
@@ -1503,7 +1486,6 @@ fn decode_declarations(
     DeclarationTable::from_snapshot(rows).map_err(|message| invalid(reader, message))
 }
 
-#[cfg(test)]
 fn encode_type_groups(
     writer: &mut SnapshotWriter,
     table: &TypeGroupTable,
@@ -1632,7 +1614,6 @@ fieldless_enum_codec!(write_umd_context, read_umd_context, UmdContext, [
     UmdContext::DeferredValidBacklog15 => 3,
 ]);
 
-#[cfg(test)]
 fn write_namespace_owner(writer: &mut SnapshotWriter, value: NamespaceOwner) {
     match value {
         NamespaceOwner::Lexical(scope) => {
@@ -1665,7 +1646,6 @@ fn read_namespace_owner(
     }
 }
 
-#[cfg(test)]
 fn write_declaration_owner(writer: &mut SnapshotWriter, value: DeclarationOwner) {
     match value {
         DeclarationOwner::Lexical(scope) => {
@@ -1707,7 +1687,6 @@ fn read_declaration_owner(
     }
 }
 
-#[cfg(test)]
 fn write_member_owner(writer: &mut SnapshotWriter, value: NamespaceMemberOwner) {
     match value {
         NamespaceMemberOwner::Fragment(id) => {
@@ -1742,7 +1721,6 @@ fn read_member_owner(
     }
 }
 
-#[cfg(test)]
 fn write_metadata_name(
     writer: &mut SnapshotWriter,
     value: &MetadataName,
@@ -1768,7 +1746,6 @@ fn read_metadata_name(reader: &mut SnapshotReader<'_>) -> Result<MetadataName, S
     }
 }
 
-#[cfg(test)]
 fn write_import_facts(writer: &mut SnapshotWriter, facts: ImportSyntaxFacts) {
     write_import_form(writer, facts.form);
     writer.bool(facts.outer_type_only);
@@ -1789,7 +1766,6 @@ fn read_import_facts(
     })
 }
 
-#[cfg(test)]
 fn write_syntax_facts(writer: &mut SnapshotWriter, facts: DeclarationSyntaxFacts) {
     match facts {
         DeclarationSyntaxFacts::None => writer.u8(0),
@@ -1824,7 +1800,6 @@ fn read_syntax_facts(
     }
 }
 
-#[cfg(test)]
 fn write_spaces(writer: &mut SnapshotWriter, spaces: DeclarationSpaces) {
     writer.bool(spaces.value);
     writer.bool(spaces.r#type);
@@ -1839,7 +1814,6 @@ fn read_spaces(reader: &mut SnapshotReader<'_>) -> Result<DeclarationSpaces, Sna
     })
 }
 
-#[cfg(test)]
 fn write_source_file_kind(writer: &mut SnapshotWriter, kind: SourceFileKind) {
     let tag = match kind {
         SourceFileKind::ImplementationTs => 0,
@@ -1866,7 +1840,6 @@ fn read_source_file_kind(
     }
 }
 
-#[cfg(test)]
 fn write_global_owner(writer: &mut SnapshotWriter, owner: GlobalOwner) {
     match owner {
         GlobalOwner::Lexical(scope) => {
@@ -1897,7 +1870,6 @@ fn read_global_owner(reader: &mut SnapshotReader<'_>) -> Result<GlobalOwner, Sna
     }
 }
 
-#[cfg(test)]
 fn write_export_owner(writer: &mut SnapshotWriter, owner: ExportContextOwner) {
     match owner {
         ExportContextOwner::NamespaceFragment(id) => {
@@ -1932,7 +1904,6 @@ fn read_export_owner(
     }
 }
 
-#[cfg(test)]
 fn write_namespace(writer: &mut SnapshotWriter, row: &Namespace) -> Result<(), SnapshotCodecError> {
     writer.u32(row.id.0);
     write_namespace_owner(writer, row.owner);
@@ -1956,7 +1927,6 @@ fn read_namespace(reader: &mut SnapshotReader<'_>) -> Result<Namespace, Snapshot
     })
 }
 
-#[cfg(test)]
 fn write_fragment(
     writer: &mut SnapshotWriter,
     row: &NamespaceFragment,
@@ -1999,7 +1969,6 @@ fn read_fragment(reader: &mut SnapshotReader<'_>) -> Result<NamespaceFragment, S
     })
 }
 
-#[cfg(test)]
 fn write_member(
     writer: &mut SnapshotWriter,
     row: &NamespaceMember,
@@ -2098,7 +2067,6 @@ fn read_member(reader: &mut SnapshotReader<'_>) -> Result<NamespaceMember, Snaps
     })
 }
 
-#[cfg(test)]
 fn write_participant(
     writer: &mut SnapshotWriter,
     row: &MergeParticipant,
@@ -2141,7 +2109,6 @@ fn read_participant(
     })
 }
 
-#[cfg(test)]
 fn write_global(
     writer: &mut SnapshotWriter,
     row: &GlobalAugmentation,
@@ -2187,7 +2154,6 @@ fn read_global(reader: &mut SnapshotReader<'_>) -> Result<GlobalAugmentation, Sn
     })
 }
 
-#[cfg(test)]
 fn write_deferred_module(
     writer: &mut SnapshotWriter,
     row: &DeferredAmbientModule,
@@ -2220,7 +2186,6 @@ fn read_deferred_module(
     })
 }
 
-#[cfg(test)]
 fn write_deferred_child(
     writer: &mut SnapshotWriter,
     row: &DeferredAmbientChild,
@@ -2257,7 +2222,6 @@ fn read_deferred_child(
     })
 }
 
-#[cfg(test)]
 fn write_umd(
     writer: &mut SnapshotWriter,
     row: &UmdNamespaceExport,
@@ -2286,7 +2250,6 @@ fn read_umd(reader: &mut SnapshotReader<'_>) -> Result<UmdNamespaceExport, Snaps
     })
 }
 
-#[cfg(test)]
 fn write_export_context(
     writer: &mut SnapshotWriter,
     row: &ExportContext,
@@ -2323,7 +2286,6 @@ fn read_export_context(
     })
 }
 
-#[cfg(test)]
 fn write_source_unit(
     writer: &mut SnapshotWriter,
     row: &SourceUnitRecord,
@@ -2350,7 +2312,6 @@ fn read_source_unit(
     })
 }
 
-#[cfg(test)]
 fn encode_namespaces(
     writer: &mut SnapshotWriter,
     table: &NamespaceTable,
@@ -2562,6 +2523,37 @@ fn validate_binder(binder: &Binder, offset: usize) -> Result<(), SnapshotCodecEr
         {
             return Err(invalid("user/library module has the wrong parent root"));
         }
+    }
+    let valid_module_key = |module: ScopeId| {
+        binder
+            .graph
+            .get(module)
+            .is_some_and(|scope| scope.kind == ScopeKind::Module)
+    };
+    if binder.fn_scopes.iter().any(|((module, _), target)| {
+        !valid_module_key(*module)
+            || binder
+                .graph
+                .get(*target)
+                .is_none_or(|scope| scope.kind != ScopeKind::Function)
+    }) {
+        return Err(invalid("retained function-scope map is invalid"));
+    }
+    if binder.block_scopes.iter().any(|((module, _), target)| {
+        !valid_module_key(*module)
+            || binder
+                .graph
+                .get(*target)
+                .is_none_or(|scope| scope.kind != ScopeKind::Block)
+    }) {
+        return Err(invalid("retained block-scope map is invalid"));
+    }
+    if binder
+        .fn_decl_ids
+        .iter()
+        .any(|((module, _), target)| !valid_module_key(*module) || target.0 >= binder.decl_count)
+    {
+        return Err(invalid("retained function-declaration map is invalid"));
     }
     let value_in_range = |id: ValueStorageId| id.0 < binder.decl_count;
     let mut value_storages = BTreeSet::new();
@@ -3010,7 +3002,6 @@ fn validate_binder(binder: &Binder, offset: usize) -> Result<(), SnapshotCodecEr
     Ok(())
 }
 
-#[cfg(test)]
 pub(crate) fn encode_binder_snapshot(binder: &Binder) -> Result<Vec<u8>, SnapshotCodecError> {
     validate_binder(binder, 0)?;
     let mut writer = SnapshotWriter::new();
@@ -3033,7 +3024,81 @@ pub(crate) fn encode_binder_snapshot(binder: &Binder) -> Result<Vec<u8>, Snapsho
         write_scope_id(&mut writer, *scope);
         write_source_key(&mut writer, *source);
     }
+    encode_retained_scope_maps_into(&mut writer, binder)?;
     Ok(writer.into_bytes())
+}
+
+pub(crate) fn encode_retained_scope_maps(binder: &Binder) -> Result<Vec<u8>, SnapshotCodecError> {
+    let mut writer = SnapshotWriter::new();
+    encode_retained_scope_maps_into(&mut writer, binder)?;
+    Ok(writer.into_bytes())
+}
+
+fn encode_retained_scope_maps_into(
+    writer: &mut SnapshotWriter,
+    binder: &Binder,
+) -> Result<(), SnapshotCodecError> {
+    encode_scope_map(writer, &binder.fn_scopes)?;
+    encode_value_map(writer, &binder.fn_decl_ids)?;
+    encode_scope_map(writer, &binder.block_scopes)
+}
+
+fn encode_scope_map(
+    writer: &mut SnapshotWriter,
+    map: &FxHashMap<(ScopeId, u32), ScopeId>,
+) -> Result<(), SnapshotCodecError> {
+    let mut rows = map.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|((module, start), target)| (module.0, *start, target.0));
+    write_len(writer, rows.len())?;
+    for ((module, start), target) in rows {
+        write_scope_id(writer, *module);
+        writer.u32(*start);
+        write_scope_id(writer, *target);
+    }
+    Ok(())
+}
+
+fn encode_value_map(
+    writer: &mut SnapshotWriter,
+    map: &FxHashMap<(ScopeId, u32), ValueStorageId>,
+) -> Result<(), SnapshotCodecError> {
+    let mut rows = map.iter().collect::<Vec<_>>();
+    rows.sort_by_key(|((module, start), target)| (module.0, *start, target.0));
+    write_len(writer, rows.len())?;
+    for ((module, start), target) in rows {
+        write_scope_id(writer, *module);
+        writer.u32(*start);
+        writer.u32(target.0);
+    }
+    Ok(())
+}
+
+fn decode_scope_map(
+    reader: &mut SnapshotReader<'_>,
+) -> Result<FxHashMap<(ScopeId, u32), ScopeId>, SnapshotCodecError> {
+    let mut map = FxHashMap::default();
+    for _ in 0..read_len(reader)? {
+        let key = (read_scope_id(reader)?, reader.u32()?);
+        let target = read_scope_id(reader)?;
+        if map.insert(key, target).is_some() {
+            return Err(invalid(reader, "duplicate retained scope-map key"));
+        }
+    }
+    Ok(map)
+}
+
+fn decode_value_map(
+    reader: &mut SnapshotReader<'_>,
+) -> Result<FxHashMap<(ScopeId, u32), ValueStorageId>, SnapshotCodecError> {
+    let mut map = FxHashMap::default();
+    for _ in 0..read_len(reader)? {
+        let key = (read_scope_id(reader)?, reader.u32()?);
+        let target = ValueStorageId(reader.u32()?);
+        if map.insert(key, target).is_some() {
+            return Err(invalid(reader, "duplicate retained value-map key"));
+        }
+    }
+    Ok(map)
 }
 
 pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCodecError> {
@@ -3060,6 +3125,9 @@ pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCod
             return Err(invalid(&reader, "duplicate module source scope"));
         }
     }
+    let fn_scopes = decode_scope_map(&mut reader)?;
+    let fn_decl_ids = decode_value_map(&mut reader)?;
+    let block_scopes = decode_scope_map(&mut reader)?;
     reader.finish()?;
     let binder = Binder::from_snapshot_parts(
         graph,
@@ -3074,6 +3142,9 @@ pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCod
         decl_count,
         prelude_type_group_count,
         module_sources,
+        fn_scopes,
+        fn_decl_ids,
+        block_scopes,
     );
     validate_binder(&binder, bytes.len())?;
     Ok(binder)
@@ -3407,6 +3478,7 @@ mod tests {
         let (mut builder, source_key) =
             ProjectBinderBuilder::resume_frozen_library(base.fork_delta().expect("binder delta"));
         let unit = CompilationUnit::implementation(source_key, &source.program);
+        builder.reserve_script_namespace_roots([(&source.program, unit)]);
         let (module, _) = builder.add_module(&source.program, &[], unit);
         let delta = builder
             .finish_frozen_library_continuation(module)
@@ -3567,9 +3639,9 @@ mod tests {
         let bytes = encode_binder_snapshot(&binder).expect("binder encodes");
         let decoded = decode_binder_snapshot(&bytes).expect("binder decodes");
         assert_eq!(encode_binder_snapshot(&decoded), Ok(bytes));
-        assert!(decoded.fn_scopes.is_empty());
-        assert!(decoded.fn_decl_ids.is_empty());
-        assert!(decoded.block_scopes.is_empty());
+        assert_eq!(decoded.fn_scopes, binder.fn_scopes);
+        assert_eq!(decoded.fn_decl_ids, binder.fn_decl_ids);
+        assert_eq!(decoded.block_scopes, binder.block_scopes);
         assert_eq!(
             decoded.resolve_type(decoded.module, "Shape"),
             binder.resolve_type(binder.module, "Shape")
@@ -3585,8 +3657,14 @@ mod tests {
         let bytes = encode_binder_snapshot(&fixture_binder()).expect("binder encodes");
         assert!(decode_binder_snapshot(&bytes[..bytes.len() - 1]).is_err());
         let mut invalid = bytes;
-        // The final module-source table follows six fixed root/counter u32 values.
-        let root_offset = invalid.len() - 8 - 8;
+        let mut reader = SnapshotReader::new(&invalid);
+        assert_eq!(reader.u32(), Ok(BINDER_SNAPSHOT_VERSION));
+        decode_scopes(&mut reader).expect("scope section");
+        decode_symbols(&mut reader).expect("symbol section");
+        decode_declarations(&mut reader).expect("declaration section");
+        decode_type_groups(&mut reader).expect("type-group section");
+        decode_namespaces(&mut reader).expect("namespace section");
+        let root_offset = reader.position();
         invalid[root_offset..root_offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
         assert!(decode_binder_snapshot(&invalid).is_err());
     }

@@ -158,6 +158,24 @@ pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
 /// budget rather than a native parser stack overflow); `inputs` and the returned reports
 /// are owned/`Send`, so they cross the scope cleanly.
 pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
+    #[cfg(test)]
+    {
+        let (reports, receipt) = std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .stack_size(CHECK_STACK_SIZE)
+                .spawn_scoped(scope, || {
+                    let reports = check_project_inner(inputs);
+                    let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
+                    (reports, receipt)
+                })
+                .expect("spawn check worker")
+                .join()
+                .expect("check worker panicked")
+        });
+        crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
+        reports
+    }
+    #[cfg(not(test))]
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(CHECK_STACK_SIZE)
@@ -210,6 +228,72 @@ where
         return Vec::new();
     }
 
+    let ProjectFrontendRun {
+        inputs,
+        parse_errors,
+        product: (project_units_by_slot, ordered_results),
+    } = run_project_frontend(inputs, |interner, units| {
+        let project_units_by_slot = units
+            .iter()
+            .map(|unit| unit.module_ordinal)
+            .collect::<Vec<_>>();
+        (project_units_by_slot, check_project(interner, units))
+    });
+    let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
+        (0..inputs.len()).map(|_| Vec::new()).collect();
+    let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
+        (0..inputs.len()).map(|_| Vec::new()).collect();
+    for result in ordered_results {
+        let original = result.module_ordinal.index();
+        debug_assert_eq!(
+            project_units_by_slot.get(result.unit_slot.index()).copied(),
+            Some(result.module_ordinal)
+        );
+        if let Some(slot) = diagnostics_by_original.get_mut(original) {
+            *slot = result.diagnostics;
+        }
+        if let Some(slot) = incomplete_by_original.get_mut(original) {
+            *slot = result.incomplete;
+        }
+    }
+
+    inputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, input)| FileReport {
+            name: input.name,
+            source: input.source,
+            output: CheckOutput {
+                diagnostics: diagnostics_by_original
+                    .get_mut(index)
+                    .map(std::mem::take)
+                    .unwrap_or_default(),
+                parse_errors: parse_errors.get(index).cloned().unwrap_or_default(),
+                incomplete: incomplete_by_original
+                    .get_mut(index)
+                    .map(std::mem::take)
+                    .unwrap_or_default(),
+            },
+        })
+        .collect()
+}
+
+pub(crate) struct ProjectFrontendRun<Product> {
+    inputs: Vec<FileInput>,
+    parse_errors: Vec<Vec<String>>,
+    product: Product,
+}
+
+impl<Product> ProjectFrontendRun<Product> {
+    pub(crate) fn into_product(self) -> Product {
+        self.product
+    }
+}
+
+pub(crate) fn run_project_frontend<Product>(
+    inputs: Vec<FileInput>,
+    consume: impl for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Product,
+) -> ProjectFrontendRun<Product> {
     let allocators: Vec<Allocator> = (0..inputs.len()).map(|_| Allocator::default()).collect();
     let parsed: Vec<_> = inputs
         .iter()
@@ -249,6 +333,7 @@ where
         .map(|(unit_slot, &original)| ProjectProgram {
             module_ordinal: ModuleOrdinal::new(original),
             unit_slot: UnitSlot::new(unit_slot),
+            normalized_path: paths[original].to_string_lossy().into_owned(),
             program: &parsed[original].program,
             compilation_unit: CompilationUnit {
                 source: source_keys[original],
@@ -282,46 +367,12 @@ where
         .collect();
 
     let mut interner = Interner::with_intrinsics();
-    let ordered_results = check_project(&mut interner, &project_units);
-    let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
-        (0..inputs.len()).map(|_| Vec::new()).collect();
-    let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
-        (0..inputs.len()).map(|_| Vec::new()).collect();
-    for result in ordered_results {
-        let original = result.module_ordinal.index();
-        debug_assert_eq!(
-            project_units
-                .get(result.unit_slot.index())
-                .map(|unit| unit.module_ordinal),
-            Some(result.module_ordinal)
-        );
-        if let Some(slot) = diagnostics_by_original.get_mut(original) {
-            *slot = result.diagnostics;
-        }
-        if let Some(slot) = incomplete_by_original.get_mut(original) {
-            *slot = result.incomplete;
-        }
+    let product = consume(&mut interner, &project_units);
+    ProjectFrontendRun {
+        inputs,
+        parse_errors,
+        product,
     }
-
-    inputs
-        .into_iter()
-        .enumerate()
-        .map(|(index, input)| FileReport {
-            name: input.name,
-            source: input.source,
-            output: CheckOutput {
-                diagnostics: diagnostics_by_original
-                    .get_mut(index)
-                    .map(std::mem::take)
-                    .unwrap_or_default(),
-                parse_errors: parse_errors.get(index).cloned().unwrap_or_default(),
-                incomplete: incomplete_by_original
-                    .get_mut(index)
-                    .map(std::mem::take)
-                    .unwrap_or_default(),
-            },
-        })
-        .collect()
 }
 
 #[cfg(test)]

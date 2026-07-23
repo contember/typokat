@@ -11,7 +11,7 @@ use super::provider::{
 };
 use crate::check::checker::library_compiler::OwnedLibraryRuntimeState;
 use crate::check::checker::library_snapshot_codec::{
-    decode_canonical_library_snapshot, SnapshotError, SnapshotErrorKind, SnapshotErrorStage,
+    SnapshotError, SnapshotErrorKind, SnapshotErrorStage,
 };
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -58,12 +58,13 @@ impl SnapshotWorkScopeForTest {
 pub(super) const PROFILE_SHA256: &str =
     "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 pub(super) const SCHEMA_SHA256: &str =
-    "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
+    "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0";
 
 pub(super) struct DecodedCanonicalLibrary {
     pub(super) runtime: OwnedLibraryRuntimeState,
     pub(super) root_names: BTreeSet<String>,
     pub(super) prefixes: [usize; 9],
+    #[cfg(test)]
     pub(super) typed_validation_sha256: [u8; 32],
     pub(super) identity: FrozenLibraryIdentity,
 }
@@ -79,20 +80,34 @@ pub(super) fn admit_packaged_canonical() -> Result<AdmittedCanonicalSnapshot, Li
     .map_err(map_admission_error)
 }
 
-pub(super) fn decode_admitted_canonical(
+pub(super) fn decode_admitted_canonical_with_evidence(
     admitted: AdmittedCanonicalSnapshot,
-) -> Result<DecodedCanonicalLibrary, LibraryInitError> {
+) -> Result<
+    (
+        DecodedCanonicalLibrary,
+        crate::check::checker::library_snapshot_codec::AdmittedLibrarySnapshotEvidence,
+    ),
+    LibraryInitError,
+> {
     #[cfg(test)]
     SNAPSHOT_DECODES.set(SNAPSHOT_DECODES.get().saturating_add(1));
-    decode_canonical_library_snapshot(admitted)
-        .map(|decoded| DecodedCanonicalLibrary {
-            runtime: decoded.runtime,
-            root_names: decoded.root_names,
-            prefixes: decoded.prefixes,
-            typed_validation_sha256: decoded.typed_validation_sha256,
-            identity: FrozenLibraryIdentity::canonical(),
-        })
-        .map_err(map_snapshot_error)
+    crate::check::checker::library_snapshot_codec::decode_canonical_library_snapshot_with_evidence(
+        admitted,
+    )
+    .map(|(decoded, evidence)| {
+        (
+            DecodedCanonicalLibrary {
+                runtime: decoded.runtime,
+                root_names: decoded.root_names,
+                prefixes: decoded.prefixes,
+                #[cfg(test)]
+                typed_validation_sha256: decoded.typed_validation_sha256,
+                identity: FrozenLibraryIdentity::canonical(),
+            },
+            evidence,
+        )
+    })
+    .map_err(map_snapshot_error)
 }
 
 #[cfg(test)]
@@ -158,10 +173,10 @@ pub(super) fn map_snapshot_error(error: SnapshotError) -> LibraryInitError {
             SnapshotErrorStage::CollisionReplayIndexAdmission => {
                 LibraryInitStage::CollisionReplayIndexAdmission
             }
+            SnapshotErrorStage::Generation => LibraryInitStage::Decode,
             #[cfg(test)]
             SnapshotErrorStage::UnsupportedStrategy
             | SnapshotErrorStage::Io
-            | SnapshotErrorStage::Generation
             | SnapshotErrorStage::UserCheck => LibraryInitStage::Decode,
         },
     };
@@ -211,19 +226,31 @@ pub(super) fn map_snapshot_error(error: SnapshotError) -> LibraryInitError {
 }
 
 #[cfg(test)]
-pub(super) fn decode_pre_admitted(
+pub(super) fn decode_pre_admitted_with_evidence(
     snapshot: &test_support::PreAdmittedSnapshot,
-) -> Result<DecodedCanonicalLibrary, LibraryInitError> {
+) -> Result<
+    (
+        DecodedCanonicalLibrary,
+        crate::check::checker::library_snapshot_codec::AdmittedLibrarySnapshotEvidence,
+    ),
+    LibraryInitError,
+> {
     SNAPSHOT_DECODES.set(SNAPSHOT_DECODES.get().saturating_add(1));
-    crate::check::checker::library_snapshot_codec::decode_pre_admitted_library_snapshot(
+    crate::check::checker::library_snapshot_codec::decode_pre_admitted_library_snapshot_with_evidence(
         &snapshot.bytes,
     )
-    .map(|decoded| DecodedCanonicalLibrary {
-        runtime: decoded.runtime,
-        root_names: decoded.root_names,
-        prefixes: decoded.prefixes,
-        typed_validation_sha256: decoded.typed_validation_sha256,
-        identity: FrozenLibraryIdentity::canonical(),
+    .map(|(decoded, evidence)| {
+        (
+            DecodedCanonicalLibrary {
+                runtime: decoded.runtime,
+                root_names: decoded.root_names,
+                prefixes: decoded.prefixes,
+                #[cfg(test)]
+                typed_validation_sha256: decoded.typed_validation_sha256,
+                identity: FrozenLibraryIdentity::canonical(),
+            },
+            evidence,
+        )
     })
     .map_err(map_snapshot_error)
 }

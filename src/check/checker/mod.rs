@@ -5,8 +5,9 @@
 
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
-use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
 #[cfg(test)]
+use crate::binder::declaration::source_global_binding_census;
+use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::namespace::{
     CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
@@ -935,9 +936,196 @@ pub(in crate::check::checker) fn final_identity_inspector_calls_for_test() -> u6
 pub struct ProjectProgram<'ast> {
     pub(crate) module_ordinal: ModuleOrdinal,
     pub(crate) unit_slot: UnitSlot,
+    pub(crate) normalized_path: String,
     pub program: &'ast Program<'ast>,
     pub(crate) compilation_unit: CompilationUnit,
     pub imports: Vec<ProjectImport>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectSourceBindingRow {
+    pub(crate) normalized_path: String,
+    pub(crate) source_file_kind: crate::binder::namespace::SourceFileKind,
+    pub(crate) external_module: bool,
+    pub(crate) original_module_ordinal: OriginalModuleOrdinal,
+    pub(crate) unit_slot: UnitSlot,
+    pub(crate) source: SourceUnitKey,
+    pub(crate) module: ScopeId,
+}
+
+pub(crate) struct BoundProjectBinder {
+    pub(crate) binder: Binder,
+    pub(crate) module_scopes: Vec<ScopeId>,
+    pub(crate) module_placeholders: Vec<Vec<ImportPlaceholder>>,
+    pub(crate) project_sources: Vec<ProjectSourceBindingRow>,
+    #[cfg(test)]
+    pub(crate) normalized: ProjectBindingProductForTest,
+}
+
+impl std::fmt::Debug for BoundProjectBinder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BoundProjectBinder")
+            .field("module_count", &self.module_scopes.len())
+            .field("project_sources", &self.project_sources)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProjectBindingProductForTest {
+    pub(crate) normalized_per_path_binding_shape: Vec<String>,
+    pub(crate) normalized_import_export_shape: Vec<String>,
+    pub(crate) normalized_namespace_shape: Vec<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROJECT_BINDING_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_FRESH_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_CHECKPOINT_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_BOUND_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_PRODUCTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_ORDINARY_CONSUMERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_CONTINUATION_CONSUMERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PROJECT_BINDING_FRESH_PRODUCTS: std::cell::RefCell<Vec<ProjectBindingProductForTest>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static PROJECT_BINDING_CHECKPOINT_PRODUCTS: std::cell::RefCell<Vec<ProjectBindingProductForTest>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AuthoritativeProjectBindingWorkForTest {
+    pub(crate) entries: u64,
+    pub(crate) fresh_project_seed_entries: u64,
+    pub(crate) authenticated_checkpoint_seed_entries: u64,
+    pub(crate) bound_units: u64,
+    pub(crate) typed_products_produced: u64,
+    pub(crate) ordinary_check_products_consumed: u64,
+    pub(crate) continuation_route_products_consumed: u64,
+    pub(crate) fresh_project_products: Vec<ProjectBindingProductForTest>,
+    pub(crate) authenticated_checkpoint_products: Vec<ProjectBindingProductForTest>,
+}
+
+#[cfg(test)]
+pub(crate) struct AuthoritativeProjectBindingWorkScopeForTest {
+    start: AuthoritativeProjectBindingWorkForTest,
+    fresh_len: usize,
+    checkpoint_len: usize,
+}
+
+#[cfg(test)]
+impl AuthoritativeProjectBindingWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self {
+            start: project_binding_work_for_test(),
+            fresh_len: PROJECT_BINDING_FRESH_PRODUCTS.with(|products| products.borrow().len()),
+            checkpoint_len: PROJECT_BINDING_CHECKPOINT_PRODUCTS
+                .with(|products| products.borrow().len()),
+        }
+    }
+
+    pub(crate) fn finish(self) -> AuthoritativeProjectBindingWorkForTest {
+        let end = project_binding_work_for_test();
+        AuthoritativeProjectBindingWorkForTest {
+            entries: end.entries.saturating_sub(self.start.entries),
+            fresh_project_seed_entries: end
+                .fresh_project_seed_entries
+                .saturating_sub(self.start.fresh_project_seed_entries),
+            authenticated_checkpoint_seed_entries: end
+                .authenticated_checkpoint_seed_entries
+                .saturating_sub(self.start.authenticated_checkpoint_seed_entries),
+            bound_units: end.bound_units.saturating_sub(self.start.bound_units),
+            typed_products_produced: end
+                .typed_products_produced
+                .saturating_sub(self.start.typed_products_produced),
+            ordinary_check_products_consumed: end
+                .ordinary_check_products_consumed
+                .saturating_sub(self.start.ordinary_check_products_consumed),
+            continuation_route_products_consumed: end
+                .continuation_route_products_consumed
+                .saturating_sub(self.start.continuation_route_products_consumed),
+            fresh_project_products: PROJECT_BINDING_FRESH_PRODUCTS
+                .with(|products| products.borrow()[self.fresh_len..].to_vec()),
+            authenticated_checkpoint_products: PROJECT_BINDING_CHECKPOINT_PRODUCTS
+                .with(|products| products.borrow()[self.checkpoint_len..].to_vec()),
+        }
+    }
+}
+
+#[cfg(test)]
+fn project_binding_work_for_test() -> AuthoritativeProjectBindingWorkForTest {
+    AuthoritativeProjectBindingWorkForTest {
+        entries: PROJECT_BINDING_ENTRIES.get(),
+        fresh_project_seed_entries: PROJECT_BINDING_FRESH_SEEDS.get(),
+        authenticated_checkpoint_seed_entries: PROJECT_BINDING_CHECKPOINT_SEEDS.get(),
+        bound_units: PROJECT_BINDING_BOUND_UNITS.get(),
+        typed_products_produced: PROJECT_BINDING_PRODUCTS.get(),
+        ordinary_check_products_consumed: PROJECT_BINDING_ORDINARY_CONSUMERS.get(),
+        continuation_route_products_consumed: PROJECT_BINDING_CONTINUATION_CONSUMERS.get(),
+        fresh_project_products: Vec::new(),
+        authenticated_checkpoint_products: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn project_binding_thread_receipt_for_test() -> AuthoritativeProjectBindingWorkForTest {
+    let mut receipt = project_binding_work_for_test();
+    receipt.fresh_project_products =
+        PROJECT_BINDING_FRESH_PRODUCTS.with(|products| products.borrow().clone());
+    receipt.authenticated_checkpoint_products =
+        PROJECT_BINDING_CHECKPOINT_PRODUCTS.with(|products| products.borrow().clone());
+    receipt
+}
+
+#[cfg(test)]
+pub(crate) fn merge_project_binding_thread_receipt_for_test(
+    receipt: AuthoritativeProjectBindingWorkForTest,
+) {
+    PROJECT_BINDING_ENTRIES.set(
+        PROJECT_BINDING_ENTRIES
+            .get()
+            .saturating_add(receipt.entries),
+    );
+    PROJECT_BINDING_FRESH_SEEDS.set(
+        PROJECT_BINDING_FRESH_SEEDS
+            .get()
+            .saturating_add(receipt.fresh_project_seed_entries),
+    );
+    PROJECT_BINDING_CHECKPOINT_SEEDS.set(
+        PROJECT_BINDING_CHECKPOINT_SEEDS
+            .get()
+            .saturating_add(receipt.authenticated_checkpoint_seed_entries),
+    );
+    PROJECT_BINDING_BOUND_UNITS.set(
+        PROJECT_BINDING_BOUND_UNITS
+            .get()
+            .saturating_add(receipt.bound_units),
+    );
+    PROJECT_BINDING_PRODUCTS.set(
+        PROJECT_BINDING_PRODUCTS
+            .get()
+            .saturating_add(receipt.typed_products_produced),
+    );
+    PROJECT_BINDING_ORDINARY_CONSUMERS.set(
+        PROJECT_BINDING_ORDINARY_CONSUMERS
+            .get()
+            .saturating_add(receipt.ordinary_check_products_consumed),
+    );
+    PROJECT_BINDING_CONTINUATION_CONSUMERS.set(
+        PROJECT_BINDING_CONTINUATION_CONSUMERS
+            .get()
+            .saturating_add(receipt.continuation_route_products_consumed),
+    );
+    PROJECT_BINDING_FRESH_PRODUCTS
+        .with(|products| products.borrow_mut().extend(receipt.fresh_project_products));
+    PROJECT_BINDING_CHECKPOINT_PRODUCTS.with(|products| {
+        products
+            .borrow_mut()
+            .extend(receipt.authenticated_checkpoint_products)
+    });
 }
 
 /// One named import after the driver has resolved its module specifier.
@@ -1323,6 +1511,285 @@ where
     )
 }
 
+pub(crate) fn bind_authenticated_project_programs(
+    checkpoint: crate::binder::bind::AuthenticatedLibraryBinderCheckpoint,
+    units: &[ProjectProgram<'_>],
+) -> Result<BoundProjectBinder, String> {
+    let checkpoint_ends = checkpoint.checkpoint_ends();
+    let (builder, _) = checkpoint.into_continuation();
+    let source_offset = u32::try_from(checkpoint_ends.next_source)
+        .map_err(|_| "library source prefix exceeds u32")?
+        .checked_sub(1)
+        .ok_or_else(|| "library source prefix omits the prelude".to_owned())?;
+    #[cfg(test)]
+    {
+        PROJECT_BINDING_CHECKPOINT_SEEDS
+            .set(PROJECT_BINDING_CHECKPOINT_SEEDS.get().saturating_add(1));
+    }
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    for (slot, unit) in units.iter().enumerate() {
+        debug_assert_eq!(unit.unit_slot.index(), slot);
+        lexical_events
+            .reserve_program(
+                unit.module_ordinal,
+                unit.unit_slot,
+                unit.program,
+                &mut event_store,
+            )
+            .map_err(|error| format!("project lexical reservation failed: {error:?}"))?;
+    }
+    let mut external_effects = BTreeMap::new();
+    let bound = bind_authoritative_project_core(
+        builder,
+        units,
+        source_offset,
+        &lexical_events,
+        &mut external_effects,
+    )?;
+    #[cfg(test)]
+    {
+        PROJECT_BINDING_CHECKPOINT_PRODUCTS
+            .with(|products| products.borrow_mut().push(bound.normalized.clone()));
+    }
+    Ok(bound)
+}
+
+fn bind_fresh_project_programs(
+    prelude: &Program<'_>,
+    units: &[ProjectProgram<'_>],
+    lexical_events: &LexicalReservations,
+    external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+) -> Result<BoundProjectBinder, String> {
+    #[cfg(test)]
+    PROJECT_BINDING_FRESH_SEEDS.set(PROJECT_BINDING_FRESH_SEEDS.get().saturating_add(1));
+    let bound = bind_authoritative_project_core(
+        ProjectBinderBuilder::new(prelude),
+        units,
+        0,
+        lexical_events,
+        external_effects,
+    )?;
+    #[cfg(test)]
+    PROJECT_BINDING_FRESH_PRODUCTS
+        .with(|products| products.borrow_mut().push(bound.normalized.clone()));
+    Ok(bound)
+}
+
+fn bind_authoritative_project_core(
+    mut builder: ProjectBinderBuilder,
+    units: &[ProjectProgram<'_>],
+    source_offset: u32,
+    lexical_events: &LexicalReservations,
+    external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+) -> Result<BoundProjectBinder, String> {
+    #[cfg(test)]
+    {
+        PROJECT_BINDING_ENTRIES.set(PROJECT_BINDING_ENTRIES.get().saturating_add(1));
+        PROJECT_BINDING_BOUND_UNITS.set(
+            PROJECT_BINDING_BOUND_UNITS
+                .get()
+                .saturating_add(u64::try_from(units.len()).unwrap_or(u64::MAX)),
+        );
+    }
+    let shifted_unit = |unit: &ProjectProgram<'_>| -> Result<CompilationUnit, String> {
+        let source = SourceUnitKey(
+            source_offset
+                .checked_add(unit.compilation_unit.source.0)
+                .ok_or_else(|| "project source key suffix exceeds u32".to_owned())?,
+        );
+        Ok(CompilationUnit {
+            source,
+            origin: unit.compilation_unit.origin,
+            binding: unit.compilation_unit.binding,
+        })
+    };
+    let reserved_units = units
+        .iter()
+        .map(|unit| shifted_unit(unit).map(|compilation| (unit.program, compilation)))
+        .collect::<Result<Vec<_>, _>>()?;
+    builder.reserve_script_namespace_roots(reserved_units.iter().copied());
+
+    let mut module_scopes = Vec::with_capacity(units.len());
+    let mut module_placeholders = Vec::with_capacity(units.len());
+    let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
+    for unit in units {
+        let imports = imported_symbols(unit, &exports, lexical_events, external_effects);
+        let compilation = shifted_unit(unit)?;
+        let (scope, placeholders) = builder.add_module(unit.program, &imports, compilation);
+        let surface = collect_exports(
+            &builder,
+            scope,
+            unit.program,
+            unit.module_ordinal,
+            lexical_events,
+            external_effects,
+        );
+        module_scopes.push(scope);
+        module_placeholders.push(placeholders);
+        exports.push(surface);
+    }
+    let final_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
+    let binder = builder.finish(final_module);
+    let mut project_sources = units
+        .iter()
+        .zip(module_scopes.iter().copied())
+        .map(|(unit, module)| {
+            let CompilationOrigin::User(original_module_ordinal) = unit.compilation_unit.origin
+            else {
+                return Err("project binding received a non-user compilation origin".to_owned());
+            };
+            Ok(ProjectSourceBindingRow {
+                normalized_path: unit.normalized_path.clone(),
+                source_file_kind: unit.compilation_unit.binding.source_file_kind,
+                external_module: unit.compilation_unit.binding.external_module,
+                original_module_ordinal,
+                unit_slot: unit.unit_slot,
+                source: shifted_unit(unit)?.source,
+                module,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    project_sources.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
+    #[cfg(test)]
+    let normalized =
+        normalized_project_binding_product(&binder, units, &module_scopes, &module_placeholders);
+    #[cfg(test)]
+    PROJECT_BINDING_PRODUCTS.set(PROJECT_BINDING_PRODUCTS.get().saturating_add(1));
+    Ok(BoundProjectBinder {
+        binder,
+        module_scopes,
+        module_placeholders,
+        project_sources,
+        #[cfg(test)]
+        normalized,
+    })
+}
+
+#[cfg(test)]
+fn normalized_project_binding_product(
+    binder: &Binder,
+    units: &[ProjectProgram<'_>],
+    module_scopes: &[ScopeId],
+    module_placeholders: &[Vec<ImportPlaceholder>],
+) -> ProjectBindingProductForTest {
+    let mut rows = units
+        .iter()
+        .zip(module_scopes.iter().copied())
+        .zip(module_placeholders)
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.0 .0.normalized_path.cmp(&right.0 .0.normalized_path));
+    let mut value_labels = BTreeMap::<u32, usize>::new();
+    let mut type_labels = BTreeMap::<u32, usize>::new();
+    let mut namespace_labels = BTreeMap::<u32, usize>::new();
+    let mut per_path = Vec::new();
+    let mut imports = Vec::new();
+    let mut namespaces = Vec::new();
+    for ((unit, module), placeholders) in rows {
+        let mut names = binder
+            .graph
+            .get(module)
+            .into_iter()
+            .flat_map(|scope| scope.symbols.keys())
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unit.compilation_unit.binding.external_module {
+            let census = source_global_binding_census(unit.program, unit.compilation_unit.binding);
+            names.extend(census.candidates.into_keys());
+            names.extend(census.uncertain_candidates.into_keys());
+        }
+        names.sort();
+        names.dedup();
+        for name in names {
+            let Some(symbol_id) = binder.graph.resolve(module, &name) else {
+                continue;
+            };
+            let Some(symbol) = binder.symbols.get(symbol_id) else {
+                continue;
+            };
+            let next_value = value_labels.len();
+            let value = symbol
+                .value
+                .map(|id| *value_labels.entry(id.0).or_insert(next_value));
+            let next_type = type_labels.len();
+            let ty = symbol
+                .ty
+                .map(|id| *type_labels.entry(id.0).or_insert(next_type));
+            let next_namespace = namespace_labels.len();
+            let namespace = symbol
+                .ns
+                .map(|id| *namespace_labels.entry(id.0).or_insert(next_namespace));
+            per_path.push(format!(
+                "{}|{}|v={value:?}|t={ty:?}|n={namespace:?}|bv={}|bt={}|bn={}",
+                unit.normalized_path,
+                name,
+                symbol.blocks_value_lookup,
+                symbol.blocks_type_lookup,
+                symbol.blocks_namespace_lookup
+            ));
+            if let Some(attachment) = binder.namespace_value_attachment(module, &name) {
+                namespaces.push(format!(
+                    "{}|{}|attached={:?}|members={}",
+                    unit.normalized_path,
+                    name,
+                    attachment.disposition,
+                    attachment.members.len()
+                ));
+            } else if let Some(namespace) = symbol.ns {
+                namespaces.push(format!(
+                    "{}|{}|standalone={}",
+                    unit.normalized_path,
+                    name,
+                    binder
+                        .namespaces
+                        .standalone_value_storage(namespace)
+                        .is_some()
+                ));
+            }
+        }
+        for import in &unit.imports {
+            let symbol = binder
+                .graph
+                .get(module)
+                .and_then(|scope| scope.lookup_local(&import.local))
+                .and_then(|id| binder.symbols.get(id));
+            imports.push(format!(
+                "{}|{}<-{}|missing={}|v={}|t={}|bv={}|bt={}",
+                unit.normalized_path,
+                import.local,
+                import.imported,
+                matches!(import.source, ProjectImportSource::Missing(_)),
+                symbol.is_some_and(|symbol| symbol.value.is_some()),
+                symbol.is_some_and(|symbol| symbol.ty.is_some()),
+                symbol.is_some_and(|symbol| symbol.blocks_value_lookup),
+                symbol.is_some_and(|symbol| symbol.blocks_type_lookup)
+            ));
+        }
+        imports.push(format!(
+            "{}|placeholder_values={}",
+            unit.normalized_path,
+            placeholders
+                .iter()
+                .filter(|placeholder| placeholder.value.is_some())
+                .count()
+        ));
+    }
+    ProjectBindingProductForTest {
+        normalized_per_path_binding_shape: per_path,
+        normalized_import_export_shape: imports,
+        normalized_namespace_shape: namespaces,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn record_continuation_project_binding_consumed_for_test() {
+    PROJECT_BINDING_CONTINUATION_CONSUMERS.set(
+        PROJECT_BINDING_CONTINUATION_CONSUMERS
+            .get()
+            .saturating_add(1),
+    );
+}
+
 fn check_project_programs_inner<'ast, F, G, H>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
@@ -1375,32 +1842,16 @@ where
             mut next_class_id,
         },
     ) = bootstrap_trusted_prelude(interner, |prelude| {
-        let mut builder = ProjectBinderBuilder::new(prelude);
-        builder.reserve_script_namespace_roots(
-            units
-                .iter()
-                .map(|unit| (unit.program, unit.compilation_unit)),
-        );
-        let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
-        for unit in units {
-            let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects);
-            let (scope, placeholders) =
-                builder.add_module(unit.program, &imports, unit.compilation_unit);
-            let surface = collect_exports(
-                &builder,
-                scope,
-                unit.program,
-                unit.module_ordinal,
-                &lexical_events,
-                &mut external_effects,
-            );
-            module_scopes.push(scope);
-            module_placeholders.push(placeholders);
-            exports.push(surface);
-        }
-        let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
-        builder.finish(binder_module)
+        let bound =
+            bind_fresh_project_programs(prelude, units, &lexical_events, &mut external_effects)
+                .expect("authoritative fresh project binding succeeds");
+        module_scopes = bound.module_scopes;
+        module_placeholders = bound.module_placeholders;
+        bound.binder
     });
+    #[cfg(test)]
+    PROJECT_BINDING_ORDINARY_CONSUMERS
+        .set(PROJECT_BINDING_ORDINARY_CONSUMERS.get().saturating_add(1));
 
     let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
     let user_type_start = type_decls.len();

@@ -3,6 +3,7 @@
 #[cfg(test)]
 use super::profile::TestLibraryProfileInput;
 use super::profile::{ExactLibraryProfile, ExactLibrarySource};
+use crate::binder::bind::UnauthenticatedLibraryBinderCheckpoint;
 use crate::check::checker::library_compiler::{
     compile_owned_injected_profile, freeze_library_runtime_product, CompiledLibraryRuntimeProduct,
     InjectedLibrarySource,
@@ -64,8 +65,9 @@ impl LibraryCompilerWorkScopeForTest {
     }
 }
 
+// SHA-256 of the preceding schema identity plus `|binder-snapshot-v2`.
 pub const COMPILER_SCHEMA_SHA256: &str =
-    "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
+    "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryCompilationReport {
@@ -282,6 +284,55 @@ impl LibraryCompiler {
         profile: &ExactLibraryProfile,
     ) -> Result<CompiledLibrary, LibraryCompilerError> {
         self.compile_sources(profile.profile_identity(), profile.sources())
+    }
+
+    #[doc(hidden)]
+    pub fn compile_binder_checkpoint(
+        &self,
+        profile: &ExactLibraryProfile,
+    ) -> Result<UnauthenticatedLibraryBinderCheckpoint, LibraryCompilerError> {
+        #[cfg(test)]
+        {
+            COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
+            COMPILER_SOURCE_BYTES.set(COMPILER_SOURCE_BYTES.get().saturating_add(
+                profile.sources().iter().fold(0u64, |total, source| {
+                    total.saturating_add(u64::try_from(source.bytes().len()).unwrap_or(u64::MAX))
+                }),
+            ));
+        }
+        let owned_sources = profile
+            .sources()
+            .iter()
+            .map(|source| {
+                let text = std::str::from_utf8(source.bytes()).map_err(|_| {
+                    LibraryCompilerError::SourceNotUtf8 {
+                        file_ordinal: source.ordinal().index(),
+                        name: source.name().to_owned(),
+                    }
+                })?;
+                Ok((source.ordinal(), source.name().to_owned(), text.to_owned()))
+            })
+            .collect::<Result<Vec<_>, LibraryCompilerError>>()?;
+        let injected = owned_sources
+            .iter()
+            .map(|(ordinal, name, source)| InjectedLibrarySource {
+                file_ordinal: *ordinal,
+                name,
+                source,
+            })
+            .collect::<Vec<_>>();
+        let checkpoint =
+            crate::check::checker::library_compiler::compile_library_binder_checkpoint(&injected)
+                .map_err(|error| LibraryCompilerError::Compilation {
+                message: format!("{error:?}"),
+            })?;
+        #[cfg(test)]
+        {
+            let unit_count = u64::try_from(injected.len()).unwrap_or(u64::MAX);
+            COMPILER_PARSE_UNITS.set(COMPILER_PARSE_UNITS.get().saturating_add(unit_count));
+            COMPILER_BIND_UNITS.set(COMPILER_BIND_UNITS.get().saturating_add(unit_count));
+        }
+        Ok(checkpoint)
     }
 
     #[cfg(test)]

@@ -36,6 +36,18 @@ pub enum CollisionReplayIndexViolation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "the contract names the independently authenticated mismatch domains"
+)]
+pub enum CheckpointAuthenticationViolation {
+    BinderDigestMismatch,
+    RootDigestMismatch,
+    PrefixMismatch,
+    RetainedScopeMapsMismatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibrarySnapshotViolation {
     MalformedHeader,
     MalformedDirectory,
@@ -68,6 +80,9 @@ pub enum LibraryInitCause {
     },
     ReplayIndexRejected {
         violation: CollisionReplayIndexViolation,
+    },
+    CheckpointAuthenticationRejected {
+        violation: CheckpointAuthenticationViolation,
     },
 }
 
@@ -112,8 +127,7 @@ enum ProviderInput {
 }
 
 pub struct LibraryBaseProvider {
-    result: OnceLock<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>>,
-    typed_validation_sha256: OnceLock<[u8; 32]>,
+    result: OnceLock<Result<Arc<InitializedLibrary>, Arc<LibraryInitError>>>,
     input: ProviderInput,
     attempts: AtomicU64,
     publications: AtomicU64,
@@ -122,11 +136,82 @@ pub struct LibraryBaseProvider {
     publication_us: AtomicU64,
 }
 
+struct InitializedLibrary {
+    base: Arc<FrozenLibraryBase>,
+    checkpoint_evidence:
+        crate::check::checker::library_snapshot_codec::AdmittedLibrarySnapshotEvidence,
+    #[cfg(test)]
+    typed_validation_sha256: [u8; 32],
+}
+
+#[doc(hidden)]
+pub struct LibraryProjectBinderContinuation {
+    library_unit_count: usize,
+    bound: crate::check::checker::BoundProjectBinder,
+}
+
+impl LibraryProjectBinderContinuation {
+    #[doc(hidden)]
+    pub const fn library_unit_count(&self) -> usize {
+        self.library_unit_count
+    }
+
+    #[doc(hidden)]
+    pub fn project_unit_count(&self) -> usize {
+        self.bound.project_sources.len()
+    }
+
+    #[doc(hidden)]
+    pub fn project_source_kind(
+        &self,
+        path: &str,
+    ) -> Option<crate::binder::namespace::SourceFileKind> {
+        self.bound
+            .project_sources
+            .iter()
+            .find(|row| row.normalized_path == path)
+            .map(|row| row.source_file_kind)
+    }
+
+    #[doc(hidden)]
+    pub fn project_source_is_external(&self, path: &str) -> Option<bool> {
+        self.bound
+            .project_sources
+            .iter()
+            .find(|row| row.normalized_path == path)
+            .map(|row| row.external_module)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn project_sources_for_test(
+        &self,
+    ) -> &[crate::check::checker::ProjectSourceBindingRow] {
+        &self.bound.project_sources
+    }
+
+    #[cfg(test)]
+    pub(crate) fn normalized_per_path_binding_shape_for_test(&self) -> Vec<String> {
+        self.bound
+            .normalized
+            .normalized_per_path_binding_shape
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn normalized_import_export_shape_for_test(&self) -> Vec<String> {
+        self.bound.normalized.normalized_import_export_shape.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn normalized_namespace_shape_for_test(&self) -> Vec<String> {
+        self.bound.normalized.normalized_namespace_shape.clone()
+    }
+}
+
 impl LibraryBaseProvider {
     pub const fn new() -> Self {
         Self {
             result: OnceLock::new(),
-            typed_validation_sha256: OnceLock::new(),
             input: ProviderInput::Packaged,
             attempts: AtomicU64::new(0),
             publications: AtomicU64::new(0),
@@ -152,7 +237,6 @@ impl LibraryBaseProvider {
     fn with_input(input: ProviderInput) -> Self {
         Self {
             result: OnceLock::new(),
-            typed_validation_sha256: OnceLock::new(),
             input,
             attempts: AtomicU64::new(0),
             publications: AtomicU64::new(0),
@@ -163,19 +247,198 @@ impl LibraryBaseProvider {
     }
 
     pub fn get(&self) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
+        self.initialized()
+            .map(|initialized| initialized.base.clone())
+    }
+
+    #[doc(hidden)]
+    pub fn authenticate_library_binder_checkpoint(
+        &self,
+        checkpoint: crate::binder::bind::UnauthenticatedLibraryBinderCheckpoint,
+    ) -> Result<crate::binder::bind::AuthenticatedLibraryBinderCheckpoint, LibraryInitError> {
+        let initialized = self.initialized().map_err(|error| error.as_ref().clone())?;
+        let evidence = &initialized.checkpoint_evidence;
+        checkpoint
+            .authenticate(
+                evidence
+                    .section_digest(3)
+                    .expect("canonical snapshot has a binder section"),
+                evidence
+                    .section_digest(9)
+                    .expect("canonical snapshot has a root section"),
+                evidence.library_prefixes(),
+                evidence.retained_scope_maps_sha256(),
+                evidence.library_units(),
+            )
+            .map_err(checkpoint_authentication_error)
+    }
+
+    #[doc(hidden)]
+    pub fn continue_authenticated_library_project_binder(
+        &self,
+        checkpoint: crate::binder::bind::AuthenticatedLibraryBinderCheckpoint,
+        inputs: Vec<crate::driver::FileInput>,
+    ) -> Result<LibraryProjectBinderContinuation, LibraryInitError> {
+        let library_unit_count = checkpoint.library_unit_count();
+        let bound =
+            crate::check::checker::library_compiler::continue_authenticated_library_project_binder(
+                checkpoint, inputs,
+            )
+            .map_err(|_| {
+                LibraryInitError::new(
+                    LibraryInitStage::ReferenceValidation,
+                    LibraryInitCause::SnapshotRejected {
+                        violation: LibrarySnapshotViolation::InvalidReference,
+                    },
+                )
+            })?;
+        Ok(LibraryProjectBinderContinuation {
+            library_unit_count,
+            bound,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn continue_authenticated_library_binder_checkpoint_for_test<F>(
+        &self,
+        inputs: &[super::base::UserDeltaProjectInputForTest<'_>],
+        mutation: Option<super::base::CheckpointAuthenticationMutationForTest>,
+        inspect: F,
+    ) -> Result<super::base::AuthenticatedBinderContinuationReceiptForTest, LibraryInitError>
+    where
+        F: FnOnce(
+            &crate::binder::bind::LibraryBinderCheckpointInspectionForTest<'_>,
+            &crate::check::checker::library_snapshot_codec::AdmittedLibrarySnapshotEvidence,
+            &crate::check::checker::replay_index::AdmittedCollisionReplayIndex,
+        ),
+    {
+        let profile = super::profile::ExactLibraryProfile::load_packaged().map_err(|_| {
+            LibraryInitError::new(
+                LibraryInitStage::ReferenceValidation,
+                LibraryInitCause::SnapshotRejected {
+                    violation: LibrarySnapshotViolation::InvalidReference,
+                },
+            )
+        })?;
+        let mut checkpoint = super::compiler::LibraryCompiler::new()
+            .compile_binder_checkpoint(&profile)
+            .map_err(|_| {
+                LibraryInitError::new(
+                    LibraryInitStage::ReferenceValidation,
+                    LibraryInitCause::SnapshotRejected {
+                        violation: LibrarySnapshotViolation::InvalidReference,
+                    },
+                )
+            })?;
+        let initialized = self.initialized().map_err(|error| error.as_ref().clone())?;
+        let evidence = &initialized.checkpoint_evidence;
+        let base = &initialized.base;
+        match mutation {
+            Some(super::base::CheckpointAuthenticationMutationForTest::BinderDigest) => {
+                checkpoint.mutate_binder_digest_for_test();
+            }
+            Some(super::base::CheckpointAuthenticationMutationForTest::RootDigest) => {
+                checkpoint.mutate_root_digest_for_test();
+            }
+            Some(super::base::CheckpointAuthenticationMutationForTest::PrefixNextIds) => {
+                checkpoint.mutate_prefix_for_test();
+            }
+            Some(super::base::CheckpointAuthenticationMutationForTest::FunctionScopes) => {
+                checkpoint.mutate_function_scopes_for_test();
+            }
+            Some(super::base::CheckpointAuthenticationMutationForTest::FunctionDeclarationIds) => {
+                checkpoint.mutate_function_declaration_ids_for_test();
+            }
+            Some(super::base::CheckpointAuthenticationMutationForTest::BlockScopes) => {
+                checkpoint.mutate_block_scopes_for_test();
+            }
+            None => {}
+        }
+        let authenticated = checkpoint
+            .authenticate(
+                evidence
+                    .section_digest(3)
+                    .expect("canonical snapshot has a binder section"),
+                evidence
+                    .section_digest(9)
+                    .expect("canonical snapshot has a root section"),
+                evidence.library_prefixes(),
+                evidence.retained_scope_maps_sha256(),
+                evidence.library_units(),
+            )
+            .map_err(checkpoint_authentication_error)?;
+        let inspection = authenticated.inspection_for_test();
+        let checkpoint_ends = inspection.ends;
+        let array_symbol = inspection.array_symbol;
+        let array_type_group = inspection.array_type_group;
+        inspect(&inspection, evidence, base.replay_index_for_test());
+        let compiler_inputs = inputs
+            .iter()
+            .map(|input| crate::driver::FileInput {
+                name: input.path.to_owned(),
+                source: input.source.to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let bound =
+            crate::check::checker::library_compiler::continue_authenticated_library_project_binder(
+                authenticated,
+                compiler_inputs,
+            )
+            .map_err(|_| {
+                LibraryInitError::new(
+                    LibraryInitStage::ReferenceValidation,
+                    LibraryInitCause::SnapshotRejected {
+                        violation: LibrarySnapshotViolation::InvalidReference,
+                    },
+                )
+            })?;
+        let continuation = crate::check::checker::library_compiler::continuation_receipt_for_test(
+            checkpoint_ends,
+            array_symbol,
+            array_type_group,
+            bound,
+        )
+        .map_err(|_| {
+            LibraryInitError::new(
+                LibraryInitStage::ReferenceValidation,
+                LibraryInitCause::SnapshotRejected {
+                    violation: LibrarySnapshotViolation::InvalidReference,
+                },
+            )
+        })?;
+        let modules = evidence.library_units();
+        let mapped_owner_sites = base
+            .replay_index_for_test()
+            .owner_sites
+            .iter()
+            .map(|site| super::base::MappedReplayOwnerSiteForTest {
+                owner: site.owner,
+                file_ordinal: site.file_ordinal,
+                span: site.span,
+                syntax_module: modules[site.file_ordinal.index()].module,
+            })
+            .collect();
+        Ok(super::base::AuthenticatedBinderContinuationReceiptForTest {
+            continuation,
+            mapped_owner_sites,
+        })
+    }
+
+    fn initialized(&self) -> Result<Arc<InitializedLibrary>, Arc<LibraryInitError>> {
         self.result.get_or_init(|| self.initialize()).clone()
     }
 
-    fn initialize(&self) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
+    fn initialize(&self) -> Result<Arc<InitializedLibrary>, Arc<LibraryInitError>> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
-        let decoded = match &self.input {
+        let (decoded, checkpoint_evidence) = match &self.input {
             ProviderInput::Packaged => {
                 let validation = Instant::now();
                 let admitted = snapshot::admit_packaged_canonical().map_err(Arc::new)?;
                 self.validation_us
                     .store(elapsed_us(validation), Ordering::Relaxed);
                 let decode = Instant::now();
-                let decoded = snapshot::decode_admitted_canonical(admitted).map_err(Arc::new)?;
+                let decoded = snapshot::decode_admitted_canonical_with_evidence(admitted)
+                    .map_err(Arc::new)?;
                 self.decode_us.store(elapsed_us(decode), Ordering::Relaxed);
                 decoded
             }
@@ -187,14 +450,16 @@ impl LibraryBaseProvider {
                 self.validation_us
                     .store(elapsed_us(validation), Ordering::Relaxed);
                 let decode = Instant::now();
-                let decoded = snapshot::decode_admitted_canonical(admitted).map_err(Arc::new)?;
+                let decoded = snapshot::decode_admitted_canonical_with_evidence(admitted)
+                    .map_err(Arc::new)?;
                 self.decode_us.store(elapsed_us(decode), Ordering::Relaxed);
                 decoded
             }
             #[cfg(test)]
             ProviderInput::PreAdmitted(snapshot) => {
                 let validation = Instant::now();
-                let decoded = snapshot::decode_pre_admitted(snapshot).map_err(Arc::new)?;
+                let decoded =
+                    snapshot::decode_pre_admitted_with_evidence(snapshot).map_err(Arc::new)?;
                 self.validation_us
                     .store(elapsed_us(validation), Ordering::Relaxed);
                 self.decode_us.store(1, Ordering::Relaxed);
@@ -202,18 +467,8 @@ impl LibraryBaseProvider {
             }
         };
         let publication = Instant::now();
-        if self
-            .typed_validation_sha256
-            .set(decoded.typed_validation_sha256)
-            .is_err()
-        {
-            return Err(Arc::new(LibraryInitError::new(
-                LibraryInitStage::Publication,
-                LibraryInitCause::SnapshotRejected {
-                    violation: LibrarySnapshotViolation::IncompletePublication,
-                },
-            )));
-        }
+        #[cfg(test)]
+        let typed_validation_sha256 = decoded.typed_validation_sha256;
         let base = Arc::new(FrozenLibraryBase::from_decoded(decoded).map_err(|_| {
             Arc::new(LibraryInitError::new(
                 LibraryInitStage::Publication,
@@ -225,7 +480,12 @@ impl LibraryBaseProvider {
         self.publication_us
             .store(elapsed_us(publication), Ordering::Relaxed);
         self.publications.fetch_add(1, Ordering::Relaxed);
-        Ok(base)
+        Ok(Arc::new(InitializedLibrary {
+            base,
+            checkpoint_evidence,
+            #[cfg(test)]
+            typed_validation_sha256,
+        }))
     }
 
     #[cfg(test)]
@@ -238,14 +498,8 @@ impl LibraryBaseProvider {
 
     #[cfg(test)]
     pub(super) fn typed_validation_sha256_for_test(&self) -> Result<String, LibraryInitError> {
-        let digest = self.typed_validation_sha256.get().ok_or_else(|| {
-            LibraryInitError::new(
-                LibraryInitStage::Publication,
-                LibraryInitCause::SnapshotRejected {
-                    violation: LibrarySnapshotViolation::IncompletePublication,
-                },
-            )
-        })?;
+        let initialized = self.initialized().map_err(|error| error.as_ref().clone())?;
+        let digest = &initialized.typed_validation_sha256;
         Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
     }
 }
@@ -254,6 +508,29 @@ impl Default for LibraryBaseProvider {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn checkpoint_authentication_error(
+    mismatch: crate::binder::bind::LibraryBinderCheckpointMismatch,
+) -> LibraryInitError {
+    let violation = match mismatch {
+        crate::binder::bind::LibraryBinderCheckpointMismatch::BinderDigest => {
+            CheckpointAuthenticationViolation::BinderDigestMismatch
+        }
+        crate::binder::bind::LibraryBinderCheckpointMismatch::RootDigest => {
+            CheckpointAuthenticationViolation::RootDigestMismatch
+        }
+        crate::binder::bind::LibraryBinderCheckpointMismatch::Prefix => {
+            CheckpointAuthenticationViolation::PrefixMismatch
+        }
+        crate::binder::bind::LibraryBinderCheckpointMismatch::RetainedScopeMaps => {
+            CheckpointAuthenticationViolation::RetainedScopeMapsMismatch
+        }
+    };
+    LibraryInitError::new(
+        LibraryInitStage::ReferenceValidation,
+        LibraryInitCause::CheckpointAuthenticationRejected { violation },
+    )
 }
 
 fn elapsed_us(start: Instant) -> u64 {

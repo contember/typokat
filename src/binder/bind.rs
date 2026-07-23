@@ -4,13 +4,14 @@
 //! The checker owns type construction and semantic diagnostics.
 
 use crate::binder::declaration::{
-    source_declaration_occurrences, DeclId, DeclarationKind, DeclarationSite, DeclarationTable,
-    LexicalDeclaration, TypeFragmentKind, TypeGroupFragment, TypeGroupId, TypeGroupTable,
-    ValueStorageId,
+    source_declaration_occurrences, source_global_binding_census_with_provenance, DeclId,
+    DeclarationKind, DeclarationSite, DeclarationTable, LexicalDeclaration, TypeFragmentKind,
+    TypeGroupFragment, TypeGroupId, TypeGroupTable, ValueStorageId,
 };
 use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
-    NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
+    DeclarationOwner, MergeDisposition, NamespaceId, NamespaceInstanceState, NamespaceTable,
+    SourceUnitKey,
 };
 use crate::binder::namespace::{
     collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
@@ -49,8 +50,6 @@ pub(crate) enum LibraryBinderError {
     #[cfg(test)]
     RequiresPristineBuilder,
     AlreadyAdded,
-    #[cfg(test)]
-    FollowsContinuation,
 }
 
 impl fmt::Display for LibraryBinderError {
@@ -89,10 +88,6 @@ impl fmt::Display for LibraryBinderError {
                 formatter.write_str("library batch requires a pristine project builder")
             }
             Self::AlreadyAdded => formatter.write_str("library batch is one-shot"),
-            #[cfg(test)]
-            Self::FollowsContinuation => {
-                formatter.write_str("library batch cannot follow a frozen continuation")
-            }
         }
     }
 }
@@ -141,6 +136,257 @@ pub struct Binder {
     next_source_key: SourceUnitKey,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+pub(crate) struct LibraryBinderCheckpointEnds {
+    pub(crate) scopes: usize,
+    pub(crate) symbols: usize,
+    pub(crate) declarations: usize,
+    pub(crate) type_groups: usize,
+    pub(crate) namespaces: usize,
+    pub(crate) value_storages: usize,
+    pub(crate) next_source: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+pub(crate) struct LibraryBinderUnit {
+    pub(crate) ordinal: LibraryFileOrdinal,
+    pub(crate) source: SourceUnitKey,
+    pub(crate) module: ScopeId,
+}
+
+#[doc(hidden)]
+pub struct UnauthenticatedLibraryBinderCheckpoint {
+    binder: Binder,
+    library_units: Vec<LibraryBinderUnit>,
+    source_binder_encoding_sha256: [u8; 32],
+    source_root_encoding_sha256: [u8; 32],
+    retained_scope_maps_sha256: [u8; 32],
+    ends: LibraryBinderCheckpointEnds,
+}
+
+#[doc(hidden)]
+pub struct AuthenticatedLibraryBinderCheckpoint {
+    checkpoint: UnauthenticatedLibraryBinderCheckpoint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+pub(crate) enum LibraryBinderCheckpointMismatch {
+    BinderDigest,
+    RootDigest,
+    Prefix,
+    RetainedScopeMaps,
+}
+
+#[cfg(test)]
+pub(crate) struct LibraryBinderCheckpointInspectionForTest<'checkpoint> {
+    pub(crate) library_units: &'checkpoint [LibraryBinderUnit],
+    pub(crate) source_binder_encoding_sha256: [u8; 32],
+    pub(crate) source_root_encoding_sha256: [u8; 32],
+    pub(crate) ends: LibraryBinderCheckpointEnds,
+    pub(crate) array_symbol: SymbolId,
+    pub(crate) array_type_group: TypeGroupId,
+}
+
+#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+impl UnauthenticatedLibraryBinderCheckpoint {
+    pub(crate) fn new(
+        binder: Binder,
+        library_units: Vec<LibraryBinderUnit>,
+        source_binder_encoding_sha256: [u8; 32],
+        source_root_encoding_sha256: [u8; 32],
+        retained_scope_maps_sha256: [u8; 32],
+    ) -> Self {
+        let ends = binder.checkpoint_ends();
+        Self {
+            binder,
+            library_units,
+            source_binder_encoding_sha256,
+            source_root_encoding_sha256,
+            retained_scope_maps_sha256,
+            ends,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn library_unit_count(&self) -> usize {
+        self.library_units.len()
+    }
+
+    pub(crate) fn authenticate(
+        self,
+        binder_digest: [u8; 32],
+        root_digest: [u8; 32],
+        ends: LibraryBinderCheckpointEnds,
+        retained_scope_maps_digest: [u8; 32],
+        library_units: &[LibraryBinderUnit],
+    ) -> Result<AuthenticatedLibraryBinderCheckpoint, LibraryBinderCheckpointMismatch> {
+        if self.source_binder_encoding_sha256 != binder_digest
+            || self.library_units != library_units
+        {
+            return Err(LibraryBinderCheckpointMismatch::BinderDigest);
+        }
+        if self.source_root_encoding_sha256 != root_digest {
+            return Err(LibraryBinderCheckpointMismatch::RootDigest);
+        }
+        if self.ends != ends {
+            return Err(LibraryBinderCheckpointMismatch::Prefix);
+        }
+        let retained = super::snapshot::encode_retained_scope_maps(&self.binder)
+            .map_err(|_| LibraryBinderCheckpointMismatch::RetainedScopeMaps)?;
+        use sha2::Digest;
+        let actual: [u8; 32] = sha2::Sha256::digest(retained).into();
+        if self.retained_scope_maps_sha256 != actual
+            || retained_scope_maps_digest != self.retained_scope_maps_sha256
+        {
+            return Err(LibraryBinderCheckpointMismatch::RetainedScopeMaps);
+        }
+        Ok(AuthenticatedLibraryBinderCheckpoint { checkpoint: self })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_binder_digest_for_test(&mut self) {
+        self.source_binder_encoding_sha256[0] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_root_digest_for_test(&mut self) {
+        self.source_root_encoding_sha256[0] ^= 1;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_prefix_for_test(&mut self) {
+        self.ends.symbols = self.ends.symbols.saturating_add(1);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_function_scopes_for_test(&mut self) {
+        if let Some(key) = self.binder.fn_scopes.keys().next().copied() {
+            self.binder.fn_scopes.remove(&key);
+        } else {
+            self.binder.fn_scopes.insert(
+                (self.binder.prelude_module, u32::MAX),
+                self.binder.prelude_module,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_function_declaration_ids_for_test(&mut self) {
+        if let Some(key) = self.binder.fn_decl_ids.keys().next().copied() {
+            self.binder.fn_decl_ids.remove(&key);
+        } else {
+            self.binder.fn_decl_ids.insert(
+                (self.binder.prelude_module, u32::MAX),
+                ValueStorageId(u32::MAX),
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutate_block_scopes_for_test(&mut self) {
+        if let Some(key) = self.binder.block_scopes.keys().next().copied() {
+            self.binder.block_scopes.remove(&key);
+        } else {
+            self.binder.block_scopes.insert(
+                (self.binder.prelude_module, u32::MAX),
+                self.binder.prelude_module,
+            );
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+impl AuthenticatedLibraryBinderCheckpoint {
+    #[cfg(test)]
+    pub(crate) fn inspection_for_test(&self) -> LibraryBinderCheckpointInspectionForTest<'_> {
+        let binder = &self.checkpoint.binder;
+        let array_symbol = binder
+            .resolve_type(binder.compilation_global, "Array")
+            .expect("canonical library checkpoint contains Array");
+        let array_type_group = binder
+            .symbols
+            .get(array_symbol)
+            .and_then(|symbol| symbol.ty)
+            .expect("canonical Array owns one type group");
+        LibraryBinderCheckpointInspectionForTest {
+            library_units: &self.checkpoint.library_units,
+            source_binder_encoding_sha256: self.checkpoint.source_binder_encoding_sha256,
+            source_root_encoding_sha256: self.checkpoint.source_root_encoding_sha256,
+            ends: self.checkpoint.ends,
+            array_symbol,
+            array_type_group,
+        }
+    }
+
+    pub(crate) fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
+        self.checkpoint.ends
+    }
+
+    #[doc(hidden)]
+    pub fn library_unit_count(&self) -> usize {
+        self.checkpoint.library_units.len()
+    }
+
+    pub(crate) fn into_continuation(self) -> (ProjectBinderBuilder, Vec<LibraryBinderUnit>) {
+        let UnauthenticatedLibraryBinderCheckpoint {
+            binder,
+            library_units,
+            ..
+        } = self.checkpoint;
+        let Binder {
+            graph,
+            symbols,
+            declarations,
+            type_groups,
+            namespaces,
+            module,
+            prelude_module,
+            compilation_global,
+            script_namespace_root,
+            decl_count,
+            prelude_type_group_count,
+            fn_scopes,
+            fn_decl_ids,
+            block_scopes,
+            module_sources,
+            next_source_key,
+        } = binder;
+        (
+            ProjectBinderBuilder {
+                state: BindState {
+                    graph,
+                    symbols,
+                    declarations,
+                    type_groups,
+                    namespaces,
+                    module_sources,
+                    library_module_ordinals: FxHashMap::default(),
+                    fn_scopes,
+                    fn_decl_ids,
+                    block_scopes,
+                    current_module: module,
+                    next_value_storage: decl_count,
+                    next_source_key,
+                    continuation_publication: None,
+                },
+                prelude_module,
+                compilation_global,
+                script_namespace_root,
+                prelude_type_group_count,
+                use_mode: BuilderUseMode::Continuation,
+                empty_prelude: true,
+                continuation_publication_plans: FxHashMap::default(),
+                #[cfg(test)]
+                frozen_global_augmentation_count: None,
+            },
+            library_units,
+        )
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub(crate) enum ResolvedValueKind {
     Ordinary,
@@ -163,6 +409,21 @@ pub(crate) enum ValueResolution {
 }
 
 impl Binder {
+    #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+    pub(crate) fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
+        LibraryBinderCheckpointEnds {
+            scopes: self.graph.snapshot_len(),
+            symbols: self.symbols.len(),
+            declarations: self.declarations.len(),
+            type_groups: self.type_groups.len(),
+            namespaces: self.namespaces.len(),
+            value_storages: usize::try_from(self.decl_count)
+                .expect("binder value-storage prefix fits usize"),
+            next_source: usize::try_from(self.next_source_key.0)
+                .expect("binder source prefix fits usize"),
+        }
+    }
+
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         self.graph.freeze_as_base()?;
         self.symbols.freeze_as_base()?;
@@ -289,6 +550,9 @@ impl Binder {
         decl_count: u32,
         prelude_type_group_count: u32,
         module_sources: FxHashMap<ScopeId, SourceUnitKey>,
+        fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+        fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
+        block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     ) -> Self {
         let next_source_key = SourceUnitKey(
             module_sources
@@ -310,9 +574,9 @@ impl Binder {
             script_namespace_root,
             decl_count,
             prelude_type_group_count,
-            fn_scopes: FxHashMap::default(),
-            fn_decl_ids: FxHashMap::default(),
-            block_scopes: FxHashMap::default(),
+            fn_scopes,
+            fn_decl_ids,
+            block_scopes,
             module_sources: {
                 let mut layered = LayeredMap::default();
                 for (scope, source) in module_sources {
@@ -567,9 +831,58 @@ pub(crate) struct BindState {
     pub(crate) current_module: ScopeId,
     /// Running checker storage counter for value declarations.
     pub(crate) next_value_storage: u32,
+    continuation_publication: Option<ContinuationPublicationPlan>,
 }
 
 impl BindState {
+    fn continuation_publication_scope(
+        &self,
+        lexical_scope: ScopeId,
+        binding_start: u32,
+    ) -> ScopeId {
+        self.continuation_publication
+            .as_ref()
+            .filter(|plan| plan.binding_sites.contains_key(&binding_start))
+            .map_or(lexical_scope, |plan| plan.compilation_global)
+    }
+
+    fn declaration_publication_scope(
+        &self,
+        lexical_scope: ScopeId,
+        declaration: DeclId,
+    ) -> ScopeId {
+        let binding_start = self
+            .declarations
+            .get(declaration)
+            .expect("publication declaration exists")
+            .site
+            .binding_span
+            .start;
+        self.continuation_publication_scope(lexical_scope, binding_start)
+    }
+
+    pub(super) fn continuation_compilation_global_for(
+        &self,
+        binding_start: u32,
+    ) -> Option<ScopeId> {
+        self.continuation_publication
+            .as_ref()
+            .filter(|plan| plan.binding_sites.contains_key(&binding_start))
+            .map(|plan| plan.compilation_global)
+    }
+
+    pub(super) fn continuation_publication_sites(&self) -> Vec<(u32, String)> {
+        self.continuation_publication
+            .as_ref()
+            .map(|plan| {
+                plan.binding_sites
+                    .iter()
+                    .map(|(start, name)| (*start, name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn record_module_source(&mut self, module: ScopeId, source: SourceUnitKey) {
         self.module_sources
             .insert_local(module, source)
@@ -707,8 +1020,14 @@ pub(crate) struct ProjectBinderBuilder {
     prelude_type_group_count: u32,
     use_mode: BuilderUseMode,
     empty_prelude: bool,
+    continuation_publication_plans: FxHashMap<SourceUnitKey, ContinuationPublicationPlan>,
     #[cfg(test)]
     frozen_global_augmentation_count: Option<usize>,
+}
+
+struct ContinuationPublicationPlan {
+    compilation_global: ScopeId,
+    binding_sites: FxHashMap<u32, String>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -717,7 +1036,7 @@ enum BuilderUseMode {
     #[cfg(test)]
     Project,
     Library,
-    #[cfg(test)]
+    #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
     Continuation,
 }
 
@@ -738,6 +1057,7 @@ impl ProjectBinderBuilder {
             current_module: ScopeId(0),
             next_value_storage: 0,
             next_source_key: SourceUnitKey(1),
+            continuation_publication: None,
         };
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
@@ -764,6 +1084,7 @@ impl ProjectBinderBuilder {
             prelude_type_group_count,
             use_mode: BuilderUseMode::Pristine,
             empty_prelude: prelude.body.is_empty(),
+            continuation_publication_plans: FxHashMap::default(),
             #[cfg(test)]
             frozen_global_augmentation_count: None,
         }
@@ -784,7 +1105,45 @@ impl ProjectBinderBuilder {
             BuilderUseMode::Continuation => {}
         }
         let mut roots = Vec::new();
+        let admitted_global_names = self
+            .state
+            .namespaces
+            .merges()
+            .filter(|record| {
+                record.owner == DeclarationOwner::CompilationGlobal
+                    && record.classification.disposition == MergeDisposition::Admitted
+            })
+            .map(|record| record.name.clone())
+            .collect::<std::collections::HashSet<_>>();
         for (program, unit) in units {
+            if self.use_mode == BuilderUseMode::Continuation {
+                let binding_sites = if unit.binding.external_module {
+                    FxHashMap::default()
+                } else {
+                    source_global_binding_census_with_provenance(program, unit.binding)
+                        .binding_sites
+                        .into_iter()
+                        .filter(|site| {
+                            self.state
+                                .graph
+                                .get(self.compilation_global)
+                                .and_then(|scope| scope.lookup_local(&site.name))
+                                .is_some()
+                                || admitted_global_names.contains(&site.name)
+                                || site.name == "globalThis"
+                        })
+                        .map(|site| (site.span.start, site.name))
+                        .collect()
+                };
+                let previous = self.continuation_publication_plans.insert(
+                    unit.source,
+                    ContinuationPublicationPlan {
+                        compilation_global: self.compilation_global,
+                        binding_sites,
+                    },
+                );
+                assert!(previous.is_none(), "one continuation plan per source");
+            }
             if unit.binding.external_module {
                 continue;
             }
@@ -819,13 +1178,29 @@ impl ProjectBinderBuilder {
                     continue;
                 };
                 if !occupied_values.contains(identifier.name.as_str()) {
-                    roots.push((unit.source, identifier.name.to_string()));
+                    roots.push((
+                        unit.source,
+                        identifier.name.to_string(),
+                        identifier.span.start,
+                    ));
                 }
             }
         }
-        roots.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+        roots.sort_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then(left.0.cmp(&right.0))
+                .then(left.2.cmp(&right.2))
+        });
         roots.dedup_by(|left, right| left.1 == right.1);
-        for (_, name) in roots {
+        for (source, name, binding_start) in roots {
+            if self
+                .continuation_publication_plans
+                .get(&source)
+                .is_some_and(|plan| plan.binding_sites.contains_key(&binding_start))
+            {
+                continue;
+            }
             if self
                 .state
                 .graph
@@ -871,15 +1246,39 @@ impl ProjectBinderBuilder {
         for import in imports {
             placeholders.push(declare_import(&mut self.state, module, import));
         }
-        bind_statements(&mut self.state, module, &program.body);
-        bind_namespace_metadata(
-            &mut self.state,
-            module,
-            program,
-            unit,
-            self.compilation_global,
-            self.script_namespace_root,
-        );
+        if self.use_mode == BuilderUseMode::Continuation {
+            self.state.continuation_publication = Some(
+                self.continuation_publication_plans
+                    .remove(&unit.source)
+                    .expect("continuation source has one publication plan"),
+            );
+            bind_library_statements(
+                &mut self.state,
+                module,
+                &program.body,
+                unit,
+                self.compilation_global,
+            );
+            bind_namespace_metadata(
+                &mut self.state,
+                module,
+                program,
+                unit,
+                self.compilation_global,
+                self.script_namespace_root,
+            );
+            self.state.continuation_publication = None;
+        } else {
+            bind_statements(&mut self.state, module, &program.body);
+            bind_namespace_metadata(
+                &mut self.state,
+                module,
+                program,
+                unit,
+                self.compilation_global,
+                self.script_namespace_root,
+            );
+        }
         (module, placeholders)
     }
 
@@ -917,9 +1316,9 @@ impl ProjectBinderBuilder {
             BuilderUseMode::Pristine => self.use_mode = BuilderUseMode::Library,
             #[cfg(test)]
             BuilderUseMode::Project => return Err(LibraryBinderError::RequiresPristineBuilder),
-            BuilderUseMode::Library => return Err(LibraryBinderError::AlreadyAdded),
-            #[cfg(test)]
-            BuilderUseMode::Continuation => return Err(LibraryBinderError::FollowsContinuation),
+            BuilderUseMode::Library | BuilderUseMode::Continuation => {
+                return Err(LibraryBinderError::AlreadyAdded);
+            }
         }
 
         let mut bound_units = Vec::with_capacity(canonical_units.len());
@@ -1048,6 +1447,7 @@ impl ProjectBinderBuilder {
                     current_module: module,
                     next_value_storage: decl_count,
                     next_source_key,
+                    continuation_publication: None,
                 },
                 prelude_module,
                 compilation_global,
@@ -1055,6 +1455,7 @@ impl ProjectBinderBuilder {
                 prelude_type_group_count,
                 use_mode: BuilderUseMode::Continuation,
                 empty_prelude: true,
+                continuation_publication_plans: FxHashMap::default(),
                 frozen_global_augmentation_count: Some(frozen_global_augmentation_count),
             },
             next_source,
@@ -1256,12 +1657,20 @@ fn bind_source_type(
     fragment_kind: TypeFragmentKind,
 ) {
     let declaration = state.attach_declaration_scope(binding_start, declaration_kind, scope);
+    let publication_scope = state.continuation_publication_scope(scope, binding_start);
     let source = state
         .module_sources
         .get(&state.current_module)
         .copied()
         .expect("current module has stable source ownership");
-    declare_type(state, scope, name, declaration, fragment_kind, source);
+    declare_type(
+        state,
+        publication_scope,
+        name,
+        declaration,
+        fragment_kind,
+        source,
+    );
 }
 
 /// Bind a list of statements into `scope`.
@@ -1357,6 +1766,10 @@ pub(super) fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &State
         // checker walks it (WU4); the catch parameter is declared in a dedicated
         // catch scope so references resolve (its type is left to the checker).
         Statement::TryStatement(try_stmt) => bind_try(state, scope, try_stmt),
+        Statement::WithStatement(with_stmt) => {
+            bind_expression(state, scope, &with_stmt.object);
+            bind_statement(state, scope, &with_stmt.body);
+        }
         // Other statements declare no names in the subset; their sub-expressions (if
         // any) are not in the subset either.
         _ => {}
@@ -1768,6 +2181,7 @@ fn declare_value(
     storage: ValueStorageId,
     declaration: DeclId,
 ) {
+    let scope = state.declaration_publication_scope(scope, declaration);
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = Some(storage);
@@ -1789,6 +2203,7 @@ fn declare_function_value(
     storage: ValueStorageId,
     declaration: DeclId,
 ) {
+    let scope = state.declaration_publication_scope(scope, declaration);
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
         if let Some(symbol) = state.symbols.get_mut(existing) {
             symbol.value = Some(storage);
@@ -1989,8 +2404,9 @@ fn binding_name_and_start<'a>(pattern: &'a BindingPattern<'a>) -> Option<(&'a st
 mod tests {
     use super::*;
     use crate::binder::namespace::{
-        GlobalIssue, MergeDisposition, NamespaceContinuationWorkForTest,
-        NamespaceContinuationWorkScopeForTest, NamespaceOwner, NamespaceValueAttachmentDisposition,
+        DeclarationSyntaxFacts, GlobalIssue, MergeDeclarationKind, MergeDisposition,
+        NamespaceContinuationWorkForTest, NamespaceContinuationWorkScopeForTest, NamespaceOwner,
+        NamespaceValueAttachmentDisposition, VariableKind,
     };
     use crate::source::{CompilationOrigin, LibraryFileOrdinal};
     use crate::types::layered::{BaseWorkLedgerForTest, BaseWorkScopeForTest};
@@ -2050,6 +2466,181 @@ mod tests {
     }
 
     #[test]
+    fn continuation_routes_each_global_collision_leaf_without_capturing_unique_siblings() {
+        let prelude_allocator = Allocator::default();
+        let library_allocator = Allocator::default();
+        let user_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let library = Parser::new(
+            &library_allocator,
+            "interface Array<T> {} declare namespace Intl {} declare var document: unknown; declare var RegExp: unknown; declare function parseInt(value: string): number;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let user_source = r#"interface Array<T> { added: T }
+interface WU5Unique {}
+declare namespace Intl { interface Added {} }
+declare namespace WU5UniqueNamespace {}
+declare function parseInt(value: "one"): 1;
+declare function wu5UniqueFunction(): void;
+var { collision: Array, unique: uniqueLeaf } = source;
+var document = 1, uniqueValue = 2;
+with (source) { var RegExp = 1; }
+"#;
+        let user = Parser::new(&user_allocator, user_source, SourceType::ts()).parse();
+        assert!(prelude.diagnostics.is_empty());
+        assert!(library.diagnostics.is_empty());
+        assert!(user.diagnostics.is_empty());
+
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let library_unit = CompilationUnit::library(
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+            &library.program,
+        );
+        builder.add_library_modules(&[(&library.program, library_unit)]);
+        let array_symbol = builder
+            .state
+            .graph
+            .get(builder.compilation_global)
+            .and_then(|scope| scope.lookup_local("Array"))
+            .expect("library Array symbol");
+        let array_group = builder
+            .state
+            .symbols
+            .get(array_symbol)
+            .and_then(|symbol| symbol.ty)
+            .expect("library Array type group");
+        let intl_namespace = builder
+            .state
+            .graph
+            .get(builder.compilation_global)
+            .and_then(|scope| scope.lookup_local("Intl"))
+            .and_then(|symbol| builder.state.symbols.get(symbol))
+            .and_then(|symbol| symbol.ns)
+            .expect("library Intl namespace");
+        let document_symbol = builder
+            .state
+            .graph
+            .get(builder.compilation_global)
+            .and_then(|scope| scope.lookup_local("document"))
+            .expect("library document symbol");
+        let parse_int_symbol = builder
+            .state
+            .graph
+            .get(builder.compilation_global)
+            .and_then(|scope| scope.lookup_local("parseInt"))
+            .expect("library parseInt symbol");
+
+        builder.use_mode = BuilderUseMode::Continuation;
+        builder.state.library_module_ordinals.clear();
+        let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
+        let (module, _) = builder.add_module(&user.program, &[], user_unit);
+        let binder = builder.finish(module);
+
+        assert_eq!(binder.resolve_type(module, "Array"), Some(array_symbol));
+        assert_eq!(
+            binder
+                .symbols
+                .get(array_symbol)
+                .and_then(|symbol| symbol.ty),
+            Some(array_group)
+        );
+        assert_eq!(
+            binder
+                .symbols
+                .get(document_symbol)
+                .map(|symbol| symbol.declarations.len()),
+            Some(2)
+        );
+        assert_eq!(
+            binder.resolve_value(module, "parseInt"),
+            Some(parse_int_symbol)
+        );
+        assert_eq!(
+            binder
+                .graph
+                .resolve(module, "Intl")
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.ns),
+            Some(intl_namespace)
+        );
+        for unique in ["WU5Unique", "wu5UniqueFunction", "uniqueValue"] {
+            assert!(
+                binder
+                    .graph
+                    .get(module)
+                    .and_then(|scope| scope.lookup_local(unique))
+                    .is_some(),
+                "{unique} remains module-local"
+            );
+            assert!(
+                binder
+                    .graph
+                    .get(binder.compilation_global)
+                    .and_then(|scope| scope.lookup_local(unique))
+                    .is_none(),
+                "{unique} does not leak into the library global"
+            );
+        }
+        let binding_scope = |name: &str, kind: DeclarationKind| {
+            binder
+                .declarations
+                .iter()
+                .find(|declaration| {
+                    declaration.site.module == module
+                        && declaration.kind == kind
+                        && &user_source[declaration.site.binding_span.range()] == name
+                })
+                .and_then(|declaration| declaration.site.scope)
+                .unwrap_or_else(|| panic!("binding scope for {name}"))
+        };
+        assert_eq!(binding_scope("Array", DeclarationKind::Interface), module);
+        assert_eq!(binding_scope("Array", DeclarationKind::Variable), module);
+        assert_eq!(binding_scope("document", DeclarationKind::Variable), module);
+        assert_eq!(binding_scope("RegExp", DeclarationKind::Variable), module);
+        assert_eq!(
+            binding_scope("uniqueLeaf", DeclarationKind::Variable),
+            module
+        );
+        assert_eq!(
+            binding_scope("uniqueValue", DeclarationKind::Variable),
+            module
+        );
+        assert!(binder
+            .graph
+            .get(binder.script_namespace_root)
+            .and_then(|scope| scope.lookup_local("WU5UniqueNamespace"))
+            .is_some());
+        for name in ["document", "RegExp"] {
+            let user_participants = binder
+                .namespaces
+                .merges()
+                .find(|record| {
+                    record.owner == DeclarationOwner::CompilationGlobal && record.name == name
+                })
+                .expect("collision has a compilation-global merge")
+                .declarations
+                .iter()
+                .filter(|participant| {
+                    participant.kind == MergeDeclarationKind::Variable
+                        && participant.source == user_unit.source
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                user_participants.len(),
+                1,
+                "{name} publishes one exact user participant"
+            );
+            assert_eq!(
+                user_participants[0].syntax,
+                DeclarationSyntaxFacts::Variable(VariableKind::Var)
+            );
+        }
+    }
+
+    #[test]
     fn frozen_binder_forks_share_prefix_and_classify_isolated_namespace_suffixes() {
         let library_allocator = Allocator::default();
         let library = Parser::new(
@@ -2088,6 +2679,7 @@ mod tests {
         let (mut first_builder, first_source) =
             ProjectBinderBuilder::resume_frozen_library(first_seed);
         let first_unit = CompilationUnit::implementation(first_source, &user.program);
+        first_builder.reserve_script_namespace_roots([(&user.program, first_unit)]);
         let (first_module, _) = first_builder.add_module(&user.program, &[], first_unit);
         let first = first_builder
             .finish_frozen_library_continuation(first_module)
@@ -2160,6 +2752,7 @@ mod tests {
         let delta = base.fork_delta().expect("private binder delta");
         let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(delta);
         let unit = CompilationUnit::implementation(source, &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, unit)]);
         let (module, _) = builder.add_module(&user.program, &[], unit);
         let binder = builder
             .finish_frozen_library_continuation(module)
@@ -2341,6 +2934,7 @@ mod tests {
         let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(delta);
         assert_eq!(source, SourceUnitKey(2));
         let unit = CompilationUnit::implementation(source, &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, unit)]);
         let (module, _) = builder.add_module(&user.program, &[], unit);
         let binder = builder
             .finish_frozen_library_continuation(module)

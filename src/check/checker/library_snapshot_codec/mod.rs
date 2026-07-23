@@ -35,9 +35,9 @@ use super::type_groups::{
     PublishedTypeGroupUnavailable, PublishedTypeParameterDefault, TypeGroupUnavailableCause,
 };
 use super::FrozenCheckerRuntimeSnapshotParts;
+use crate::binder::bind::{LibraryBinderCheckpointEnds, LibraryBinderUnit};
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
-#[cfg(test)]
 use crate::binder::snapshot::encode_binder_snapshot;
 use crate::binder::snapshot::{decode_binder_snapshot, snapshot_reference_records};
 use crate::binder::symbol::SymbolId;
@@ -48,7 +48,6 @@ use crate::class_semantics::{
 #[cfg(test)]
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::library::artifact::AdmittedCanonicalSnapshot;
-#[cfg(test)]
 use crate::snapshot_codec::SnapshotWriter;
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
@@ -78,11 +77,11 @@ pub(super) use runtime::check_source_with_decoded_base_for_test;
 const MAGIC: &[u8] = b"typokat-semantic-snapshot";
 const VERSION: u32 = 1;
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SCHEMA_IDENTITY: &str = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
-const CANONICAL_ARCHIVE_BYTES: usize = 21_000_266;
+const SCHEMA_IDENTITY: &str = "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0";
+const CANONICAL_ARCHIVE_BYTES: usize = 21_003_926;
 #[cfg(test)]
 const CANONICAL_ARCHIVE_SHA256: &str =
-    "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
+    "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f";
 #[cfg(test)]
 const SECTION_NAMES: [&str; 11] = [
     "store",
@@ -169,7 +168,6 @@ fn codec(stage: SnapshotErrorStage, error: SnapshotCodecError) -> SnapshotError 
     invalid(stage, error.to_string())
 }
 
-#[cfg(test)]
 fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
@@ -225,7 +223,6 @@ pub(crate) enum SnapshotErrorStage {
     UnsupportedStrategy,
     #[cfg(test)]
     Io,
-    #[cfg(test)]
     Generation,
     #[cfg(test)]
     UserCheck,
@@ -500,8 +497,41 @@ pub(in crate::check::checker) struct ValidatedSnapshot {
     sections: Vec<DirectorySection>,
 }
 
+pub(crate) struct AdmittedLibrarySnapshotEvidence {
+    section_digests: [[u8; 32]; 11],
+    prefixes: LibraryBinderCheckpointEnds,
+    library_units: Vec<LibraryBinderUnit>,
+    retained_scope_maps_sha256: [u8; 32],
+}
+
+impl AdmittedLibrarySnapshotEvidence {
+    pub(crate) fn section_digest(&self, tag: usize) -> Option<[u8; 32]> {
+        tag.checked_sub(1)
+            .and_then(|index| self.section_digests.get(index))
+            .copied()
+    }
+
+    pub(crate) fn library_prefixes(&self) -> LibraryBinderCheckpointEnds {
+        self.prefixes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_source(&self) -> usize {
+        self.prefixes.next_source
+    }
+
+    pub(crate) fn library_units(&self) -> &[LibraryBinderUnit] {
+        &self.library_units
+    }
+
+    pub(crate) fn retained_scope_maps_sha256(&self) -> [u8; 32] {
+        self.retained_scope_maps_sha256
+    }
+}
+
 pub(in crate::check::checker) struct DecodedLibraryBase {
     pub(super) state: OwnedLibraryRuntimeState,
+    #[cfg(test)]
     pub(super) typed_validation_sha256: [u8; 32],
     #[cfg(test)]
     pub(super) projection: RuntimeProjectionForTest,
@@ -521,6 +551,7 @@ pub(crate) struct DecodedFrozenLibrary {
     pub(crate) runtime: OwnedLibraryRuntimeState,
     pub(crate) root_names: BTreeSet<String>,
     pub(crate) prefixes: [usize; 9],
+    #[cfg(test)]
     pub(crate) typed_validation_sha256: [u8; 32],
 }
 
@@ -664,6 +695,7 @@ impl DecodedFrozenLibrary {
     fn from_decoded(decoded: DecodedLibraryBase) -> Self {
         let DecodedLibraryBase {
             state: runtime,
+            #[cfg(test)]
             typed_validation_sha256,
             prefix_lengths,
             root_names,
@@ -683,6 +715,7 @@ impl DecodedFrozenLibrary {
                 prefix_lengths.namespaces,
                 prefix_lengths.value_storages,
             ],
+            #[cfg(test)]
             typed_validation_sha256,
         }
     }
@@ -711,7 +744,6 @@ fn read_optional_u32(reader: &mut SnapshotReader<'_>) -> Result<Option<u32>, Sna
     }
 }
 
-#[cfg(test)]
 fn write_root_optional_u32(writer: &mut SnapshotWriter, value: Option<u32>) {
     writer.u32(value.unwrap_or(ABSENT_ID));
 }
@@ -3174,7 +3206,6 @@ pub(in crate::check::checker) fn collect_root_rows(
     Ok(rows)
 }
 
-#[cfg(test)]
 fn encode_root_index(rows: &[RootNameRow]) -> Result<Vec<u8>, SnapshotError> {
     let mut writer = SnapshotWriter::new();
     writer.u32(1);
@@ -3197,6 +3228,28 @@ fn encode_root_index(rows: &[RootNameRow]) -> Result<Vec<u8>, SnapshotError> {
         write_root_optional_u32(&mut writer, row.namespace.map(|id| id.0));
     }
     Ok(writer.into_bytes())
+}
+
+pub(crate) struct SourceBinderCheckpointDigests {
+    pub(crate) binder: [u8; 32],
+    pub(crate) roots: [u8; 32],
+    pub(crate) retained_scope_maps: [u8; 32],
+}
+
+pub(crate) fn source_binder_checkpoint_digests(
+    binder: &Binder,
+) -> Result<SourceBinderCheckpointDigests, SnapshotError> {
+    let binder_bytes = encode_binder_snapshot(binder)
+        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
+    let roots = collect_root_rows(binder)?;
+    let root_bytes = encode_root_index(&roots)?;
+    let retained_scope_maps = crate::binder::snapshot::encode_retained_scope_maps(binder)
+        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
+    Ok(SourceBinderCheckpointDigests {
+        binder: digest32(&binder_bytes),
+        roots: digest32(&root_bytes),
+        retained_scope_maps: digest32(&retained_scope_maps),
+    })
 }
 
 fn decode_root_index(bytes: &[u8], next: &NextIds) -> Result<Vec<RootNameRow>, SnapshotError> {
@@ -4755,9 +4808,9 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
     })
 }
 
-pub(in crate::check::checker) fn decode_canonical_snapshot(
+fn decode_canonical_snapshot_with_evidence(
     validated: ValidatedSnapshot,
-) -> Result<DecodedLibraryBase, SnapshotError> {
+) -> Result<(DecodedLibraryBase, AdmittedLibrarySnapshotEvidence), SnapshotError> {
     #[cfg(test)]
     let strategy = SnapshotDecodeStrategy::EagerComplete;
     let (next, source_file_count) = decode_next_ids(section(&validated, 10)?)?;
@@ -4866,6 +4919,8 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
             "decoded runtime counts disagree with next-id prefix",
         ));
     }
+    let evidence =
+        admitted_library_snapshot_evidence(&validated, &next, source_file_count, &binder)?;
     let roots = decode_root_index(section(&validated, 9)?, &next)?;
     let canonical_roots = collect_root_rows(&binder)
         .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
@@ -5085,6 +5140,8 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
         &binder_references,
         &tail_references,
     )?;
+    #[cfg(not(test))]
+    let _ = typed_validation_sha256;
     #[cfg(test)]
     let identity = identity_witness(&roots, &published_types);
     #[cfg(test)]
@@ -5115,22 +5172,33 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
         Some(replay_index),
     )
     .map_err(|message| invalid(SnapshotErrorStage::Publication, message))?;
-    Ok(DecodedLibraryBase {
-        state,
-        typed_validation_sha256,
-        #[cfg(test)]
-        projection,
-        #[cfg(test)]
-        identity,
-        #[cfg(test)]
-        source_file_count,
-        prefix_lengths: next,
-        root_names: roots.iter().map(|row| row.name.clone()).collect(),
-        #[cfg(test)]
-        root_counts: root_counts(&roots),
-        #[cfg(test)]
-        strategy,
-    })
+    Ok((
+        DecodedLibraryBase {
+            state,
+            #[cfg(test)]
+            typed_validation_sha256,
+            #[cfg(test)]
+            projection,
+            #[cfg(test)]
+            identity,
+            #[cfg(test)]
+            source_file_count,
+            prefix_lengths: next,
+            root_names: roots.iter().map(|row| row.name.clone()).collect(),
+            #[cfg(test)]
+            root_counts: root_counts(&roots),
+            #[cfg(test)]
+            strategy,
+        },
+        evidence,
+    ))
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn decode_canonical_snapshot(
+    validated: ValidatedSnapshot,
+) -> Result<DecodedLibraryBase, SnapshotError> {
+    decode_canonical_snapshot_with_evidence(validated).map(|(decoded, _)| decoded)
 }
 
 #[cfg(test)]
@@ -5142,19 +5210,79 @@ pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(
     decode_snapshot_for_test(validated, strategy)
 }
 
-pub(crate) fn decode_canonical_library_snapshot(
+#[allow(
+    dead_code,
+    reason = "retained as the validated single-output decode seam"
+)]
+pub(crate) fn decode_canonical_library_snapshot_with_evidence(
     admitted: AdmittedCanonicalSnapshot,
-) -> Result<DecodedFrozenLibrary, SnapshotError> {
+) -> Result<(DecodedFrozenLibrary, AdmittedLibrarySnapshotEvidence), SnapshotError> {
     let validated = validate_canonical_snapshot(admitted.into_bytes())?;
-    decode_canonical_snapshot(validated).map(DecodedFrozenLibrary::from_decoded)
+    decode_canonical_snapshot_with_evidence(validated)
+        .map(|(decoded, evidence)| (DecodedFrozenLibrary::from_decoded(decoded), evidence))
+}
+
+fn admitted_library_snapshot_evidence(
+    validated: &ValidatedSnapshot,
+    next: &NextIds,
+    source_file_count: u32,
+    binder: &Binder,
+) -> Result<AdmittedLibrarySnapshotEvidence, SnapshotError> {
+    let mut modules = binder
+        .snapshot_module_sources()
+        .iter()
+        .filter(|(_, source)| **source != crate::binder::namespace::SourceUnitKey::PRELUDE)
+        .map(|(module, source)| (*module, *source))
+        .collect::<Vec<_>>();
+    modules.sort_by_key(|(_, source)| source.0);
+    let source_count = usize::try_from(source_file_count).map_err(|_| {
+        invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "source count exceeds usize",
+        )
+    })?;
+    if modules.len() != source_count {
+        return Err(invalid(
+            SnapshotErrorStage::ReferenceValidation,
+            "binder module ownership disagrees with source count",
+        ));
+    }
+    let library_units = modules
+        .into_iter()
+        .enumerate()
+        .map(|(index, (module, source))| LibraryBinderUnit {
+            ordinal: crate::source::LibraryFileOrdinal::new(index),
+            source,
+            module,
+        })
+        .collect();
+    let section_digests = std::array::from_fn(|index| validated.sections[index].digest);
+    let retained_scope_maps = crate::binder::snapshot::encode_retained_scope_maps(binder)
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
+    let evidence = AdmittedLibrarySnapshotEvidence {
+        section_digests,
+        prefixes: LibraryBinderCheckpointEnds {
+            scopes: next.scopes,
+            symbols: next.symbols,
+            declarations: next.declarations,
+            type_groups: next.type_groups,
+            namespaces: next.namespaces,
+            value_storages: next.value_storages,
+            next_source: source_count + 1,
+        },
+        library_units,
+        retained_scope_maps_sha256: digest32(&retained_scope_maps),
+    };
+    Ok(evidence)
 }
 
 #[cfg(test)]
-pub(crate) fn decode_pre_admitted_library_snapshot(
+pub(crate) fn decode_pre_admitted_library_snapshot_with_evidence(
     bytes: &[u8],
-) -> Result<DecodedFrozenLibrary, SnapshotError> {
+) -> Result<(DecodedFrozenLibrary, AdmittedLibrarySnapshotEvidence), SnapshotError> {
     let validated = validate_snapshot(bytes)?;
-    decode_canonical_snapshot(validated).map(DecodedFrozenLibrary::from_decoded)
+    decode_canonical_snapshot_with_evidence(validated)
+        .map(|(decoded, evidence)| (DecodedFrozenLibrary::from_decoded(decoded), evidence))
 }
 
 #[cfg(test)]

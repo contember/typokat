@@ -4,8 +4,8 @@ use std::process::Command;
 
 const EXPECTED_RECORD: &str = concat!(
     "typokat-library-package-v1 clean_roots=2 generations=2 ",
-    "artifact_bytes=21000266 ",
-    "artifact_sha256=539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960 ",
+    "artifact_bytes=21003926 ",
+    "artifact_sha256=47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f ",
     "profile_sha256=ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d ",
     "dts_sources=82 licenses=2 cargo_checks=2 build_scripts=0 build_generations=0 ",
     "source_mutations=0"

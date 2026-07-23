@@ -183,6 +183,43 @@ pub(super) enum ReplayIndexMutationForTest {
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CheckpointAuthenticationMutationForTest {
+    BinderDigest,
+    RootDigest,
+    PrefixNextIds,
+    FunctionScopes,
+    FunctionDeclarationIds,
+    BlockScopes,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct MappedReplayOwnerSiteForTest {
+    pub(super) owner: crate::check::checker::replay_index::ReplayOwner,
+    pub(super) file_ordinal: crate::source::LibraryFileOrdinal,
+    pub(super) span: crate::span::Span,
+    pub(super) syntax_module: crate::binder::scope::ScopeId,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct AuthenticatedBinderContinuationReceiptForTest {
+    pub(super) continuation:
+        crate::check::checker::library_compiler::AuthenticatedBinderContinuationForTest,
+    pub(super) mapped_owner_sites: Vec<MappedReplayOwnerSiteForTest>,
+}
+
+#[cfg(test)]
+impl std::ops::Deref for AuthenticatedBinderContinuationReceiptForTest {
+    type Target = crate::check::checker::library_compiler::AuthenticatedBinderContinuationForTest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.continuation
+    }
+}
+
+#[cfg(test)]
 pub(super) struct RegeneratedReplayIndexForTest {
     index: CollisionReplayIndex,
     pub(super) library_source_compiles: u64,
@@ -740,7 +777,8 @@ impl FrozenLibraryBase {
             mut runtime,
             root_names,
             prefixes,
-            typed_validation_sha256: _,
+            #[cfg(test)]
+                typed_validation_sha256: _,
             identity,
         } = decoded;
         runtime.freeze_as_library_base()?;

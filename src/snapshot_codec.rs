@@ -26,12 +26,10 @@ impl fmt::Display for SnapshotCodecError {
 impl std::error::Error for SnapshotCodecError {}
 
 #[derive(Default)]
-#[cfg(test)]
 pub(crate) struct SnapshotWriter {
     bytes: Vec<u8>,
 }
 
-#[cfg(test)]
 impl SnapshotWriter {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -49,6 +47,7 @@ impl SnapshotWriter {
         self.u8(u8::from(value));
     }
 
+    #[cfg(test)]
     pub(crate) fn u16(&mut self, value: u16) {
         self.bytes.extend_from_slice(&value.to_be_bytes());
     }

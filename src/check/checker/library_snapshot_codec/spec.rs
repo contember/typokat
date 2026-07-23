@@ -83,9 +83,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-// SHA-256 of the preceding schema identity plus `|collision-replay-index-v1`.
+// SHA-256 of the preceding schema identity plus `|binder-snapshot-v2`.
 const SNAPSHOT_SCHEMA_IDENTITY: &str =
-    "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
+    "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0";
 const FAST_CLEAN: &str =
     include_str!("../../../../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 const FAST_ERRORS: &str =
@@ -94,9 +94,9 @@ const FAST_ERRORS: &str =
 // The prototype freezes a simple independently parseable wire header. The integration spec
 // mutates these bytes itself; the implementation cannot choose convenient corruptions.
 const SNAPSHOT_MAGIC: &[u8] = b"typokat-semantic-snapshot";
-const CANONICAL_ARCHIVE_BYTES: usize = 21_000_266;
+const CANONICAL_ARCHIVE_BYTES: usize = 21_003_926;
 const CANONICAL_ARCHIVE_SHA256: &str =
-    "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
+    "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f";
 const VERSION_OFFSET: usize = SNAPSHOT_MAGIC.len();
 const PROFILE_DIGEST_LEN: usize = 32;
 const SCHEMA_DIGEST_LEN: usize = 32;
@@ -1255,10 +1255,10 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         "timed fast-clean route must not execute semantic calibration"
     );
     let canonical_start = compiler_source
-        .find("pub(in crate::check::checker) fn decode_canonical_snapshot(")
+        .find("fn decode_canonical_snapshot_with_evidence(")
         .expect("canonical decoder entrypoint");
     let canonical_end = compiler_source[canonical_start..]
-        .find("pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(")
+        .find("pub(in crate::check::checker) fn decode_canonical_snapshot(")
         .map(|offset| canonical_start + offset)
         .expect("canonical decoder boundary");
     let canonical_source = &compiler_source[canonical_start..canonical_end];
@@ -1318,10 +1318,10 @@ fn canonical_replay_decode_reuses_the_authenticated_section_digest() {
     );
 
     let canonical_start = codec_source
-        .find("pub(in crate::check::checker) fn decode_canonical_snapshot(")
+        .find("fn decode_canonical_snapshot_with_evidence(")
         .expect("canonical decoder entrypoint");
     let canonical_end = codec_source[canonical_start..]
-        .find("pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(")
+        .find("pub(in crate::check::checker) fn decode_canonical_snapshot(")
         .map(|offset| canonical_start + offset)
         .expect("canonical decoder boundary");
     let canonical_source = &codec_source[canonical_start..canonical_end];

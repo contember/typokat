@@ -16,8 +16,8 @@ pub use crate::source::LibraryFileOrdinal;
 /// ```
 pub use base::FrozenLibraryBase;
 pub use provider::{
-    LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage,
-    LibrarySnapshotViolation,
+    CheckpointAuthenticationViolation, LibraryBaseProvider, LibraryInitCause, LibraryInitError,
+    LibraryInitStage, LibraryProjectBinderContinuation, LibrarySnapshotViolation,
 };
 
 pub(crate) use collision_preflight::CollisionFreeUserDeltaCapability;

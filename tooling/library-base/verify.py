@@ -204,11 +204,11 @@ EXPECTED_CONTRACT: dict[str, Any] = {
         "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
     ),
     "schema_sha256": (
-        "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599"
+        "6cf27cde368f8b2ff3bdafd5fce8fb3550ec8e2264aab7249362e2294e3f5be0"
     ),
-    "artifact_bytes": 21_000_266,
+    "artifact_bytes": 21_003_926,
     "artifact_sha256": (
-        "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960"
+        "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f"
     ),
     "required_initializations": 1,
     "required_publications": 1,
