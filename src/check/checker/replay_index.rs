@@ -195,8 +195,145 @@ pub(crate) struct AdmittedCollisionReplayIndex {
     pub(crate) invalid_owner_site_count: u64,
     pub(crate) noncanonical_edge_count: u64,
     pub(crate) typed_reference_coverage_misses: u64,
+    pub(crate) owner_to_scc: Vec<u32>,
+    pub(crate) scc_owner_ranges: Vec<ReplayRowRange>,
+    pub(crate) scc_owners: Vec<ReplayOwner>,
+    pub(crate) reverse_scc_offsets: Vec<u32>,
+    pub(crate) reverse_scc_edges: Vec<u32>,
+    pub(crate) root_slot_lookup: rustc_hash::FxHashMap<Box<str>, ReplayRootLookup>,
+    pub(crate) owner_site_ranges: Vec<ReplayRowRange>,
+    pub(crate) baseline_record_ranges: Vec<ReplayRowRange>,
     pub(crate) canonical_manifest_len: usize,
     pub(crate) canonical_manifest_sha256: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReplayRowRange {
+    start: u32,
+    end: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplayRootLookup {
+    pub(crate) root_ordinal: u32,
+    pub(crate) value_seeds: SmallVec<[ReplayOwner; 1]>,
+    pub(crate) type_seeds: SmallVec<[ReplayOwner; 1]>,
+    pub(crate) namespace_seeds: SmallVec<[ReplayOwner; 1]>,
+}
+
+impl ReplayRootLookup {
+    fn seeds_mut(&mut self, slot: RootSlotKind) -> &mut SmallVec<[ReplayOwner; 1]> {
+        match slot {
+            RootSlotKind::Value => &mut self.value_seeds,
+            RootSlotKind::Type => &mut self.type_seeds,
+            RootSlotKind::Namespace => &mut self.namespace_seeds,
+        }
+    }
+}
+
+impl ReplayRowRange {
+    fn checked(start: usize, end: usize) -> Result<Self, ReplayIndexAdmissionError> {
+        Ok(Self {
+            start: u32::try_from(start).map_err(|_| ReplayIndexAdmissionError::InvalidEncoding)?,
+            end: u32::try_from(end).map_err(|_| ReplayIndexAdmissionError::InvalidEncoding)?,
+        })
+    }
+
+    #[allow(dead_code)] // Used when the ADR-0015 collision route consumes admitted ranges.
+    fn indices(self) -> Option<std::ops::Range<usize>> {
+        Some(usize::try_from(self.start).ok()?..usize::try_from(self.end).ok()?)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
+pub(crate) enum SparseReplayScheduleError {
+    UnknownSeed(ReplayOwner),
+    MissingScc(u32),
+}
+
+#[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
+pub(crate) trait SparseReplayGraphAccess {
+    fn owner_scc(&self, owner: ReplayOwner) -> Option<u32>;
+    fn reverse_sccs(&self, scc: u32) -> Option<&[u32]>;
+    fn scc_owners(&self, scc: u32) -> Option<&[ReplayOwner]>;
+
+    fn observe_seed_probe(&self, _owner: ReplayOwner) {}
+    fn observe_queue_push(&self, _scc: u32) {}
+    fn observe_queue_pop(&self, _scc: u32) {}
+    fn observe_reverse_edge_probe(&self, _dependency: u32, _consumer: u32) {}
+    fn observe_affected_scc_insert(&self, _scc: u32) {}
+    fn observe_affected_owner_emission(&self, _owner: ReplayOwner) {}
+}
+
+#[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
+pub(crate) fn schedule_sparse_collision_closure<G: SparseReplayGraphAccess + ?Sized>(
+    graph: &G,
+    seeds: &[ReplayOwner],
+) -> Result<Vec<ReplayOwner>, SparseReplayScheduleError> {
+    let mut affected_sccs = rustc_hash::FxHashSet::default();
+    let mut pending = Vec::new();
+    for seed in seeds {
+        graph.observe_seed_probe(*seed);
+        let scc = graph
+            .owner_scc(*seed)
+            .ok_or(SparseReplayScheduleError::UnknownSeed(*seed))?;
+        if affected_sccs.insert(scc) {
+            graph.observe_affected_scc_insert(scc);
+            graph.observe_queue_push(scc);
+            pending.push(scc);
+        }
+    }
+
+    let mut pending_cursor = 0;
+    while let Some(dependency) = pending.get(pending_cursor).copied() {
+        pending_cursor += 1;
+        graph.observe_queue_pop(dependency);
+        let consumers = graph
+            .reverse_sccs(dependency)
+            .ok_or(SparseReplayScheduleError::MissingScc(dependency))?;
+        for consumer in consumers {
+            graph.observe_reverse_edge_probe(dependency, *consumer);
+            if affected_sccs.insert(*consumer) {
+                graph.observe_affected_scc_insert(*consumer);
+                graph.observe_queue_push(*consumer);
+                pending.push(*consumer);
+            }
+        }
+    }
+
+    let mut affected_sccs = affected_sccs.into_iter().collect::<Vec<_>>();
+    affected_sccs.sort_unstable();
+    let mut affected_owners = Vec::new();
+    for scc in affected_sccs {
+        let owners = graph
+            .scc_owners(scc)
+            .ok_or(SparseReplayScheduleError::MissingScc(scc))?;
+        for owner in owners {
+            graph.observe_affected_owner_emission(*owner);
+            affected_owners.push(*owner);
+        }
+    }
+    Ok(affected_owners)
+}
+
+impl SparseReplayGraphAccess for AdmittedCollisionReplayIndex {
+    fn owner_scc(&self, owner: ReplayOwner) -> Option<u32> {
+        let ordinal = self.owner_partition.binary_search(&owner).ok()?;
+        self.owner_to_scc.get(ordinal).copied()
+    }
+
+    fn reverse_sccs(&self, scc: u32) -> Option<&[u32]> {
+        let scc = usize::try_from(scc).ok()?;
+        let start = usize::try_from(*self.reverse_scc_offsets.get(scc)?).ok()?;
+        let end = usize::try_from(*self.reverse_scc_offsets.get(scc.checked_add(1)?)?).ok()?;
+        self.reverse_scc_edges.get(start..end)
+    }
+
+    fn scc_owners(&self, scc: u32) -> Option<&[ReplayOwner]> {
+        let range = *self.scc_owner_ranges.get(usize::try_from(scc).ok()?)?;
+        self.scc_owners.get(range.indices()?)
+    }
 }
 
 impl AdmittedCollisionReplayIndex {
@@ -1198,11 +1335,13 @@ pub(crate) fn admit_decoded_collision_replay_index(
     {
         return Err(ReplayIndexAdmissionError::InvalidOwnerPartition);
     }
-    let partition = decoded
+    let owner_ordinals = decoded
         .owner_partition
         .iter()
         .copied()
-        .collect::<rustc_hash::FxHashSet<_>>();
+        .enumerate()
+        .map(|(ordinal, owner)| (owner, ordinal))
+        .collect::<rustc_hash::FxHashMap<_, _>>();
 
     if decoded.root_slots.iter().any(|root| root.name.is_empty())
         || decoded
@@ -1223,32 +1362,39 @@ pub(crate) fn admit_decoded_collision_replay_index(
     {
         return Err(ReplayIndexAdmissionError::InvalidRootIndex);
     }
-    let site_owners = decoded
-        .owner_sites
-        .iter()
-        .map(|site| site.owner)
-        .collect::<rustc_hash::FxHashSet<_>>();
-    if decoded.owner_sites.windows(2).any(|pair| {
-        (
-            pair[0].owner,
-            pair[0].file_ordinal,
-            pair[0].span.start,
-            pair[0].span.end,
-        ) >= (
-            pair[1].owner,
-            pair[1].file_ordinal,
-            pair[1].span.start,
-            pair[1].span.end,
-        )
-    }) || decoded.owner_sites.iter().any(|site| {
-        !partition.contains(&site.owner)
-            || site.file_ordinal.index() >= limits.source_files
-            || site.span.start > site.span.end
-    }) || decoded
-        .owner_partition
-        .iter()
-        .any(|owner| !site_owners.contains(owner))
-    {
+    let mut owner_site_ranges = Vec::with_capacity(decoded.owner_partition.len());
+    let mut site_index = 0;
+    let mut previous_site_key = None;
+    for owner in &decoded.owner_partition {
+        let range_start = site_index;
+        while let Some(site) = decoded.owner_sites.get(site_index) {
+            if site.owner != *owner {
+                break;
+            }
+            let key = (
+                site.owner,
+                site.file_ordinal,
+                site.span.start,
+                site.span.end,
+            );
+            if previous_site_key.is_some_and(|previous| previous >= key)
+                || site.file_ordinal.index() >= limits.source_files
+                || site.span.start > site.span.end
+            {
+                return Err(ReplayIndexAdmissionError::InvalidOwnerSites);
+            }
+            previous_site_key = Some(key);
+            site_index += 1;
+        }
+        if site_index == range_start {
+            return Err(ReplayIndexAdmissionError::InvalidOwnerSites);
+        }
+        owner_site_ranges.push(
+            ReplayRowRange::checked(range_start, site_index)
+                .map_err(|_| ReplayIndexAdmissionError::InvalidOwnerSites)?,
+        );
+    }
+    if site_index != decoded.owner_sites.len() {
         return Err(ReplayIndexAdmissionError::InvalidOwnerSites);
     }
 
@@ -1263,15 +1409,15 @@ pub(crate) fn admit_decoded_collision_replay_index(
         .any(|pair| pair[0] >= pair[1])
         || decoded.reverse_edges.iter().any(|edge| {
             edge.dependency == edge.consumer
-                || !partition.contains(&edge.dependency)
-                || !partition.contains(&edge.consumer)
+                || !owner_ordinals.contains_key(&edge.dependency)
+                || !owner_ordinals.contains_key(&edge.consumer)
         })
         || decoded
             .root_slot_consumers
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
         || decoded.root_slot_consumers.iter().any(|edge| {
-            !partition.contains(&edge.consumer) || !root_names.contains(edge.name.as_str())
+            !owner_ordinals.contains_key(&edge.consumer) || !root_names.contains(edge.name.as_str())
         })
     {
         return Err(ReplayIndexAdmissionError::InvalidDependencyGraph);
@@ -1302,33 +1448,82 @@ pub(crate) fn admit_decoded_collision_replay_index(
     if populated_roots != canonical_roots || placeholder_names != consumed_placeholder_names {
         return Err(ReplayIndexAdmissionError::InvalidRootIndex);
     }
+    let mut root_slot_lookup = rustc_hash::FxHashMap::default();
+    for (ordinal, root) in decoded.root_slots.iter().enumerate() {
+        let lookup = ReplayRootLookup {
+            root_ordinal: u32::try_from(ordinal)
+                .map_err(|_| ReplayIndexAdmissionError::InvalidRootIndex)?,
+            value_seeds: root.value.map(ReplayOwner::Value).into_iter().collect(),
+            type_seeds: root.ty.map(ReplayOwner::TypeGroup).into_iter().collect(),
+            namespace_seeds: root
+                .namespace
+                .map(ReplayOwner::Namespace)
+                .into_iter()
+                .collect(),
+        };
+        if root_slot_lookup
+            .insert(root.name.clone().into_boxed_str(), lookup)
+            .is_some()
+        {
+            return Err(ReplayIndexAdmissionError::InvalidRootIndex);
+        }
+    }
+    for consumer in &decoded.root_slot_consumers {
+        let lookup = root_slot_lookup
+            .get_mut(consumer.name.as_str())
+            .ok_or(ReplayIndexAdmissionError::InvalidRootIndex)?;
+        lookup.seeds_mut(consumer.slot).push(consumer.consumer);
+    }
+    for lookup in root_slot_lookup.values_mut() {
+        for owners in [
+            &mut lookup.value_seeds,
+            &mut lookup.type_seeds,
+            &mut lookup.namespace_seeds,
+        ] {
+            owners.sort_unstable();
+            owners.dedup();
+        }
+    }
 
-    let mut owner_scc = rustc_hash::FxHashMap::default();
+    let mut owner_to_scc = vec![u32::MAX; decoded.owner_partition.len()];
+    let mut scc_owner_ranges = Vec::with_capacity(decoded.scc_membership.len());
+    let mut scc_owners = Vec::with_capacity(decoded.owner_partition.len());
     for (ordinal, component) in decoded.scc_membership.iter().enumerate() {
-        if component.replay_ordinal
-            != u32::try_from(ordinal).map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?
+        let replay_ordinal =
+            u32::try_from(ordinal).map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?;
+        if component.replay_ordinal != replay_ordinal
             || component.owners.is_empty()
             || component.owners.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err(ReplayIndexAdmissionError::InvalidSccPartition);
         }
+        let range_start = scc_owners.len();
         for owner in &component.owners {
-            if !partition.contains(owner) || owner_scc.insert(*owner, ordinal).is_some() {
+            let Some(owner_ordinal) = owner_ordinals.get(owner).copied() else {
+                return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+            };
+            if owner_to_scc[owner_ordinal] != u32::MAX {
                 return Err(ReplayIndexAdmissionError::InvalidSccPartition);
             }
+            owner_to_scc[owner_ordinal] = replay_ordinal;
+            scc_owners.push(*owner);
         }
+        scc_owner_ranges.push(
+            ReplayRowRange::checked(range_start, scc_owners.len())
+                .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?,
+        );
     }
-    if owner_scc.len() != partition.len() {
+    if owner_to_scc.contains(&u32::MAX) {
         return Err(ReplayIndexAdmissionError::InvalidSccPartition);
     }
     let mut forward = rustc_hash::FxHashMap::<ReplayOwner, Vec<ReplayOwner>>::default();
     let mut reverse = rustc_hash::FxHashMap::<ReplayOwner, Vec<ReplayOwner>>::default();
-    let mut component_edges = rustc_hash::FxHashSet::default();
-    let mut dependency_counts = vec![0usize; decoded.scc_membership.len()];
-    let mut component_dependents = vec![Vec::new(); decoded.scc_membership.len()];
+    let mut component_edges = Vec::new();
     for edge in &decoded.reverse_edges {
-        let dependency_scc = owner_scc[&edge.dependency];
-        let consumer_scc = owner_scc[&edge.consumer];
+        let dependency_ordinal = owner_ordinals[&edge.dependency];
+        let consumer_ordinal = owner_ordinals[&edge.consumer];
+        let dependency_scc = owner_to_scc[dependency_ordinal];
+        let consumer_scc = owner_to_scc[consumer_ordinal];
         if dependency_scc > consumer_scc {
             return Err(ReplayIndexAdmissionError::InvalidSccPartition);
         }
@@ -1341,12 +1536,46 @@ pub(crate) fn admit_decoded_collision_replay_index(
                 .entry(edge.dependency)
                 .or_default()
                 .push(edge.consumer);
-        } else if component_edges.insert((dependency_scc, consumer_scc)) {
-            dependency_counts[consumer_scc] = dependency_counts[consumer_scc]
+        } else {
+            component_edges.push((dependency_scc, consumer_scc));
+        }
+    }
+    drop(owner_ordinals);
+    component_edges.sort_unstable();
+    component_edges.dedup();
+
+    let component_count = decoded.scc_membership.len();
+    let mut dependency_counts = vec![0usize; component_count];
+    let mut reverse_scc_offsets = Vec::with_capacity(component_count.saturating_add(1));
+    let mut reverse_scc_edges = Vec::with_capacity(component_edges.len());
+    let mut edge_index = 0;
+    for dependency in 0..component_count {
+        reverse_scc_offsets.push(
+            u32::try_from(reverse_scc_edges.len())
+                .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?,
+        );
+        let dependency = u32::try_from(dependency)
+            .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?;
+        while component_edges
+            .get(edge_index)
+            .is_some_and(|edge| edge.0 == dependency)
+        {
+            let consumer = component_edges[edge_index].1;
+            let consumer_index = usize::try_from(consumer)
+                .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?;
+            dependency_counts[consumer_index] = dependency_counts[consumer_index]
                 .checked_add(1)
                 .ok_or(ReplayIndexAdmissionError::InvalidSccPartition)?;
-            component_dependents[dependency_scc].push(consumer_scc);
+            reverse_scc_edges.push(consumer);
+            edge_index += 1;
         }
+    }
+    reverse_scc_offsets.push(
+        u32::try_from(reverse_scc_edges.len())
+            .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?,
+    );
+    if edge_index != component_edges.len() {
+        return Err(ReplayIndexAdmissionError::InvalidSccPartition);
     }
     fn reaches_component(
         start: ReplayOwner,
@@ -1394,7 +1623,13 @@ pub(crate) fn admit_decoded_collision_replay_index(
         if component != expected {
             return Err(ReplayIndexAdmissionError::InvalidSccPartition);
         }
-        for dependent in component_dependents[component].iter().copied() {
+        let edge_start = usize::try_from(reverse_scc_offsets[component])
+            .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?;
+        let edge_end = usize::try_from(reverse_scc_offsets[component + 1])
+            .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?;
+        for dependent in reverse_scc_edges[edge_start..edge_end].iter().copied() {
+            let dependent = usize::try_from(dependent)
+                .map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?;
             dependency_counts[dependent] -= 1;
             if dependency_counts[dependent] == 0 {
                 ready.push(std::cmp::Reverse((
@@ -1421,17 +1656,28 @@ pub(crate) fn admit_decoded_collision_replay_index(
         return Err(ReplayIndexAdmissionError::InvalidStatementPartition);
     }
     let empty_digest = empty_baseline_digest();
-    if decoded
-        .baseline_records
-        .iter()
-        .map(|record| record.owner)
-        .ne(decoded.owner_partition.iter().copied())
-        || decoded.baseline_records.iter().any(|record| {
-            !matches!(record.owner, ReplayOwner::Statement(_))
-                && (record.record_count != 0 || record.digest != empty_digest)
-        })
-    {
+    if decoded.baseline_records.len() != decoded.owner_partition.len() {
         return Err(ReplayIndexAdmissionError::InvalidBaselinePartition);
+    }
+    let mut baseline_record_ranges = Vec::with_capacity(decoded.owner_partition.len());
+    for (index, (owner, record)) in decoded
+        .owner_partition
+        .iter()
+        .zip(&decoded.baseline_records)
+        .enumerate()
+    {
+        if record.owner != *owner
+            || (!matches!(record.owner, ReplayOwner::Statement(_))
+                && (record.record_count != 0 || record.digest != empty_digest))
+        {
+            return Err(ReplayIndexAdmissionError::InvalidBaselinePartition);
+        }
+        let end = index
+            .checked_add(1)
+            .ok_or(ReplayIndexAdmissionError::InvalidBaselinePartition)?;
+        let range = ReplayRowRange::checked(index, end)
+            .map_err(|_| ReplayIndexAdmissionError::InvalidBaselinePartition)?;
+        baseline_record_ranges.push(range);
     }
     if decoded.unowned_demand_count != 0
         || decoded.invalid_owner_site_count != 0
@@ -1460,6 +1706,14 @@ pub(crate) fn admit_decoded_collision_replay_index(
         invalid_owner_site_count: decoded.invalid_owner_site_count,
         noncanonical_edge_count: decoded.noncanonical_edge_count,
         typed_reference_coverage_misses: decoded.typed_reference_coverage_misses,
+        owner_to_scc,
+        scc_owner_ranges,
+        scc_owners,
+        reverse_scc_offsets,
+        reverse_scc_edges,
+        root_slot_lookup,
+        owner_site_ranges,
+        baseline_record_ranges,
         canonical_manifest_len,
         canonical_manifest_sha256: decoded.canonical_manifest_sha256,
     })
