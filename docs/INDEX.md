@@ -43,9 +43,13 @@ decisions → reference → archive.
   [`ADR-0013`](decisions/0013-replay-private-library-collision-closures.md) now seeds that universe
   from the canonical snapshot and replays the authenticated affected-owner closure, while
   [`ADR-0014`](decisions/0014-authenticate-private-replay-prefixes-at-separate-boundaries.md)
-  separates semantic-prefix decode from the pre-user binder-prefix checkpoint. The earlier
-  [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the first
-  substitution and rendering barriers. The
+  separates semantic-prefix decode from the pre-user binder-prefix checkpoint.
+  [`ADR-0015`](decisions/0015-make-private-collisions-snapshot-native.md) supersedes the remaining
+  production fresh-decode/full-source-bind boundary with an authenticated snapshot-native
+  publication epoch, typed sparse binder-prefix replacements, and affected-site parsing; the
+  complete source checkpoint remains only the generator, oracle, and containment fallback. The
+  earlier [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
+  first substitution and rendering barriers. The
   [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now owns a
   deterministic semantic-snapshot feasibility gate, production Stage-1 cutover, collision/fanout
   correctness, and an apples-to-apples ≥2× native TypeScript 7 gate. Stage 1 is not yet shipped and

@@ -30,3 +30,4 @@ a commit message suffices.
 - [`0012`](0012-ship-the-canonical-default-library-snapshot.md) — ship the canonical default-library semantic snapshot as ADR-0011's startup realization — accepted (2026-07-22)
 - [`0013`](0013-replay-private-library-collision-closures.md) — seed private collision universes from the canonical snapshot and replay only affected semantic owners — accepted (2026-07-23)
 - [`0014`](0014-authenticate-private-replay-prefixes-at-separate-boundaries.md) — authenticate semantic decode and the continuable library binder at separate private-replay boundaries — accepted (2026-07-23)
+- [`0015`](0015-make-private-collisions-snapshot-native.md) — make private collisions snapshot-native publication epochs with sparse binder-prefix replacement — accepted (2026-07-23)
