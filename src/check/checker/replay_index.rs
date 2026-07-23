@@ -2188,9 +2188,11 @@ mod tests {
     const TEST_ONLY_REPLAY_SOURCE_PATHS: &[&str] = &[
         "src/check/checker/decls/cycle_tainted_application_cache_spec.rs",
         "src/check/checker/decls/eager_application_cache_spec.rs",
+        "src/check/checker/decls/interface_scc_pending_spec.rs",
         "src/check/checker/eval/tests.rs",
         "src/check/checker/library_snapshot_codec/spec.rs",
         "src/check/checker/lexical_events/owner_lookup_spec.rs",
+        "src/check/query/demand_identity_spec.rs",
         "src/check/query/dom_source_cold_spec.rs",
         "src/check/query/identity_memo_spec.rs",
         "src/check/query/tests.rs",
