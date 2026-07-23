@@ -1813,6 +1813,10 @@ fn statement_variable_declaration<'ast>(
 }
 
 #[cfg(test)]
+#[path = "lexical_events/owner_lookup_spec.rs"]
+mod owner_lookup_spec;
+
+#[cfg(test)]
 mod tests {
     use super::super::context::CheckerEffects;
     use super::super::events::{EventStore, EventStoreError};
