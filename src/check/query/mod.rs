@@ -2393,6 +2393,9 @@ mod demand_identity_spec;
 mod identity_memo_spec;
 
 #[cfg(test)]
+mod instantiation_root_lazy_spec;
+
+#[cfg(test)]
 mod relation_root_lazy_spec;
 
 #[cfg(test)]
