@@ -58,6 +58,7 @@ pub(crate) struct QuerySourceColdMeasure {
     pub publication_edge_visits: u64,
     pub publication_unique_edges: u64,
     pub planner_transactions: u64,
+    pub planner_visits: u64,
     pub planner_clean_finishes: u64,
     pub planner_tainted_finishes: u64,
     pub planner_zero_write_finishes: u64,
@@ -66,6 +67,11 @@ pub(crate) struct QuerySourceColdMeasure {
     pub completed_relation_no_hits: u64,
     pub completed_relation_yes_inserts: u64,
     pub completed_relation_no_inserts: u64,
+    pub durable_identity_yes_hits: u64,
+    pub durable_identity_no_hits: u64,
+    pub durable_identity_yes_inserts: u64,
+    pub durable_identity_no_inserts: u64,
+    pub identity_recursive_calls: u64,
     pub durable_memo_seed_copy_entries: u64,
     pub exhaustion_frontiers: u64,
 }
@@ -523,6 +529,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         seen: &mut IdentitySeen,
         alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
     ) -> DemandOutcome<bool> {
+        #[cfg(test)]
+        measure_query_source_cold(|measure| measure.identity_recursive_calls += 1);
         let mut left = match plan.normalize(left) {
             Ok(left) => left,
             Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
@@ -1630,7 +1638,10 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
 
     fn visit(&mut self, ty: TypeId) -> TypeId {
         #[cfg(test)]
-        measure_query_demand(|measure| measure.planner_visits += 1);
+        {
+            measure_query_demand(|measure| measure.planner_visits += 1);
+            measure_query_source_cold(|measure| measure.planner_visits += 1);
+        }
         if let Ok(normalized) = self.plan.normalize(ty) {
             if normalized != ty {
                 #[cfg(test)]
@@ -2072,6 +2083,9 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
 
 #[cfg(test)]
 mod dom_source_cold_spec;
+
+#[cfg(test)]
+mod identity_memo_spec;
 
 #[cfg(test)]
 mod tests;
