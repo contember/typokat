@@ -262,9 +262,14 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
 /// declaration type parameter. Concrete-but-unsupported `keyof` nodes must not be
 /// skipped; they relate conservatively instead of accepting bad arguments.
 pub(in crate::check) fn contains_deferred_keyof(interner: &mut Interner, ty: TypeId) -> bool {
+    if let Some(result) = interner.deferred_keyof_result(ty) {
+        return result;
+    }
     #[cfg(test)]
     measure_deferred_keyof(|measure| measure.graph_scans += 1);
-    contains_deferred_keyof_node(interner.store(), ty)
+    let result = contains_deferred_keyof_node(interner.store(), ty);
+    interner.publish_deferred_keyof_result(ty, result);
+    result
 }
 
 fn contains_deferred_keyof_node(store: &crate::types::store::Store, ty: TypeId) -> bool {

@@ -310,6 +310,8 @@ pub struct Interner {
     free_param_summaries: FreeParamSummaryCache,
     /// Whether a root can preserve mapper entries beyond its free set.
     application_key_modes: DerivedGraphCache<TypeId, ApplicationKeyMode>,
+    /// Completed deferred-`keyof` containment results for immutable roots.
+    deferred_keyof_results: DerivedGraphCache<TypeId, bool>,
     /// Completed root substitutions that did not observe a recursive stack cut.
     clean_application_results: DerivedGraphCache<CleanApplicationKey, TypeId>,
     /// Immutable structural buckets owned by the sealed prefix.
@@ -338,6 +340,7 @@ impl Interner {
             store,
             free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
             application_key_modes: DerivedGraphCache::new(Arc::clone(&graph_identity)),
+            deferred_keyof_results: DerivedGraphCache::new(Arc::clone(&graph_identity)),
             clean_application_results: DerivedGraphCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
@@ -440,6 +443,18 @@ impl Interner {
         self.application_key_modes.insert_batch(modes);
     }
 
+    pub(crate) fn deferred_keyof_result(&mut self, ty: TypeId) -> Option<bool> {
+        self.deferred_keyof_results
+            .align_with(self.store.semantic_graph_identity());
+        self.deferred_keyof_results.get(&ty)
+    }
+
+    pub(crate) fn publish_deferred_keyof_result(&mut self, ty: TypeId, result: bool) {
+        self.deferred_keyof_results
+            .align_with(self.store.semantic_graph_identity());
+        self.deferred_keyof_results.insert(ty, result);
+    }
+
     pub(crate) fn clean_application_result(&mut self, key: &CleanApplicationKey) -> Option<TypeId> {
         self.clean_application_results
             .align_with(self.store.semantic_graph_identity());
@@ -472,11 +487,14 @@ impl Interner {
             .align_with(self.store.semantic_graph_identity());
         self.application_key_modes
             .align_with(self.store.semantic_graph_identity());
+        self.deferred_keyof_results
+            .align_with(self.store.semantic_graph_identity());
         self.clean_application_results
             .align_with(self.store.semantic_graph_identity());
         self.store.freeze_as_base()?;
         self.free_param_summaries.freeze_as_base();
         self.application_key_modes.freeze_as_base();
+        self.deferred_keyof_results.freeze_as_base();
         self.clean_application_results.freeze_as_base();
         self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
         self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
@@ -497,6 +515,9 @@ impl Interner {
                 .fork_delta(Arc::clone(&graph_identity)),
             application_key_modes: self
                 .application_key_modes
+                .fork_delta(Arc::clone(&graph_identity)),
+            deferred_keyof_results: self
+                .deferred_keyof_results
                 .fork_delta(Arc::clone(&graph_identity)),
             clean_application_results: self.clean_application_results.fork_delta(graph_identity),
             dedup_base: Arc::clone(&self.dedup_base),
