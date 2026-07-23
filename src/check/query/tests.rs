@@ -154,11 +154,13 @@ fn regular_application_cycle_costs_one_budget_unit() {
     let application = interner.intern_class_instance(class, vec![wk.string]);
     let projection_memo = FxHashMap::default();
     let evaluator_memo = FxHashMap::default();
+    let resolved_subtrees = FxHashSet::default();
     let transaction = ProjectionPlanner::new(
         &mut interner,
         &published,
         &projection_memo,
         &evaluator_memo,
+        &resolved_subtrees,
         0,
     )
     .plan(&[application]);
@@ -236,11 +238,13 @@ fn non_regular_application_exhausts_exactly_at_129_and_writes_nothing() {
 
     let projection_memo = FxHashMap::default();
     let evaluator_memo = FxHashMap::default();
+    let resolved_subtrees = FxHashSet::default();
     let transaction = ProjectionPlanner::new(
         &mut interner,
         &published,
         &projection_memo,
         &evaluator_memo,
+        &resolved_subtrees,
         0,
     )
     .plan(&[application]);
@@ -2061,8 +2065,16 @@ fn borrowed_durable_identity_requires_explicit_admission() {
 
     let published = PublishedClasses::empty();
     let projection = FxHashMap::default();
-    let transaction = ProjectionPlanner::new(&mut interner, &published, &projection, &durable, 0)
-        .plan(&[conditional]);
+    let resolved_subtrees = FxHashSet::default();
+    let transaction = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection,
+        &durable,
+        &resolved_subtrees,
+        0,
+    )
+    .plan(&[conditional]);
     assert_eq!(transaction.plan.normalize(conditional), Ok(conditional));
     assert_eq!(
         transaction
@@ -2093,6 +2105,7 @@ fn local_evaluation_override_wins_and_commits_only_the_delta() {
             &published,
             &projection,
             &state.evaluation_memo,
+            &state.resolved_subtrees,
             0,
         );
         planner.record_evaluation(conditional, wk.string);
@@ -2158,7 +2171,15 @@ fn normalization_follows_borrowed_durable_chain_without_local_copies() {
     let durable = FxHashMap::from_iter([(first, second), (second, wk.string)]);
     let published = PublishedClasses::empty();
     let projection = FxHashMap::default();
-    let planner = ProjectionPlanner::new(&mut interner, &published, &projection, &durable, 0);
+    let resolved_subtrees = FxHashSet::default();
+    let planner = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection,
+        &durable,
+        &resolved_subtrees,
+        0,
+    );
     assert_eq!(planner.plan.normalize(first), Ok(wk.string));
     assert!(planner.working_evaluation_memo.is_empty());
     assert!(planner.plan.evaluation_overlay.is_empty());

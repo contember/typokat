@@ -100,6 +100,7 @@ fn resolved_graph(interner: &mut Interner) -> ResolvedGraph {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn infer_once(
     interner: &mut Interner,
     published: &PublishedClasses,

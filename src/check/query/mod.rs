@@ -339,6 +339,7 @@ impl PublishedClassLookup for PublishedClasses {
 pub(crate) struct SemanticQueryState {
     projection_memo: FxHashMap<TypeId, TypeId>,
     evaluation_memo: FxHashMap<TypeId, TypeId>,
+    resolved_subtrees: FxHashSet<TypeId>,
     completed_identities: FxHashMap<CompletedIdentityKey, bool>,
     relation_cache: RelationCache,
     completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
@@ -437,6 +438,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
+            &self.state.resolved_subtrees,
             *self.next_type_param,
         )
         .plan_demand(root);
@@ -512,6 +514,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
+            &self.state.resolved_subtrees,
             *self.next_type_param,
         )
         .plan(&[left, right]);
@@ -1178,6 +1181,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
+            &self.state.resolved_subtrees,
             *self.next_type_param,
         );
         planner.prepare_relation_roots(&[src, tgt]);
@@ -1291,6 +1295,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
+            &self.state.resolved_subtrees,
             *self.next_type_param,
         )
         .plan(&[source, target]);
@@ -1346,6 +1351,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
+            &self.state.resolved_subtrees,
             *self.next_type_param,
         );
         planner.prepare_relation_roots(&[overload, implementation]);
@@ -1407,6 +1413,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             transaction.pending_projection_writes,
             transaction.pending_evaluator_writes,
         );
+        self.state
+            .resolved_subtrees
+            .extend(transaction.pending_resolved_subtrees);
         *self.next_type_param = transaction.next_type_param;
     }
 
@@ -1443,7 +1452,9 @@ pub(crate) struct ProjectionPlan<'a> {
     evaluation_overlay: FxHashMap<TypeId, TypeId>,
     resolved_evaluations: FxHashSet<TypeId>,
     frontier: FxHashMap<TypeId, Exhaustion>,
+    durable_projection_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
     durable_evaluation_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
+    durable_resolved_subtrees: Option<&'a FxHashSet<TypeId>>,
 }
 
 impl RelationNormalization for ProjectionPlan<'_> {
@@ -1465,6 +1476,10 @@ impl RelationNormalization for ProjectionPlan<'_> {
                         .and_then(|memo| memo.get(&current))
                 })
                 .or_else(|| self.class_projection_overlay.get(&current))
+                .or_else(|| {
+                    self.durable_projection_memo
+                        .and_then(|memo| memo.get(&current))
+                })
                 .copied();
             match next {
                 Some(next) if next != current => current = next,
@@ -1474,6 +1489,12 @@ impl RelationNormalization for ProjectionPlan<'_> {
     }
 
     fn relation_demand(&self, store: &Store, ty: TypeId) -> Option<RelationDemand> {
+        if self
+            .durable_resolved_subtrees
+            .is_some_and(|resolved| resolved.contains(&ty))
+        {
+            return None;
+        }
         match store.tag(ty) {
             TypeTag::ClassInstance => Some(RelationDemand::ClassProjection(ty)),
             TypeTag::DeferredIndexedAccess
@@ -1498,6 +1519,7 @@ struct PlannedQuery<'a> {
     plan: ProjectionPlan<'a>,
     pending_projection_writes: FxHashMap<TypeId, TypeId>,
     pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
+    pending_resolved_subtrees: FxHashSet<TypeId>,
     next_type_param: u32,
     planning_tainted: bool,
     first_exhaustion: Option<Exhaustion>,
@@ -1506,14 +1528,20 @@ struct PlannedQuery<'a> {
 struct PendingQueryCommit {
     pending_projection_writes: FxHashMap<TypeId, TypeId>,
     pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
+    pending_resolved_subtrees: FxHashSet<TypeId>,
     next_type_param: u32,
 }
 
 impl PlannedQuery<'_> {
     fn into_commit(self) -> PendingQueryCommit {
+        assert!(
+            !self.planning_tainted,
+            "tainted projection planning must not publish a partial subtree"
+        );
         PendingQueryCommit {
             pending_projection_writes: self.pending_projection_writes,
             pending_evaluator_writes: self.pending_evaluator_writes,
+            pending_resolved_subtrees: self.pending_resolved_subtrees,
             next_type_param: self.next_type_param,
         }
     }
@@ -1522,8 +1550,9 @@ impl PlannedQuery<'_> {
 struct ProjectionPlanner<'work, 'memo, L: PublishedClassLookup + ?Sized> {
     interner: &'work mut Interner,
     published: &'work L,
-    durable_projection_memo: &'work FxHashMap<TypeId, TypeId>,
+    durable_projection_memo: &'memo FxHashMap<TypeId, TypeId>,
     durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
+    durable_resolved_subtrees: &'memo FxHashSet<TypeId>,
     working_evaluation_memo: FxHashMap<TypeId, TypeId>,
     next_type_param: u32,
     plan: ProjectionPlan<'memo>,
@@ -1541,8 +1570,9 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     fn new(
         interner: &'work mut Interner,
         published: &'work L,
-        durable_projection_memo: &'work FxHashMap<TypeId, TypeId>,
+        durable_projection_memo: &'memo FxHashMap<TypeId, TypeId>,
         durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
+        durable_resolved_subtrees: &'memo FxHashSet<TypeId>,
         next_type_param: u32,
     ) -> Self {
         #[cfg(test)]
@@ -1554,10 +1584,13 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             published,
             durable_projection_memo,
             durable_evaluation_memo,
+            durable_resolved_subtrees,
             working_evaluation_memo: FxHashMap::default(),
             next_type_param,
             plan: ProjectionPlan {
+                durable_projection_memo: Some(durable_projection_memo),
                 durable_evaluation_memo: Some(durable_evaluation_memo),
+                durable_resolved_subtrees: Some(durable_resolved_subtrees),
                 ..ProjectionPlan::default()
             },
             pending_projection_writes: FxHashMap::default(),
@@ -1651,6 +1684,11 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 (self.durable_evaluation_memo.get(&key) != Some(&value)).then_some((key, value))
             })
             .collect();
+        let pending_resolved_subtrees = if self.demand_outer_only {
+            FxHashSet::default()
+        } else {
+            self.visited
+        };
         #[cfg(test)]
         measure_query_source_cold(|measure| {
             if self.planning_tainted {
@@ -1666,6 +1704,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             plan: self.plan,
             pending_projection_writes: self.pending_projection_writes,
             pending_evaluator_writes,
+            pending_resolved_subtrees,
             next_type_param: self.next_type_param,
             planning_tainted: self.planning_tainted,
             first_exhaustion: self.first_exhaustion,
@@ -1677,6 +1716,9 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         {
             measure_query_demand(|measure| measure.planner_visits += 1);
             measure_query_source_cold(|measure| measure.planner_visits += 1);
+        }
+        if self.durable_resolved_subtrees.contains(&ty) {
+            return self.plan.normalize(ty).unwrap_or(ty);
         }
         if let Ok(normalized) = self.plan.normalize(ty) {
             if normalized != ty {
@@ -2022,6 +2064,7 @@ fn refresh_semantic_context<L: PublishedClassLookup + ?Sized>(
     if !same_store || !same_publication {
         state.projection_memo.clear();
         state.evaluation_memo.clear();
+        state.resolved_subtrees.clear();
         state.completed_identities.clear();
         state.relation_cache = RelationCache::default();
         state.publication_clean.clear();
