@@ -10,7 +10,7 @@ use super::base::{
 use super::{FrozenLibraryBase, LibraryBaseProvider};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 fn acquire() -> Arc<FrozenLibraryBase> {
@@ -654,8 +654,7 @@ fn project_inputs(directory: &Path) -> Vec<(String, String)> {
 
 #[test]
 fn b14_routing_matrix_is_exactly_two_shared_and_ten_private() {
-    let root =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cases/b14_full_lib_loading_project");
+    let root = crate::test_repository_root().join("tests/cases/b14_full_lib_loading_project");
     let mut observed = Vec::new();
     for entry in fs::read_dir(root).expect("B14 routing corpus") {
         let path = entry.expect("B14 project entry").path();
@@ -734,7 +733,7 @@ fn collision_free_capability_is_issued_only_for_a_shared_receipt() {
     assert!(shared.capability_issued);
     assert!(!private.capability_issued);
 
-    let library_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/library");
+    let library_root = crate::test_repository_root().join("src/library");
     let constructor = ["CollisionFreeUserDelta", "Capability(())"].concat();
     let mut owners = Vec::new();
     for entry in fs::read_dir(library_root).expect("library source directory") {

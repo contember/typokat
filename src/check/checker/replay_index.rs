@@ -2317,8 +2317,8 @@ mod tests {
 
     #[test]
     fn semantic_replay_accesses_have_an_exact_source_allowlist() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let sources = discover_production_rust_sources(root);
+        let root = crate::test_repository_root();
+        let sources = discover_production_rust_sources(&root);
         let allowed = [
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "parts.class_parents.iter()", count: 1, reason: "snapshot ordering" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "self.class_parents.iter()", count: 1, reason: "snapshot projection" },

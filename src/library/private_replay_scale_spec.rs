@@ -4,7 +4,6 @@ use super::base::{PrivateExecutionForTest, UserDeltaProjectInputForTest};
 use super::{FrozenLibraryBase, LibraryBaseProvider};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 const REPLAY_BASE_FAMILIES: &str = concat!(
@@ -261,8 +260,7 @@ fn dom_listener_map_replays_the_exact_reverse_closure_in_linear_physical_work() 
 
 #[test]
 fn exact_locked_production_collision_uses_replay_without_source_fallback() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tooling/full-lib-bench/workloads/collision");
+    let root = crate::test_repository_root().join("tooling/full-lib-bench/workloads/collision");
     let augment = fs::read_to_string(root.join("00_augment.ts")).expect("locked augmentation");
     let consume = fs::read_to_string(root.join("99_consume.ts")).expect("locked consumer");
     let inputs = [
