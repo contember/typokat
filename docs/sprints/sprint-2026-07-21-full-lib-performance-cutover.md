@@ -720,3 +720,55 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   the index but deliberately leaves the snapshot at ten sections. Persisted section admission,
   the continuable private binder, closure replay, and collision/fanout performance gates remain
   open WU5 work.
+
+### 2026-07-23 — WU5 authenticated replay admission and startup gate
+
+- RED commit `beba550` and implementation commit `26709e4` persist the replay manifest as the
+  authenticated eleventh snapshot section. The canonical artifact is now **21,000,266 bytes**,
+  SHA-256 `539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960`;
+  section 11 remains 10,996,257 bytes with the independently pinned manifest SHA-256
+  `cc125e22a561b069f62f6707e5eb3f8187be0959bb75d8cbfb665266d21c2c95`. Strict decoding,
+  owner/root/site/edge/SCC/statement/baseline partitions, generation-health counters, and
+  self-consistent-but-unpinned mutation families all fail closed before publication. Independent
+  review is PASS after 60,000/40,000-case semantic fuzz predecessors and the full typed mutation
+  matrix.
+- The first clean release gate exposed a pre-existing reproducibility defect: four unit-test
+  `env!("CARGO_MANIFEST_DIR")` literals embedded the two physical clone roots. Commit `0475f1f`
+  replaces them with fail-closed runtime repository discovery and adds a recursive source guard.
+  Two isolated release libtests are byte-identical again.
+- The first complete 45-process timing run at `0475f1f`
+  (`run-20260723T053958Z-3306213.json`) was a real NO-GO. Every sample exceeded 120 ms; window
+  medians were **127.563 / 126.784 / 128.414 ms**, window nearest-rank p95s were
+  **129.771 / 132.400 / 135.822 ms**, and overall p95 was **132.400 ms**. Median internal phases
+  were 15.601 ms artifact validation, 87.212 ms decode/admission, and 2.290 ms publication.
+  Relative to the pre-replay WU3 gate, internal work explained 96.9% of the 31.184 ms mean wall
+  regression; launcher noise and build selection did not.
+- Heap attribution found 45,241 SCC-owner allocations, a redundant replay-section SHA, and three
+  complete const-promoted copies of the 21 MB snapshot in the release libtest. RED commits
+  `d464629` and `a4187c4`, followed by reviewed implementations `87f581b` and `28e464e`, retain
+  singleton SCC members inline, reuse the directory-authenticated section digest, and give the
+  packaged snapshot one immutable static definition. The release executable now contains exactly
+  one byte-for-byte payload; the local layout witness shrank its libtest from 107,023,568 bytes
+  with four test-induced copies to 44,022,944 bytes with one. These fixes preserved the wire and
+  semantic identities but alone still measured 125.241 ms median / 128.423 ms p95.
+- RED `6d1ce00` then pinned an opaque, consuming admission witness around the exact verified
+  `Cow<'static, [u8]>`. Implementation `25081b7` removes only the second whole-artifact SHA in the
+  canonical decoder; package identity failures retain `ArtifactAdmission`, structural parsing
+  retains its typed stages, and the generic adversarial decoder still validates body and every
+  section digest. Independent review found zero unresolved HIGH or MEDIUM issues.
+- **Replay-admission GO:** authoritative clean-tree run
+  `run-20260723T062645Z-3691945.json` at `25081b7` produced two byte-identical 44,179,400-byte
+  release libtests, SHA-256
+  `dc4397d2c19873fb9bf8e5c2bd646402e3c46cae3cf3d5f85eecbceb0d3962b5`, then completed three
+  windows of five warmups plus ten recorded fresh processes. Window medians were
+  **111.674 / 112.242 / 111.749 ms**; p95s were
+  **114.308 / 118.921 / 119.317 ms**; overall median/p95 were
+  **111.991 / 118.921 ms**. Median validation/decode/publication were
+  **15.744 / 71.112 / 2.299 ms**, and maximum external RSS was **88,322,048 bytes**. The unchanged
+  120 ms / 512 MiB gate passes with one typed validation identity, one initialization, one
+  publication, and zero source/compiler/generator activity.
+- This GO closes persisted replay admission, not WU5. The remaining critical path is the exact
+  continuable library-only binder checkpoint, affected-owner reverse closure, append-only semantic
+  replay, and the collision/fanout 2x gates. The final window retains only 0.683 ms p95 headroom, so
+  later WU5/WU8 work must preserve or improve startup rather than treating this checkpoint as
+  surplus budget.
