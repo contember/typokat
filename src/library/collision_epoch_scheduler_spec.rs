@@ -3,7 +3,7 @@
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
 use crate::check::checker::replay_index::{
-    schedule_sparse_collision_closure, AdmittedCollisionReplayIndex, ReplayOwner,
+    schedule_sparse_collision_closure, AdmittedCollisionReplayIndex, ReplayOwner, RootSlotKind,
     SparseReplayGraphAccess,
 };
 use crate::types::repr::ClassId;
@@ -241,6 +241,177 @@ fn require_compact_runtime_indexes(index: &AdmittedCollisionReplayIndex) {
         &index.root_slot_lookup,
         &index.owner_site_ranges,
         &index.baseline_record_ranges,
+    );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ExpectedRootLookup {
+    root_ordinal: u32,
+    value_seeds: Vec<ReplayOwner>,
+    type_seeds: Vec<ReplayOwner>,
+    namespace_seeds: Vec<ReplayOwner>,
+}
+
+impl ExpectedRootLookup {
+    fn seeds_mut(&mut self, slot: RootSlotKind) -> &mut Vec<ReplayOwner> {
+        match slot {
+            RootSlotKind::Value => &mut self.value_seeds,
+            RootSlotKind::Type => &mut self.type_seeds,
+            RootSlotKind::Namespace => &mut self.namespace_seeds,
+        }
+    }
+
+    fn has_seed(&self) -> bool {
+        !self.value_seeds.is_empty()
+            || !self.type_seeds.is_empty()
+            || !self.namespace_seeds.is_empty()
+    }
+}
+
+fn derive_root_lookup_from_wire(
+    index: &AdmittedCollisionReplayIndex,
+) -> BTreeMap<String, ExpectedRootLookup> {
+    let mut expected = index
+        .root_slots
+        .iter()
+        .enumerate()
+        .map(|(ordinal, root)| {
+            (
+                root.name.clone(),
+                ExpectedRootLookup {
+                    root_ordinal: u32::try_from(ordinal).expect("root ordinal fits u32"),
+                    value_seeds: root.value.map(ReplayOwner::Value).into_iter().collect(),
+                    type_seeds: root.ty.map(ReplayOwner::TypeGroup).into_iter().collect(),
+                    namespace_seeds: root
+                        .namespace
+                        .map(ReplayOwner::Namespace)
+                        .into_iter()
+                        .collect(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(expected.len(), index.root_slots.len());
+
+    for consumer in &index.root_slot_consumers {
+        expected
+            .get_mut(&consumer.name)
+            .expect("consumer root exists in authenticated rows")
+            .seeds_mut(consumer.slot)
+            .push(consumer.consumer);
+    }
+    for lookup in expected.values_mut() {
+        for seeds in [
+            &mut lookup.value_seeds,
+            &mut lookup.type_seeds,
+            &mut lookup.namespace_seeds,
+        ] {
+            seeds.sort_unstable();
+            seeds.dedup();
+        }
+    }
+    expected
+}
+
+#[test]
+fn admitted_root_lookup_exactly_projects_authenticated_roots_and_consumers() {
+    let base = super::LibraryBaseProvider::new()
+        .get()
+        .expect("canonical frozen library base");
+    let index = base.replay_index_for_test();
+    let expected = derive_root_lookup_from_wire(index);
+
+    assert_eq!(index.root_slot_lookup.len(), expected.len());
+    assert_eq!(
+        index
+            .root_slot_lookup
+            .keys()
+            .map(|name| name.as_ref())
+            .collect::<BTreeSet<_>>(),
+        expected.keys().map(String::as_str).collect::<BTreeSet<_>>()
+    );
+    for (name, expected) in expected {
+        let actual = index
+            .root_slot_lookup
+            .get(name.as_str())
+            .expect("every authenticated root has a runtime lookup");
+        assert_eq!(actual.root_ordinal, expected.root_ordinal, "{name}");
+        assert_eq!(
+            actual.value_seeds.as_slice(),
+            expected.value_seeds,
+            "{name}"
+        );
+        assert_eq!(actual.type_seeds.as_slice(), expected.type_seeds, "{name}");
+        assert_eq!(
+            actual.namespace_seeds.as_slice(),
+            expected.namespace_seeds,
+            "{name}"
+        );
+        for seeds in [
+            actual.value_seeds.as_slice(),
+            actual.type_seeds.as_slice(),
+            actual.namespace_seeds.as_slice(),
+        ] {
+            assert!(
+                seeds.windows(2).all(|pair| pair[0] < pair[1]),
+                "{name} seeds must be sorted and deduplicated"
+            );
+        }
+    }
+}
+
+#[test]
+fn root_lookup_ordinals_recover_placeholder_roots_and_global_flags() {
+    let base = super::LibraryBaseProvider::new()
+        .get()
+        .expect("canonical frozen library base");
+    let index = base.replay_index_for_test();
+    let expected = derive_root_lookup_from_wire(index);
+    let mut placeholder_witnesses = BTreeSet::new();
+    let mut global_contributor_witnesses = BTreeSet::new();
+    let expected_flags = index
+        .root_slots
+        .iter()
+        .map(|root| {
+            (
+                root.name.as_str(),
+                (root.global_object_contributor, root.explicit_global_this),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut recovered_flags = BTreeMap::new();
+
+    for (name, expected) in &expected {
+        let lookup = &index.root_slot_lookup[name.as_str()];
+        let root = &index.root_slots
+            [usize::try_from(lookup.root_ordinal).expect("root ordinal fits usize")];
+        assert_eq!(&root.name, name);
+        assert_eq!(lookup.root_ordinal, expected.root_ordinal);
+
+        if root.value.is_none()
+            && root.ty.is_none()
+            && root.namespace.is_none()
+            && expected.has_seed()
+        {
+            placeholder_witnesses.insert(name.as_str());
+        }
+        if root.global_object_contributor {
+            global_contributor_witnesses.insert(name.as_str());
+        }
+        recovered_flags.insert(
+            name.as_str(),
+            (root.global_object_contributor, root.explicit_global_this),
+        );
+    }
+
+    assert_eq!(recovered_flags, expected_flags);
+    assert!(
+        !placeholder_witnesses.is_empty(),
+        "consumer-only placeholder roots remain reachable through the lookup"
+    );
+    assert!(
+        !global_contributor_witnesses.is_empty(),
+        "global-object contributor flags remain recoverable through root ordinals"
     );
 }
 
