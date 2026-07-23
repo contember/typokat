@@ -17,6 +17,7 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
+use std::hash::Hash;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -31,6 +32,106 @@ struct FreeParamSummaryCache {
     graph_identity: Arc<()>,
     base: Arc<FxHashMap<TypeId, Arc<[TypeParamId]>>>,
     local: FxHashMap<TypeId, Arc<[TypeParamId]>>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ApplicationKeyMode {
+    RelevantOnly,
+    FullMap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CleanApplicationArguments {
+    RelevantOnly(SmallVec<[(TypeParamId, TypeId); 4]>),
+    FullMap(SmallVec<[(TypeParamId, TypeId); 4]>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CleanApplicationKey {
+    source: TypeId,
+    arguments: CleanApplicationArguments,
+}
+
+impl CleanApplicationKey {
+    pub(crate) fn from_sorted_arguments(
+        source: TypeId,
+        mode: ApplicationKeyMode,
+        arguments: impl IntoIterator<Item = (TypeParamId, TypeId)>,
+    ) -> Option<Self> {
+        let arguments: SmallVec<[(TypeParamId, TypeId); 4]> = arguments.into_iter().collect();
+        debug_assert!(
+            arguments.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "clean application arguments must be sorted and unique"
+        );
+        if arguments.is_empty() {
+            return None;
+        }
+        let arguments = match mode {
+            ApplicationKeyMode::RelevantOnly => CleanApplicationArguments::RelevantOnly(arguments),
+            ApplicationKeyMode::FullMap => CleanApplicationArguments::FullMap(arguments),
+        };
+        Some(Self { source, arguments })
+    }
+}
+
+#[derive(Default)]
+struct DerivedGraphCache<K, V> {
+    graph_identity: Arc<()>,
+    base: Arc<FxHashMap<K, V>>,
+    local: FxHashMap<K, V>,
+}
+
+impl<K, V> DerivedGraphCache<K, V>
+where
+    K: Clone + Eq + Hash,
+    V: Copy,
+{
+    fn new(graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            base: Arc::new(FxHashMap::default()),
+            local: FxHashMap::default(),
+        }
+    }
+
+    fn align_with(&mut self, graph_identity: &Arc<()>) {
+        if Arc::ptr_eq(&self.graph_identity, graph_identity) {
+            return;
+        }
+        self.graph_identity = Arc::clone(graph_identity);
+        self.local.clear();
+    }
+
+    fn get(&self, key: &K) -> Option<V> {
+        self.local.get(key).or_else(|| self.base.get(key)).copied()
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if !self.base.contains_key(&key) {
+            self.local.entry(key).or_insert(value);
+        }
+    }
+
+    fn insert_batch(&mut self, entries: impl IntoIterator<Item = (K, V)>) {
+        for (key, value) in entries {
+            self.insert(key, value);
+        }
+    }
+
+    fn freeze_as_base(&mut self) {
+        let mut combined = FxHashMap::default();
+        combined.extend(self.base.iter().map(|(key, &value)| (key.clone(), value)));
+        combined.extend(std::mem::take(&mut self.local));
+        self.base = Arc::new(combined);
+    }
+
+    fn fork_delta(&self, graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            base: Arc::clone(&self.base),
+            local: FxHashMap::default(),
+        }
+    }
 }
 
 impl FreeParamSummaryCache {
@@ -207,6 +308,10 @@ pub struct Interner {
     store: Store,
     /// Binder-aware derived summaries for the current immutable type graph.
     free_param_summaries: FreeParamSummaryCache,
+    /// Whether a root can preserve mapper entries beyond its free set.
+    application_key_modes: DerivedGraphCache<TypeId, ApplicationKeyMode>,
+    /// Completed root substitutions that did not observe a recursive stack cut.
+    clean_application_results: DerivedGraphCache<CleanApplicationKey, TypeId>,
     /// Immutable structural buckets owned by the sealed prefix.
     dedup_base: Arc<FxHashMap<u64, SmallVec<[TypeId; 2]>>>,
     /// Structural hash → interned candidates sharing that hash (architecture
@@ -231,7 +336,9 @@ impl Interner {
         let graph_identity = Arc::clone(store.semantic_graph_identity());
         let mut interner = Interner {
             store,
-            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
+            free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
+            application_key_modes: DerivedGraphCache::new(Arc::clone(&graph_identity)),
+            clean_application_results: DerivedGraphCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
@@ -318,6 +425,37 @@ impl Interner {
         self.free_param_summaries.insert_batch(summaries);
     }
 
+    pub(crate) fn application_key_mode(&mut self, ty: TypeId) -> Option<ApplicationKeyMode> {
+        self.application_key_modes
+            .align_with(self.store.semantic_graph_identity());
+        self.application_key_modes.get(&ty)
+    }
+
+    pub(crate) fn publish_application_key_modes(
+        &mut self,
+        modes: impl IntoIterator<Item = (TypeId, ApplicationKeyMode)>,
+    ) {
+        self.application_key_modes
+            .align_with(self.store.semantic_graph_identity());
+        self.application_key_modes.insert_batch(modes);
+    }
+
+    pub(crate) fn clean_application_result(&mut self, key: &CleanApplicationKey) -> Option<TypeId> {
+        self.clean_application_results
+            .align_with(self.store.semantic_graph_identity());
+        self.clean_application_results.get(key)
+    }
+
+    pub(crate) fn publish_clean_application_result(
+        &mut self,
+        key: CleanApplicationKey,
+        result: TypeId,
+    ) {
+        self.clean_application_results
+            .align_with(self.store.semantic_graph_identity());
+        self.clean_application_results.insert(key, result);
+    }
+
     /// Seal a complete standalone interner as the immutable shared prefix.
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if !self.dedup_base.is_empty() || !self.reserved_types_base.is_empty() {
@@ -332,8 +470,14 @@ impl Interner {
         }
         self.free_param_summaries
             .align_with(self.store.semantic_graph_identity());
+        self.application_key_modes
+            .align_with(self.store.semantic_graph_identity());
+        self.clean_application_results
+            .align_with(self.store.semantic_graph_identity());
         self.store.freeze_as_base()?;
         self.free_param_summaries.freeze_as_base();
+        self.application_key_modes.freeze_as_base();
+        self.clean_application_results.freeze_as_base();
         self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
         self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
         Ok(())
@@ -348,7 +492,13 @@ impl Interner {
         let graph_identity = Arc::clone(store.semantic_graph_identity());
         Ok(Self {
             store,
-            free_param_summaries: self.free_param_summaries.fork_delta(graph_identity),
+            free_param_summaries: self
+                .free_param_summaries
+                .fork_delta(Arc::clone(&graph_identity)),
+            application_key_modes: self
+                .application_key_modes
+                .fork_delta(Arc::clone(&graph_identity)),
+            clean_application_results: self.clean_application_results.fork_delta(graph_identity),
             dedup_base: Arc::clone(&self.dedup_base),
             dedup: FxHashMap::default(),
             reserved_types_base: Arc::clone(&self.reserved_types_base),

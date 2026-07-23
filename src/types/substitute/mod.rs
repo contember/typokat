@@ -4,10 +4,12 @@
 //! returns the original id on self-referential nominal types; recursive generic
 //! instantiation remains out of scope.
 
+use crate::types::intern::{ApplicationKeyMode, CleanApplicationKey};
 use crate::types::repr::{FunctionType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -403,15 +405,38 @@ fn for_each_apply_child(
     }
 }
 
-/// Compute exact, map-independent free declaration parameters as a least fixed
-/// point. Results are published only after the complete reachable graph closes.
-fn compute_free_param_summaries(
+#[derive(Clone)]
+struct ApplicationSummary {
+    free_params: Arc<[TypeParamId]>,
+    key_mode: ApplicationKeyMode,
+}
+
+fn retains_full_mapper(store: &Store, ty: TypeId) -> bool {
+    match store.tag(ty) {
+        TypeTag::Conditional => store
+            .conditional_type(ty)
+            .is_some_and(|conditional| conditional.distributive && !conditional.poisoned),
+        TypeTag::Mapped => store
+            .mapped_type(ty)
+            .is_some_and(|mapped| mapped.homomorphic),
+        _ => false,
+    }
+}
+
+/// Compute binder-aware free parameters and mapper-retention reachability in one
+/// fixed point. Results publish only after the reachable graph closes.
+fn compute_application_summaries(
     interner: &mut Interner,
     #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
     root: TypeId,
-) -> Arc<[TypeParamId]> {
-    if let Some(summary) = interner.free_param_summary(root) {
-        return summary;
+) -> ApplicationSummary {
+    let cached_free_params = interner.free_param_summary(root);
+    let cached_key_mode = interner.application_key_mode(root);
+    if let (Some(free_params), Some(key_mode)) = (cached_free_params, cached_key_mode) {
+        return ApplicationSummary {
+            free_params,
+            key_mode,
+        };
     }
 
     let mut pending = vec![root];
@@ -420,9 +445,10 @@ fn compute_free_param_summaries(
     let mut parents: FxHashMap<TypeId, Vec<TypeId>> = FxHashMap::default();
     let mut binders: FxHashMap<TypeId, Vec<TypeParamId>> = FxHashMap::default();
     let mut values: FxHashMap<TypeId, FxHashSet<TypeParamId>> = FxHashMap::default();
+    let mut full_mapper: FxHashSet<TypeId> = FxHashSet::default();
 
     while let Some(ty) = pending.pop() {
-        let (own_parameter, node_binders, children) = {
+        let (own_parameter, node_binders, retains_mapper, children) = {
             let store = interner.store();
             let own_parameter = store.type_param(ty).map(|parameter| parameter.id);
             let node_binders = store.function_type(ty).map_or_else(Vec::new, |function| {
@@ -440,17 +466,27 @@ fn compute_free_param_summaries(
                 measurement,
                 |child| children.push(child),
             );
-            (own_parameter, node_binders, children)
+            (
+                own_parameter,
+                node_binders,
+                retains_full_mapper(store, ty),
+                children,
+            )
         };
 
         let value = values.entry(ty).or_default();
         if let Some(parameter) = own_parameter {
             value.insert(parameter);
         }
+        if retains_mapper {
+            full_mapper.insert(ty);
+        }
         binders.insert(ty, node_binders);
 
         for child in children {
-            if let Some(summary) = interner.free_param_summary(child) {
+            let cached_free_params = interner.free_param_summary(child);
+            let cached_key_mode = interner.application_key_mode(child);
+            if let (Some(summary), Some(key_mode)) = (cached_free_params, cached_key_mode) {
                 let node_binders = binders
                     .get(&ty)
                     .expect("the current node's binders were recorded");
@@ -460,6 +496,9 @@ fn compute_free_param_summaries(
                         .copied()
                         .filter(|parameter| !node_binders.contains(parameter)),
                 );
+                if key_mode == ApplicationKeyMode::FullMap {
+                    full_mapper.insert(ty);
+                }
                 continue;
             }
             parents.entry(child).or_default().push(ty);
@@ -470,13 +509,17 @@ fn compute_free_param_summaries(
     }
 
     let mut propagate: Vec<TypeId> = values
-        .iter()
-        .filter_map(|(&ty, parameters)| (!parameters.is_empty()).then_some(ty))
+        .keys()
+        .copied()
+        .filter(|ty| {
+            values.get(ty).is_some_and(|value| !value.is_empty()) || full_mapper.contains(ty)
+        })
         .collect();
     let mut queued: FxHashSet<TypeId> = propagate.iter().copied().collect();
     while let Some(ty) = propagate.pop() {
         queued.remove(&ty);
         let parameters: Vec<TypeParamId> = values.get(&ty).into_iter().flatten().copied().collect();
+        let child_retains_mapper = full_mapper.contains(&ty);
         if let Some(type_parents) = parents.get(&ty) {
             for &parent in type_parents {
                 let node_binders = binders
@@ -491,6 +534,9 @@ fn compute_free_param_summaries(
                 {
                     changed |= parent_value.insert(parameter);
                 }
+                if child_retains_mapper {
+                    changed |= full_mapper.insert(parent);
+                }
                 if changed && queued.insert(parent) {
                     propagate.push(parent);
                 }
@@ -499,20 +545,34 @@ fn compute_free_param_summaries(
     }
 
     let mut summaries = Vec::with_capacity(discovered.len());
-    let mut root_summary = None;
+    let mut modes = Vec::with_capacity(discovered.len());
+    let mut root_free_params = None;
+    let mut root_key_mode = None;
     for ty in discovered {
         let mut parameters: Vec<TypeParamId> =
             values.remove(&ty).unwrap_or_default().into_iter().collect();
         parameters.sort_unstable();
         let summary: Arc<[TypeParamId]> = parameters.into();
+        let key_mode = if full_mapper.contains(&ty) {
+            ApplicationKeyMode::FullMap
+        } else {
+            ApplicationKeyMode::RelevantOnly
+        };
         if ty == root {
-            root_summary = Some(Arc::clone(&summary));
+            root_free_params = Some(Arc::clone(&summary));
+            root_key_mode = Some(key_mode);
         }
         summaries.push((ty, summary));
+        modes.push((ty, key_mode));
     }
-    let root_summary = root_summary.expect("the fixed point assigns the root");
+    let free_params = root_free_params.expect("the fixed point assigns the root");
+    let key_mode = root_key_mode.expect("the fixed point classifies the root");
     interner.publish_free_param_summaries(summaries);
-    root_summary
+    interner.publish_application_key_modes(modes);
+    ApplicationSummary {
+        free_params,
+        key_mode,
+    }
 }
 
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
@@ -780,19 +840,43 @@ impl<'a> Substitution<'a> {
 
     /// Whether every map key free in `ty` is currently blocked.
     fn effective_free_set_is_empty(&mut self, interner: &mut Interner, ty: TypeId) -> bool {
-        let summary = match interner.free_param_summary(ty) {
-            Some(summary) => summary,
-            None => compute_free_param_summaries(
+        let summary = self.free_param_summary(interner, ty);
+        summary
+            .iter()
+            .all(|id| self.blocked.contains(id) || !self.map.contains_key(id))
+    }
+
+    fn application_summary(&mut self, interner: &mut Interner, ty: TypeId) -> ApplicationSummary {
+        let cached_free_params = self
+            .free_param_summaries
+            .get(&ty)
+            .cloned()
+            .or_else(|| interner.free_param_summary(ty));
+        let cached_key_mode = interner.application_key_mode(ty);
+        let summary = match (cached_free_params, cached_key_mode) {
+            (Some(free_params), Some(key_mode)) => ApplicationSummary {
+                free_params,
+                key_mode,
+            },
+            _ => compute_application_summaries(
                 interner,
                 #[cfg(test)]
                 self.measurement.as_ref(),
                 ty,
             ),
         };
+        self.free_param_summaries
+            .insert(ty, Arc::clone(&summary.free_params));
+        summary
+    }
+
+    fn free_param_summary(&mut self, interner: &mut Interner, ty: TypeId) -> Arc<[TypeParamId]> {
+        if let Some(summary) = self.free_param_summaries.get(&ty) {
+            return Arc::clone(summary);
+        }
+        let summary = self.application_summary(interner, ty).free_params;
         self.free_param_summaries.insert(ty, Arc::clone(&summary));
         summary
-            .iter()
-            .all(|id| self.blocked.contains(id) || !self.map.contains_key(id))
     }
 
     fn canonical_blocked_context(&self, ty: TypeId) -> Vec<TypeParamId> {
@@ -804,6 +888,41 @@ impl<'a> Substitution<'a> {
             .filter(|id| self.map.contains_key(id) && self.blocked.contains(id))
             .copied()
             .collect()
+    }
+
+    fn clean_application_key(
+        &mut self,
+        interner: &mut Interner,
+        ty: TypeId,
+    ) -> Option<CleanApplicationKey> {
+        if self.map.is_empty() {
+            return None;
+        }
+        let summary = self.application_summary(interner, ty);
+        if !summary
+            .free_params
+            .iter()
+            .any(|id| self.map.contains_key(id))
+        {
+            return None;
+        }
+        let arguments: SmallVec<[(TypeParamId, TypeId); 4]> = match summary.key_mode {
+            ApplicationKeyMode::RelevantOnly => summary
+                .free_params
+                .iter()
+                .filter_map(|id| self.map.get(id).copied().map(|argument| (*id, argument)))
+                .collect(),
+            ApplicationKeyMode::FullMap => {
+                let mut arguments: SmallVec<[(TypeParamId, TypeId); 4]> = self
+                    .map
+                    .iter()
+                    .map(|(&id, &argument)| (id, argument))
+                    .collect();
+                arguments.sort_unstable_by_key(|(id, _)| *id);
+                arguments
+            }
+        };
+        CleanApplicationKey::from_sorted_arguments(ty, summary.key_mode, arguments)
     }
 }
 
@@ -838,8 +957,18 @@ pub(crate) fn substitute_with_outcome(
     map: &FxHashMap<TypeParamId, TypeId>,
 ) -> SubstitutionOutcome {
     let mut substitution = Substitution::new(map);
+    let clean_key = substitution.clean_application_key(interner, ty);
+    if let Some(cached) = clean_key
+        .as_ref()
+        .and_then(|key| interner.clean_application_result(key))
+    {
+        return SubstitutionOutcome::CycleClean(cached);
+    }
     let result = substitution.apply(interner, ty);
     if substitution.cycle_epoch == 0 {
+        if let Some(key) = clean_key {
+            interner.publish_clean_application_result(key, result);
+        }
         SubstitutionOutcome::CycleClean(result)
     } else {
         SubstitutionOutcome::CycleTainted(result)
