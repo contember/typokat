@@ -29,6 +29,19 @@ struct AlphaBinderKey {
 
 type IdentitySeen = FxHashSet<(TypeId, TypeId, AlphaBinderKey)>;
 type CompletedIdentityKey = (TypeId, TypeId);
+type IdentityProgressKey = (TypeId, TypeId, AlphaBinderKey);
+
+#[derive(Clone, Default)]
+struct IdentityRetryState {
+    sequences: FxHashMap<IdentityProgressKey, IdentitySequenceProgress>,
+    coinductive_epoch: u64,
+}
+
+#[derive(Clone, Default)]
+struct IdentitySequenceProgress {
+    cursor: usize,
+    recheck: Vec<usize>,
+}
 
 enum IdentityAttempt {
     Decided(DemandOutcome<bool>),
@@ -525,14 +538,16 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.evaluation_memo,
             *self.next_type_param,
         );
+        let mut retry = IdentityRetryState::default();
         let outcome = loop {
-            let attempt = Self::identical_attempt(
+            let attempt = Self::identical_retry_attempt(
                 planner.interner.store(),
                 &planner.plan,
                 left,
                 right,
                 &mut FxHashSet::default(),
                 &mut Vec::new(),
+                &mut retry,
             );
             match attempt {
                 IdentityAttempt::Decided(outcome) => break outcome,
@@ -574,6 +589,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
     }
 
+    #[cfg(test)]
     fn identical_attempt(
         store: &Store,
         plan: &ProjectionPlan<'_>,
@@ -581,6 +597,26 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         right: TypeId,
         seen: &mut IdentitySeen,
         alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
+    ) -> IdentityAttempt {
+        Self::identical_retry_attempt(
+            store,
+            plan,
+            left,
+            right,
+            seen,
+            alpha_binders,
+            &mut IdentityRetryState::default(),
+        )
+    }
+
+    fn identical_retry_attempt(
+        store: &Store,
+        plan: &ProjectionPlan<'_>,
+        left: TypeId,
+        right: TypeId,
+        seen: &mut IdentitySeen,
+        alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
+        retry: &mut IdentityRetryState,
     ) -> IdentityAttempt {
         #[cfg(test)]
         measure_query_source_cold(|measure| measure.identity_recursive_calls += 1);
@@ -636,7 +672,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         {
             return IdentityAttempt::Needs(demand);
         }
-        if !seen.insert((left, right, Self::alpha_binder_key(alpha_binders))) {
+        let progress_key = (left, right, Self::alpha_binder_key(alpha_binders));
+        if !seen.insert(progress_key.clone()) {
+            retry.coinductive_epoch = retry.coinductive_epoch.saturating_add(1);
             return IdentityAttempt::Decided(DemandOutcome::Ready(true));
         }
         let tag = store.tag(left);
@@ -645,99 +683,93 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
         match tag {
             TypeTag::Object => {
-                let left = store
-                    .object_type(left)
-                    .expect("object tag has payload")
-                    .clone();
-                let right = store
-                    .object_type(right)
-                    .expect("object tag has payload")
-                    .clone();
+                let left = store.object_type(left).expect("object tag has payload");
+                let right = store.object_type(right).expect("object tag has payload");
                 if left.properties.len() != right.properties.len()
                     || left.call_signatures.len() != right.call_signatures.len()
                     || left.construct_signatures.len() != right.construct_signatures.len()
                 {
                     return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
-                for (left, right) in left.properties.iter().zip(&right.properties) {
-                    if left.name != right.name
-                        || left.optional != right.optional
-                        || left.visibility != right.visibility
-                        || (left.visibility != Visibility::Public
-                            && left.declaring_class != right.declaring_class)
-                        || left.readonly != right.readonly
-                        || left.is_accessor != right.is_accessor
-                    {
-                        return IdentityAttempt::Decided(DemandOutcome::Ready(false));
+                let property_end = left.properties.len();
+                let call_end = property_end + left.call_signatures.len();
+                let construct_end = call_end + left.construct_signatures.len();
+                let string_index = construct_end;
+                let number_index = string_index + 1;
+                Self::identical_sequence(retry, progress_key, number_index + 1, |index, retry| {
+                    if index < property_end {
+                        let left = &left.properties[index];
+                        let right = &right.properties[index];
+                        if left.name != right.name
+                            || left.optional != right.optional
+                            || left.visibility != right.visibility
+                            || (left.visibility != Visibility::Public
+                                && left.declaring_class != right.declaring_class)
+                            || left.readonly != right.readonly
+                            || left.is_accessor != right.is_accessor
+                        {
+                            return IdentityAttempt::Decided(DemandOutcome::Ready(false));
+                        }
+                        match Self::identical_retry_attempt(
+                            store,
+                            plan,
+                            left.ty,
+                            right.ty,
+                            seen,
+                            alpha_binders,
+                            retry,
+                        ) {
+                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
+                            outcome => return outcome,
+                        }
+                        return Self::identical_optional(
+                            store,
+                            plan,
+                            left.write_ty,
+                            right.write_ty,
+                            seen,
+                            alpha_binders,
+                            retry,
+                        );
                     }
-                    match Self::identical_attempt(
-                        store,
-                        plan,
-                        left.ty,
-                        right.ty,
-                        seen,
-                        alpha_binders,
-                    ) {
-                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                        outcome => return outcome,
+                    if index < call_end {
+                        let index = index - property_end;
+                        return Self::identical_retry_attempt(
+                            store,
+                            plan,
+                            left.call_signatures[index],
+                            right.call_signatures[index],
+                            seen,
+                            alpha_binders,
+                            retry,
+                        );
                     }
-                    match Self::identical_optional(
-                        store,
-                        plan,
-                        left.write_ty,
-                        right.write_ty,
-                        seen,
-                        alpha_binders,
-                    ) {
-                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                        outcome => return outcome,
+                    if index < construct_end {
+                        let index = index - call_end;
+                        return Self::identical_retry_attempt(
+                            store,
+                            plan,
+                            left.construct_signatures[index],
+                            right.construct_signatures[index],
+                            seen,
+                            alpha_binders,
+                            retry,
+                        );
                     }
-                }
-                for (left, right) in left.call_signatures.iter().zip(&right.call_signatures) {
-                    match Self::identical_attempt(store, plan, *left, *right, seen, alpha_binders) {
-                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                        outcome => return outcome,
-                    }
-                }
-                for (left, right) in left
-                    .construct_signatures
-                    .iter()
-                    .zip(&right.construct_signatures)
-                {
-                    match Self::identical_attempt(store, plan, *left, *right, seen, alpha_binders) {
-                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                        outcome => return outcome,
-                    }
-                }
-                match Self::identical_optional(
-                    store,
-                    plan,
-                    left.string_index,
-                    right.string_index,
-                    seen,
-                    alpha_binders,
-                ) {
-                    IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                    outcome => return outcome,
-                }
-                Self::identical_optional(
-                    store,
-                    plan,
-                    left.number_index,
-                    right.number_index,
-                    seen,
-                    alpha_binders,
-                )
+                    let (left, right) = if index == string_index {
+                        (left.string_index, right.string_index)
+                    } else {
+                        debug_assert_eq!(index, number_index);
+                        (left.number_index, right.number_index)
+                    };
+                    Self::identical_optional(store, plan, left, right, seen, alpha_binders, retry)
+                })
             }
             TypeTag::Function => {
-                let left = store
-                    .function_type(left)
-                    .expect("function tag has payload")
-                    .clone();
+                let left = store.function_type(left).expect("function tag has payload");
                 let right = store
                     .function_type(right)
-                    .expect("function tag has payload")
-                    .clone();
+                    .expect("function tag has payload");
                 if left.type_params.len() != right.type_params.len()
                     || left.params.len() != right.params.len()
                 {
@@ -750,70 +782,89 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         .zip(&right.type_params)
                         .map(|(left, right)| (left.id, right.id)),
                 );
-                let outcome = (|| {
-                    for (left, right) in left.type_params.iter().zip(&right.type_params) {
-                        match Self::identical_optional(
+                let type_parameter_end = left.type_params.len() * 2;
+                let receiver_index = type_parameter_end;
+                let parameter_start = receiver_index + 1;
+                let return_index = parameter_start + left.params.len();
+                let function_progress_key = (
+                    progress_key.0,
+                    progress_key.1,
+                    Self::alpha_binder_key(alpha_binders),
+                );
+                let outcome = Self::identical_sequence(
+                    retry,
+                    function_progress_key,
+                    return_index + 1,
+                    |index, retry| {
+                        if index < type_parameter_end {
+                            let parameter = index / 2;
+                            let left = &left.type_params[parameter];
+                            let right = &right.type_params[parameter];
+                            let (left, right) = if index % 2 == 0 {
+                                (left.constraint, right.constraint)
+                            } else {
+                                (left.default, right.default)
+                            };
+                            return Self::identical_optional(
+                                store,
+                                plan,
+                                left,
+                                right,
+                                seen,
+                                alpha_binders,
+                                retry,
+                            );
+                        }
+                        if index == receiver_index {
+                            return Self::identical_optional(
+                                store,
+                                plan,
+                                left.receiver,
+                                right.receiver,
+                                seen,
+                                alpha_binders,
+                                retry,
+                            );
+                        }
+                        if index < return_index {
+                            let parameter = index - parameter_start;
+                            let left = &left.params[parameter];
+                            let right = &right.params[parameter];
+                            if left.optional != right.optional
+                                || left.has_default != right.has_default
+                                || left.rest != right.rest
+                            {
+                                return IdentityAttempt::Decided(DemandOutcome::Ready(false));
+                            }
+                            return Self::identical_retry_attempt(
+                                store,
+                                plan,
+                                left.ty,
+                                right.ty,
+                                seen,
+                                alpha_binders,
+                                retry,
+                            );
+                        }
+                        debug_assert_eq!(index, return_index);
+                        Self::identical_retry_attempt(
                             store,
                             plan,
-                            left.constraint,
-                            right.constraint,
+                            left.ret,
+                            right.ret,
                             seen,
                             alpha_binders,
-                        ) {
-                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                            outcome => return outcome,
-                        }
-                        match Self::identical_optional(
-                            store,
-                            plan,
-                            left.default,
-                            right.default,
-                            seen,
-                            alpha_binders,
-                        ) {
-                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                            outcome => return outcome,
-                        }
-                    }
-                    match Self::identical_optional(
-                        store,
-                        plan,
-                        left.receiver,
-                        right.receiver,
-                        seen,
-                        alpha_binders,
-                    ) {
-                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                        outcome => return outcome,
-                    }
-                    for (left, right) in left.params.iter().zip(&right.params) {
-                        if left.optional != right.optional
-                            || left.has_default != right.has_default
-                            || left.rest != right.rest
-                        {
-                            return IdentityAttempt::Decided(DemandOutcome::Ready(false));
-                        }
-                        match Self::identical_attempt(
-                            store,
-                            plan,
-                            left.ty,
-                            right.ty,
-                            seen,
-                            alpha_binders,
-                        ) {
-                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
-                            outcome => return outcome,
-                        }
-                    }
-                    Self::identical_attempt(store, plan, left.ret, right.ret, seen, alpha_binders)
-                })();
+                            retry,
+                        )
+                    },
+                );
                 alpha_binders.truncate(binder_start);
                 outcome
             }
             TypeTag::Array => {
                 let left = store.array_type(left).unwrap().element;
                 let right = store.array_type(right).unwrap().element;
-                Self::identical_attempt(store, plan, left, right, seen, alpha_binders)
+                Self::identical_retry_attempt(store, plan, left, right, seen, alpha_binders, retry)
             }
             TypeTag::Tuple => {
                 let left = store.tuple_type(left).unwrap().clone();
@@ -824,7 +875,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.elements.iter().zip(&right.elements) {
-                    match Self::identical_attempt(store, plan, *left, *right, seen, alpha_binders) {
+                    match Self::identical_retry_attempt(
+                        store,
+                        plan,
+                        *left,
+                        *right,
+                        seen,
+                        alpha_binders,
+                        retry,
+                    ) {
                         IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
@@ -836,15 +895,17 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     right.rest.map(|rest| rest.ty),
                     seen,
                     alpha_binders,
+                    retry,
                 )
             }
-            TypeTag::Readonly => Self::identical_attempt(
+            TypeTag::Readonly => Self::identical_retry_attempt(
                 store,
                 plan,
                 store.readonly_operand(left).unwrap(),
                 store.readonly_operand(right).unwrap(),
                 seen,
                 alpha_binders,
+                retry,
             ),
             TypeTag::Union | TypeTag::Intersection => {
                 let left = if tag == TypeTag::Union {
@@ -873,7 +934,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
                     }
                 };
-                Self::identical_unordered(store, plan, &left, &right, seen, alpha_binders)
+                Self::identical_unordered(store, plan, &left, &right, seen, alpha_binders, retry)
             }
             TypeTag::ClassInstance => {
                 let left = store.class_instance_type(left).unwrap().clone();
@@ -882,7 +943,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.args.into_iter().zip(right.args) {
-                    match Self::identical_attempt(store, plan, left, right, seen, alpha_binders) {
+                    match Self::identical_retry_attempt(
+                        store,
+                        plan,
+                        left,
+                        right,
+                        seen,
+                        alpha_binders,
+                        retry,
+                    ) {
                         IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
@@ -904,7 +973,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     (left.true_branch, right.true_branch),
                     (left.false_branch, right.false_branch),
                 ] {
-                    match Self::identical_attempt(store, plan, left, right, seen, alpha_binders) {
+                    match Self::identical_retry_attempt(
+                        store,
+                        plan,
+                        left,
+                        right,
+                        seen,
+                        alpha_binders,
+                        retry,
+                    ) {
                         IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
@@ -923,13 +1000,14 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 if left.args.len() != right.args.len() {
                     return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
-                match Self::identical_attempt(
+                match Self::identical_retry_attempt(
                     store,
                     plan,
                     left.base,
                     right.base,
                     seen,
                     alpha_binders,
+                    retry,
                 ) {
                     IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                     outcome => return outcome,
@@ -942,13 +1020,14 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                     };
                     let (_, right_value) = remaining.remove(position);
-                    match Self::identical_attempt(
+                    match Self::identical_retry_attempt(
                         store,
                         plan,
                         left_value,
                         right_value,
                         seen,
                         alpha_binders,
+                        retry,
                     ) {
                         IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
@@ -970,7 +1049,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     (Some(left.value_template), Some(right.value_template)),
                     (left.modifiers_source, right.modifiers_source),
                 ] {
-                    match Self::identical_optional(store, plan, left, right, seen, alpha_binders) {
+                    match Self::identical_optional(
+                        store,
+                        plan,
+                        left,
+                        right,
+                        seen,
+                        alpha_binders,
+                        retry,
+                    ) {
                         IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
@@ -987,20 +1074,29 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.holes.into_iter().zip(right.holes) {
-                    match Self::identical_attempt(store, plan, left, right, seen, alpha_binders) {
+                    match Self::identical_retry_attempt(
+                        store,
+                        plan,
+                        left,
+                        right,
+                        seen,
+                        alpha_binders,
+                        retry,
+                    ) {
                         IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
                 IdentityAttempt::Decided(DemandOutcome::Ready(true))
             }
-            TypeTag::Keyof => Self::identical_attempt(
+            TypeTag::Keyof => Self::identical_retry_attempt(
                 store,
                 plan,
                 store.keyof_operand(left).expect("keyof payload"),
                 store.keyof_operand(right).expect("keyof payload"),
                 seen,
                 alpha_binders,
+                retry,
             ),
             TypeTag::DeferredIndexedAccess => {
                 let left = *store
@@ -1009,22 +1105,24 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 let right = *store
                     .deferred_indexed_access_type(right)
                     .expect("indexed-access payload");
-                match Self::identical_attempt(
+                match Self::identical_retry_attempt(
                     store,
                     plan,
                     left.object,
                     right.object,
                     seen,
                     alpha_binders,
+                    retry,
                 ) {
                     IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {
-                        Self::identical_attempt(
+                        Self::identical_retry_attempt(
                             store,
                             plan,
                             left.index,
                             right.index,
                             seen,
                             alpha_binders,
+                            retry,
                         )
                     }
                     outcome => outcome,
@@ -1039,6 +1137,47 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
     }
 
+    fn identical_sequence(
+        retry: &mut IdentityRetryState,
+        key: IdentityProgressKey,
+        len: usize,
+        mut compare: impl FnMut(usize, &mut IdentityRetryState) -> IdentityAttempt,
+    ) -> IdentityAttempt {
+        let mut progress = retry.sequences.get(&key).cloned().unwrap_or_default();
+        for index in progress.recheck.clone() {
+            let coinductive_epoch = retry.coinductive_epoch;
+            match compare(index, retry) {
+                IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {
+                    if retry.coinductive_epoch == coinductive_epoch {
+                        progress.recheck.retain(|candidate| *candidate != index);
+                    }
+                }
+                outcome => {
+                    retry.sequences.insert(key, progress);
+                    return outcome;
+                }
+            }
+        }
+        while progress.cursor < len {
+            let index = progress.cursor;
+            let coinductive_epoch = retry.coinductive_epoch;
+            match compare(index, retry) {
+                IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {
+                    progress.cursor += 1;
+                    if retry.coinductive_epoch != coinductive_epoch {
+                        progress.recheck.push(index);
+                    }
+                }
+                outcome => {
+                    retry.sequences.insert(key, progress);
+                    return outcome;
+                }
+            }
+        }
+        retry.sequences.insert(key, progress);
+        IdentityAttempt::Decided(DemandOutcome::Ready(true))
+    }
+
     fn identical_optional(
         store: &Store,
         plan: &ProjectionPlan<'_>,
@@ -1046,10 +1185,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         right: Option<TypeId>,
         seen: &mut IdentitySeen,
         alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
+        retry: &mut IdentityRetryState,
     ) -> IdentityAttempt {
         match (left, right) {
             (Some(left), Some(right)) => {
-                Self::identical_attempt(store, plan, left, right, seen, alpha_binders)
+                Self::identical_retry_attempt(store, plan, left, right, seen, alpha_binders, retry)
             }
             (None, None) => IdentityAttempt::Decided(DemandOutcome::Ready(true)),
             _ => IdentityAttempt::Decided(DemandOutcome::Ready(false)),
@@ -1101,6 +1241,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         right: &[TypeId],
         seen: &mut IdentitySeen,
         alpha_binders: &[(TypeParamId, TypeParamId)],
+        retry: &mut IdentityRetryState,
     ) -> IdentityAttempt {
         if left.len() != right.len() {
             return IdentityAttempt::Decided(DemandOutcome::Ready(false));
@@ -1111,16 +1252,18 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             for (position, &target) in remaining.iter().enumerate() {
                 let mut trial_seen = seen.clone();
                 let mut trial_binders = alpha_binders.to_vec();
-                match Self::identical_attempt(
+                let mut trial_retry = retry.clone();
+                match Self::identical_retry_attempt(
                     store,
                     plan,
                     candidate,
                     target,
                     &mut trial_seen,
                     &mut trial_binders,
+                    &mut trial_retry,
                 ) {
                     IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {
-                        matched = Some((position, trial_seen));
+                        matched = Some((position, trial_seen, trial_retry));
                         break;
                     }
                     IdentityAttempt::Decided(DemandOutcome::Ready(false)) => {}
@@ -1130,10 +1273,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     IdentityAttempt::Needs(demand) => return IdentityAttempt::Needs(demand),
                 }
             }
-            let Some((position, trial_seen)) = matched else {
+            let Some((position, trial_seen, trial_retry)) = matched else {
                 return IdentityAttempt::Decided(DemandOutcome::Ready(false));
             };
             *seen = trial_seen;
+            *retry = trial_retry;
             remaining.remove(position);
         }
         IdentityAttempt::Decided(DemandOutcome::Ready(remaining.is_empty()))
@@ -1509,6 +1653,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 #[derive(Default)]
 pub(crate) struct ProjectionPlan<'a> {
     class_projection_overlay: FxHashMap<TypeId, TypeId>,
+    resolved_class_projections: FxHashSet<TypeId>,
     evaluation_overlay: FxHashMap<TypeId, TypeId>,
     resolved_evaluations: FxHashSet<TypeId>,
     frontier: FxHashMap<TypeId, Exhaustion>,
@@ -1544,7 +1689,9 @@ impl RelationNormalization for ProjectionPlan<'_> {
 
     fn relation_demand(&self, store: &Store, ty: TypeId) -> Option<RelationDemand> {
         match store.tag(ty) {
-            TypeTag::ClassInstance => Some(RelationDemand::ClassProjection(ty)),
+            TypeTag::ClassInstance if !self.resolved_class_projections.contains(&ty) => {
+                Some(RelationDemand::ClassProjection(ty))
+            }
             TypeTag::DeferredIndexedAccess
             | TypeTag::Keyof
             | TypeTag::Conditional
@@ -1825,6 +1972,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             instance.args.len(),
             "complete ClassInstance vectors must match the published declaration arity"
         );
+        self.plan.resolved_class_projections.insert(application);
 
         let projection = self
             .durable_projection_memo
