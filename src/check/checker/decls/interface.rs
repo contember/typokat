@@ -41,45 +41,44 @@ fn flatten_qualified_heritage_expression<'a>(
     }
 }
 
-pub(super) fn interface_heritage_root<'name>(
-    binder: &Binder,
-    scope: ScopeId,
-    heritage: &'name TSInterfaceHeritage<'_>,
-) -> Option<(crate::binder::declaration::TypeGroupId, &'name str, Span)> {
-    match &heritage.expression {
-        Expression::Identifier(identifier) => Some((
-            type_decl_id(binder, scope, identifier.name.as_str())?,
-            identifier.name.as_str(),
-            Span::from_oxc(identifier.span),
-        )),
-        Expression::StaticMemberExpression(member) => {
-            let mut segments = Vec::new();
-            if !flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
-                return None;
-            }
-            let names = segments
-                .iter()
-                .map(|segment| segment.name)
-                .collect::<Vec<_>>();
-            let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
-                binder.resolve_qualified_type_path(scope, &names)
-            else {
-                return None;
-            };
-            Some((group, segments.last()?.name, Span::from_oxc(member.span)))
-        }
-        _ => None,
-    }
-}
-
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    pub(super) fn interface_heritage_root_replay<'name>(
+        &self,
+        scope: ScopeId,
+        heritage: &'name TSInterfaceHeritage<'_>,
+    ) -> Option<(crate::binder::declaration::TypeGroupId, &'name str, Span)> {
+        match &heritage.expression {
+            Expression::Identifier(identifier) => Some((
+                self.type_decl_id_replay(scope, identifier.name.as_str())?,
+                identifier.name.as_str(),
+                Span::from_oxc(identifier.span),
+            )),
+            Expression::StaticMemberExpression(member) => {
+                let mut segments = Vec::new();
+                if !flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
+                    return None;
+                }
+                let names = segments
+                    .iter()
+                    .map(|segment| segment.name)
+                    .collect::<Vec<_>>();
+                let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
+                    self.resolve_qualified_type_path_replay(scope, &names)
+                else {
+                    return None;
+                };
+                Some((group, segments.last()?.name, Span::from_oxc(member.span)))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn validate_interface_heritage_application_without_resolution(
         &mut self,
         scope: ScopeId,
         heritage: &TSInterfaceHeritage<'_>,
     ) {
-        let Some((group, name, span)) = interface_heritage_root(self.binder, scope, heritage)
-        else {
+        let Some((group, name, span)) = self.interface_heritage_root_replay(scope, heritage) else {
             return;
         };
         self.validate_type_group_application_without_resolution(
@@ -115,7 +114,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         match &heritage.expression {
             Expression::Identifier(identifier) => {
-                if let Some(group) = type_decl_id(self.binder, scope, identifier.name.as_str()) {
+                if let Some(group) = self.type_decl_id_replay(scope, identifier.name.as_str()) {
                     let _ = self.resolve_type_group_reference(
                         scope,
                         group,
@@ -126,12 +125,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return;
                 }
                 if self
-                    .binder
-                    .resolve_type(scope, identifier.name.as_str())
+                    .resolve_type_replay(scope, identifier.name.as_str())
                     .is_none()
                     && self
-                        .binder
-                        .resolve_value(scope, identifier.name.as_str())
+                        .resolve_value_replay(scope, identifier.name.as_str())
                         .is_none()
                 {
                     self.emit_diagnostic(crate::diagnostics::Diagnostic::cannot_find_name(
@@ -266,6 +263,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(merge_intersection_objects(self.interner, objects));
         }
         let application = self.interner.store().class_instance_type(ty).cloned()?;
+        if let Some(trace) = &self.replay_trace {
+            let _observation = trace.observe_typed_demand("interface-class-projection");
+            trace.demand_at(
+                super::super::replay_index::ReplayOwner::Class(application.class),
+                "interface-class-projection",
+            );
+        }
         let crate::class_semantics::DemandOutcome::Ready(surface) = self
             .staged_published_classes
             .as_ref()
@@ -296,7 +300,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Option<TypeId> {
         let (decl_id, name, span) = match &heritage.expression {
             Expression::Identifier(ident) => (
-                type_decl_id(self.binder, scope, ident.name.as_str())?,
+                self.type_decl_id_replay(scope, ident.name.as_str())?,
                 ident.name.as_str(),
                 Span::from_oxc(ident.span),
             ),
@@ -305,7 +309,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if flatten_qualified_heritage_expression(&heritage.expression, &mut segments) {
                     let names: Vec<&str> = segments.iter().map(|segment| segment.name).collect();
                     if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) =
-                        self.binder.resolve_qualified_type_path(scope, &names)
+                        self.resolve_qualified_type_path_replay(scope, &names)
                     {
                         (group, segments.last()?.name, Span::from_oxc(member.span))
                     } else {

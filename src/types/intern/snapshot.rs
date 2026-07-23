@@ -38,7 +38,7 @@ const BUCKET_CANDIDATE_FIELD: u8 = 0;
 const RESERVED_TYPE_FIELD: u8 = 1;
 const WELL_KNOWN_TYPE_FIELD: u8 = 2;
 
-type SnapshotReferenceRecord = (u8, u8, u8, u32, u32);
+pub(crate) type SnapshotReferenceRecord = (u8, u8, u8, u32, u32);
 
 fn reference(
     owner_domain: u8,
@@ -90,6 +90,12 @@ fn push_class_identity(
 }
 
 impl Interner {
+    pub(crate) fn typed_reference_records_for_replay_generation(
+        &self,
+    ) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
+        self.store_snapshot_reference_records()
+    }
+
     /// Canonical reference rows for the Store and Interner archive families.
     ///
     /// Tuple order is `(owner_domain, target_domain, field, owner, target)`.

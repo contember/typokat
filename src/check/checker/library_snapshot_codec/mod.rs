@@ -460,12 +460,12 @@ impl CompiledSnapshotForTest {
 }
 
 #[derive(Clone)]
-struct RootNameRow {
-    name: String,
-    symbol: Option<SymbolId>,
-    value: Option<ValueStorageId>,
-    ty: Option<TypeGroupId>,
-    namespace: Option<NamespaceId>,
+pub(in crate::check::checker) struct RootNameRow {
+    pub(in crate::check::checker) name: String,
+    pub(in crate::check::checker) symbol: Option<SymbolId>,
+    pub(in crate::check::checker) value: Option<ValueStorageId>,
+    pub(in crate::check::checker) ty: Option<TypeGroupId>,
+    pub(in crate::check::checker) namespace: Option<NamespaceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -3123,7 +3123,9 @@ fn verify_reference_manifest_streaming(
     Ok(())
 }
 
-fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, SnapshotError> {
+pub(in crate::check::checker) fn collect_root_rows(
+    binder: &Binder,
+) -> Result<Vec<RootNameRow>, SnapshotError> {
     let scope = binder.graph.get(binder.compilation_global).ok_or_else(|| {
         invalid(
             SnapshotErrorStage::ReferenceValidation,

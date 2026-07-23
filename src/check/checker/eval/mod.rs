@@ -6,7 +6,6 @@
 
 use super::context::Pass;
 use crate::check::infer::infer_from_types_for_conditional;
-use crate::check::query::SemanticQueryCoordinator;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::Diagnostic;
 use crate::relate::cache::RelationCache;
@@ -38,13 +37,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// conditionals and other types are unchanged. Exhaustion reports `TK2589` at
     /// the demand span, a documented tsc span divergence.
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
-        SemanticQueryCoordinator::new(
-            self.interner,
-            self.type_environment.published().classes(),
-            &mut self.semantic_queries,
-            &mut self.next_type_param,
-        )
-        .demand(ty)
+        self.with_semantic_query(|query| query.demand(ty))
     }
 
     pub(in crate::check::checker) fn own_type_demand(

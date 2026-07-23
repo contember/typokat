@@ -8,7 +8,6 @@ use super::retained::RetainedClassCallable;
 use super::surface_types::SurfaceTypeFactory;
 use crate::binder::scope::ScopeId;
 use crate::check::checker::lexical_events::LexicalOwnerPhase;
-use crate::check::query::SemanticQueryCoordinator;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
 use crate::relate::RelationOutcome;
@@ -43,13 +42,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .and_then(|site| self.lexical_events.class(site))
             .and_then(|reservation| reservation.binding.as_ref())
             .cloned();
+        let _replay_owner_scope = binding.as_ref().and_then(|binding| {
+            self.replay_trace.as_ref().map(|trace| {
+                trace.scope(super::super::replay_index::ReplayOwner::Class(
+                    binding.class_id,
+                ))
+            })
+        });
         let published_templates = binding.as_ref().and_then(|binding| {
-            match self
-                .type_environment
-                .published()
-                .classes()
-                .published_class(binding.class_id)
-            {
+            match self.published_class_replay(binding.class_id) {
                 DemandOutcome::Ready(surface) => {
                     Some((surface.instance_template(), surface.static_template()))
                 }
@@ -427,13 +428,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     else {
                         continue;
                     };
-                    let outcome = SemanticQueryCoordinator::new(
-                        self.interner,
-                        self.type_environment.published().classes(),
-                        &mut self.semantic_queries,
-                        &mut self.next_type_param,
-                    )
-                    .overload_implementation_compatible(signature_ty, implementation);
+                    let outcome = self.with_semantic_query(|query| {
+                        query.overload_implementation_compatible(signature_ty, implementation)
+                    });
                     if matches!(outcome, RelationOutcome::No(_)) {
                         self.with_lexical_effects(
                             signature.span.start,

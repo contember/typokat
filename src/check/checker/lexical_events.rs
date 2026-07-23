@@ -1484,6 +1484,66 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     }
 }
 
+impl<Ticket: Copy + Ord> LexicalReservations<Ticket> {
+    pub(crate) fn class_ticket_owners(&self) -> BTreeMap<Ticket, ClassId> {
+        let mut owners = BTreeMap::new();
+        let insert = |owners: &mut BTreeMap<Ticket, ClassId>, ticket, class| {
+            let previous = owners.insert(ticket, class);
+            assert!(
+                previous.is_none_or(|previous| previous == class),
+                "one replay class owns each class ticket"
+            );
+        };
+        for class in &self.classes {
+            let Some(binding) = class.binding.as_ref() else {
+                continue;
+            };
+            let class_id = binding.class_id;
+            for ticket in [
+                class.tickets.immediate,
+                class.tickets.deferred,
+                class.tickets.incomplete,
+            ] {
+                insert(&mut owners, ticket, class_id);
+            }
+            for ticket in class
+                .constraints
+                .iter()
+                .map(|row| row.owner)
+                .chain(class.defaults.iter().map(|row| row.owner))
+            {
+                insert(&mut owners, ticket, class_id);
+            }
+            for member_id in &class.members {
+                let member = self
+                    .member(*member_id)
+                    .expect("class member reservation remains retained");
+                for ticket in [
+                    member.tickets.immediate,
+                    member.tickets.deferred,
+                    member.tickets.incomplete,
+                ] {
+                    insert(&mut owners, ticket, class_id);
+                }
+                if let Some(callable_id) = member.callable {
+                    let callable = self
+                        .callable(callable_id)
+                        .expect("class callable reservation remains retained");
+                    for ticket in [
+                        callable.tickets.signature,
+                        callable.tickets.deferred,
+                        callable.tickets.incomplete,
+                        callable.tickets.body,
+                    ] {
+                        insert(&mut owners, ticket, class_id);
+                    }
+                }
+            }
+        }
+        owners
+    }
+}
+
 impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     fn reserve_class<Allocator>(
         &mut self,

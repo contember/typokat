@@ -1153,42 +1153,30 @@ fn heritage_construction_order<Ticket: Copy>(
 pub(in crate::check::checker) fn dependency_first_sccs<Node: Copy + Ord>(
     graph: &BTreeMap<Node, BTreeSet<Node>>,
 ) -> Vec<Vec<Node>> {
-    fn visit<Node: Copy + Ord>(
-        graph: &BTreeMap<Node, BTreeSet<Node>>,
-        node: Node,
-        seen: &mut BTreeSet<Node>,
-        order: &mut Vec<Node>,
-    ) {
-        if !seen.insert(node) {
-            return;
-        }
-        for dependency in graph.get(&node).into_iter().flatten().copied() {
-            visit(graph, dependency, seen, order);
-        }
-        order.push(node);
-    }
-
-    fn reverse_visit<Node: Copy + Ord>(
-        reverse: &BTreeMap<Node, BTreeSet<Node>>,
-        node: Node,
-        seen: &mut BTreeSet<Node>,
-        component: &mut Vec<Node>,
-    ) {
-        if !seen.insert(node) {
-            return;
-        }
-        component.push(node);
-        if let Some(dependents) = reverse.get(&node) {
-            for dependent in dependents {
-                reverse_visit(reverse, *dependent, seen, component);
-            }
-        }
-    }
-
     let mut order = Vec::new();
     let mut seen = BTreeSet::new();
-    for node in graph.keys().copied() {
-        visit(graph, node, &mut seen, &mut order);
+    for start in graph.keys().copied() {
+        if seen.contains(&start) {
+            continue;
+        }
+        let mut stack = vec![(start, false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if expanded {
+                order.push(node);
+                continue;
+            }
+            if !seen.insert(node) {
+                continue;
+            }
+            stack.push((node, true));
+            if let Some(dependencies) = graph.get(&node) {
+                for dependency in dependencies.iter().rev().copied() {
+                    if !seen.contains(&dependency) {
+                        stack.push((dependency, false));
+                    }
+                }
+            }
+        }
     }
     let mut reverse: BTreeMap<Node, BTreeSet<Node>> =
         graph.keys().map(|node| (*node, BTreeSet::new())).collect();
@@ -1204,7 +1192,20 @@ pub(in crate::check::checker) fn dependency_first_sccs<Node: Copy + Ord>(
             continue;
         }
         let mut component = Vec::new();
-        reverse_visit(&reverse, node, &mut seen, &mut component);
+        let mut stack = vec![node];
+        while let Some(candidate) = stack.pop() {
+            if !seen.insert(candidate) {
+                continue;
+            }
+            component.push(candidate);
+            if let Some(dependents) = reverse.get(&candidate) {
+                for dependent in dependents.iter().rev().copied() {
+                    if !seen.contains(&dependent) {
+                        stack.push(dependent);
+                    }
+                }
+            }
+        }
         component.sort_unstable();
         components.push(component);
     }

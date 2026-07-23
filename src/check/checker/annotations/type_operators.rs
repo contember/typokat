@@ -221,7 +221,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let TSTypeName::IdentifierReference(ident) = &reference.type_name else {
             return false;
         };
-        type_decl_id(self.binder, scope, ident.name.as_str()) == Some(decl_id)
+        self.type_decl_id_replay(scope, ident.name.as_str()) == Some(decl_id)
     }
 
     fn lower_surface_reference_arguments(&mut self, scope: ScopeId, ty: &TSType<'_>) -> bool {

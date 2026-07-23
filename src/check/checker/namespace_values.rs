@@ -10,6 +10,7 @@ use super::function_groups::FunctionNamespacePayload;
 #[cfg(test)]
 use super::lexical_events::SourceSite;
 use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
+use super::replay_index::ReplayOwner;
 use super::source_ordinal_from_origin;
 use super::statements::{function_decl_from_statement, function_overload_group};
 use crate::binder::declaration::{DeclId, TypeGroupId, ValueStorageId};
@@ -675,6 +676,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             let owner_scope = attachment.owner_scope;
             let name = attachment.name.clone();
+            let replay_owner = self
+                .binder
+                .graph
+                .get(owner_scope)
+                .and_then(|scope| scope.symbols.get(&name))
+                .and_then(|symbol| self.binder.symbols.get(*symbol))
+                .and_then(|symbol| {
+                    symbol
+                        .ns
+                        .map(ReplayOwner::Namespace)
+                        .or_else(|| symbol.value.map(ReplayOwner::Value))
+                });
+            let _replay_owner_scope = replay_owner
+                .and_then(|owner| self.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             self.prepare_namespace_attachment(attachment, &syntax);
             self.namespace_values.mark_prepared_owner(owner_scope, name);
         }
@@ -704,6 +719,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             {
                 continue;
             }
+            let _replay_owner_scope = self
+                .replay_trace
+                .as_ref()
+                .map(|trace| trace.scope(ReplayOwner::Namespace(attachment.namespace)));
             self.prepare_standalone_namespace_attachment(attachment, &syntax);
         }
         #[cfg(test)]
@@ -1109,8 +1128,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             unavailable = Some(NamespaceValueUnavailableCause::FunctionSurfaceUnavailable);
         }
         for (storage, module, source_start, scope, annotation, ty) in variables {
-            if self.decl_types.get(storage).is_none() {
-                self.decl_types.set(storage, ty);
+            if self.decl_type_replay(storage).is_none() {
+                self.publish_copied_decl_type_replay(storage, ty);
             }
             self.namespace_values.insert_member(
                 module,
@@ -1124,8 +1143,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .find(|property| property.name == function.input.name)
                 .map(|property| property.ty);
             if let Some(property_ty) = property_ty {
-                if self.decl_types.get(function.input.storage).is_none() {
-                    self.decl_types.set(function.input.storage, property_ty);
+                if self.decl_type_replay(function.input.storage).is_none() {
+                    self.publish_copied_decl_type_replay(function.input.storage, property_ty);
                 }
             }
             self.namespace_values.insert_member(
@@ -1240,8 +1259,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         })
                     });
                     if let (Some(storage), Some(ty)) = (member.value_storage, ty) {
-                        if self.decl_types.get(storage).is_none() {
-                            self.decl_types.set(storage, ty);
+                        if self.decl_type_replay(storage).is_none() {
+                            self.publish_copied_decl_type_replay(storage, ty);
                         }
                     }
                     self.namespace_values.insert_member(
@@ -1264,9 +1283,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         (member.value_storage, &reservation)
                     {
                         if (function.body.is_none() || surface.declared_return.is_some())
-                            && self.decl_types.get(storage).is_none()
+                            && self.decl_type_replay(storage).is_none()
                         {
-                            self.decl_types.set(storage, surface.function_ty);
+                            self.publish_copied_decl_type_replay(storage, surface.function_ty);
                         }
                     }
                     self.namespace_values.insert_member(
@@ -1311,6 +1330,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut next = Vec::new();
             let mut progressed = false;
             for namespace in remaining {
+                let _replay_owner_scope = self
+                    .replay_trace
+                    .as_ref()
+                    .map(|trace| trace.scope(ReplayOwner::Namespace(namespace)));
                 let Some(plan) = self.namespace_values.standalone_plans.get(&namespace) else {
                     continue;
                 };
@@ -1345,6 +1368,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                     Some(NamespaceValueUnavailableCause::ClassSurfaceUnavailable);
                                 None
                             } else {
+                                if let Some(trace) = &self.replay_trace {
+                                    let _observation =
+                                        trace.observe_typed_demand("namespace-class-terminal");
+                                    trace.demand_at(
+                                        ReplayOwner::Class(*class),
+                                        "namespace-class-terminal",
+                                    );
+                                }
                                 match self
                                     .staged_published_classes
                                     .as_ref()
@@ -1352,7 +1383,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                     .published_class(*class)
                                 {
                                     DemandOutcome::Ready(_) => {
-                                        match self.decl_types.get(*storage) {
+                                        match self.decl_type_replay(*storage) {
                                             Some(ty) => Some(ty),
                                             None => {
                                                 unavailable = Some(
@@ -1374,7 +1405,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         StandaloneNamespaceDependencyKind::Namespace {
                             namespace: child,
                             alias_failure,
-                        } => match self.namespace_values.standalone_terminal(*child) {
+                        } => match self.standalone_namespace_terminal_replay(*child) {
                             Some(StandaloneNamespaceTerminal::Ready { ty, .. }) => Some(ty),
                             Some(StandaloneNamespaceTerminal::Unavailable { .. }) => {
                                 if let Some(failure) = alias_failure {
@@ -1393,7 +1424,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         StandaloneNamespaceDependencyKind::ExistingValue {
                             storage,
                             alias_failure,
-                        } => match self.decl_types.get(*storage) {
+                        } => match self.decl_type_replay(*storage) {
                             Some(ty) => Some(ty),
                             None => {
                                 if let Some(failure) = alias_failure {
@@ -1454,8 +1485,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     properties: all_properties,
                     ..Default::default()
                 });
-                assert!(self.decl_types.get(plan.storage).is_none());
-                self.decl_types.set(plan.storage, ty);
+                assert!(self.decl_type_replay(plan.storage).is_none());
+                self.publish_copied_decl_type_replay(plan.storage, ty);
                 self.namespace_values
                     .standalone_terminals
                     .insert_local(
@@ -1668,8 +1699,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
 
         for variable in variables {
-            if self.decl_types.get(variable.input.storage).is_none() {
-                self.decl_types.set(variable.input.storage, variable.ty);
+            if self.decl_type_replay(variable.input.storage).is_none() {
+                self.publish_copied_decl_type_replay(variable.input.storage, variable.ty);
             }
             self.namespace_values.insert_member(
                 variable.input.module,
@@ -1686,8 +1717,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .find(|property| property.name == function.input.name)
                 .map(|property| property.ty);
             if let Some(property_ty) = property_ty {
-                if self.decl_types.get(function.input.storage).is_none() {
-                    self.decl_types.set(function.input.storage, property_ty);
+                if self.decl_type_replay(function.input.storage).is_none() {
+                    self.publish_copied_decl_type_replay(function.input.storage, property_ty);
                 }
             }
             self.namespace_values.insert_member(
@@ -1856,76 +1887,89 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             declaration.expect("namespace function declaration"),
             callable.source,
         );
-        #[cfg(not(test))]
-        let _ = declaration;
-        self.with_ticket_effects(tickets.signature, |pass| {
-            let (mut lowered, child_failures) =
-                pass.lower_namespace_callable_surface(scope, function, tickets.signature);
-            let mut failures = lowered.failure.take().into_iter().collect::<Vec<_>>();
-            failures.extend(child_failures);
-            let unavailable = !failures.is_empty() || lowered.params.iter().any(Option::is_none);
-            for failure in failures {
-                pass.record_namespace_surface_failure(
-                    failure,
-                    tickets.signature,
-                    Span::from_oxc(function.span),
-                );
-            }
-            if function.return_type.is_none() {
-                lowered.declared_return = None;
-            }
-            let type_param_frame = function
-                .type_parameters
-                .as_deref()
-                .into_iter()
-                .flat_map(|declaration| declaration.params.iter())
-                .zip(&lowered.type_params)
-                .map(|(parameter, generic)| {
-                    (
-                        parameter.name.name.to_string(),
-                        pass.interner
-                            .intern_type_param(generic.id, parameter.name.name.as_str()),
-                    )
-                })
-                .collect();
-            if unavailable {
-                return FunctionReservation::Unavailable(RetainedFunctionBodySurface {
-                    type_param_frame,
-                    receiver: lowered.receiver,
-                    params: lowered.params,
-                    declared_return: lowered.declared_return,
-                    tickets: Some(tickets),
-                });
-            }
-            let params = lowered
-                .params
-                .into_iter()
-                .map(|parameter| parameter.expect("ready namespace callable parameter"))
-                .collect::<Vec<_>>();
-            let ret = lowered.declared_return.unwrap_or_else(|| {
-                let well_known = pass.interner.well_known();
-                if function.body.is_some() {
-                    well_known.unknown
-                } else {
-                    well_known.void
+        let storage = declaration.and_then(|declaration| {
+            self.binder
+                .declarations
+                .get(declaration)
+                .and_then(|declaration| declaration.value_storage)
+        });
+        let reserve = |pass: &mut Self| {
+            pass.with_ticket_effects(tickets.signature, |pass| {
+                let (mut lowered, child_failures) =
+                    pass.lower_namespace_callable_surface(scope, function, tickets.signature);
+                let mut failures = lowered.failure.take().into_iter().collect::<Vec<_>>();
+                failures.extend(child_failures);
+                let unavailable =
+                    !failures.is_empty() || lowered.params.iter().any(Option::is_none);
+                for failure in failures {
+                    pass.record_namespace_surface_failure(
+                        failure,
+                        tickets.signature,
+                        Span::from_oxc(function.span),
+                    );
                 }
-            });
-            let function_ty = pass.interner.intern_function(FunctionType {
-                type_params: lowered.type_params.clone(),
-                receiver: lowered.receiver,
-                params: params.clone(),
-                ret,
-            });
-            FunctionReservation::Ready(FunctionSurface {
-                receiver: lowered.receiver,
-                params,
-                generic_params: lowered.type_params,
-                type_param_frame,
-                declared_return: lowered.declared_return,
-                function_ty,
-                tickets: Some(tickets),
+                if function.return_type.is_none() {
+                    lowered.declared_return = None;
+                }
+                let type_param_frame = function
+                    .type_parameters
+                    .as_deref()
+                    .into_iter()
+                    .flat_map(|declaration| declaration.params.iter())
+                    .zip(&lowered.type_params)
+                    .map(|(parameter, generic)| {
+                        (
+                            parameter.name.name.to_string(),
+                            pass.interner
+                                .intern_type_param(generic.id, parameter.name.name.as_str()),
+                        )
+                    })
+                    .collect();
+                if unavailable {
+                    return FunctionReservation::Unavailable(RetainedFunctionBodySurface {
+                        type_param_frame,
+                        receiver: lowered.receiver,
+                        params: lowered.params,
+                        declared_return: lowered.declared_return,
+                        tickets: Some(tickets),
+                    });
+                }
+                let params = lowered
+                    .params
+                    .into_iter()
+                    .map(|parameter| parameter.expect("ready namespace callable parameter"))
+                    .collect::<Vec<_>>();
+                let ret = lowered.declared_return.unwrap_or_else(|| {
+                    let well_known = pass.interner.well_known();
+                    if function.body.is_some() {
+                        well_known.unknown
+                    } else {
+                        well_known.void
+                    }
+                });
+                let function_ty = pass.interner.intern_function(FunctionType {
+                    type_params: lowered.type_params.clone(),
+                    receiver: lowered.receiver,
+                    params: params.clone(),
+                    ret,
+                });
+                FunctionReservation::Ready(FunctionSurface {
+                    receiver: lowered.receiver,
+                    params,
+                    generic_params: lowered.type_params,
+                    type_param_frame,
+                    declared_return: lowered.declared_return,
+                    function_ty,
+                    tickets: Some(tickets),
+                })
             })
-        })
+        };
+        match storage {
+            Some(storage) => {
+                self.with_replay_publication_owner(ReplayOwner::Value(storage), reserve)
+            }
+            None => reserve(self),
+        }
     }
 
     fn lower_namespace_member_annotation(
@@ -1939,27 +1983,38 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .declaration_owner(declaration)
             .expect("namespace member annotation has one exact owner")
             .ticket;
-        self.with_ticket_effects(owner, |pass| {
-            let (result, child_failures) =
-                pass.lower_namespace_type_surface(scope, annotation, owner);
-            let (ty, primary_failure) = match result {
-                Ok(ty) => (Some(ty), None),
-                Err(failure) => (None, Some(failure)),
-            };
-            let unavailable = primary_failure.is_some() || !child_failures.is_empty();
-            for failure in primary_failure.into_iter().chain(child_failures) {
-                pass.record_namespace_surface_failure(
-                    failure,
-                    owner,
-                    Span::from_oxc(annotation.span()),
-                );
-            }
-            if unavailable {
-                None
-            } else {
-                ty
-            }
-        })
+        let lower = |pass: &mut Self| {
+            pass.with_ticket_effects(owner, |pass| {
+                let (result, child_failures) =
+                    pass.lower_namespace_type_surface(scope, annotation, owner);
+                let (ty, primary_failure) = match result {
+                    Ok(ty) => (Some(ty), None),
+                    Err(failure) => (None, Some(failure)),
+                };
+                let unavailable = primary_failure.is_some() || !child_failures.is_empty();
+                for failure in primary_failure.into_iter().chain(child_failures) {
+                    pass.record_namespace_surface_failure(
+                        failure,
+                        owner,
+                        Span::from_oxc(annotation.span()),
+                    );
+                }
+                if unavailable {
+                    None
+                } else {
+                    ty
+                }
+            })
+        };
+        match self
+            .binder
+            .declarations
+            .get(declaration)
+            .and_then(|declaration| declaration.value_storage)
+        {
+            Some(storage) => self.with_replay_publication_owner(ReplayOwner::Value(storage), lower),
+            None => lower(self),
+        }
     }
 
     fn class_namespace_property_payload(

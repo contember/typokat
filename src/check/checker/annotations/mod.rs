@@ -2,7 +2,6 @@
 
 use super::calls::parameter_name;
 use super::context::*;
-use super::decls::type_decl_id;
 use crate::binder::declaration::TypeGroupId;
 use crate::binder::scope::ScopeId;
 use crate::diagnostics::Diagnostic;

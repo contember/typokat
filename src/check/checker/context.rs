@@ -30,6 +30,8 @@ use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::library_identities::LibrarySemanticIdentities;
 use super::namespace_values::NamespaceValueRegistry;
+use super::replay_index::ReplayDependencyTrace;
+use super::replay_index::ReplayOwner;
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
     InterfaceTypedAlternative, PublishedTypeParameterDefault, TypeEnvironmentState,
@@ -224,7 +226,55 @@ pub(in crate::check::checker) struct CheckerEffects<Ticket: Copy = UserRecordTic
     pub(in crate::check::checker) constraint_checks: Vec<ConstraintCheckObligation>,
     pub(in crate::check::checker) interface_relations: Vec<InterfaceRelationObligation>,
     pub(in crate::check::checker) override_checks: Vec<OverrideCheck>,
+    replay_owners: Option<Box<DeferredReplayOwners>>,
     pub(in crate::check::checker) nested: Vec<CheckerEffects<Ticket>>,
+}
+
+#[derive(Default)]
+struct DeferredReplayOwners {
+    obligations: Vec<Option<ReplayOwner>>,
+    constraint_checks: Vec<Option<ReplayOwner>>,
+    interface_relations: Vec<Option<ReplayOwner>>,
+    override_checks: Vec<Option<ReplayOwner>>,
+}
+
+fn push_replay_owner(
+    sidecar: &mut Option<Box<DeferredReplayOwners>>,
+    select: impl Fn(&mut DeferredReplayOwners) -> &mut Vec<Option<ReplayOwner>>,
+    prior_len: usize,
+    owner: Option<ReplayOwner>,
+) {
+    if sidecar.is_none() && owner.is_none() {
+        return;
+    }
+    let owners = select(sidecar.get_or_insert_with(|| Box::new(DeferredReplayOwners::default())));
+    if owners.len() < prior_len {
+        owners.resize(prior_len, None);
+    }
+    owners.push(owner);
+}
+
+fn merge_replay_owner_column(
+    target: &mut Option<Box<DeferredReplayOwners>>,
+    source: &mut Option<Box<DeferredReplayOwners>>,
+    select: impl Fn(&mut DeferredReplayOwners) -> &mut Vec<Option<ReplayOwner>>,
+    target_len: usize,
+    source_len: usize,
+) {
+    if target.is_none() && source.is_none() {
+        return;
+    }
+    let target_column =
+        select(target.get_or_insert_with(|| Box::new(DeferredReplayOwners::default())));
+    target_column.resize(target_len, None);
+    match source.as_mut() {
+        Some(source) => {
+            let source_column = select(source);
+            source_column.resize(source_len, None);
+            target_column.append(source_column);
+        }
+        None => target_column.resize(target_len + source_len, None),
+    }
 }
 
 impl<Ticket: Copy> CheckerEffects<Ticket> {
@@ -235,6 +285,7 @@ impl<Ticket: Copy> CheckerEffects<Ticket> {
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
             override_checks: Vec::new(),
+            replay_owners: None,
             nested: Vec::new(),
         }
     }
@@ -249,19 +300,157 @@ impl CheckerEffects<UserRecordTicket> {
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
             override_checks: Vec::new(),
+            replay_owners: None,
             nested: Vec::new(),
         }
     }
 }
 
 impl<Ticket: Copy + PartialEq> CheckerEffects<Ticket> {
-    pub(in crate::check::checker) fn merge(&mut self, child: CheckerEffects<Ticket>) {
+    pub(in crate::check::checker) fn merge(&mut self, mut child: CheckerEffects<Ticket>) {
+        merge_replay_owner_column(
+            &mut self.replay_owners,
+            &mut child.replay_owners,
+            |owners| &mut owners.obligations,
+            self.obligations.len(),
+            child.obligations.len(),
+        );
+        merge_replay_owner_column(
+            &mut self.replay_owners,
+            &mut child.replay_owners,
+            |owners| &mut owners.constraint_checks,
+            self.constraint_checks.len(),
+            child.constraint_checks.len(),
+        );
+        merge_replay_owner_column(
+            &mut self.replay_owners,
+            &mut child.replay_owners,
+            |owners| &mut owners.interface_relations,
+            self.interface_relations.len(),
+            child.interface_relations.len(),
+        );
+        merge_replay_owner_column(
+            &mut self.replay_owners,
+            &mut child.replay_owners,
+            |owners| &mut owners.override_checks,
+            self.override_checks.len(),
+            child.override_checks.len(),
+        );
         self.records.merge(child.records);
         self.obligations.extend(child.obligations);
         self.constraint_checks.extend(child.constraint_checks);
         self.interface_relations.extend(child.interface_relations);
         self.override_checks.extend(child.override_checks);
         self.nested.extend(child.nested);
+    }
+
+    pub(in crate::check::checker) fn push_obligation(
+        &mut self,
+        obligation: DeferredRelationObligation,
+        owner: Option<ReplayOwner>,
+    ) {
+        push_replay_owner(
+            &mut self.replay_owners,
+            |owners| &mut owners.obligations,
+            self.obligations.len(),
+            owner,
+        );
+        self.obligations.push(obligation);
+    }
+
+    pub(in crate::check::checker) fn push_constraint_check(
+        &mut self,
+        check: ConstraintCheckObligation,
+        owner: Option<ReplayOwner>,
+    ) {
+        push_replay_owner(
+            &mut self.replay_owners,
+            |owners| &mut owners.constraint_checks,
+            self.constraint_checks.len(),
+            owner,
+        );
+        self.constraint_checks.push(check);
+    }
+
+    pub(in crate::check::checker) fn push_interface_relation(
+        &mut self,
+        relation: InterfaceRelationObligation,
+        owner: Option<ReplayOwner>,
+    ) {
+        push_replay_owner(
+            &mut self.replay_owners,
+            |owners| &mut owners.interface_relations,
+            self.interface_relations.len(),
+            owner,
+        );
+        self.interface_relations.push(relation);
+    }
+
+    pub(in crate::check::checker) fn push_override(
+        &mut self,
+        check: OverrideCheck,
+        owner: Option<ReplayOwner>,
+    ) {
+        push_replay_owner(
+            &mut self.replay_owners,
+            |owners| &mut owners.override_checks,
+            self.override_checks.len(),
+            owner,
+        );
+        self.override_checks.push(check);
+    }
+
+    pub(in crate::check::checker) fn take_constraint_checks(
+        &mut self,
+    ) -> (
+        Vec<ConstraintCheckObligation>,
+        Option<Vec<Option<ReplayOwner>>>,
+    ) {
+        let values = std::mem::take(&mut self.constraint_checks);
+        let owners = self
+            .replay_owners
+            .as_mut()
+            .map(|owners| std::mem::take(&mut owners.constraint_checks));
+        (values, owners)
+    }
+
+    pub(in crate::check::checker) fn take_interface_relations(
+        &mut self,
+    ) -> (
+        Vec<InterfaceRelationObligation>,
+        Option<Vec<Option<ReplayOwner>>>,
+    ) {
+        let values = std::mem::take(&mut self.interface_relations);
+        let owners = self
+            .replay_owners
+            .as_mut()
+            .map(|owners| std::mem::take(&mut owners.interface_relations));
+        (values, owners)
+    }
+
+    pub(in crate::check::checker) fn take_obligations(
+        &mut self,
+    ) -> (
+        Vec<DeferredRelationObligation>,
+        Option<Vec<Option<ReplayOwner>>>,
+    ) {
+        let values = std::mem::take(&mut self.obligations);
+        let owners = self
+            .replay_owners
+            .as_mut()
+            .map(|owners| std::mem::take(&mut owners.obligations));
+        (values, owners)
+    }
+
+    pub(in crate::check::checker) fn take_override_checks(
+        &mut self,
+    ) -> (Vec<OverrideCheck>, Option<Vec<Option<ReplayOwner>>>) {
+        let values = std::mem::take(&mut self.override_checks);
+        let owners = self
+            .replay_owners
+            .as_mut()
+            .map(|owners| std::mem::take(&mut owners.override_checks));
+        (values, owners)
     }
 }
 
@@ -1136,6 +1325,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) current_module: ScopeId,
     /// Exact source identity, independent of reporting authority.
     pub(in crate::check::checker) current_source: SourceUnit,
+    /// Present only while the source-backed library compiler generates replay evidence.
+    pub(in crate::check::checker) replay_trace: Option<ReplayDependencyTrace>,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
@@ -1476,12 +1667,13 @@ mod tests {
                 Span::new(12, 13),
                 "second",
             ));
-        pass.pending_effects[0]
-            .constraint_checks
-            .push(super::ConstraintCheckObligation {
+        pass.pending_effects[0].push_constraint_check(
+            super::ConstraintCheckObligation {
                 checks: vec![(Some(string), number, Span::new(14, 15))],
                 substitutions: FxHashMap::default(),
-            });
+            },
+            None,
+        );
         pass.pending_effects[1]
             .records
             .record(CheckerRecord::Diagnostic(Diagnostic::cannot_find_name(

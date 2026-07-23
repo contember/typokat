@@ -113,7 +113,11 @@ fn preflight_project(
         work.binding_leaves_visited = work
             .binding_leaves_visited
             .saturating_add(census.binding_leaves_visited);
-        for (name, candidate) in census.candidates {
+        for (name, candidate) in census
+            .candidates
+            .into_iter()
+            .chain(census.uncertain_candidates)
+        {
             let aggregate =
                 candidates
                     .entry(name)

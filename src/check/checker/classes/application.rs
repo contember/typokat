@@ -1,7 +1,8 @@
 //! Exact-vector class application construction.
 
+use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::{
-    ClassApplicationArguments, ClassDefaultDeclaration, DemandOutcome, Exhaustion, PublishedClasses,
+    ClassApplicationArguments, ClassDefaultDeclaration, DemandOutcome, Exhaustion,
 };
 use crate::types::repr::{ClassId, TypeParamId};
 use crate::types::store::TypeId;
@@ -84,7 +85,7 @@ pub(in crate::check::checker) struct ClassApplicationRequest<'a, Ticket> {
 
 pub(in crate::check::checker) fn build_class_application<Ticket: Copy>(
     factory: &mut SurfaceTypeFactory<'_>,
-    published: &PublishedClasses,
+    published: &impl PublishedClassLookup,
     request: ClassApplicationRequest<'_, Ticket>,
 ) -> DemandOutcome<TypeId> {
     let class = request.class;
@@ -93,7 +94,7 @@ pub(in crate::check::checker) fn build_class_application<Ticket: Copy>(
         DemandOutcome::Exhausted(reason) => return DemandOutcome::Exhausted(reason),
     };
 
-    match published.require(class) {
+    match published.require_class(class) {
         DemandOutcome::Ready(()) => {
             DemandOutcome::Ready(factory.intern_class_instance(class, arguments))
         }

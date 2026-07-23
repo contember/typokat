@@ -7,7 +7,6 @@ use super::classes::application::{
 use super::classes::surface_types::SurfaceTypeFactory;
 use super::context::*;
 use super::decls::alloc_type_param_ids;
-use super::decls::value_decl_id;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use super::expr::contextual_literal_target;
 use super::function_groups::FunctionGroupDemand;
@@ -15,7 +14,6 @@ use super::type_groups::{PublishedTypeGroupSurface, PublishedTypeGroupTerminal};
 use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
 use crate::check::infer;
-use crate::check::query::SemanticQueryCoordinator;
 use crate::class_semantics::{
     ClassApplicationArguments, ClassConstructionState, DemandOutcome, Exhaustion,
 };
@@ -229,14 +227,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         map: &FxHashMap<TypeParamId, TypeId>,
     ) {
         if self.building_template {
+            let owner = self.current_replay_owner();
             self.effect_stack
                 .last_mut()
                 .expect("construction constraint check requires a lexical owner")
-                .constraint_checks
-                .push(ConstraintCheckObligation {
-                    checks: args.to_vec(),
-                    substitutions: map.clone(),
-                });
+                .push_constraint_check(
+                    ConstraintCheckObligation {
+                        checks: args.to_vec(),
+                        substitutions: map.clone(),
+                    },
+                    owner,
+                );
             return;
         }
         let outcome = self.check_constraint_arguments_outcome(args, map);
@@ -287,14 +288,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // Render relation failures before mutating the effect stack.
         let mut failures: Vec<(String, String, Span, Vec<String>)> = Vec::new();
         for (evaluated_arg, written_arg, constraint, span) in checks {
-            match SemanticQueryCoordinator::new(
-                self.interner,
-                self.type_environment.published().classes(),
-                &mut self.semantic_queries,
-                &mut self.next_type_param,
-            )
-            .is_assignable(evaluated_arg, constraint)
-            {
+            match self.with_semantic_query(|query| query.is_assignable(evaluated_arg, constraint)) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(chain) => {
                     let store = self.interner.store();
@@ -420,14 +414,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             })
             .collect();
         if self.building_template {
+            let owner = self.current_replay_owner();
             self.effect_stack
                 .last_mut()
                 .expect("construction constraint check requires a lexical owner")
-                .constraint_checks
-                .push(ConstraintCheckObligation {
-                    checks,
-                    substitutions: map.clone(),
-                });
+                .push_constraint_check(
+                    ConstraintCheckObligation {
+                        checks,
+                        substitutions: map.clone(),
+                    },
+                    owner,
+                );
             return;
         }
         let outcome = self.check_constraint_arguments_outcome(&checks, map);
@@ -533,9 +530,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         let direct_function_group = match callee {
             Expression::Identifier(identifier) => self
-                .binder
-                .resolve_value(scope, identifier.name.as_str())
-                .map(|symbol| self.function_groups.demand(symbol))
+                .resolve_value_replay(scope, identifier.name.as_str())
+                .map(|symbol| self.demand_function_group_replay(symbol))
                 .filter(|demand| !matches!(demand, FunctionGroupDemand::NotGroup)),
             _ => None,
         };
@@ -1242,14 +1238,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 });
                 return CandidateTrial::Mismatch;
             }
-            match SemanticQueryCoordinator::new(
-                self.interner,
-                self.type_environment.published().classes(),
-                &mut self.semantic_queries,
-                &mut self.next_type_param,
-            )
-            .is_assignable(src, param_ty)
-            {
+            match self.with_semantic_query(|query| query.is_assignable(src, param_ty)) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(_) => {
                     #[cfg(test)]
@@ -1505,14 +1494,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     compatible = false;
                     break;
                 }
-                match SemanticQueryCoordinator::new(
-                    self.interner,
-                    self.type_environment.published().classes(),
-                    &mut self.semantic_queries,
-                    &mut self.next_type_param,
-                )
-                .is_assignable(src, param_ty)
-                {
+                match self.with_semantic_query(|query| query.is_assignable(src, param_ty)) {
                     RelationOutcome::Yes => {}
                     RelationOutcome::No(_) => {
                         compatible = false;
@@ -1545,13 +1527,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         measure_call(|measure| measure.selected_receiver_relation_queries += 1);
         let (source_receiver, span) =
             call_receiver.unwrap_or((self.interner.well_known().undefined, call_span));
-        match SemanticQueryCoordinator::new(
-            self.interner,
-            self.type_environment.published().classes(),
-            &mut self.semantic_queries,
-            &mut self.next_type_param,
-        )
-        .is_assignable(source_receiver, target_receiver)
+        match self
+            .with_semantic_query(|query| query.is_assignable(source_receiver, target_receiver))
         {
             RelationOutcome::Yes => DemandOutcome::Ready(()),
             RelationOutcome::No(_) => {
@@ -1578,13 +1555,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         #[cfg(test)]
         measure_call(|measure| measure.trial_receiver_relation_queries += 1);
         let source_receiver = call_receiver.unwrap_or(self.interner.well_known().undefined);
-        SemanticQueryCoordinator::new(
-            self.interner,
-            self.type_environment.published().classes(),
-            &mut self.semantic_queries,
-            &mut self.next_type_param,
-        )
-        .is_assignable(source_receiver, target_receiver)
+        self.with_semantic_query(|query| query.is_assignable(source_receiver, target_receiver))
     }
 
     fn evaluate_parameters(
@@ -1606,13 +1577,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     fn evaluate_call_boundary_type(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
         if self.interner.store().tag(ty) == TypeTag::ClassInstance {
-            return SemanticQueryCoordinator::new(
-                self.interner,
-                self.type_environment.published().classes(),
-                &mut self.semantic_queries,
-                &mut self.next_type_param,
-            )
-            .normalize_class_application(ty);
+            return self.with_semantic_query(|query| query.normalize_class_application(ty));
         }
         if let Some(mut function) = self.interner.store().function_type(ty).cloned() {
             for parameter in &mut function.params {
@@ -2143,8 +2108,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return self.class_new_target(scope, &paren.expression)
             }
             Expression::Identifier(ident) => {
-                let Some(value_decl) = value_decl_id(self.binder, scope, ident.name.as_str())
-                else {
+                let Some(value_decl) = self.value_decl_id_replay(scope, ident.name.as_str()) else {
                     return DemandOutcome::Ready(None);
                 };
                 let class_decl = self
@@ -2166,8 +2130,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return DemandOutcome::Ready(None);
                 }
                 let root_is_namespace_value = self
-                    .binder
-                    .resolve_value(scope, segments[0])
+                    .resolve_value_replay(scope, segments[0])
                     .and_then(|symbol| self.binder.symbols.get(symbol))
                     .and_then(|symbol| symbol.value)
                     .is_some_and(|storage| {
@@ -2179,7 +2142,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return DemandOutcome::Ready(None);
                 }
                 let QualifiedTypePathResolution::TypeGroup(group) =
-                    self.binder.resolve_qualified_type_path(scope, &segments)
+                    self.resolve_qualified_type_path_replay(scope, &segments)
                 else {
                     return DemandOutcome::Ready(None);
                 };
@@ -2197,12 +2160,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             _ => return DemandOutcome::Ready(None),
         };
-        let surface = match self
-            .type_environment
-            .published()
-            .classes()
-            .published_class(class_id)
-        {
+        let surface = match self.published_class_replay(class_id) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
         };
@@ -2235,12 +2193,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if !has_source_overloads {
             return Vec::new();
         }
-        let surface = match self
-            .type_environment
-            .published()
-            .classes()
-            .published_class(info.class_id)
-        {
+        let surface = match self.published_class_replay(info.class_id) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(_) => return Vec::new(),
         };
@@ -2956,7 +2909,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|symbol| symbol.value)
                 {
-                    self.decl_types.set(decl_id, ty);
+                    self.publish_copied_decl_type_replay(decl_id, ty);
                 }
             }
             lowered.push(syntax.with_type(name, ty));
@@ -3127,7 +3080,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .and_then(|symbol_id| self.binder.symbols.get(symbol_id))
                     .and_then(|s| s.value)
                 {
-                    self.decl_types.set(decl_id, parameter.ty);
+                    self.publish_copied_decl_type_replay(decl_id, parameter.ty);
                 }
             }
 
@@ -3176,7 +3129,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 continue;
             };
-            self.decl_types.set(decl_id, lowered.ty);
+            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
         }
         if let (Some(rest), Some(lowered)) = (params.rest.as_ref(), lowered.get(params.items.len()))
         {
@@ -3187,7 +3140,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 return;
             };
-            self.decl_types.set(decl_id, lowered.ty);
+            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
         }
     }
 
@@ -3211,7 +3164,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 continue;
             };
-            self.decl_types.set(decl_id, lowered.ty);
+            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
         }
         if let (Some(rest), Some(Some(lowered))) =
             (params.rest.as_ref(), lowered.get(params.items.len()))
@@ -3223,7 +3176,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             else {
                 return;
             };
-            self.decl_types.set(decl_id, lowered.ty);
+            self.publish_copied_decl_type_replay(decl_id, lowered.ty);
         }
     }
 
@@ -3275,7 +3228,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(name) = direct_identifier_name(expression) else {
             return false;
         };
-        let Some(value) = value_decl_id(self.binder, scope, name) else {
+        let Some(value) = self
+            .resolve_value_replay(scope, name)
+            .and_then(|symbol| self.binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.value)
+        else {
             return false;
         };
         let root = self
@@ -3290,7 +3247,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return false;
         };
         matches!(
-            self.namespace_values.standalone_terminal(namespace),
+            self.standalone_namespace_terminal_replay(namespace),
             Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
                 storage,
                 ..

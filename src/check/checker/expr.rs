@@ -3,7 +3,6 @@
 use super::calls::widen;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
-use super::decls::value_decl_id;
 use super::function_groups::FunctionGroupDemand;
 use super::library_identities::{LibraryComposedMember, LibraryMemberProjection};
 use crate::binder::bind::{ResolvedValueKind, ValueResolution};
@@ -112,10 +111,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if ident.name.as_str() == "undefined" {
                     return Some((well_known.undefined, span));
                 }
-                match self
-                    .binder
-                    .resolve_value_binding(scope, ident.name.as_str())
-                {
+                match self.resolve_value_binding_replay(scope, ident.name.as_str()) {
                     ValueResolution::TypeOnlyNamespace { .. } => {
                         self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
                             span,
@@ -125,7 +121,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     ValueResolution::Resolved {
                         symbol: symbol_id, ..
-                    } => match self.function_groups.demand(symbol_id) {
+                    } => match self.demand_function_group_replay(symbol_id) {
                         FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty) => {
                             Some((ty, span))
                         }
@@ -387,10 +383,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if ident.name.as_str() == "undefined" {
                     return;
                 }
-                match self
-                    .binder
-                    .resolve_value_binding(scope, ident.name.as_str())
-                {
+                match self.resolve_value_binding_replay(scope, ident.name.as_str()) {
                     ValueResolution::Resolved {
                         kind: ResolvedValueKind::StandaloneNamespace { .. },
                         ..
@@ -1492,7 +1485,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::Identifier(identifier) => identifier,
             _ => return None,
         };
-        let value_decl = value_decl_id(self.binder, scope, identifier.name.as_str())?;
+        let value_decl = self.value_decl_id_replay(scope, identifier.name.as_str())?;
         let class_decl = self
             .class_value_aliases
             .get(&value_decl)
@@ -1503,17 +1496,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return None;
         }
         let class_id = binding.class_id;
-        Some(
-            match self
-                .type_environment
-                .published()
-                .classes()
-                .published_class(class_id)
-            {
-                DemandOutcome::Ready(_) => DemandOutcome::Ready(()),
-                DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
-            },
-        )
+        Some(match self.published_class_replay(class_id) {
+            DemandOutcome::Ready(_) => DemandOutcome::Ready(()),
+            DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        })
     }
 
     /// Resolve a member after its object has already been inferred. Calls use this
@@ -1740,13 +1726,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::Identifier(identifier) => identifier,
             _ => return None,
         };
-        let symbol = self.binder.resolve_value(scope, identifier.name.as_str())?;
+        let symbol = self.resolve_value_replay(scope, identifier.name.as_str())?;
         if self.function_groups.contains_symbol(symbol)
             || self.named_function_symbols.contains(&symbol)
         {
             return Some(identifier.name.to_string());
         }
-        let value_decl = value_decl_id(self.binder, scope, identifier.name.as_str())?;
+        let value_decl = self.binder.symbols.get(symbol)?.value?;
         let class_decl = self
             .class_value_aliases
             .get(&value_decl)
@@ -1769,12 +1755,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some(application) = self.interner.store().class_instance_type(base_ty) else {
             return DemandOutcome::Ready(None);
         };
-        let surface = match self
-            .type_environment
-            .published()
-            .classes()
-            .published_class(application.class)
-        {
+        let surface = match self.published_class_replay(application.class) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(exhaustion) => {
                 return DemandOutcome::Exhausted(exhaustion);

@@ -260,7 +260,12 @@ fn measure_publication_children(parent: TypeId, children: &[TypeId]) {
 /// must return poison/pre-publication exhaustion before exposing any template.
 pub(crate) trait PublishedClassLookup {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface>;
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()>;
     fn publication_identity(&self) -> &Arc<()>;
+    fn observe_class_demand(&self, _class: ClassId) {}
+    fn class_demand_observation_enabled(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -311,6 +316,10 @@ impl CompletedRelationOutcome {
 impl PublishedClassLookup for PublishedClasses {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
         PublishedClasses::published_class(self, class)
+    }
+
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
+        self.require(class)
     }
 
     fn publication_identity(&self) -> &Arc<()> {
@@ -384,9 +393,19 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
     }
 
+    fn observe_outer_class(&self, ty: TypeId) {
+        if !self.published.class_demand_observation_enabled() {
+            return;
+        }
+        if let Some(application) = self.interner.store().class_instance_type(ty) {
+            self.published.observe_class_demand(application.class);
+        }
+    }
+
     /// Demand one normalized outer shape. Successful untainted work promotes
     /// projection/evaluator memo entries together; exhaustion promotes nothing.
     pub(crate) fn demand(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+        self.observe_outer_class(root);
         #[cfg(test)]
         measure_query_demand(|measure| measure.root_calls += 1);
         if matches!(
@@ -432,6 +451,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     /// Normalize a class application's arguments without erasing its nominal root.
     /// Call/constructor inference needs the class identity until the relation phase.
     pub(crate) fn normalize_class_application(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+        self.observe_outer_class(root);
         let Some(application) = self.interner.store().class_instance_type(root).cloned() else {
             return self.demand(root);
         };
@@ -454,6 +474,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     /// canonical identities. Interface heritage uses identity rather than
     /// assignability (`1` differs from `number`, and `any` differs from `string`).
     pub(crate) fn is_identical(&mut self, left: TypeId, right: TypeId) -> DemandOutcome<bool> {
+        self.observe_outer_class(left);
+        self.observe_outer_class(right);
         if let Some(reason) = publication_exhaustion(
             self.interner.store(),
             &[left, right],
@@ -1081,6 +1103,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Plan, normalize, and relate one top-level assignability operation.
     pub(crate) fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
+        self.observe_outer_class(src);
+        self.observe_outer_class(tgt);
         if let Some(reason) = publication_exhaustion(
             self.interner.store(),
             &[src, tgt],
@@ -1263,6 +1287,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         overload: TypeId,
         implementation: TypeId,
     ) -> RelationOutcome {
+        self.observe_outer_class(implementation);
+        self.observe_outer_class(overload);
         if let Some(reason) = publication_exhaustion(
             self.interner.store(),
             &[overload, implementation],

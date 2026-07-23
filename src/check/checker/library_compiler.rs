@@ -1,7 +1,7 @@
 //! Measurement-only compiler for injected declaration-library profiles.
 
 use super::classes::application::ClassTypeParameterDefault;
-use super::context::DeclTypes;
+use super::context::{DeclTypes, TypeDecl};
 use super::events_library::{
     library_record_ticket_key, LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError,
     LibraryRecordTicket, LibrarySemanticReportingAdapter,
@@ -17,9 +17,18 @@ use super::library_reporting::LibraryReportingConsumer;
 use super::library_reporting::LibraryReportingFamily;
 #[cfg(test)]
 use super::library_reporting::LibraryReportingReceipt;
-use super::namespace_values::FrozenNamespaceValueTerminalSnapshot;
+use super::library_snapshot_codec::{collect_root_rows, RootNameRow};
 #[cfg(test)]
 use super::namespace_values::NamespaceValueRegistry;
+use super::namespace_values::{
+    FrozenNamespaceValueTerminalSnapshot, FrozenNamespaceValueTerminalSnapshotRow,
+};
+#[cfg(test)]
+use super::replay_index::ReplayReverseEdge;
+use super::replay_index::{
+    baseline_record, CollisionReplayIndex, ReplayDependencyTrace, ReplayIndexGenerationError,
+    ReplayOwner, ReplayOwnerSite, ReplayRootSlot,
+};
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
     PublishedTypeEnvironment, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
@@ -27,24 +36,29 @@ use super::type_groups::{
 };
 use super::{
     build_pass_with_tickets, finish_semantic_effects, reserve_type_decls,
-    FrozenCheckerRuntimeMetadata, PassReporting, PassReportingPlan,
+    FrozenCheckerRuntimeMetadata, FrozenCheckerRuntimeSnapshotParts, PassReporting,
+    PassReportingPlan,
 };
 #[cfg(test)]
 use super::{check_bound_user_program_with_final_identity_inspector, BoundUserBase};
 use crate::binder::bind::ProjectBinderBuilder;
 #[cfg(test)]
 use crate::binder::declaration::TypeFragmentKind;
-use crate::binder::declaration::{TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{
+    source_global_binding_census_with_provenance, SourceBindingSlot, SourceGlobalContributorKind,
+    TypeGroupId, ValueStorageId,
+};
 #[cfg(test)]
 use crate::binder::namespace::MergeDeclarationKind;
 use crate::binder::namespace::{
     exact_key, source_file_kind, CompilationUnit, ExactKey, ExportContextKind,
-    ExportSyntaxDisposition, ModuleBindingContext, SourceFileKind,
+    ExportSyntaxDisposition, ModuleBindingContext, NamespaceId, SourceFileKind,
 };
 use crate::binder::scope::ScopeId;
 #[cfg(test)]
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
+use crate::class_semantics::CanonicalPublishedClassTerminal;
 #[cfg(test)]
 use crate::class_semantics::DemandOutcome;
 use crate::class_semantics::PublishedClassSnapshotTerminal;
@@ -82,6 +96,7 @@ pub(crate) struct OwnedLibraryRuntimeState {
     next_type_param: u32,
     next_class_id: u32,
     source_file_count: u32,
+    replay_index: Option<Box<CollisionReplayIndex>>,
 }
 
 pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
@@ -115,14 +130,23 @@ pub(in crate::check::checker) struct BorrowedLibraryRuntimeSnapshotParts<'runtim
 
 pub(crate) struct CompiledLibraryRuntimeProduct {
     pub(in crate::check::checker) _parts: OwnedLibraryRuntimeSnapshotParts,
+    pub(in crate::check::checker) _replay_index: CollisionReplayIndex,
 }
 
 pub(crate) fn freeze_library_runtime_product(
-    state: OwnedLibraryRuntimeState,
+    mut state: OwnedLibraryRuntimeState,
 ) -> Result<CompiledLibraryRuntimeProduct, &'static str> {
+    let replay_index = state
+        .replay_index
+        .take()
+        .map(|index| *index)
+        .ok_or("source library compiler did not produce a replay index")?;
     state
         .into_snapshot_parts()
-        .map(|parts| CompiledLibraryRuntimeProduct { _parts: parts })
+        .map(|parts| CompiledLibraryRuntimeProduct {
+            _parts: parts,
+            _replay_index: replay_index,
+        })
 }
 
 fn validate_library_source_prefix(
@@ -564,6 +588,7 @@ impl OwnedLibraryRuntimeState {
             next_type_param,
             next_class_id,
             source_file_count: _,
+            replay_index: _,
         } = self;
         (
             interner,
@@ -612,6 +637,7 @@ impl OwnedLibraryRuntimeState {
             next_type_param: self.next_type_param,
             next_class_id: self.next_class_id,
             source_file_count: self.source_file_count,
+            replay_index: None,
         })
     }
 
@@ -940,6 +966,7 @@ impl OwnedLibraryRuntimeState {
             next_type_param: parts.next_type_param,
             next_class_id: parts.next_class_id,
             source_file_count: parts.source_file_count,
+            replay_index: None,
         })
     }
 }
@@ -1593,6 +1620,7 @@ pub(crate) enum InjectedProfileError {
     Binder(String),
     Reservation(String),
     Reporting(LibraryEventLedgerError),
+    ReplayIndex(ReplayIndexGenerationError),
     CanonicalProjection(String),
 }
 
@@ -2125,6 +2153,641 @@ fn canonical_library_evidence(
     })
 }
 
+struct ReplayTerminalValidationInputs<'a> {
+    binder: &'a Binder,
+    published: &'a PublishedTypeEnvironment,
+    decl_types: &'a DeclTypes,
+    namespace_terminals: &'a [FrozenNamespaceValueTerminalSnapshotRow],
+    runtime: &'a FrozenCheckerRuntimeSnapshotParts,
+    semantic_identities: Option<&'a LibrarySemanticIdentities>,
+}
+
+fn validate_terminal_class_dependencies(
+    trace: &ReplayDependencyTrace,
+    interner: &Interner,
+    inputs: ReplayTerminalValidationInputs<'_>,
+) -> Result<(), InjectedProfileError> {
+    let ReplayTerminalValidationInputs {
+        binder,
+        published,
+        decl_types,
+        namespace_terminals,
+        runtime,
+        semantic_identities,
+    } = inputs;
+    const TYPE_DOMAIN: u8 = 1;
+    const CLASS_DOMAIN: u8 = 3;
+
+    let references = interner
+        .typed_reference_records_for_replay_generation()
+        .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?;
+    let mut type_edges: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    let mut class_edges: BTreeMap<u32, Vec<ClassId>> = BTreeMap::new();
+    for (owner_domain, target_domain, _, owner, target) in references {
+        if owner_domain != TYPE_DOMAIN {
+            continue;
+        }
+        match target_domain {
+            TYPE_DOMAIN => type_edges.entry(owner).or_default().push(target),
+            CLASS_DOMAIN => class_edges.entry(owner).or_default().push(ClassId(target)),
+            _ => {}
+        }
+    }
+
+    let mut direct = BTreeMap::<ReplayOwner, Vec<TypeId>>::new();
+    for index in 0..published.groups().len() {
+        let group =
+            TypeGroupId(u32::try_from(index).map_err(|_| InjectedProfileError::SourceKeyOverflow)?);
+        let Some(PublishedTypeGroupTerminal::Ready(ready)) = published.groups().get(group) else {
+            continue;
+        };
+        let owner = ReplayOwner::TypeGroup(group);
+        match ready.surface {
+            PublishedTypeGroupSurface::Template(ty) => direct.entry(owner).or_default().push(ty),
+            PublishedTypeGroupSurface::Class(class) => {
+                trace.require_dependency(owner, ReplayOwner::Class(class));
+            }
+        }
+        direct
+            .entry(owner)
+            .or_default()
+            .extend(
+                ready
+                    .parameter_defaults
+                    .iter()
+                    .filter_map(|default| match default {
+                        PublishedTypeParameterDefault::Ready(ty) => Some(*ty),
+                        PublishedTypeParameterDefault::Absent
+                        | PublishedTypeParameterDefault::Unsupported => None,
+                    }),
+            );
+        direct.entry(owner).or_default().extend(
+            ready
+                .conflict_alternatives
+                .iter()
+                .flat_map(|alternative| alternative.types.iter().copied()),
+        );
+    }
+    for (index, ty) in decl_types.snapshot_slots().into_iter().enumerate() {
+        let Some(ty) = ty else { continue };
+        let storage = ValueStorageId(
+            u32::try_from(index).map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+        );
+        direct
+            .entry(ReplayOwner::Value(storage))
+            .or_default()
+            .push(ty);
+    }
+    for row in namespace_terminals {
+        let FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } = row.terminal else {
+            continue;
+        };
+        let owner = ReplayOwner::Namespace(row.namespace);
+        trace.require_dependency(owner, ReplayOwner::Value(storage));
+        direct.entry(owner).or_default().push(ty);
+    }
+    let terminals = published.classes().canonical_terminals().ok_or_else(|| {
+        InjectedProfileError::CanonicalProjection(
+            "replay generation saw a non-terminal class registry".to_owned(),
+        )
+    })?;
+    for (class, terminal) in &terminals {
+        let CanonicalPublishedClassTerminal::Ready(surface) = terminal else {
+            continue;
+        };
+        let types = direct.entry(ReplayOwner::Class(*class)).or_default();
+        types.push(surface.instance_template());
+        types.push(surface.static_template());
+        types.extend(surface.constructor_template());
+    }
+
+    for (class, parameters) in &runtime.class_application_parameters {
+        let types = direct.entry(ReplayOwner::Class(*class)).or_default();
+        for parameter in parameters {
+            types.extend(parameter.constraint);
+            if let ClassTypeParameterDefault::Ready(default) = parameter.default {
+                types.push(default);
+            }
+        }
+    }
+    for (class, metadata) in &runtime.class_new_metadata {
+        trace.require_dependency(
+            ReplayOwner::Class(*class),
+            ReplayOwner::Class(metadata.ctor_declaring_class),
+        );
+    }
+    for (class, parent) in &runtime.class_parents {
+        trace.require_dependency(ReplayOwner::Class(*class), ReplayOwner::Class(*parent));
+    }
+    for (alias, target) in &runtime.class_value_aliases {
+        trace.require_dependency(ReplayOwner::Value(*alias), ReplayOwner::Value(*target));
+    }
+    for (storage, binding) in &runtime.class_value_bindings {
+        trace.require_dependency(
+            ReplayOwner::Value(*storage),
+            ReplayOwner::Class(binding.class_id),
+        );
+    }
+    for (alias, target) in &runtime.standalone_namespace_value_aliases {
+        trace.require_dependency(ReplayOwner::Value(*alias), ReplayOwner::Value(*target));
+    }
+    let class_ids = terminals
+        .iter()
+        .map(|(class, _)| *class)
+        .collect::<BTreeSet<_>>();
+    if runtime
+        .class_names
+        .iter()
+        .any(|(class, _)| !class_ids.contains(class))
+    {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "replay runtime class name has no published class owner".to_owned(),
+        ));
+    }
+    for symbol in &runtime.named_function_symbols {
+        let binding = binder.symbols.get(*symbol).ok_or_else(|| {
+            InjectedProfileError::CanonicalProjection(
+                "replay runtime named function symbol is missing".to_owned(),
+            )
+        })?;
+        let Some(canonical) = binding.function_values.first().copied() else {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "replay runtime named function has no value owner".to_owned(),
+            ));
+        };
+        for participant in &binding.function_values {
+            trace.require_dependency(
+                ReplayOwner::Value(canonical),
+                ReplayOwner::Value(*participant),
+            );
+        }
+    }
+    if let Some(identities) = semantic_identities {
+        let recomputed = LibrarySemanticIdentities::select(binder, published, interner.store());
+        if &recomputed != identities {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "replay semantic identities differ from exact recomputation".to_owned(),
+            ));
+        }
+        for terminal in identities.terminals() {
+            let LibraryIdentityTerminal::Ready(identity) = terminal else {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    "replay semantic identity is unavailable".to_owned(),
+                ));
+            };
+            direct
+                .entry(ReplayOwner::TypeGroup(identity.group))
+                .or_default()
+                .push(identity.template);
+        }
+    }
+
+    for (owner, roots) in direct {
+        let mut pending = roots.into_iter().map(|ty| ty.0).collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+        while let Some(ty) = pending.pop() {
+            if !visited.insert(ty) {
+                continue;
+            }
+            if let Some(classes) = class_edges.get(&ty) {
+                for class in classes {
+                    trace.require_dependency(owner, ReplayOwner::Class(*class));
+                }
+            }
+            if let Some(targets) = type_edges.get(&ty) {
+                pending.extend(targets.iter().copied());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_root_census(
+    candidates: &BTreeMap<String, crate::binder::declaration::SourceGlobalBindingCandidate>,
+    rows: &[RootNameRow],
+    explicit_global_this: bool,
+) -> Result<(), ReplayIndexGenerationError> {
+    let mut by_name = BTreeMap::new();
+    for row in rows {
+        if by_name.insert(row.name.as_str(), row).is_some() {
+            return Err(ReplayIndexGenerationError::DuplicateRootName(
+                row.name.clone(),
+            ));
+        }
+    }
+    for (name, candidate) in candidates {
+        let Some(row) = by_name.get(name.as_str()).copied() else {
+            return Err(ReplayIndexGenerationError::InvalidRootSlot(name.clone()));
+        };
+        for (slot, present) in [
+            (SourceBindingSlot::Value, row.value.is_some()),
+            (SourceBindingSlot::Type, row.ty.is_some()),
+            (SourceBindingSlot::Namespace, row.namespace.is_some()),
+        ] {
+            if candidate.slots.contains(&slot) != present {
+                return Err(ReplayIndexGenerationError::InvalidRootSlot(name.clone()));
+            }
+        }
+    }
+    for row in rows {
+        if !candidates.contains_key(&row.name) {
+            return Err(ReplayIndexGenerationError::InvalidRootSlot(
+                row.name.clone(),
+            ));
+        }
+    }
+    if explicit_global_this && !by_name.contains_key("globalThis") {
+        return Err(ReplayIndexGenerationError::InvalidRootSlot(
+            "globalThis".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+struct NormalizedSourceRootCandidates {
+    candidates: BTreeMap<String, crate::binder::declaration::SourceGlobalBindingCandidate>,
+    namespace_contributors: BTreeSet<String>,
+}
+
+fn apply_merge_root_semantics(
+    candidate: &mut crate::binder::declaration::SourceGlobalBindingCandidate,
+    slots: BTreeSet<SourceBindingSlot>,
+    ordinary_contributor: bool,
+    namespace_instantiated: bool,
+) {
+    candidate.slots = slots;
+    if namespace_instantiated {
+        candidate.slots.insert(SourceBindingSlot::Value);
+    }
+    candidate.global_object_contributor = ordinary_contributor || namespace_instantiated;
+}
+
+fn normalize_source_root_candidates(
+    mut candidates: BTreeMap<String, crate::binder::declaration::SourceGlobalBindingCandidate>,
+    binder: &Binder,
+) -> NormalizedSourceRootCandidates {
+    let mut namespace_contributors = BTreeSet::new();
+    for record in binder.namespaces.merges().filter(|record| {
+        record.owner == crate::binder::namespace::DeclarationOwner::CompilationGlobal
+    }) {
+        if record.classification.disposition != crate::binder::namespace::MergeDisposition::Admitted
+        {
+            candidates.remove(&record.name);
+            continue;
+        }
+        let Some(candidate) = candidates.get_mut(&record.name) else {
+            continue;
+        };
+        let mut slots = BTreeSet::new();
+        let mut ordinary_contributor = false;
+        for declaration in &record.declarations {
+            if declaration.spaces.value {
+                slots.insert(SourceBindingSlot::Value);
+            }
+            if declaration.spaces.r#type {
+                slots.insert(SourceBindingSlot::Type);
+            }
+            if declaration.spaces.namespace {
+                slots.insert(SourceBindingSlot::Namespace);
+            }
+            ordinary_contributor |= declaration.kind
+                == crate::binder::namespace::MergeDeclarationKind::Function
+                || matches!(
+                    declaration.syntax,
+                    crate::binder::namespace::DeclarationSyntaxFacts::Variable(
+                        crate::binder::namespace::VariableKind::Var
+                    )
+                );
+        }
+        let namespace = record
+            .declarations
+            .iter()
+            .find_map(|declaration| declaration.namespace_fragment)
+            .and_then(|fragment| binder.namespaces.fragment(fragment))
+            .map(|fragment| fragment.namespace);
+        let namespace_instantiated = namespace.is_some_and(|namespace| {
+            binder.namespaces.aggregate_instance_state(namespace)
+                == Some(crate::binder::namespace::NamespaceInstanceState::Instantiated)
+        });
+        apply_merge_root_semantics(
+            candidate,
+            slots,
+            ordinary_contributor,
+            namespace_instantiated,
+        );
+        if namespace_instantiated {
+            namespace_contributors.insert(record.name.clone());
+        }
+    }
+    NormalizedSourceRootCandidates {
+        candidates,
+        namespace_contributors,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_collision_replay_index(
+    trace: ReplayDependencyTrace,
+    interner: &Interner,
+    binder: &Binder,
+    published: &PublishedTypeEnvironment,
+    decl_types: &DeclTypes,
+    namespace_terminals: &[FrozenNamespaceValueTerminalSnapshotRow],
+    runtime: &FrozenCheckerRuntimeSnapshotParts,
+    semantic_identities: Option<&LibrarySemanticIdentities>,
+    canonical: &[CanonicalInput<'_>],
+    parsed: &[oxc_parser::ParserReturn<'_>],
+    module_scopes: &[ScopeId],
+    class_declarations: &BTreeMap<ClassId, crate::binder::declaration::DeclId>,
+    statement_keys: Vec<LibraryEventKey>,
+    records: &[(LibraryEventKey, CheckerRecord)],
+) -> Result<CollisionReplayIndex, InjectedProfileError> {
+    fn add_owner_site(
+        module_ordinals: &rustc_hash::FxHashMap<ScopeId, LibraryFileOrdinal>,
+        sites: &mut BTreeSet<(ReplayOwner, LibraryFileOrdinal, u32, u32)>,
+        invalid_sites: &mut u64,
+        owner: ReplayOwner,
+        module: ScopeId,
+        span: Span,
+    ) {
+        if let Some(file_ordinal) = module_ordinals.get(&module).copied() {
+            sites.insert((owner, file_ordinal, span.start, span.end));
+        } else {
+            *invalid_sites = invalid_sites.saturating_add(1);
+        }
+    }
+
+    let module_ordinals = module_scopes
+        .iter()
+        .copied()
+        .zip(canonical.iter().map(|input| input.file_ordinal))
+        .collect::<rustc_hash::FxHashMap<_, _>>();
+    let mut owners = Vec::new();
+    owners.extend((0..binder.type_groups.len()).map(|index| {
+        ReplayOwner::TypeGroup(TypeGroupId(
+            u32::try_from(index).expect("type-group count fits u32"),
+        ))
+    }));
+    owners.extend(
+        (0..usize::try_from(binder.decl_count).unwrap_or(usize::MAX)).map(|index| {
+            ReplayOwner::Value(ValueStorageId(
+                u32::try_from(index).expect("value-storage count fits u32"),
+            ))
+        }),
+    );
+    owners.extend((0..binder.namespaces.len()).map(|index| {
+        ReplayOwner::Namespace(NamespaceId(
+            u32::try_from(index).expect("namespace count fits u32"),
+        ))
+    }));
+    let class_terminals = published.classes().canonical_terminals().ok_or_else(|| {
+        InjectedProfileError::CanonicalProjection(
+            "replay generation saw a non-terminal class registry".to_owned(),
+        )
+    })?;
+    owners.extend(
+        class_terminals
+            .iter()
+            .map(|(class, _)| ReplayOwner::Class(*class)),
+    );
+    owners.push(ReplayOwner::GlobalObject);
+    owners.extend(statement_keys.iter().copied().map(ReplayOwner::Statement));
+
+    let mut invalid_sites = 0u64;
+    let mut sites = BTreeSet::new();
+    for index in 0..binder.type_groups.len() {
+        let group = TypeGroupId(u32::try_from(index).expect("type-group count fits u32"));
+        if let Some(row) = binder.type_groups.get(group) {
+            for fragment in &row.fragments {
+                add_owner_site(
+                    &module_ordinals,
+                    &mut sites,
+                    &mut invalid_sites,
+                    ReplayOwner::TypeGroup(group),
+                    fragment.site.module,
+                    fragment.site.declaration_span,
+                );
+            }
+        }
+    }
+    for declaration in binder.declarations.iter() {
+        if let Some(storage) = declaration.value_storage {
+            add_owner_site(
+                &module_ordinals,
+                &mut sites,
+                &mut invalid_sites,
+                ReplayOwner::Value(storage),
+                declaration.site.module,
+                declaration.site.declaration_span,
+            );
+        }
+    }
+    for index in 0..binder.namespaces.len() {
+        let namespace = NamespaceId(u32::try_from(index).expect("namespace count fits u32"));
+        let Some(row) = binder.namespaces.get(namespace) else {
+            continue;
+        };
+        for fragment_id in &row.fragments {
+            let Some(fragment) = binder.namespaces.fragment(*fragment_id) else {
+                invalid_sites = invalid_sites.saturating_add(1);
+                continue;
+            };
+            let Some(declaration) = binder.declarations.get(fragment.declaration) else {
+                invalid_sites = invalid_sites.saturating_add(1);
+                continue;
+            };
+            add_owner_site(
+                &module_ordinals,
+                &mut sites,
+                &mut invalid_sites,
+                ReplayOwner::Namespace(namespace),
+                declaration.site.module,
+                declaration.site.declaration_span,
+            );
+            if let Some(storage) = binder.namespaces.standalone_value_storage(namespace) {
+                add_owner_site(
+                    &module_ordinals,
+                    &mut sites,
+                    &mut invalid_sites,
+                    ReplayOwner::Value(storage),
+                    declaration.site.module,
+                    declaration.site.declaration_span,
+                );
+            }
+        }
+    }
+    for (class, declaration) in class_declarations {
+        if let Some(declaration) = binder.declarations.get(*declaration) {
+            add_owner_site(
+                &module_ordinals,
+                &mut sites,
+                &mut invalid_sites,
+                ReplayOwner::Class(*class),
+                declaration.site.module,
+                declaration.site.declaration_span,
+            );
+        } else {
+            invalid_sites = invalid_sites.saturating_add(1);
+        }
+    }
+
+    let mut candidates = BTreeMap::new();
+    let mut explicit_global_this = false;
+    let mut contributor_sites = Vec::new();
+    let mut explicit_global_this_sites = Vec::new();
+    for ((input, parsed), module) in canonical.iter().zip(parsed).zip(module_scopes) {
+        let provenance = source_global_binding_census_with_provenance(
+            &parsed.program,
+            ModuleBindingContext::for_program(&parsed.program, input.kind),
+        );
+        explicit_global_this |= provenance.census.explicit_global_this;
+        contributor_sites.extend(
+            provenance
+                .contributor_sites
+                .into_iter()
+                .map(|site| (site.name, site.kind, input.file_ordinal, site.span)),
+        );
+        explicit_global_this_sites.extend(
+            provenance
+                .explicit_global_this_sites
+                .into_iter()
+                .map(|span| (input.file_ordinal, span)),
+        );
+        for (name, candidate) in provenance.census.candidates {
+            let aggregate = candidates
+                .entry(name)
+                .or_insert_with(crate::binder::declaration::SourceGlobalBindingCandidate::default);
+            aggregate.slots.extend(candidate.slots);
+            aggregate.global_object_contributor |= candidate.global_object_contributor;
+        }
+        let _ = module;
+    }
+    if let Some(input) = canonical.first() {
+        sites.insert((ReplayOwner::GlobalObject, input.file_ordinal, 0, 0));
+    }
+    for key in &statement_keys {
+        sites.insert((
+            ReplayOwner::Statement(*key),
+            key.file_ordinal,
+            key.source_start,
+            key.source_start,
+        ));
+    }
+
+    let root_rows = collect_root_rows(binder)
+        .map_err(|error| InjectedProfileError::CanonicalProjection(format!("{error:?}")))?;
+    let normalized = normalize_source_root_candidates(candidates, binder);
+    let candidates = normalized.candidates;
+    for (name, kind, file_ordinal, span) in contributor_sites {
+        let admitted = match kind {
+            SourceGlobalContributorKind::Ordinary => candidates.contains_key(&name),
+            SourceGlobalContributorKind::Namespace => {
+                normalized.namespace_contributors.contains(&name)
+            }
+        };
+        if admitted {
+            sites.insert((
+                ReplayOwner::GlobalObject,
+                file_ordinal,
+                span.start,
+                span.end,
+            ));
+        }
+    }
+    for (file_ordinal, span) in explicit_global_this_sites {
+        sites.insert((
+            ReplayOwner::GlobalObject,
+            file_ordinal,
+            span.start,
+            span.end,
+        ));
+    }
+    validate_root_census(&candidates, &root_rows, explicit_global_this)
+        .map_err(InjectedProfileError::ReplayIndex)?;
+    let mut roots = Vec::with_capacity(root_rows.len());
+    {
+        let _global_scope = trace.scope(ReplayOwner::GlobalObject);
+        for row in root_rows {
+            let candidate = candidates
+                .get(&row.name)
+                .expect("validated root rows have exact source provenance");
+            let contributor = candidate.global_object_contributor;
+            if contributor {
+                if let Some(value) = row.value {
+                    trace.demand(ReplayOwner::Value(value));
+                }
+                if let Some(ty) = row.ty {
+                    trace.demand(ReplayOwner::TypeGroup(ty));
+                }
+                if let Some(namespace) = row.namespace {
+                    trace.demand(ReplayOwner::Namespace(namespace));
+                }
+            }
+            roots.push(ReplayRootSlot {
+                explicit_global_this: explicit_global_this && row.name == "globalThis",
+                name: row.name,
+                value: row.value,
+                ty: row.ty,
+                namespace: row.namespace,
+                global_object_contributor: contributor,
+            });
+        }
+    }
+
+    let mut record_bytes = BTreeMap::<LibraryEventKey, Vec<Vec<u8>>>::new();
+    for (key, record) in records {
+        let input = canonical_input_for_record(canonical, key.file_ordinal)?;
+        record_bytes
+            .entry(*key)
+            .or_default()
+            .push(canonical_record_bytes(canonical[input].source, record)?);
+    }
+    let baselines = owners
+        .iter()
+        .copied()
+        .map(|owner| {
+            let records = match owner {
+                ReplayOwner::Statement(key) => {
+                    record_bytes.get(&key).map_or(&[][..], Vec::as_slice)
+                }
+                _ => &[],
+            };
+            baseline_record(owner, records).map_err(InjectedProfileError::ReplayIndex)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    validate_terminal_class_dependencies(
+        &trace,
+        interner,
+        ReplayTerminalValidationInputs {
+            binder,
+            published,
+            decl_types,
+            namespace_terminals,
+            runtime,
+            semantic_identities,
+        },
+    )?;
+    let owner_sites = sites
+        .into_iter()
+        .map(|(owner, file_ordinal, start, end)| ReplayOwnerSite {
+            owner,
+            file_ordinal,
+            span: Span::new(start, end),
+        })
+        .collect();
+    trace
+        .finish(
+            owners,
+            roots,
+            owner_sites,
+            statement_keys,
+            baselines,
+            invalid_sites,
+        )
+        .map_err(InjectedProfileError::ReplayIndex)
+}
+
 #[cfg(test)]
 pub(crate) fn run_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
@@ -2302,6 +2965,19 @@ pub(crate) fn compile_owned_injected_profile(
         .reserve_callable_type_params(&mut next_type_param)
         .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
 
+    let replay_class_declarations = lexical_events
+        .classes()
+        .iter()
+        .filter_map(|reservation| {
+            let binding = reservation.binding.as_ref()?;
+            let TypeDecl::Class { declaration, .. } = type_decls.get(binding.type_decl.index())?
+            else {
+                return None;
+            };
+            Some((binding.class_id, *declaration))
+        })
+        .collect::<BTreeMap<_, _>>();
+
     let pending_tickets = lexical_events.library_semantic_tickets();
     let mut pass = build_pass_with_tickets(
         &mut interner,
@@ -2320,6 +2996,7 @@ pub(crate) fn compile_owned_injected_profile(
             ticket_key: library_record_ticket_key,
         },
     );
+    pass.replay_trace = Some(ReplayDependencyTrace::new(ledger.replay_ticket_owners()));
 
     let declaration_count = pass.type_decls.len();
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
@@ -2397,6 +3074,10 @@ pub(crate) fn compile_owned_injected_profile(
     #[cfg(not(test))]
     let _ = &reporting_receipts;
     let snapshot = ledger.snapshot();
+    let statement_keys = ledger
+        .replay_ticket_owners()
+        .into_values()
+        .collect::<Vec<_>>();
     let library_records = ledger.finish().map_err(InjectedProfileError::Reporting)?;
     let evidence = canonical_library_evidence(&canonical, &library_records)?;
     #[cfg(test)]
@@ -2406,6 +3087,14 @@ pub(crate) fn compile_owned_injected_profile(
         .namespace_values
         .try_freeze_terminals()
         .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
+    let namespace_terminal_rows = namespace_terminals
+        .snapshot_parts()
+        .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
+    let replay_trace = pass.replay_trace.take().ok_or_else(|| {
+        InjectedProfileError::CanonicalProjection(
+            "source library compilation lost its replay trace".to_owned(),
+        )
+    })?;
     let super::context::Pass {
         type_environment,
         decl_types,
@@ -2427,29 +3116,51 @@ pub(crate) fn compile_owned_injected_profile(
         ));
     };
     let named_function_symbols = function_groups.frozen_symbols();
+    let runtime = FrozenCheckerRuntimeMetadata {
+        class_application_parameters,
+        class_new_metadata,
+        class_parents,
+        class_value_aliases,
+        class_value_bindings,
+        standalone_namespace_value_aliases,
+        class_names,
+        namespace_terminals,
+        named_function_symbols: named_function_symbols.into(),
+    };
+    let runtime_parts = runtime
+        .snapshot_parts()
+        .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
+    let selected_semantic_identities = semantic_identities
+        .all_ready()
+        .then_some(semantic_identities.clone());
+    let replay_index = build_collision_replay_index(
+        replay_trace,
+        &interner,
+        &binder,
+        &published_types,
+        &decl_types,
+        &namespace_terminal_rows,
+        &runtime_parts,
+        selected_semantic_identities.as_ref(),
+        &canonical,
+        &parsed,
+        &module_scopes,
+        &replay_class_declarations,
+        statement_keys,
+        &library_records,
+    )?;
     let runtime_state = OwnedLibraryRuntimeState {
         interner,
         binder,
         published_types,
         decl_types,
-        semantic_identities: semantic_identities
-            .all_ready()
-            .then_some(semantic_identities.clone()),
-        runtime: FrozenCheckerRuntimeMetadata {
-            class_application_parameters,
-            class_new_metadata,
-            class_parents,
-            class_value_aliases,
-            class_value_bindings,
-            standalone_namespace_value_aliases,
-            class_names,
-            namespace_terminals,
-            named_function_symbols: named_function_symbols.into(),
-        },
+        semantic_identities: selected_semantic_identities,
+        runtime,
         next_type_param,
         next_class_id,
         source_file_count: u32::try_from(canonical.len())
             .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+        replay_index: Some(Box::new(replay_index)),
     };
 
     let run = InjectedProfileRun {
@@ -2647,6 +3358,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         next_type_param,
         next_class_id,
         source_file_count: _,
+        replay_index: _,
     } = state;
     let base_store_len = interner.store().len();
     let base_store_digest = verify_store_prefix
@@ -3667,6 +4379,224 @@ mod tests {
     }
 
     #[test]
+    fn replay_index_covers_class_references_in_interface_parameter_defaults() {
+        let state = compile_reservation_fixture(
+            "replay-interface-class-default.d.ts",
+            r#"
+                declare class DefaultClass {}
+                interface Box<T = DefaultClass> { value: T; }
+            "#,
+        );
+        let replay = state
+            .replay_index
+            .as_deref()
+            .expect("source compiler retains its replay index");
+
+        assert_eq!(replay.unowned_demand_count, 0);
+        assert_eq!(replay.invalid_owner_site_count, 0);
+        assert_eq!(replay.noncanonical_edge_count, 0);
+        assert_eq!(replay.typed_reference_coverage_misses, 0);
+    }
+
+    #[test]
+    fn replay_index_covers_class_references_copied_across_overload_rows() {
+        let state = compile_reservation_fixture(
+            "replay-overload-class-provenance.d.ts",
+            r#"
+                declare class DefaultClass {}
+                declare function consume(value: DefaultClass): void;
+                declare function consume(value: string): void;
+            "#,
+        );
+        let replay = state
+            .replay_index
+            .as_deref()
+            .expect("source compiler retains its replay index");
+
+        assert_eq!(replay.unowned_demand_count, 0);
+        assert_eq!(replay.invalid_owner_site_count, 0);
+        assert_eq!(replay.noncanonical_edge_count, 0);
+        assert_eq!(replay.typed_reference_coverage_misses, 0);
+    }
+
+    #[test]
+    fn replay_index_records_empty_and_constructor_only_parent_edges() {
+        let state = compile_reservation_fixture(
+            "replay-class-parent-edges.d.ts",
+            r#"
+                declare class EmptyBase {}
+                declare class EmptyChild extends EmptyBase {}
+                declare class ConstructorBase { constructor(value: string); }
+                declare class ConstructorChild extends ConstructorBase {
+                    constructor(value: string);
+                }
+            "#,
+        );
+        let class = |name: &str| {
+            let group = state
+                .binder
+                .type_groups
+                .iter()
+                .find(|group| group.name == name)
+                .unwrap_or_else(|| panic!("missing class group {name}"));
+            match state.published_types.groups().get(group.id) {
+                Some(PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                    surface: PublishedTypeGroupSurface::Class(class),
+                    ..
+                })) => *class,
+                terminal => panic!("{name} did not publish a class: {terminal:?}"),
+            }
+        };
+        let replay = state
+            .replay_index
+            .as_deref()
+            .expect("source compiler retains its replay index");
+
+        for (parent, child) in [
+            (class("EmptyBase"), class("EmptyChild")),
+            (class("ConstructorBase"), class("ConstructorChild")),
+        ] {
+            assert!(replay.reverse_edges.contains(&ReplayReverseEdge {
+                dependency: ReplayOwner::Class(parent),
+                consumer: ReplayOwner::Class(child),
+            }));
+        }
+    }
+
+    fn root_candidate(
+        slots: impl IntoIterator<Item = SourceBindingSlot>,
+    ) -> crate::binder::declaration::SourceGlobalBindingCandidate {
+        crate::binder::declaration::SourceGlobalBindingCandidate {
+            slots: slots.into_iter().collect(),
+            global_object_contributor: false,
+        }
+    }
+
+    #[test]
+    fn replay_root_census_rejects_a_missing_binder_root() {
+        let candidates = BTreeMap::from([(
+            "PresentOnlyInSource".to_owned(),
+            root_candidate([SourceBindingSlot::Value]),
+        )]);
+        let error = validate_root_census(&candidates, &[], false).unwrap_err();
+        assert_eq!(
+            error,
+            ReplayIndexGenerationError::InvalidRootSlot("PresentOnlyInSource".to_owned())
+        );
+    }
+
+    #[test]
+    fn replay_root_census_rejects_an_inexact_slot_set() {
+        let candidates = BTreeMap::from([(
+            "Merged".to_owned(),
+            root_candidate([SourceBindingSlot::Value, SourceBindingSlot::Type]),
+        )]);
+        let rows = [RootNameRow {
+            name: "Merged".to_owned(),
+            symbol: None,
+            value: Some(ValueStorageId(0)),
+            ty: None,
+            namespace: None,
+        }];
+        let error = validate_root_census(&candidates, &rows, false).unwrap_err();
+        assert_eq!(
+            error,
+            ReplayIndexGenerationError::InvalidRootSlot("Merged".to_owned())
+        );
+    }
+
+    #[test]
+    fn replay_root_census_requires_explicit_global_this_to_publish() {
+        let error = validate_root_census(&BTreeMap::new(), &[], true).unwrap_err();
+        assert_eq!(
+            error,
+            ReplayIndexGenerationError::InvalidRootSlot("globalThis".to_owned())
+        );
+    }
+
+    #[test]
+    fn instantiated_namespace_expectation_does_not_depend_on_storage_or_root_row() {
+        let mut candidate = root_candidate([SourceBindingSlot::Namespace]);
+        apply_merge_root_semantics(
+            &mut candidate,
+            BTreeSet::from([SourceBindingSlot::Namespace]),
+            false,
+            true,
+        );
+        assert_eq!(
+            candidate.slots,
+            BTreeSet::from([SourceBindingSlot::Value, SourceBindingSlot::Namespace])
+        );
+        assert!(candidate.global_object_contributor);
+
+        let candidates = BTreeMap::from([("RuntimeNamespace".to_owned(), candidate)]);
+        let rows = [RootNameRow {
+            name: "RuntimeNamespace".to_owned(),
+            symbol: Some(SymbolId(0)),
+            value: None,
+            ty: None,
+            namespace: Some(NamespaceId(0)),
+        }];
+        assert_eq!(
+            validate_root_census(&candidates, &rows, false).unwrap_err(),
+            ReplayIndexGenerationError::InvalidRootSlot("RuntimeNamespace".to_owned())
+        );
+    }
+
+    #[test]
+    fn replay_root_normalization_covers_pure_and_mixed_namespace_semantics() {
+        let source = r#"
+            declare namespace PureType { interface Member {} }
+            declare namespace PureRuntime { const value: number; }
+            interface InterfaceMerge {}
+            declare namespace InterfaceMerge { interface Member {} }
+            declare class ClassMerge {}
+            declare namespace ClassMerge { interface Member {} }
+            declare function FunctionMerge(): void;
+            declare namespace FunctionMerge { interface Member {} }
+        "#;
+        let state = compile_reservation_fixture("root-normalization.d.ts", source);
+        let replay = state
+            .replay_index
+            .as_deref()
+            .expect("source compiler retains its replay index");
+        let root = |name: &str| {
+            replay
+                .root_slots
+                .iter()
+                .find(|root| root.name == name)
+                .unwrap_or_else(|| panic!("missing replay root {name}"))
+        };
+        let slots = |name: &str| {
+            let root = root(name);
+            (
+                root.value.is_some(),
+                root.ty.is_some(),
+                root.namespace.is_some(),
+                root.global_object_contributor,
+            )
+        };
+        assert_eq!(slots("PureType"), (false, false, true, false));
+        assert_eq!(slots("PureRuntime"), (true, false, true, true));
+        assert_eq!(slots("InterfaceMerge"), (false, true, true, false));
+        assert_eq!(slots("ClassMerge"), (true, true, true, false));
+        assert_eq!(slots("FunctionMerge"), (true, false, true, true));
+
+        let binding_span = |name: &str| {
+            let start = u32::try_from(source.find(name).expect("fixture binding")).unwrap();
+            Span::new(start, start + u32::try_from(name.len()).unwrap())
+        };
+        let has_global_site = |span: Span| {
+            replay
+                .owner_sites
+                .iter()
+                .any(|site| site.owner == ReplayOwner::GlobalObject && site.span == span)
+        };
+        assert!(!has_global_site(binding_span("PureType")));
+        assert!(has_global_site(binding_span("PureRuntime")));
+    }
+
+    #[test]
     fn object_alias_identity_ignores_member_source_order() {
         let state = compile_reservation_fixture(
             "object-alias-member-order.d.ts",
@@ -3787,6 +4717,64 @@ mod tests {
             .interner
             .encode_snapshot_bytes_for_test()
             .expect("full profile must close every reserved type before snapshot");
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full-profile replay-index generation is release-only"
+    )]
+    fn exact_profile_replay_index_is_complete_and_deterministic() {
+        let profile = load_strict_profile().expect("strict full-library profile");
+        let injected = profile.injected_sources();
+        let started = Instant::now();
+        let (_, first_state) =
+            compile_owned_injected_profile(&injected).expect("first exact replay index generation");
+        let first_elapsed = started.elapsed();
+        let started = Instant::now();
+        let (_, second_state) = compile_owned_injected_profile(&injected)
+            .expect("second exact replay index generation");
+        let second_elapsed = started.elapsed();
+        let first = first_state
+            .replay_index
+            .as_deref()
+            .expect("source compiler retains its replay index");
+        let second = second_state
+            .replay_index
+            .as_deref()
+            .expect("source compiler retains its replay index");
+        assert_eq!(
+            first.canonical_manifest_bytes,
+            second.canonical_manifest_bytes
+        );
+        assert_eq!(
+            first.canonical_manifest_sha256,
+            second.canonical_manifest_sha256
+        );
+        assert_eq!(first.unowned_demand_count, 0);
+        assert_eq!(first.invalid_owner_site_count, 0);
+        assert_eq!(first.noncanonical_edge_count, 0);
+        assert_eq!(first.typed_reference_coverage_misses, 0);
+        let digest = first
+            .canonical_manifest_sha256
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        eprintln!(
+            "replay-index owners={} roots={} sites={} edges={} root_edges={} sccs={} statements={} baselines={} bytes={} sha256={} first={:?} second={:?}",
+            first.owner_partition.len(),
+            first.root_slots.len(),
+            first.owner_sites.len(),
+            first.reverse_edges.len(),
+            first.root_slot_consumers.len(),
+            first.scc_membership.len(),
+            first.statement_owners.len(),
+            first.baseline_records.len(),
+            first.canonical_manifest_bytes.len(),
+            digest,
+            first_elapsed,
+            second_elapsed,
+        );
     }
 
     #[test]

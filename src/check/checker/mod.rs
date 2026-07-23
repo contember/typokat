@@ -59,6 +59,7 @@ pub(crate) mod library_reporting;
 pub(crate) mod library_snapshot_codec;
 mod namespace_values;
 mod narrowing;
+pub(crate) mod replay_index;
 pub(crate) mod reporting_record;
 mod statements;
 mod type_groups;
@@ -81,6 +82,7 @@ use context::{
 use decls::{reserve_type_decls, type_decl_id, walk_type_decls, TopTypeDecl};
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
 use lexical_events::{ClassBinding, LexicalOwnerPhase, LexicalReservations};
+use replay_index::ReplayOwner;
 use reporting_record::CheckerRecord;
 use statements::{emit_exhausted_obligation, emit_obligation_failure};
 
@@ -2119,7 +2121,15 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
     for mut effects in pending {
         let mut reported_heritage_pairs = BTreeSet::new();
         let mut reported_header_groups = BTreeSet::new();
-        for check in std::mem::take(&mut effects.constraint_checks) {
+        let (checks, check_owners) = effects.take_constraint_checks();
+        for (index, check) in checks.into_iter().enumerate() {
+            let owner = check_owners
+                .as_ref()
+                .and_then(|owners| owners.get(index))
+                .copied()
+                .flatten();
+            let _replay_scope =
+                owner.and_then(|owner| pass.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             pass.effect_stack.push(effects);
             pass.check_constraint_arguments(&check.checks, &check.substitutions);
             effects = pass
@@ -2127,32 +2137,30 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                 .pop()
                 .expect("constraint obligation lexical effect frame");
         }
-        for check in std::mem::take(&mut effects.interface_relations) {
+        let (relations, relation_owners) = effects.take_interface_relations();
+        for (index, check) in relations.into_iter().enumerate() {
+            let owner = relation_owners
+                .as_ref()
+                .and_then(|owners| owners.get(index))
+                .copied()
+                .flatten();
+            let _replay_scope =
+                owner.and_then(|owner| pass.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             let decision = if matches!(
                 &check.kind,
                 InterfaceRelationKind::Heritage { .. }
                     | InterfaceRelationKind::MergedProperty { .. }
                     | InterfaceRelationKind::HeaderMetadata { .. }
             ) {
-                match SemanticQueryCoordinator::new(
-                    pass.interner,
-                    pass.type_environment.published().classes(),
-                    &mut pass.semantic_queries,
-                    &mut pass.next_type_param,
-                )
-                .is_identical(check.source, check.target)
+                match pass
+                    .with_semantic_query(|query| query.is_identical(check.source, check.target))
                 {
                     DemandOutcome::Ready(identical) => Ok(!identical),
                     DemandOutcome::Exhausted(exhaustion) => Err(exhaustion),
                 }
             } else {
-                match SemanticQueryCoordinator::new(
-                    pass.interner,
-                    pass.type_environment.published().classes(),
-                    &mut pass.semantic_queries,
-                    &mut pass.next_type_param,
-                )
-                .is_assignable(check.source, check.target)
+                match pass
+                    .with_semantic_query(|query| query.is_assignable(check.source, check.target))
                 {
                     RelationOutcome::Yes => Ok(false),
                     RelationOutcome::No(_) => Ok(true),
@@ -2200,38 +2208,45 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                         Diagnostic::incorrectly_extends_interface(check.span, &derived, &base)
                     }
                 };
-                effects.records.diagnostic(diagnostic);
+                pass.append_effect_diagnostic(&mut effects, diagnostic);
             }
         }
-        for obligation in std::mem::take(&mut effects.obligations) {
+        let (obligations, obligation_owners) = effects.take_obligations();
+        for (index, obligation) in obligations.into_iter().enumerate() {
+            let owner = obligation_owners
+                .as_ref()
+                .and_then(|owners| owners.get(index))
+                .copied()
+                .flatten();
+            let _replay_scope =
+                owner.and_then(|owner| pass.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             match obligation {
                 DeferredRelationObligation::Assign(obligation) => {
-                    let outcome = SemanticQueryCoordinator::new(
-                        pass.interner,
-                        pass.type_environment.published().classes(),
-                        &mut pass.semantic_queries,
-                        &mut pass.next_type_param,
-                    )
-                    .is_assignable(obligation.src, obligation.tgt);
+                    let outcome = pass.with_semantic_query(|query| {
+                        query.is_assignable(obligation.src, obligation.tgt)
+                    });
                     match outcome {
                         RelationOutcome::Yes => {}
                         RelationOutcome::No(chain) => {
-                            effects.records.diagnostic(emit_obligation_failure(
+                            let diagnostic = emit_obligation_failure(
                                 pass.interner.store(),
                                 &obligation,
                                 chain.head(),
-                            ));
+                            );
+                            pass.append_effect_diagnostic(&mut effects, diagnostic);
                         }
                         RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
-                            effects.records.diagnostic(emit_exhausted_obligation(
-                                pass.interner.store(),
-                                &obligation,
-                            ));
-                            effects.records.incomplete(IncompleteSurface::new(
-                                "relation/class-projection-budget",
-                                obligation.src_span,
-                                "class projection budget exhausted",
-                            ));
+                            let diagnostic =
+                                emit_exhausted_obligation(pass.interner.store(), &obligation);
+                            pass.append_effect_diagnostic(&mut effects, diagnostic);
+                            pass.append_effect_incomplete(
+                                &mut effects,
+                                IncompleteSurface::new(
+                                    "relation/class-projection-budget",
+                                    obligation.src_span,
+                                    "class projection budget exhausted",
+                                ),
+                            );
                         }
                         RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
                         | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
@@ -2245,23 +2260,15 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                     }
                 }
                 DeferredRelationObligation::AssertionCompatibility(obligation) => {
-                    let source_to_asserted = SemanticQueryCoordinator::new(
-                        pass.interner,
-                        pass.type_environment.published().classes(),
-                        &mut pass.semantic_queries,
-                        &mut pass.next_type_param,
-                    )
-                    .is_assignable(obligation.source, obligation.asserted);
+                    let source_to_asserted = pass.with_semantic_query(|query| {
+                        query.is_assignable(obligation.source, obligation.asserted)
+                    });
                     if matches!(&source_to_asserted, RelationOutcome::Yes) {
                         continue;
                     }
-                    let asserted_to_source = SemanticQueryCoordinator::new(
-                        pass.interner,
-                        pass.type_environment.published().classes(),
-                        &mut pass.semantic_queries,
-                        &mut pass.next_type_param,
-                    )
-                    .is_assignable(obligation.asserted, obligation.source);
+                    let asserted_to_source = pass.with_semantic_query(|query| {
+                        query.is_assignable(obligation.asserted, obligation.source)
+                    });
                     if matches!(&asserted_to_source, RelationOutcome::Yes) {
                         continue;
                     }
@@ -2270,11 +2277,14 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                         .iter()
                         .all(|outcome| matches!(outcome, RelationOutcome::No(_)))
                     {
-                        effects.records.incomplete(IncompleteSurface::new(
-                            obligation.syntax.incomplete_id(),
-                            obligation.span,
-                            "assertion source/target compatibility not validated",
-                        ));
+                        pass.append_effect_incomplete(
+                            &mut effects,
+                            IncompleteSurface::new(
+                                obligation.syntax.incomplete_id(),
+                                obligation.span,
+                                "assertion source/target compatibility not validated",
+                            ),
+                        );
                         continue;
                     }
                     let mut exhaustions = Vec::new();
@@ -2293,25 +2303,23 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                 }
             }
         }
-        for check in std::mem::take(&mut effects.override_checks) {
+        let (override_checks, override_owners) = effects.take_override_checks();
+        for (index, check) in override_checks.into_iter().enumerate() {
+            let owner = override_owners
+                .as_ref()
+                .and_then(|owners| owners.get(index))
+                .copied()
+                .flatten();
+            let _replay_scope =
+                owner.and_then(|owner| pass.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             if check.base_is_method {
-                let strict = SemanticQueryCoordinator::new(
-                    pass.interner,
-                    pass.type_environment.published().classes(),
-                    &mut pass.semantic_queries,
-                    &mut pass.next_type_param,
-                )
-                .is_assignable(check.own_ty, check.base_ty);
+                let strict = pass
+                    .with_semantic_query(|query| query.is_assignable(check.own_ty, check.base_ty));
                 let (compatible, exhaustion) = match strict {
                     RelationOutcome::Yes => (true, None),
-                    RelationOutcome::No(_) => match SemanticQueryCoordinator::new(
-                        pass.interner,
-                        pass.type_environment.published().classes(),
-                        &mut pass.semantic_queries,
-                        &mut pass.next_type_param,
-                    )
-                    .overload_implementation_compatible(check.own_ty, check.base_ty)
-                    {
+                    RelationOutcome::No(_) => match pass.with_semantic_query(|query| {
+                        query.overload_implementation_compatible(check.own_ty, check.base_ty)
+                    }) {
                         RelationOutcome::Yes => (true, None),
                         RelationOutcome::No(_) => (false, None),
                         RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
@@ -2319,11 +2327,14 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                     RelationOutcome::Exhausted(exhaustion) => (false, Some(exhaustion)),
                 };
                 if matches!(exhaustion, Some(Exhaustion::ClassProjectionBudget)) {
-                    effects.records.incomplete(IncompleteSurface::new(
-                        "relation/class-projection-budget",
-                        check.span,
-                        "class projection budget exhausted",
-                    ));
+                    pass.append_effect_incomplete(
+                        &mut effects,
+                        IncompleteSurface::new(
+                            "relation/class-projection-budget",
+                            check.span,
+                            "class projection budget exhausted",
+                        ),
+                    );
                 }
                 if !compatible {
                     effects
@@ -2336,40 +2347,40 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                         ));
                 }
             } else {
-                let outcome = SemanticQueryCoordinator::new(
-                    pass.interner,
-                    pass.type_environment.published().classes(),
-                    &mut pass.semantic_queries,
-                    &mut pass.next_type_param,
-                )
-                .is_assignable(check.own_ty, check.base_ty);
+                let outcome = pass
+                    .with_semantic_query(|query| query.is_assignable(check.own_ty, check.base_ty));
                 match outcome {
                     RelationOutcome::Yes => {}
-                    RelationOutcome::No(chain) => effects.records.diagnostic(
-                        Diagnostic::property_override_incompatible(
+                    RelationOutcome::No(chain) => {
+                        let diagnostic = Diagnostic::property_override_incompatible(
                             check.span,
                             &check.name,
                             &check.derived,
                             &check.base,
                         )
-                        .with_elaboration(render_reason_chain(pass.interner.store(), chain.head())),
-                    ),
+                        .with_elaboration(render_reason_chain(pass.interner.store(), chain.head()));
+                        pass.append_effect_diagnostic(&mut effects, diagnostic);
+                    }
                     RelationOutcome::Exhausted(exhaustion) => {
                         if exhaustion == Exhaustion::ClassProjectionBudget {
-                            effects.records.incomplete(IncompleteSurface::new(
-                                "relation/class-projection-budget",
-                                check.span,
-                                "class projection budget exhausted",
-                            ));
+                            pass.append_effect_incomplete(
+                                &mut effects,
+                                IncompleteSurface::new(
+                                    "relation/class-projection-budget",
+                                    check.span,
+                                    "class projection budget exhausted",
+                                ),
+                            );
                         }
-                        effects
-                            .records
-                            .diagnostic(Diagnostic::property_override_incompatible(
+                        pass.append_effect_diagnostic(
+                            &mut effects,
+                            Diagnostic::property_override_incompatible(
                                 check.span,
                                 &check.name,
                                 &check.derived,
                                 &check.base,
-                            ));
+                            ),
+                        );
                     }
                 }
             }
@@ -2415,6 +2426,342 @@ impl UserReportingAdapter {
 }
 
 impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
+    pub(in crate::check::checker) fn current_replay_owner(&self) -> Option<ReplayOwner> {
+        self.replay_trace
+            .as_ref()
+            .and_then(replay_index::ReplayDependencyTrace::current_owner)
+    }
+
+    pub(in crate::check::checker) fn with_replay_owner<R>(
+        &mut self,
+        owner: ReplayOwner,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(trace) = self.replay_trace.clone() else {
+            return produce(self);
+        };
+        trace.enter(owner);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(self)));
+        trace.leave(owner);
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    pub(in crate::check::checker) fn record_replay_demand(&self, owner: ReplayOwner) {
+        if let Some(trace) = &self.replay_trace {
+            trace.demand(owner);
+        }
+    }
+
+    fn record_replay_demand_at(&self, owner: ReplayOwner, boundary: &'static str) {
+        if let Some(trace) = &self.replay_trace {
+            trace.demand_at(owner, boundary);
+        }
+    }
+
+    fn record_replay_record_dependency(&self, ticket: Ticket) {
+        let Some(trace) = &self.replay_trace else {
+            return;
+        };
+        let Some(producer) = trace.current_owner() else {
+            return;
+        };
+        trace.record_statement_dependency((self.pending_effect_key)(ticket), producer);
+    }
+
+    fn append_effect_diagnostic(
+        &self,
+        effects: &mut CheckerEffects<Ticket>,
+        diagnostic: Diagnostic,
+    ) {
+        self.record_replay_record_dependency(effects.records.owner());
+        effects.records.diagnostic(diagnostic);
+    }
+
+    fn append_effect_incomplete(
+        &self,
+        effects: &mut CheckerEffects<Ticket>,
+        incomplete: IncompleteSurface,
+    ) {
+        self.record_replay_record_dependency(effects.records.owner());
+        effects.records.incomplete(incomplete);
+    }
+
+    pub(in crate::check::checker) fn resolve_value_binding_replay(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> crate::binder::bind::ValueResolution {
+        if self.replay_trace.is_none() {
+            return self.binder.resolve_value_binding(scope, name);
+        }
+        let trace = self.replay_trace.clone();
+        let _observation = trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("value-binding"));
+        let resolution = self.binder.resolve_value_binding_traced(scope, name, || {
+            if let Some(trace) = &trace {
+                trace.demand_root_slot(name, replay_index::RootSlotKind::Value);
+                if name == "globalThis" {
+                    trace.demand(ReplayOwner::GlobalObject);
+                }
+            }
+        });
+        match resolution {
+            crate::binder::bind::ValueResolution::Resolved { symbol, kind } => {
+                if let Some(binding) = self.binder.symbols.get(symbol) {
+                    if let Some(storage) = binding.value {
+                        self.record_replay_demand_at(ReplayOwner::Value(storage), "value-binding");
+                    }
+                    if let Some(namespace) = binding.ns {
+                        self.record_replay_demand_at(
+                            ReplayOwner::Namespace(namespace),
+                            "value-binding-namespace",
+                        );
+                    }
+                }
+                if let crate::binder::bind::ResolvedValueKind::StandaloneNamespace {
+                    namespace,
+                    storage,
+                } = kind
+                {
+                    self.record_replay_demand_at(
+                        ReplayOwner::Namespace(namespace),
+                        "standalone-value-namespace",
+                    );
+                    self.record_replay_demand_at(
+                        ReplayOwner::Value(storage),
+                        "standalone-value-storage",
+                    );
+                }
+            }
+            crate::binder::bind::ValueResolution::TypeOnlyNamespace { namespace } => {
+                self.record_replay_demand_at(
+                    ReplayOwner::Namespace(namespace),
+                    "type-only-namespace",
+                );
+            }
+            crate::binder::bind::ValueResolution::Missing => {}
+        }
+        resolution
+    }
+
+    pub(in crate::check::checker) fn resolve_value_replay(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<SymbolId> {
+        if self.replay_trace.is_none() {
+            return self.binder.resolve_value(scope, name);
+        }
+        match self.resolve_value_binding_replay(scope, name) {
+            crate::binder::bind::ValueResolution::Resolved { symbol, .. } => Some(symbol),
+            crate::binder::bind::ValueResolution::TypeOnlyNamespace { .. }
+            | crate::binder::bind::ValueResolution::Missing => None,
+        }
+    }
+
+    pub(in crate::check::checker) fn resolve_type_replay(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<SymbolId> {
+        if self.replay_trace.is_none() {
+            return self.binder.resolve_type(scope, name);
+        }
+        let trace = self.replay_trace.clone();
+        let _observation = trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("type-binding"));
+        let symbol = self.binder.resolve_type_traced(scope, name, || {
+            if let Some(trace) = &trace {
+                trace.demand_root_slot(name, replay_index::RootSlotKind::Type);
+            }
+        });
+        if let Some(group) = symbol
+            .and_then(|symbol| self.binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.ty)
+        {
+            self.record_replay_demand_at(ReplayOwner::TypeGroup(group), "type-binding");
+        }
+        symbol
+    }
+
+    pub(in crate::check::checker) fn resolve_qualified_type_path_replay(
+        &self,
+        scope: ScopeId,
+        segments: &[&str],
+    ) -> crate::binder::namespace::QualifiedTypePathResolution {
+        if self.replay_trace.is_none() {
+            return self.binder.resolve_qualified_type_path(scope, segments);
+        }
+        let trace = self.replay_trace.clone();
+        let _observation = trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("qualified-type-binding"));
+        let resolution = self.binder.resolve_qualified_type_path_traced(
+            scope,
+            segments,
+            || {
+                if let (Some(trace), Some(root)) = (&trace, segments.first()) {
+                    trace.demand_root_slot(root, replay_index::RootSlotKind::Namespace);
+                }
+            },
+            |namespace| {
+                if let Some(trace) = &trace {
+                    trace.demand_at(
+                        ReplayOwner::Namespace(namespace),
+                        "qualified-type-namespace",
+                    );
+                }
+            },
+        );
+        if let crate::binder::namespace::QualifiedTypePathResolution::TypeGroup(group) = resolution
+        {
+            self.record_replay_demand_at(ReplayOwner::TypeGroup(group), "qualified-type-terminal");
+        }
+        resolution
+    }
+
+    pub(in crate::check::checker) fn type_decl_id_replay(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<crate::binder::declaration::TypeGroupId> {
+        self.resolve_type_replay(scope, name)
+            .and_then(|symbol| self.binder.symbols.get(symbol))
+            .and_then(|binding| binding.ty)
+    }
+
+    pub(in crate::check::checker) fn value_decl_id_replay(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<ValueStorageId> {
+        self.resolve_value_replay(scope, name)
+            .and_then(|symbol| self.binder.symbols.get(symbol))
+            .and_then(|binding| binding.value)
+    }
+
+    pub(in crate::check::checker) fn published_class_replay(
+        &self,
+        class: crate::types::repr::ClassId,
+    ) -> crate::class_semantics::DemandOutcome<&crate::class_semantics::PublishedClassSurface> {
+        if let Some(trace) = &self.replay_trace {
+            let _observation = trace.observe_typed_demand("class-terminal");
+            trace.demand_at(ReplayOwner::Class(class), "class-terminal");
+        }
+        self.type_environment
+            .published()
+            .classes()
+            .published_class(class)
+    }
+
+    pub(in crate::check::checker) fn decl_type_replay(
+        &self,
+        storage: ValueStorageId,
+    ) -> Option<TypeId> {
+        if self.replay_trace.is_none() {
+            return self.decl_types.get(storage);
+        }
+        let _observation = self
+            .replay_trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("decl-type"));
+        self.record_replay_demand_at(ReplayOwner::Value(storage), "decl-type");
+        self.decl_types.get(storage)
+    }
+
+    pub(in crate::check::checker) fn publish_copied_decl_type_replay(
+        &mut self,
+        storage: ValueStorageId,
+        ty: TypeId,
+    ) {
+        let owner = ReplayOwner::Value(storage);
+        self.with_replay_publication_owner(owner, |pass| pass.decl_types.set(storage, ty));
+    }
+
+    pub(in crate::check::checker) fn with_replay_publication_owner<R>(
+        &mut self,
+        owner: ReplayOwner,
+        publish: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let producer = self.current_replay_owner();
+        if producer == Some(owner) {
+            return publish(self);
+        }
+        if producer.is_some() {
+            self.record_replay_demand(owner);
+        }
+        self.with_replay_owner(owner, |pass| {
+            if let Some(producer) = producer {
+                pass.record_replay_demand(producer);
+            }
+            publish(pass)
+        })
+    }
+
+    pub(in crate::check::checker) fn demand_function_group_replay(
+        &mut self,
+        symbol: SymbolId,
+    ) -> function_groups::FunctionGroupDemand {
+        if self.replay_trace.is_none() {
+            return self.function_groups.demand(symbol);
+        }
+        let _observation = self
+            .replay_trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("function-group"));
+        if let Some(storage) = self
+            .binder
+            .symbols
+            .get(symbol)
+            .and_then(|binding| binding.value)
+        {
+            self.record_replay_demand_at(ReplayOwner::Value(storage), "function-group");
+        }
+        self.function_groups.demand(symbol)
+    }
+
+    pub(in crate::check::checker) fn standalone_namespace_terminal_replay(
+        &self,
+        namespace: crate::binder::namespace::NamespaceId,
+    ) -> Option<namespace_values::StandaloneNamespaceTerminal> {
+        if self.replay_trace.is_none() {
+            return self.namespace_values.standalone_terminal(namespace);
+        }
+        let _observation = self
+            .replay_trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("namespace-terminal"));
+        self.record_replay_demand_at(ReplayOwner::Namespace(namespace), "namespace-terminal");
+        let terminal = self.namespace_values.standalone_terminal(namespace);
+        if let Some(namespace_values::StandaloneNamespaceTerminal::Ready { storage, .. }) = terminal
+        {
+            self.record_replay_demand_at(ReplayOwner::Value(storage), "namespace-terminal-storage");
+        }
+        terminal
+    }
+
+    pub(in crate::check::checker) fn with_semantic_query<R>(
+        &mut self,
+        run: impl FnOnce(&mut SemanticQueryCoordinator<'_, replay_index::ReplayClassLookup<'_>>) -> R,
+    ) -> R {
+        let lookup = replay_index::ReplayClassLookup::new(
+            self.type_environment.published().classes(),
+            self.replay_trace.clone(),
+        );
+        let mut coordinator = SemanticQueryCoordinator::new(
+            self.interner,
+            &lookup,
+            &mut self.semantic_queries,
+            &mut self.next_type_param,
+        );
+        run(&mut coordinator)
+    }
+
     /// Run one lexically owned producer and retain its effects until deferred work
     /// has resolved. Nested lexical sites keep distinct preallocated owners.
     pub(in crate::check::checker) fn with_lexical_effects<R>(
@@ -2438,6 +2785,26 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
 impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     /// Run a producer that already owns an exact preallocated ticket.
     pub(in crate::check::checker) fn with_ticket_effects<R>(
+        &mut self,
+        owner: Ticket,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let statement_owner = self.replay_trace.as_ref().and_then(|trace| {
+            trace
+                .current_owner()
+                .is_none()
+                .then(|| trace.statement_owner((self.pending_effect_key)(owner)))
+                .flatten()
+        });
+        match statement_owner {
+            Some(statement_owner) => self.with_replay_owner(statement_owner, |pass| {
+                pass.with_ticket_effects_inner(owner, produce)
+            }),
+            None => self.with_ticket_effects_inner(owner, produce),
+        }
+    }
+
+    fn with_ticket_effects_inner<R>(
         &mut self,
         owner: Ticket,
         produce: impl FnOnce(&mut Self) -> R,
@@ -2493,6 +2860,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         owner: Ticket,
         record: CheckerRecord,
     ) {
+        self.record_replay_record_dependency(owner);
         let mut effects = CheckerEffects::new(owner);
         effects.records.record(record);
         self.enqueue_effects(effects);
@@ -2525,6 +2893,13 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     }
 
     pub(in crate::check::checker) fn emit_diagnostic(&mut self, diagnostic: Diagnostic) {
+        let owner = self
+            .effect_stack
+            .last()
+            .expect("diagnostic requires a lexical owner")
+            .records
+            .owner();
+        self.record_replay_record_dependency(owner);
         self.effect_stack
             .last_mut()
             .expect("diagnostic requires a lexical owner")
@@ -2533,6 +2908,13 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     }
 
     pub(in crate::check::checker) fn emit_incomplete(&mut self, incomplete: IncompleteSurface) {
+        let owner = self
+            .effect_stack
+            .last()
+            .expect("incomplete record requires a lexical owner")
+            .records
+            .owner();
+        self.record_replay_record_dependency(owner);
         self.effect_stack
             .last_mut()
             .expect("incomplete record requires a lexical owner")
@@ -2541,43 +2923,44 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     }
 
     pub(in crate::check::checker) fn schedule_obligation(&mut self, obligation: AssignObligation) {
+        let owner = self.current_replay_owner();
         self.effect_stack
             .last_mut()
             .expect("obligation requires a lexical owner")
-            .obligations
-            .push(DeferredRelationObligation::Assign(obligation));
+            .push_obligation(DeferredRelationObligation::Assign(obligation), owner);
     }
 
     pub(in crate::check::checker) fn schedule_assertion_compatibility(
         &mut self,
         obligation: AssertionCompatibilityObligation,
     ) {
+        let owner = self.current_replay_owner();
         self.effect_stack
             .last_mut()
             .expect("assertion compatibility requires a lexical owner")
-            .obligations
-            .push(DeferredRelationObligation::AssertionCompatibility(
-                obligation,
-            ));
+            .push_obligation(
+                DeferredRelationObligation::AssertionCompatibility(obligation),
+                owner,
+            );
     }
 
     pub(in crate::check::checker) fn schedule_override(&mut self, check: OverrideCheck) {
+        let owner = self.current_replay_owner();
         self.effect_stack
             .last_mut()
             .expect("override check requires a lexical owner")
-            .override_checks
-            .push(check);
+            .push_override(check, owner);
     }
 
     pub(in crate::check::checker) fn schedule_interface_relation(
         &mut self,
         check: InterfaceRelationObligation,
     ) {
+        let owner = self.current_replay_owner();
         self.effect_stack
             .last_mut()
             .expect("interface relation requires a lexical owner")
-            .interface_relations
-            .push(check);
+            .push_interface_relation(check, owner);
     }
 
     /// Record an in-scope AST position the walk skipped (WU2, sprint 2026-07-10). `id`
@@ -2707,6 +3090,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         // the single-file default (backlog 58).
         current_module: binder.module,
         current_source: reporting.source,
+        replay_trace: None,
         effect_stack: Vec::new(),
         pending_effects,
         pending_effect_slots,

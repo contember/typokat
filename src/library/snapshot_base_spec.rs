@@ -508,6 +508,7 @@ fn frozen_library_base_retains_only_ast_free_semantic_state() {
             "next_type_param",
             "next_class_id",
             "source_file_count",
+            "replay_index",
         ]
     );
     let checker_source = include_str!("../check/checker/mod.rs");

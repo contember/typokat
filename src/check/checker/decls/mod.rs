@@ -585,7 +585,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
             let owner = self.merged_header_owner(index, declaration, header_span.start);
-            self.with_ticket_effects(owner, lower)
+            self.with_replay_owner(super::replay_index::ReplayOwner::TypeGroup(group), |pass| {
+                pass.with_ticket_effects(owner, lower)
+            })
         } else {
             self.with_type_decl_effects(group, lower)
         };
@@ -679,6 +681,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         decl_id: TypeGroupId,
         produce: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        if self.current_replay_owner().is_some() {
+            self.record_replay_demand(super::replay_index::ReplayOwner::TypeGroup(decl_id));
+        }
         let declaration = match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface { declaration, .. })
             | Some(TypeDecl::Alias { declaration, .. })
@@ -692,7 +697,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .lexical_events
             .declaration_owner(declaration)
             .expect("type declaration must have a preallocated lexical owner");
-        self.with_ticket_effects(owner.ticket, produce)
+        self.with_replay_owner(
+            super::replay_index::ReplayOwner::TypeGroup(decl_id),
+            |pass| pass.with_ticket_effects(owner.ticket, produce),
+        )
     }
 
     pub(super) fn resolve_type_decl(&mut self, scope: ScopeId, decl_id: TypeGroupId) -> TypeId {
@@ -1054,6 +1062,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let building_template = std::mem::replace(&mut self.building_template, true);
         let mut prepared = BTreeMap::new();
         for index in groups {
+            let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            let _replay_owner_scope = self
+                .replay_trace
+                .as_ref()
+                .map(|trace| trace.scope(super::replay_index::ReplayOwner::TypeGroup(group)));
             let headers = self.class_interface_header_fragments(index);
             self.validate_interface_group_headers(index, &headers);
             let interfaces = match &self.type_decls[index] {
@@ -1673,6 +1686,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         let mut own_objects = Vec::with_capacity(component.len());
         for &index in component {
+            let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            let _replay_owner_scope = self
+                .replay_trace
+                .as_ref()
+                .map(|trace| trace.scope(super::replay_index::ReplayOwner::TypeGroup(group)));
             let TypeDecl::Interface { fragments, .. } = &self.type_decls[index] else {
                 unreachable!("interface SCC contains only interfaces")
             };
@@ -1741,6 +1759,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let component_set: FxHashSet<usize> = component.iter().copied().collect();
         let mut completed = Vec::with_capacity(component.len());
         for (index, own, mut alternatives) in own_objects {
+            let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            let _replay_owner_scope = self
+                .replay_trace
+                .as_ref()
+                .map(|trace| trace.scope(super::replay_index::ReplayOwner::TypeGroup(group)));
             let TypeDecl::Interface { fragments, .. } = &self.type_decls[index] else {
                 unreachable!()
             };
@@ -3169,9 +3192,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Interfaces recurse, while aliases resolve then fill any reserved template
     /// they land on. Generic alias heritage resolves on demand at instantiation time.
     fn ensure_heritage_base_filled(&mut self, scope: ScopeId, heritage: &TSInterfaceHeritage<'_>) {
-        let Some((decl_id, _, _)) =
-            interface::interface_heritage_root(self.binder, scope, heritage)
-        else {
+        let Some((decl_id, _, _)) = self.interface_heritage_root_replay(scope, heritage) else {
             return;
         };
         match self.type_decls.get(decl_id.index()) {
@@ -4904,18 +4925,6 @@ pub(in crate::check::checker) fn type_decl_id(
 ) -> Option<TypeGroupId> {
     let symbol_id = binder.resolve_type(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.ty)
-}
-
-/// The value-storage id a name resolves to from `scope` (binder value slot),
-/// if any (M11 — the class constructor side). Mirrors [`type_decl_id`] for the value
-/// space.
-pub(in crate::check::checker) fn value_decl_id(
-    binder: &Binder,
-    scope: ScopeId,
-    name: &str,
-) -> Option<crate::binder::declaration::ValueStorageId> {
-    let symbol_id = binder.resolve_value(scope, name)?;
-    binder.symbols.get(symbol_id).and_then(|s| s.value)
 }
 
 #[cfg(test)]

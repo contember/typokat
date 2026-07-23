@@ -338,7 +338,24 @@ impl Binder {
 
     /// Resolve a value binding and its namespace provenance in one scope walk.
     pub(crate) fn resolve_value_binding(&self, scope: ScopeId, name: &str) -> ValueResolution {
-        resolve_value_binding(&self.graph, &self.symbols, &self.namespaces, scope, name)
+        self.resolve_value_binding_traced(scope, name, || {})
+    }
+
+    pub(crate) fn resolve_value_binding_traced(
+        &self,
+        scope: ScopeId,
+        name: &str,
+        mut compilation_root_probe: impl FnMut(),
+    ) -> ValueResolution {
+        resolve_value_binding(
+            &self.graph,
+            &self.symbols,
+            &self.namespaces,
+            self.compilation_global,
+            scope,
+            name,
+            &mut compilation_root_probe,
+        )
     }
 
     /// Resolve only the ordinary symbol projection of [`Binder::resolve_value_binding`].
@@ -352,7 +369,23 @@ impl Binder {
     /// Resolve a type-space binding, skipping same-named value-only symbols while
     /// walking parents.
     pub(crate) fn resolve_type(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
-        resolve_type_symbol(&self.graph, &self.symbols, scope, name)
+        self.resolve_type_traced(scope, name, || {})
+    }
+
+    pub(crate) fn resolve_type_traced(
+        &self,
+        scope: ScopeId,
+        name: &str,
+        mut compilation_root_probe: impl FnMut(),
+    ) -> Option<SymbolId> {
+        resolve_type_symbol(
+            &self.graph,
+            &self.symbols,
+            self.compilation_global,
+            scope,
+            name,
+            &mut compilation_root_probe,
+        )
     }
 }
 
@@ -360,12 +393,17 @@ fn resolve_value_binding(
     graph: &ScopeGraph,
     symbols: &SymbolTable,
     namespaces: &NamespaceTable,
+    compilation_global: ScopeId,
     scope: ScopeId,
     name: &str,
+    compilation_root_probe: &mut impl FnMut(),
 ) -> ValueResolution {
     let mut current = Some(scope);
     let mut type_only_namespace = None;
     while let Some(id) = current {
+        if id == compilation_global {
+            compilation_root_probe();
+        }
         let Some(current_scope) = graph.get(id) else {
             return ValueResolution::Missing;
         };
@@ -414,11 +452,16 @@ fn resolve_value_binding(
 fn resolve_type_symbol(
     graph: &ScopeGraph,
     symbols: &SymbolTable,
+    compilation_global: ScopeId,
     scope: ScopeId,
     name: &str,
+    compilation_root_probe: &mut impl FnMut(),
 ) -> Option<SymbolId> {
     let mut current = Some(scope);
     while let Some(id) = current {
+        if id == compilation_global {
+            compilation_root_probe();
+        }
         let current_scope = graph.get(id)?;
         if let Some(symbol_id) = current_scope.lookup_local(name) {
             let symbol = symbols.get(symbol_id)?;

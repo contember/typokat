@@ -76,6 +76,26 @@ pub(crate) struct LibraryEventLedger {
 }
 
 impl LibraryEventLedger {
+    pub(crate) fn replay_ticket_owners(&self) -> BTreeMap<(usize, usize), LibraryEventKey> {
+        self.events
+            .iter()
+            .enumerate()
+            .flat_map(|(event_index, meta)| {
+                (0..meta.next_record_ordinal).map(move |record_ordinal| {
+                    (
+                        (event_index, record_ordinal),
+                        LibraryEventKey {
+                            file_ordinal: meta.file_ordinal,
+                            source_start: meta.source_start,
+                            event_ordinal: meta.event_ordinal,
+                            record_ordinal,
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn reserve_event(
         &mut self,
         file_ordinal: LibraryFileOrdinal,

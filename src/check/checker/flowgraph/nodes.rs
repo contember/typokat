@@ -95,7 +95,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .symbols
             .get(symbol)
             .and_then(|s| s.value)
-            .and_then(|decl_id| self.decl_types.get(decl_id))
+            .and_then(|decl_id| self.decl_type_replay(decl_id))
             .unwrap_or_else(|| self.interner.well_known().error)
     }
 

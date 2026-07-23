@@ -263,10 +263,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // whether a type obligation is collected below.
         let value = rhs.map(|(ty, _)| (ty, assign_span));
 
-        let symbol_id = match self
-            .binder
-            .resolve_value_binding(scope, target.name.as_str())
-        {
+        let symbol_id = match self.resolve_value_binding_replay(scope, target.name.as_str()) {
             ValueResolution::Resolved {
                 kind: ResolvedValueKind::StandaloneNamespace { .. },
                 ..
@@ -301,7 +298,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .symbols
             .get(symbol_id)
             .and_then(|s| s.value)
-            .and_then(|decl_id| self.decl_types.get(decl_id));
+            .and_then(|decl_id| self.decl_type_replay(decl_id));
 
         if let (Some(tgt), Some(raw)) = (target_ty, rhs) {
             let (src, src_span) = self.infer_contextual_source_after_walked(

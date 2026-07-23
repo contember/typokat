@@ -183,7 +183,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Resolve an assignment-target name to its narrowable value symbol, or `None`
     /// for an unresolvable / non-value binding.
     fn assignable_symbol(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
-        match self.binder.resolve_value_binding(scope, name) {
+        match self.resolve_value_binding_replay(scope, name) {
             ValueResolution::Resolved {
                 symbol,
                 kind: ResolvedValueKind::Ordinary,

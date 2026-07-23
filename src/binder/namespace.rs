@@ -3152,6 +3152,16 @@ impl Binder {
         scope: ScopeId,
         segments: &[&str],
     ) -> QualifiedTypePathResolution {
+        self.resolve_qualified_type_path_traced(scope, segments, || {}, |_| {})
+    }
+
+    pub(crate) fn resolve_qualified_type_path_traced(
+        &self,
+        scope: ScopeId,
+        segments: &[&str],
+        mut compilation_root_probe: impl FnMut(),
+        mut namespace_visit: impl FnMut(NamespaceId),
+    ) -> QualifiedTypePathResolution {
         if segments.len() < 2 {
             return QualifiedTypePathResolution::MissingRoot { segment: 0 };
         }
@@ -3171,6 +3181,9 @@ impl Binder {
                 Some(scope) => scope,
                 None => return QualifiedTypePathResolution::MissingRoot { segment: 0 },
             };
+            if candidate_scope == self.compilation_global {
+                compilation_root_probe();
+            }
             let owning_namespace = self.namespace_for_lookup_scope(candidate_scope);
             let root_merge = owning_namespace
                 .is_none()
@@ -3260,6 +3273,7 @@ impl Binder {
         };
 
         let mut namespace = root_namespace;
+        namespace_visit(namespace);
         for (segment, name) in segments.iter().enumerate().skip(1) {
             let public_scope = match self.namespaces.get(namespace) {
                 Some(namespace) => namespace.public_scope,
@@ -3283,6 +3297,7 @@ impl Binder {
             if !leaf {
                 if let Some(next) = view.namespace {
                     namespace = next;
+                    namespace_visit(namespace);
                     continue;
                 }
                 return if view.type_group.is_some() {

@@ -294,14 +294,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.well_known().error);
         }
 
-        let decl_id = match type_decl_id(self.binder, scope, name) {
+        let decl_id = match self
+            .resolve_type_replay(scope, name)
+            .and_then(|symbol| self.binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.ty)
+        {
             Some(id) => id,
             None => {
                 // Report `TK2304` only for truly undeclared names. Value-as-type,
                 // applied type parameters, and qualified names are found/deferred cases,
                 // not "cannot find name".
-                let found_in_some_space = self.binder.resolve_type(scope, name).is_some()
-                    || self.binder.resolve_value(scope, name).is_some()
+                let found_in_some_space = self.resolve_type_replay(scope, name).is_some()
+                    || self.resolve_value_replay(scope, name).is_some()
                     || self.lookup_type_param(name).is_some();
                 if !found_in_some_space {
                     let span = Span::from_oxc(ident.span);
@@ -398,7 +402,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .iter()
             .map(|segment| segment.span)
             .collect::<Vec<_>>();
-        let mut resolution = self.binder.resolve_qualified_type_path(scope, &names);
+        let trace = self.replay_trace.clone();
+        let _observation = trace
+            .as_ref()
+            .map(|trace| trace.observe_typed_demand("qualified-type-binding"));
+        let mut resolution = self.binder.resolve_qualified_type_path_traced(
+            scope,
+            &names,
+            || {
+                if let Some(trace) = &trace {
+                    trace.demand_root_slot(
+                        names[0],
+                        super::super::replay_index::RootSlotKind::Namespace,
+                    );
+                }
+            },
+            |namespace| {
+                if let Some(trace) = &trace {
+                    trace.demand(super::super::replay_index::ReplayOwner::Namespace(
+                        namespace,
+                    ));
+                }
+            },
+        );
         if matches!(resolution, QualifiedTypePathResolution::MissingRoot { .. })
             && self.checker_local_qualified_root(names[0])
         {
@@ -448,6 +474,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         span: Span,
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
+        self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
         assert!(
             !self.type_environment.is_published()
                 || self
@@ -930,9 +957,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 environment.classes()
             }
         };
+        let class_lookup =
+            super::super::replay_index::ReplayClassLookup::new(classes, self.replay_trace.clone());
         let outcome = build_class_application(
             &mut SurfaceTypeFactory::new(self.interner),
-            classes,
+            &class_lookup,
             ClassApplicationRequest {
                 class: class_id,
                 parameters: &parameters,
