@@ -1314,7 +1314,7 @@ fn identity_ignores_only_public_declaring_class_origins() {
 }
 
 #[test]
-fn identity_exhaustion_discards_both_roots_pending_writes() {
+fn identity_exhaustion_discards_writes_and_skips_unrelated_children() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let class = ClassId(80_505);
@@ -1359,9 +1359,7 @@ fn identity_exhaustion_discards_both_roots_pending_writes() {
         DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
     );
     assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
-    assert_eq!(next_type_param, initial_type_param + 1);
-    let subsequent_binder = TypeParamId(next_type_param);
-    assert_ne!(subsequent_binder, TypeParamId(initial_type_param));
+    assert_eq!(next_type_param, initial_type_param);
     assert!(matches!(
         published.published_class(class),
         DemandOutcome::Ready(surface) if surface.instance_template() == template
@@ -2130,7 +2128,13 @@ fn tainted_transaction_discards_local_delta_and_preserves_parent() {
         ],
         ..Default::default()
     });
-    let target = interner.intern_object(ObjectType::default());
+    let target = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("aCompleted", wk.string),
+            PropertyType::public("zExhausting", wk.number),
+        ],
+        ..Default::default()
+    });
     let published = PublishedClasses::empty();
     let mut state = SemanticQueryState {
         evaluation_memo: FxHashMap::from_iter([(retained, wk.boolean)]),

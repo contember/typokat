@@ -30,6 +30,17 @@ struct AlphaBinderKey {
 type IdentitySeen = FxHashSet<(TypeId, TypeId, AlphaBinderKey)>;
 type CompletedIdentityKey = (TypeId, TypeId);
 
+enum IdentityAttempt {
+    Decided(DemandOutcome<bool>),
+    Needs(RelationDemand),
+}
+
+enum ExactFamilyAttempt {
+    Ready(TypeId),
+    Needs(RelationDemand),
+    Exhausted(Exhaustion),
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct QueryDemandMeasure {
@@ -507,14 +518,28 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             });
             return DemandOutcome::Ready(identical);
         }
-        let transaction = ProjectionPlanner::new(
+        let mut planner = ProjectionPlanner::new(
             self.interner,
             self.published,
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
-        )
-        .plan(&[left, right]);
+        );
+        let outcome = loop {
+            let attempt = Self::identical_attempt(
+                planner.interner.store(),
+                &planner.plan,
+                left,
+                right,
+                &mut FxHashSet::default(),
+                &mut Vec::new(),
+            );
+            match attempt {
+                IdentityAttempt::Decided(outcome) => break outcome,
+                IdentityAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+            }
+        };
+        let transaction = planner.finish();
         *self.next_type_param = transaction.next_type_param;
         if transaction.planning_tainted {
             return DemandOutcome::Exhausted(
@@ -524,14 +549,6 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     .unwrap_or(Exhaustion::ClassProjectionBudget),
             );
         }
-        let outcome = Self::identical_recursive(
-            self.interner.store(),
-            &transaction.plan,
-            left,
-            right,
-            &mut FxHashSet::default(),
-            &mut Vec::new(),
-        );
         if let DemandOutcome::Ready(identical) = &outcome {
             self.commit_plan(transaction.into_commit());
             #[cfg(test)]
@@ -557,50 +574,74 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
     }
 
-    fn identical_recursive(
+    fn identical_attempt(
         store: &Store,
         plan: &ProjectionPlan<'_>,
         left: TypeId,
         right: TypeId,
         seen: &mut IdentitySeen,
         alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
-    ) -> DemandOutcome<bool> {
+    ) -> IdentityAttempt {
         #[cfg(test)]
         measure_query_source_cold(|measure| measure.identity_recursive_calls += 1);
         let mut left = match plan.normalize(left) {
             Ok(left) => left,
-            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+            Err(exhaustion) => {
+                return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
+            }
         };
         let mut right = match plan.normalize(right) {
             Ok(right) => right,
-            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
-        };
-        left = match Self::collapse_exact_family_root(store, plan, left) {
-            Ok(left) => left,
-            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
-        };
-        right = match Self::collapse_exact_family_root(store, plan, right) {
-            Ok(right) => right,
-            Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+            Err(exhaustion) => {
+                return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
+            }
         };
         if let (Some(left_param), Some(right_param)) =
             (store.type_param(left), store.type_param(right))
         {
-            return DemandOutcome::Ready(Self::alpha_type_params_identical(
-                left_param.id,
-                right_param.id,
-                alpha_binders,
+            return IdentityAttempt::Decided(DemandOutcome::Ready(
+                Self::alpha_type_params_identical(left_param.id, right_param.id, alpha_binders),
             ));
         }
         if left == right {
-            return DemandOutcome::Ready(true);
+            return IdentityAttempt::Decided(DemandOutcome::Ready(true));
+        }
+        left = match Self::prepare_exact_family_root(store, plan, left) {
+            ExactFamilyAttempt::Ready(left) => left,
+            ExactFamilyAttempt::Needs(demand) => return IdentityAttempt::Needs(demand),
+            ExactFamilyAttempt::Exhausted(exhaustion) => {
+                return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
+            }
+        };
+        right = match Self::prepare_exact_family_root(store, plan, right) {
+            ExactFamilyAttempt::Ready(right) => right,
+            ExactFamilyAttempt::Needs(demand) => return IdentityAttempt::Needs(demand),
+            ExactFamilyAttempt::Exhausted(exhaustion) => {
+                return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
+            }
+        };
+        if let (Some(left_param), Some(right_param)) =
+            (store.type_param(left), store.type_param(right))
+        {
+            return IdentityAttempt::Decided(DemandOutcome::Ready(
+                Self::alpha_type_params_identical(left_param.id, right_param.id, alpha_binders),
+            ));
+        }
+        if left == right {
+            return IdentityAttempt::Decided(DemandOutcome::Ready(true));
+        }
+        if let Some(demand) = plan
+            .relation_demand(store, left)
+            .or_else(|| plan.relation_demand(store, right))
+        {
+            return IdentityAttempt::Needs(demand);
         }
         if !seen.insert((left, right, Self::alpha_binder_key(alpha_binders))) {
-            return DemandOutcome::Ready(true);
+            return IdentityAttempt::Decided(DemandOutcome::Ready(true));
         }
         let tag = store.tag(left);
         if tag != store.tag(right) {
-            return DemandOutcome::Ready(false);
+            return IdentityAttempt::Decided(DemandOutcome::Ready(false));
         }
         match tag {
             TypeTag::Object => {
@@ -616,7 +657,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     || left.call_signatures.len() != right.call_signatures.len()
                     || left.construct_signatures.len() != right.construct_signatures.len()
                 {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.properties.iter().zip(&right.properties) {
                     if left.name != right.name
@@ -627,9 +668,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         || left.readonly != right.readonly
                         || left.is_accessor != right.is_accessor
                     {
-                        return DemandOutcome::Ready(false);
+                        return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                     }
-                    match Self::identical_recursive(
+                    match Self::identical_attempt(
                         store,
                         plan,
                         left.ty,
@@ -637,7 +678,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         seen,
                         alpha_binders,
                     ) {
-                        DemandOutcome::Ready(true) => {}
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                     match Self::identical_optional(
@@ -648,14 +689,13 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         seen,
                         alpha_binders,
                     ) {
-                        DemandOutcome::Ready(true) => {}
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
                 for (left, right) in left.call_signatures.iter().zip(&right.call_signatures) {
-                    match Self::identical_recursive(store, plan, *left, *right, seen, alpha_binders)
-                    {
-                        DemandOutcome::Ready(true) => {}
+                    match Self::identical_attempt(store, plan, *left, *right, seen, alpha_binders) {
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
@@ -664,9 +704,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     .iter()
                     .zip(&right.construct_signatures)
                 {
-                    match Self::identical_recursive(store, plan, *left, *right, seen, alpha_binders)
-                    {
-                        DemandOutcome::Ready(true) => {}
+                    match Self::identical_attempt(store, plan, *left, *right, seen, alpha_binders) {
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
@@ -678,7 +717,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     seen,
                     alpha_binders,
                 ) {
-                    DemandOutcome::Ready(true) => {}
+                    IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                     outcome => return outcome,
                 }
                 Self::identical_optional(
@@ -702,7 +741,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 if left.type_params.len() != right.type_params.len()
                     || left.params.len() != right.params.len()
                 {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 let binder_start = alpha_binders.len();
                 alpha_binders.extend(
@@ -721,7 +760,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                             seen,
                             alpha_binders,
                         ) {
-                            DemandOutcome::Ready(true) => {}
+                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                             outcome => return outcome,
                         }
                         match Self::identical_optional(
@@ -732,7 +771,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                             seen,
                             alpha_binders,
                         ) {
-                            DemandOutcome::Ready(true) => {}
+                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                             outcome => return outcome,
                         }
                     }
@@ -744,7 +783,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         seen,
                         alpha_binders,
                     ) {
-                        DemandOutcome::Ready(true) => {}
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                     for (left, right) in left.params.iter().zip(&right.params) {
@@ -752,9 +791,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                             || left.has_default != right.has_default
                             || left.rest != right.rest
                         {
-                            return DemandOutcome::Ready(false);
+                            return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                         }
-                        match Self::identical_recursive(
+                        match Self::identical_attempt(
                             store,
                             plan,
                             left.ty,
@@ -762,11 +801,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                             seen,
                             alpha_binders,
                         ) {
-                            DemandOutcome::Ready(true) => {}
+                            IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                             outcome => return outcome,
                         }
                     }
-                    Self::identical_recursive(store, plan, left.ret, right.ret, seen, alpha_binders)
+                    Self::identical_attempt(store, plan, left.ret, right.ret, seen, alpha_binders)
                 })();
                 alpha_binders.truncate(binder_start);
                 outcome
@@ -774,7 +813,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             TypeTag::Array => {
                 let left = store.array_type(left).unwrap().element;
                 let right = store.array_type(right).unwrap().element;
-                Self::identical_recursive(store, plan, left, right, seen, alpha_binders)
+                Self::identical_attempt(store, plan, left, right, seen, alpha_binders)
             }
             TypeTag::Tuple => {
                 let left = store.tuple_type(left).unwrap().clone();
@@ -782,12 +821,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 if left.elements.len() != right.elements.len()
                     || left.rest.map(|rest| rest.position) != right.rest.map(|rest| rest.position)
                 {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.elements.iter().zip(&right.elements) {
-                    match Self::identical_recursive(store, plan, *left, *right, seen, alpha_binders)
-                    {
-                        DemandOutcome::Ready(true) => {}
+                    match Self::identical_attempt(store, plan, *left, *right, seen, alpha_binders) {
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
@@ -800,7 +838,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     alpha_binders,
                 )
             }
-            TypeTag::Readonly => Self::identical_recursive(
+            TypeTag::Readonly => Self::identical_attempt(
                 store,
                 plan,
                 store.readonly_operand(left).unwrap(),
@@ -825,11 +863,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 .to_vec();
                 let left = match Self::flatten_normalized_family(store, plan, tag, &left) {
                     Ok(left) => left,
-                    Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+                    Err(exhaustion) => {
+                        return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
+                    }
                 };
                 let right = match Self::flatten_normalized_family(store, plan, tag, &right) {
                     Ok(right) => right,
-                    Err(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+                    Err(exhaustion) => {
+                        return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
+                    }
                 };
                 Self::identical_unordered(store, plan, &left, &right, seen, alpha_binders)
             }
@@ -837,15 +879,15 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 let left = store.class_instance_type(left).unwrap().clone();
                 let right = store.class_instance_type(right).unwrap().clone();
                 if left.class != right.class || left.args.len() != right.args.len() {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.args.into_iter().zip(right.args) {
-                    match Self::identical_recursive(store, plan, left, right, seen, alpha_binders) {
-                        DemandOutcome::Ready(true) => {}
+                    match Self::identical_attempt(store, plan, left, right, seen, alpha_binders) {
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
-                DemandOutcome::Ready(true)
+                IdentityAttempt::Decided(DemandOutcome::Ready(true))
             }
             TypeTag::Conditional => {
                 let left = *store.conditional_type(left).expect("conditional payload");
@@ -854,7 +896,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     || left.distributive != right.distributive
                     || left.poisoned != right.poisoned
                 {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in [
                     (left.check, right.check),
@@ -862,12 +904,12 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     (left.true_branch, right.true_branch),
                     (left.false_branch, right.false_branch),
                 ] {
-                    match Self::identical_recursive(store, plan, left, right, seen, alpha_binders) {
-                        DemandOutcome::Ready(true) => {}
+                    match Self::identical_attempt(store, plan, left, right, seen, alpha_binders) {
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
-                DemandOutcome::Ready(true)
+                IdentityAttempt::Decided(DemandOutcome::Ready(true))
             }
             TypeTag::Instantiation => {
                 let left = store
@@ -879,9 +921,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     .expect("instantiation payload")
                     .clone();
                 if left.args.len() != right.args.len() {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
-                match Self::identical_recursive(
+                match Self::identical_attempt(
                     store,
                     plan,
                     left.base,
@@ -889,7 +931,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     seen,
                     alpha_binders,
                 ) {
-                    DemandOutcome::Ready(true) => {}
+                    IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                     outcome => return outcome,
                 }
                 let mut remaining = right.args;
@@ -897,10 +939,10 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     let Some(position) = remaining.iter().position(|(right_key, _)| {
                         Self::alpha_type_params_identical(left_key, *right_key, alpha_binders)
                     }) else {
-                        return DemandOutcome::Ready(false);
+                        return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                     };
                     let (_, right_value) = remaining.remove(position);
-                    match Self::identical_recursive(
+                    match Self::identical_attempt(
                         store,
                         plan,
                         left_value,
@@ -908,11 +950,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         seen,
                         alpha_binders,
                     ) {
-                        DemandOutcome::Ready(true) => {}
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
-                DemandOutcome::Ready(true)
+                IdentityAttempt::Decided(DemandOutcome::Ready(true))
             }
             TypeTag::Mapped => {
                 let left = *store.mapped_type(left).expect("mapped payload");
@@ -921,7 +963,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     || left.optional_modifier != right.optional_modifier
                     || left.readonly_modifier != right.readonly_modifier
                 {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in [
                     (Some(left.key_source), Some(right.key_source)),
@@ -929,11 +971,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     (left.modifiers_source, right.modifiers_source),
                 ] {
                     match Self::identical_optional(store, plan, left, right, seen, alpha_binders) {
-                        DemandOutcome::Ready(true) => {}
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
-                DemandOutcome::Ready(true)
+                IdentityAttempt::Decided(DemandOutcome::Ready(true))
             }
             TypeTag::Template => {
                 let left = store.template_type(left).expect("template payload").clone();
@@ -942,17 +984,17 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     .expect("template payload")
                     .clone();
                 if left.texts != right.texts || left.holes.len() != right.holes.len() {
-                    return DemandOutcome::Ready(false);
+                    return IdentityAttempt::Decided(DemandOutcome::Ready(false));
                 }
                 for (left, right) in left.holes.into_iter().zip(right.holes) {
-                    match Self::identical_recursive(store, plan, left, right, seen, alpha_binders) {
-                        DemandOutcome::Ready(true) => {}
+                    match Self::identical_attempt(store, plan, left, right, seen, alpha_binders) {
+                        IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {}
                         outcome => return outcome,
                     }
                 }
-                DemandOutcome::Ready(true)
+                IdentityAttempt::Decided(DemandOutcome::Ready(true))
             }
-            TypeTag::Keyof => Self::identical_recursive(
+            TypeTag::Keyof => Self::identical_attempt(
                 store,
                 plan,
                 store.keyof_operand(left).expect("keyof payload"),
@@ -967,7 +1009,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 let right = *store
                     .deferred_indexed_access_type(right)
                     .expect("indexed-access payload");
-                match Self::identical_recursive(
+                match Self::identical_attempt(
                     store,
                     plan,
                     left.object,
@@ -975,23 +1017,25 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     seen,
                     alpha_binders,
                 ) {
-                    DemandOutcome::Ready(true) => Self::identical_recursive(
-                        store,
-                        plan,
-                        left.index,
-                        right.index,
-                        seen,
-                        alpha_binders,
-                    ),
+                    IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {
+                        Self::identical_attempt(
+                            store,
+                            plan,
+                            left.index,
+                            right.index,
+                            seen,
+                            alpha_binders,
+                        )
+                    }
                     outcome => outcome,
                 }
             }
-            TypeTag::Infer => DemandOutcome::Ready(
+            TypeTag::Infer => IdentityAttempt::Decided(DemandOutcome::Ready(
                 store.infer_index(left).expect("infer payload")
                     == store.infer_index(right).expect("infer payload"),
-            ),
-            TypeTag::MappedValue => DemandOutcome::Ready(true),
-            _ => DemandOutcome::Ready(false),
+            )),
+            TypeTag::MappedValue => IdentityAttempt::Decided(DemandOutcome::Ready(true)),
+            _ => IdentityAttempt::Decided(DemandOutcome::Ready(false)),
         }
     }
 
@@ -1002,13 +1046,13 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         right: Option<TypeId>,
         seen: &mut IdentitySeen,
         alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
-    ) -> DemandOutcome<bool> {
+    ) -> IdentityAttempt {
         match (left, right) {
             (Some(left), Some(right)) => {
-                Self::identical_recursive(store, plan, left, right, seen, alpha_binders)
+                Self::identical_attempt(store, plan, left, right, seen, alpha_binders)
             }
-            (None, None) => DemandOutcome::Ready(true),
-            _ => DemandOutcome::Ready(false),
+            (None, None) => IdentityAttempt::Decided(DemandOutcome::Ready(true)),
+            _ => IdentityAttempt::Decided(DemandOutcome::Ready(false)),
         }
     }
 
@@ -1057,9 +1101,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         right: &[TypeId],
         seen: &mut IdentitySeen,
         alpha_binders: &[(TypeParamId, TypeParamId)],
-    ) -> DemandOutcome<bool> {
+    ) -> IdentityAttempt {
         if left.len() != right.len() {
-            return DemandOutcome::Ready(false);
+            return IdentityAttempt::Decided(DemandOutcome::Ready(false));
         }
         let mut remaining = right.to_vec();
         for &candidate in left {
@@ -1067,7 +1111,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             for (position, &target) in remaining.iter().enumerate() {
                 let mut trial_seen = seen.clone();
                 let mut trial_binders = alpha_binders.to_vec();
-                match Self::identical_recursive(
+                match Self::identical_attempt(
                     store,
                     plan,
                     candidate,
@@ -1075,23 +1119,24 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     &mut trial_seen,
                     &mut trial_binders,
                 ) {
-                    DemandOutcome::Ready(true) => {
+                    IdentityAttempt::Decided(DemandOutcome::Ready(true)) => {
                         matched = Some((position, trial_seen));
                         break;
                     }
-                    DemandOutcome::Ready(false) => {}
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion)
+                    IdentityAttempt::Decided(DemandOutcome::Ready(false)) => {}
+                    IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion)) => {
+                        return IdentityAttempt::Decided(DemandOutcome::Exhausted(exhaustion))
                     }
+                    IdentityAttempt::Needs(demand) => return IdentityAttempt::Needs(demand),
                 }
             }
             let Some((position, trial_seen)) = matched else {
-                return DemandOutcome::Ready(false);
+                return IdentityAttempt::Decided(DemandOutcome::Ready(false));
             };
             *seen = trial_seen;
             remaining.remove(position);
         }
-        DemandOutcome::Ready(remaining.is_empty())
+        IdentityAttempt::Decided(DemandOutcome::Ready(remaining.is_empty()))
     }
 
     fn flatten_normalized_family(
@@ -1122,23 +1167,47 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         Ok(flattened)
     }
 
-    fn collapse_exact_family_root(
+    fn prepare_exact_family_root(
         store: &Store,
         plan: &ProjectionPlan<'_>,
         root: TypeId,
-    ) -> Result<TypeId, Exhaustion> {
-        let tag = store.tag(root);
-        if !matches!(tag, TypeTag::Union | TypeTag::Intersection) {
-            return Ok(root);
+    ) -> ExactFamilyAttempt {
+        let family = store.tag(root);
+        if !matches!(family, TypeTag::Union | TypeTag::Intersection) {
+            return ExactFamilyAttempt::Ready(root);
         }
-        let roots = if tag == TypeTag::Union {
+        let mut stack = if family == TypeTag::Union {
             store.union_members(root)
         } else {
             store.intersection_members(root)
         }
-        .expect("family root has members");
-        let flattened = Self::flatten_normalized_family(store, plan, tag, roots)?;
-        Ok(if flattened.len() == 1 {
+        .expect("family root has members")
+        .to_vec();
+        let mut flattened = Vec::new();
+        let mut expanded = FxHashSet::default();
+        while let Some(child) = stack.pop() {
+            let normalized = match plan.normalize(child) {
+                Ok(normalized) => normalized,
+                Err(exhaustion) => return ExactFamilyAttempt::Exhausted(exhaustion),
+            };
+            if let Some(demand) = plan.relation_demand(store, normalized) {
+                return ExactFamilyAttempt::Needs(demand);
+            }
+            if store.tag(normalized) == family && expanded.insert(normalized) {
+                let members = if family == TypeTag::Union {
+                    store.union_members(normalized)
+                } else {
+                    store.intersection_members(normalized)
+                }
+                .expect("normalized family tag has members");
+                stack.extend(members.iter().copied());
+            } else if store.tag(normalized) != family {
+                flattened.push(normalized);
+            }
+        }
+        flattened.sort_unstable();
+        flattened.dedup();
+        ExactFamilyAttempt::Ready(if flattened.len() == 1 {
             flattened[0]
         } else {
             root
