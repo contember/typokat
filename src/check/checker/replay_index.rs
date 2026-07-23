@@ -2193,7 +2193,6 @@ mod tests {
         "src/check/checker/lexical_events/owner_lookup_spec.rs",
         "src/check/query/dom_source_cold_spec.rs",
         "src/check/query/identity_memo_spec.rs",
-        "src/check/query/resolved_subtree_spec.rs",
         "src/check/query/tests.rs",
     ];
 
