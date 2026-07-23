@@ -942,9 +942,8 @@ fn fix_signature_params(
         // M28 gate (mirroring the TK2344 gate in `check_type_argument_constraints`):
         // evaluate first so concrete `keyof` constraints relate by value, then skip
         // only constraints that still carry a deferred `keyof`.
-        let constraint = constraint.filter(|&c| {
-            !crate::check::checker::eval::contains_deferred_keyof(interner.store(), c)
-        });
+        let constraint = constraint
+            .filter(|&c| !crate::check::checker::eval::contains_deferred_keyof(interner, c));
 
         let value = match map.get(&param).copied() {
             Some(candidate) => match constraint {
@@ -1024,7 +1023,7 @@ fn fix_present_signature_params(
                         return DemandOutcome::Exhausted(exhaustion);
                     }
                 };
-                (!crate::check::checker::eval::contains_deferred_keyof(interner.store(), evaluated))
+                (!crate::check::checker::eval::contains_deferred_keyof(interner, evaluated))
                     .then_some(evaluated)
             }
             None => None,

@@ -269,7 +269,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             };
             // Concrete instantiation decides deferred `keyof` constraints later.
-            if contains_deferred_keyof(self.interner.store(), evaluated) {
+            if contains_deferred_keyof(self.interner, evaluated) {
                 continue;
             }
             // Decidable argument compositions check precisely; deferred ones stay conservative.

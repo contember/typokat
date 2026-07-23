@@ -1,5 +1,61 @@
 use super::*;
 
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct DeferredKeyofMeasure {
+    pub(super) graph_scans: u64,
+    pub(super) node_visits: u64,
+}
+
+#[cfg(test)]
+type DeferredKeyofMeasureCollector = std::rc::Rc<std::cell::RefCell<DeferredKeyofMeasure>>;
+
+#[cfg(test)]
+thread_local! {
+    static DEFERRED_KEYOF_MEASURE: std::cell::RefCell<Option<DeferredKeyofMeasureCollector>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) struct DeferredKeyofMeasureScope {
+    previous: Option<DeferredKeyofMeasureCollector>,
+    _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl Drop for DeferredKeyofMeasureScope {
+    fn drop(&mut self) {
+        DEFERRED_KEYOF_MEASURE.with(|measure| {
+            measure.replace(self.previous.take());
+        });
+    }
+}
+
+#[cfg(test)]
+pub(super) fn start_deferred_keyof_measure() -> DeferredKeyofMeasureScope {
+    let collector = std::rc::Rc::new(std::cell::RefCell::new(DeferredKeyofMeasure::default()));
+    let previous = DEFERRED_KEYOF_MEASURE
+        .with(|current| current.replace(Some(std::rc::Rc::clone(&collector))));
+    DeferredKeyofMeasureScope {
+        previous,
+        _thread_affine: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+pub(super) fn deferred_keyof_measure() -> Option<DeferredKeyofMeasure> {
+    let collector = DEFERRED_KEYOF_MEASURE.with(|current| current.borrow().clone())?;
+    let measure = collector.borrow().clone();
+    Some(measure)
+}
+
+#[cfg(test)]
+fn measure_deferred_keyof(update: impl FnOnce(&mut DeferredKeyofMeasure)) {
+    if let Some(collector) = DEFERRED_KEYOF_MEASURE.with(|current| current.borrow().clone()) {
+        update(&mut collector.borrow_mut());
+    }
+}
+
 impl<'a> ConditionalEvaluator<'a> {
     /// Schedule the evaluation of a deferred `keyof` (M28). A node whose operand still
     /// contains a free declaration type parameter stays deferred (its own value,
@@ -205,11 +261,10 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
 /// (M28) — the constraint-side gate for a `keyof` whose operand still contains a free
 /// declaration type parameter. Concrete-but-unsupported `keyof` nodes must not be
 /// skipped; they relate conservatively instead of accepting bad arguments.
-pub(in crate::check) fn contains_deferred_keyof(
-    store: &crate::types::store::Store,
-    ty: TypeId,
-) -> bool {
-    contains_deferred_keyof_node(store, ty)
+pub(in crate::check) fn contains_deferred_keyof(interner: &mut Interner, ty: TypeId) -> bool {
+    #[cfg(test)]
+    measure_deferred_keyof(|measure| measure.graph_scans += 1);
+    contains_deferred_keyof_node(interner.store(), ty)
 }
 
 fn contains_deferred_keyof_node(store: &crate::types::store::Store, ty: TypeId) -> bool {
@@ -219,6 +274,8 @@ fn contains_deferred_keyof_node(store: &crate::types::store::Store, ty: TypeId) 
         if !visited.insert(t) {
             continue;
         }
+        #[cfg(test)]
+        measure_deferred_keyof(|measure| measure.node_visits += 1);
         if store.tag(t) == TypeTag::Keyof {
             if let Some(operand) = store.keyof_operand(t) {
                 if contains_free_keyof_operand(store, operand) {
@@ -240,6 +297,8 @@ fn contains_free_keyof_operand(store: &crate::types::store::Store, ty: TypeId) -
         if !visited.insert(t) {
             continue;
         }
+        #[cfg(test)]
+        measure_deferred_keyof(|measure| measure.node_visits += 1);
         match store.tag(t) {
             TypeTag::TypeParam | TypeTag::Infer | TypeTag::MappedValue => return true,
             _ => push_node_children(store, t, &mut stack, false),

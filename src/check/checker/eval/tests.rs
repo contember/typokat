@@ -1133,7 +1133,7 @@ fn deferred_keyof_walks_function_receivers() {
     });
     let deferred = interner.intern_keyof(function);
 
-    assert!(contains_deferred_keyof(interner.store(), deferred));
+    assert!(contains_deferred_keyof(&mut interner, deferred));
 }
 
 fn instantiate_one(
