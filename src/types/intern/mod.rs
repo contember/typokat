@@ -26,6 +26,63 @@ struct UserDeltaDropWitness {
     discarded: Arc<AtomicBool>,
 }
 
+#[derive(Default)]
+struct FreeParamSummaryCache {
+    graph_identity: Arc<()>,
+    base: Arc<FxHashMap<TypeId, Arc<[TypeParamId]>>>,
+    local: FxHashMap<TypeId, Arc<[TypeParamId]>>,
+}
+
+impl FreeParamSummaryCache {
+    fn new(graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            base: Arc::new(FxHashMap::default()),
+            local: FxHashMap::default(),
+        }
+    }
+
+    fn align_with(&mut self, graph_identity: &Arc<()>) {
+        if Arc::ptr_eq(&self.graph_identity, graph_identity) {
+            return;
+        }
+        self.graph_identity = Arc::clone(graph_identity);
+        self.base = Arc::new(FxHashMap::default());
+        self.local.clear();
+    }
+
+    fn get(&self, ty: TypeId) -> Option<Arc<[TypeParamId]>> {
+        self.local.get(&ty).or_else(|| self.base.get(&ty)).cloned()
+    }
+
+    fn insert_batch(&mut self, summaries: impl IntoIterator<Item = (TypeId, Arc<[TypeParamId]>)>) {
+        for (ty, summary) in summaries {
+            if !self.base.contains_key(&ty) {
+                self.local.entry(ty).or_insert(summary);
+            }
+        }
+    }
+
+    fn freeze_as_base(&mut self) {
+        let mut combined = FxHashMap::default();
+        combined.extend(
+            self.base
+                .iter()
+                .map(|(&ty, summary)| (ty, Arc::clone(summary))),
+        );
+        combined.extend(std::mem::take(&mut self.local));
+        self.base = Arc::new(combined);
+    }
+
+    fn fork_delta(&self, graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            base: Arc::clone(&self.base),
+            local: FxHashMap::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 impl Drop for UserDeltaDropWitness {
     fn drop(&mut self) {
@@ -148,6 +205,8 @@ impl WellKnown {
 
 pub struct Interner {
     store: Store,
+    /// Binder-aware derived summaries for the current immutable type graph.
+    free_param_summaries: FreeParamSummaryCache,
     /// Immutable structural buckets owned by the sealed prefix.
     dedup_base: Arc<FxHashMap<u64, SmallVec<[TypeId; 2]>>>,
     /// Structural hash → interned candidates sharing that hash (architecture
@@ -168,8 +227,11 @@ impl Interner {
     /// order, returning it ready to use. The `WellKnown` table is filled as a
     /// side effect.
     pub fn with_intrinsics() -> Self {
+        let store = Store::new();
+        let graph_identity = Arc::clone(store.semantic_graph_identity());
         let mut interner = Interner {
-            store: Store::new(),
+            store,
+            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
@@ -241,6 +303,21 @@ impl Interner {
         &self.store
     }
 
+    pub(crate) fn free_param_summary(&mut self, ty: TypeId) -> Option<Arc<[TypeParamId]>> {
+        self.free_param_summaries
+            .align_with(self.store.semantic_graph_identity());
+        self.free_param_summaries.get(ty)
+    }
+
+    pub(crate) fn publish_free_param_summaries(
+        &mut self,
+        summaries: impl IntoIterator<Item = (TypeId, Arc<[TypeParamId]>)>,
+    ) {
+        self.free_param_summaries
+            .align_with(self.store.semantic_graph_identity());
+        self.free_param_summaries.insert_batch(summaries);
+    }
+
     /// Seal a complete standalone interner as the immutable shared prefix.
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if !self.dedup_base.is_empty() || !self.reserved_types_base.is_empty() {
@@ -253,7 +330,10 @@ impl Interner {
         {
             return Err("interner has pending reserved types");
         }
+        self.free_param_summaries
+            .align_with(self.store.semantic_graph_identity());
         self.store.freeze_as_base()?;
+        self.free_param_summaries.freeze_as_base();
         self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
         self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
         Ok(())
@@ -264,8 +344,11 @@ impl Interner {
         if !self.dedup.is_empty() || !self.reserved_types.is_empty() {
             return Err("interner base has an unpublished suffix");
         }
+        let store = self.store.fork_delta()?;
+        let graph_identity = Arc::clone(store.semantic_graph_identity());
         Ok(Self {
-            store: self.store.fork_delta()?,
+            store,
+            free_param_summaries: self.free_param_summaries.fork_delta(graph_identity),
             dedup_base: Arc::clone(&self.dedup_base),
             dedup: FxHashMap::default(),
             reserved_types_base: Arc::clone(&self.reserved_types_base),

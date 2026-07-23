@@ -639,8 +639,10 @@ impl Interner {
         }
         let well_known = well_known_from_ids(ids);
 
+        let graph_identity = Arc::clone(store.semantic_graph_identity());
         let interner = Interner {
             store,
+            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup,
             reserved_types_base: Arc::new(FxHashMap::default()),
@@ -731,8 +733,10 @@ impl Interner {
         for id in &mut ids {
             *id = TypeId(reader.u32()?);
         }
+        let graph_identity = Arc::clone(store.semantic_graph_identity());
         let interner = Interner {
             store,
+            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup,
             reserved_types_base: Arc::new(FxHashMap::default()),

@@ -8,6 +8,7 @@ use crate::types::repr::{FunctionType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::Arc;
 
 #[cfg(test)]
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -250,15 +251,6 @@ fn tag_can_reenter(tag: TypeTag) -> bool {
     )
 }
 
-/// The prefilter tracks free params as a `u64` bitmask; larger maps walk instead.
-const PREFILTER_MAX_PARAMS: usize = 64;
-
-fn param_bit(param_keys: &[TypeParamId], id: TypeParamId) -> u64 {
-    param_keys
-        .binary_search(&id)
-        .map_or(0, |index| 1u64 << index)
-}
-
 /// Visit exactly the child ids the `apply_*` arms recurse into — keep this in
 /// sync with `apply.rs` (like `tag_can_reenter`); the prefilter is only sound
 /// while these edges mirror the recursion.
@@ -409,222 +401,116 @@ fn for_each_apply_child(
     }
 }
 
-/// One iterative-Tarjan DFS frame of [`compute_free_sets`].
-struct FreeSetFrame {
-    ty: TypeId,
-    children: Vec<TypeId>,
-    next_child: usize,
-    /// Bits of this node's own declared binders (Function only), masked at frame end.
-    binder_mask: u64,
-    bits: u64,
-    index: usize,
-    lowlink: usize,
-}
-
-/// Fill `free_sets` for every node reachable from `root` along the apply-child
-/// edges and return `root`'s mask: which `param_keys` occur free (a Function
-/// removes its own binder bits from its subtree; SCC members share their union,
-/// a sound over-approximation for binders inside a cycle). Iterative Tarjan —
-/// recursive DFS would risk stack overflow on deep graphs.
-fn compute_free_sets(
-    store: &Store,
-    param_keys: &[TypeParamId],
-    free_sets: &mut FxHashMap<TypeId, u64>,
+/// Compute exact, map-independent free declaration parameters as a least fixed
+/// point. Results are published only after the complete reachable graph closes.
+fn compute_free_param_summaries(
+    interner: &mut Interner,
     #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
     root: TypeId,
-) -> u64 {
-    debug_assert!(param_keys.len() <= PREFILTER_MAX_PARAMS);
-    let push_frame = |ty: TypeId, index: usize| -> FreeSetFrame {
-        let mut children = Vec::new();
-        for_each_apply_child(
-            store,
-            ty,
-            #[cfg(test)]
-            measurement,
-            |child| children.push(child),
-        );
-        let binder_mask = store.function_type(ty).map_or(0, |function| {
-            function
-                .type_params
-                .iter()
-                .fold(0, |mask, param| mask | param_bit(param_keys, param.id))
-        });
-        // A TypeParam contributes its own bit iff its id is a map key.
-        let bits = store
-            .type_param(ty)
-            .map_or(0, |param| param_bit(param_keys, param.id));
-        FreeSetFrame {
-            ty,
-            children,
-            next_child: 0,
-            binder_mask,
-            bits,
-            index,
-            lowlink: index,
-        }
-    };
-
-    let mut next_index = 0_usize;
-    let mut frames: Vec<FreeSetFrame> = Vec::new();
-    let mut index_of: FxHashMap<TypeId, usize> = FxHashMap::default();
-    // Nodes discovered in this pass but not yet assigned their SCC union: the
-    // Tarjan stack plus each one's partial (post-binder-mask) contribution.
-    let mut scc_stack: Vec<TypeId> = Vec::new();
-    let mut on_stack: FxHashSet<TypeId> = FxHashSet::default();
-    let mut pending_bits: FxHashMap<TypeId, u64> = FxHashMap::default();
-
-    frames.push(push_frame(root, next_index));
-    index_of.insert(root, next_index);
-    next_index += 1;
-    scc_stack.push(root);
-    on_stack.insert(root);
-
-    while let Some(frame) = frames.last_mut() {
-        if let Some(&child) = frame.children.get(frame.next_child) {
-            frame.next_child += 1;
-            if let Some(&bits) = free_sets.get(&child) {
-                // Completed (this pass or an earlier one): final value.
-                frame.bits |= bits;
-            } else if let Some(&child_index) = index_of.get(&child) {
-                // In-stack back edge: the child is in this frame's own SCC
-                // (Tarjan invariant), so its partial contribution — already in
-                // `pending_bits` if its frame closed — is fixed up by the
-                // SCC-completion union, never taken from a cached final value.
-                debug_assert!(on_stack.contains(&child));
-                frame.lowlink = frame.lowlink.min(child_index);
-                frame.bits |= pending_bits.get(&child).copied().unwrap_or(0);
-            } else {
-                index_of.insert(child, next_index);
-                scc_stack.push(child);
-                on_stack.insert(child);
-                frames.push(push_frame(child, next_index));
-                next_index += 1;
-            }
-            continue;
-        }
-
-        let finished = frames.pop().expect("the loop condition saw a frame");
-        let contribution = (finished.bits) & !finished.binder_mask;
-        pending_bits.insert(finished.ty, contribution);
-        if finished.lowlink == finished.index {
-            // SCC root: every member gets the union over ALL members' contributions.
-            let first_member = scc_stack
-                .iter()
-                .rposition(|&member| member == finished.ty)
-                .expect("an unfinished node stays on the Tarjan stack");
-            let members = scc_stack.split_off(first_member);
-            let union = members.iter().fold(0, |union, member| {
-                union | pending_bits.get(member).copied().unwrap_or(0)
-            });
-            for member in members {
-                on_stack.remove(&member);
-                pending_bits.remove(&member);
-                free_sets.insert(member, union);
-            }
-        }
-        if let Some(parent) = frames.last_mut() {
-            parent.lowlink = parent.lowlink.min(finished.lowlink);
-            // Finalized child → its SCC union; still-pending child → its partial.
-            parent.bits |= free_sets
-                .get(&finished.ty)
-                .or_else(|| pending_bits.get(&finished.ty))
-                .copied()
-                .unwrap_or(0);
-        }
-    }
-
-    free_sets
-        .get(&root)
-        .copied()
-        .expect("the pass assigns every reachable node, including the root")
-}
-
-/// Compute exact free map-parameter sets as a least fixed point over type ids.
-/// Function binders kill their bits at the function boundary, so cycles never
-/// multiply states by combinations of binders crossed along different paths.
-fn compute_exact_free_sets(
-    store: &Store,
-    param_keys: &[TypeParamId],
-    exact_free_sets: &mut FxHashMap<TypeId, u64>,
-    #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
-    root: TypeId,
-) -> u64 {
-    if let Some(&bits) = exact_free_sets.get(&root) {
-        return bits;
+) -> Arc<[TypeParamId]> {
+    if let Some(summary) = interner.free_param_summary(root) {
+        return summary;
     }
 
     let mut pending = vec![root];
     let mut discovered = FxHashSet::default();
     discovered.insert(root);
     let mut parents: FxHashMap<TypeId, Vec<TypeId>> = FxHashMap::default();
-    let mut binder_masks: FxHashMap<TypeId, u64> = FxHashMap::default();
-    let mut values: FxHashMap<TypeId, u64> = FxHashMap::default();
+    let mut binders: FxHashMap<TypeId, Vec<TypeParamId>> = FxHashMap::default();
+    let mut values: FxHashMap<TypeId, FxHashSet<TypeParamId>> = FxHashMap::default();
 
     while let Some(ty) = pending.pop() {
-        if let Some(&cached) = exact_free_sets.get(&ty) {
-            values.insert(ty, cached);
-            continue;
-        }
+        let (own_parameter, node_binders, children) = {
+            let store = interner.store();
+            let own_parameter = store.type_param(ty).map(|parameter| parameter.id);
+            let node_binders = store.function_type(ty).map_or_else(Vec::new, |function| {
+                function
+                    .type_params
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect()
+            });
+            let mut children = Vec::new();
+            for_each_apply_child(
+                store,
+                ty,
+                #[cfg(test)]
+                measurement,
+                |child| children.push(child),
+            );
+            (own_parameter, node_binders, children)
+        };
 
-        values.insert(
-            ty,
-            store
-                .type_param(ty)
-                .map_or(0, |param| param_bit(param_keys, param.id)),
-        );
-        let binder_mask = store.function_type(ty).map_or(0, |function| {
-            function
-                .type_params
-                .iter()
-                .fold(0, |mask, param| mask | param_bit(param_keys, param.id))
-        });
-        binder_masks.insert(ty, binder_mask);
-        for_each_apply_child(
-            store,
-            ty,
-            #[cfg(test)]
-            measurement,
-            |child| {
-                parents.entry(child).or_default().push(ty);
-                if discovered.insert(child) {
-                    pending.push(child);
-                }
-            },
-        );
+        let value = values.entry(ty).or_default();
+        if let Some(parameter) = own_parameter {
+            value.insert(parameter);
+        }
+        binders.insert(ty, node_binders);
+
+        for child in children {
+            if let Some(summary) = interner.free_param_summary(child) {
+                let node_binders = binders
+                    .get(&ty)
+                    .expect("the current node's binders were recorded");
+                values.entry(ty).or_default().extend(
+                    summary
+                        .iter()
+                        .copied()
+                        .filter(|parameter| !node_binders.contains(parameter)),
+                );
+                continue;
+            }
+            parents.entry(child).or_default().push(ty);
+            if discovered.insert(child) {
+                pending.push(child);
+            }
+        }
     }
 
-    let mut deltas = values.clone();
-    let mut propagate: Vec<TypeId> = deltas
+    let mut propagate: Vec<TypeId> = values
         .iter()
-        .filter_map(|(&ty, &bits)| (bits != 0).then_some(ty))
+        .filter_map(|(&ty, parameters)| (!parameters.is_empty()).then_some(ty))
         .collect();
     let mut queued: FxHashSet<TypeId> = propagate.iter().copied().collect();
     while let Some(ty) = propagate.pop() {
         queued.remove(&ty);
-        let delta = deltas.insert(ty, 0).unwrap_or(0);
+        let parameters: Vec<TypeParamId> = values.get(&ty).into_iter().flatten().copied().collect();
         if let Some(type_parents) = parents.get(&ty) {
             for &parent in type_parents {
-                let contribution = delta & !binder_masks.get(&parent).copied().unwrap_or(0);
+                let node_binders = binders
+                    .get(&parent)
+                    .expect("every discovered parent records its binders");
                 let parent_value = values.entry(parent).or_default();
-                let new_bits = contribution & !*parent_value;
-                if new_bits != 0 {
-                    *parent_value |= new_bits;
-                    *deltas.entry(parent).or_default() |= new_bits;
-                    if queued.insert(parent) {
-                        propagate.push(parent);
-                    }
+                let mut changed = false;
+                for parameter in parameters
+                    .iter()
+                    .copied()
+                    .filter(|parameter| !node_binders.contains(parameter))
+                {
+                    changed |= parent_value.insert(parameter);
+                }
+                if changed && queued.insert(parent) {
+                    propagate.push(parent);
                 }
             }
         }
     }
 
+    let mut summaries = Vec::with_capacity(discovered.len());
+    let mut root_summary = None;
     for ty in discovered {
-        exact_free_sets.insert(ty, values.get(&ty).copied().unwrap_or(0));
+        let mut parameters: Vec<TypeParamId> =
+            values.remove(&ty).unwrap_or_default().into_iter().collect();
+        parameters.sort_unstable();
+        let summary: Arc<[TypeParamId]> = parameters.into();
+        if ty == root {
+            root_summary = Some(Arc::clone(&summary));
+        }
+        summaries.push((ty, summary));
     }
-    exact_free_sets
-        .get(&root)
-        .copied()
-        .expect("the fixed point assigns the root")
+    let root_summary = root_summary.expect("the fixed point assigns the root");
+    interner.publish_free_param_summaries(summaries);
+    root_summary
 }
 
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
@@ -647,14 +533,8 @@ pub struct Substitution<'a> {
     frame_visited: FxHashSet<TypeId>,
     /// Incremented by every raw-`TypeId` re-entry to taint all active ancestors.
     cycle_epoch: u64,
-    /// Sorted map keys giving each param its prefilter bit; `None` disables the
-    /// prefilter for this run (map too large — walking is always sound).
-    param_keys: Option<Vec<TypeParamId>>,
-    /// Per-node free-param bitmasks over `param_keys`, filled on demand by the
-    /// Tarjan pass in [`compute_free_sets`]. Scoped to this run.
-    free_sets: FxHashMap<TypeId, u64>,
-    /// Exact binder-aware free sets after a positive approximate answer.
-    exact_free_sets: FxHashMap<TypeId, u64>,
+    /// Durable exact summaries opened by this run, used to canonicalize memo keys.
+    free_param_summaries: FxHashMap<TypeId, Arc<[TypeParamId]>>,
     /// Captured at construction so each run keeps one stable measurement owner.
     #[cfg(test)]
     measurement: Option<SubstitutionMeasureCollector>,
@@ -669,11 +549,6 @@ impl<'a> Substitution<'a> {
         let measurement = capture_substitution_measurement();
         #[cfg(test)]
         let run_visit_measurement = capture_substitution_run_visit_measure();
-        let param_keys = (map.len() <= PREFILTER_MAX_PARAMS).then(|| {
-            let mut keys: Vec<TypeParamId> = map.keys().copied().collect();
-            keys.sort_unstable();
-            keys
-        });
         Substitution {
             map,
             in_progress: FxHashSet::default(),
@@ -683,9 +558,7 @@ impl<'a> Substitution<'a> {
             frame_reentered: FxHashSet::default(),
             frame_visited: FxHashSet::default(),
             cycle_epoch: 0,
-            param_keys,
-            free_sets: FxHashMap::default(),
-            exact_free_sets: FxHashMap::default(),
+            free_param_summaries: FxHashMap::default(),
             #[cfg(test)]
             measurement,
             #[cfg(test)]
@@ -903,63 +776,32 @@ impl<'a> Substitution<'a> {
         result
     }
 
-    /// Whether every map key free in `ty` is currently blocked (so `apply` may
-    /// answer `ty` without walking). `false` whenever the prefilter is disabled.
-    fn effective_free_set_is_empty(&mut self, interner: &Interner, ty: TypeId) -> bool {
-        let Some(param_keys) = self.param_keys.as_deref() else {
-            return false;
-        };
-        let bits = match self.free_sets.get(&ty) {
-            Some(&bits) => bits,
-            None => compute_free_sets(
-                interner.store(),
-                param_keys,
-                &mut self.free_sets,
+    /// Whether every map key free in `ty` is currently blocked.
+    fn effective_free_set_is_empty(&mut self, interner: &mut Interner, ty: TypeId) -> bool {
+        let summary = match interner.free_param_summary(ty) {
+            Some(summary) => summary,
+            None => compute_free_param_summaries(
+                interner,
                 #[cfg(test)]
                 self.measurement.as_ref(),
                 ty,
             ),
         };
-        let blocked = self
-            .blocked
+        self.free_param_summaries.insert(ty, Arc::clone(&summary));
+        summary
             .iter()
-            .fold(0, |mask, &id| mask | param_bit(param_keys, id));
-        if bits & !blocked == 0 {
-            return true;
-        }
-        let exact_bits = compute_exact_free_sets(
-            interner.store(),
-            param_keys,
-            &mut self.exact_free_sets,
-            #[cfg(test)]
-            self.measurement.as_ref(),
-            ty,
-        );
-        exact_bits & !blocked == 0
+            .all(|id| self.blocked.contains(id) || !self.map.contains_key(id))
     }
 
     fn canonical_blocked_context(&self, ty: TypeId) -> Vec<TypeParamId> {
-        if let (Some(param_keys), Some(&free_bits)) =
-            (self.param_keys.as_deref(), self.exact_free_sets.get(&ty))
-        {
-            return param_keys
-                .iter()
-                .enumerate()
-                .filter_map(|(index, &id)| {
-                    (free_bits & (1u64 << index) != 0 && self.blocked.contains(&id)).then_some(id)
-                })
-                .collect();
-        }
-
-        // Large maps disable free-set analysis, so retain the full mapped context.
-        let mut context: Vec<TypeParamId> = self
-            .blocked
+        self.free_param_summaries
+            .get(&ty)
+            .map(Arc::as_ref)
+            .unwrap_or(&[])
             .iter()
-            .filter(|id| self.map.contains_key(id))
+            .filter(|id| self.map.contains_key(id) && self.blocked.contains(id))
             .copied()
-            .collect();
-        context.sort_unstable();
-        context
+            .collect()
     }
 }
 
