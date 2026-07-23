@@ -1,8 +1,8 @@
 //! Strict admission and decoding of the canonical semantic snapshot.
 
 use super::artifact::{
-    packaged_canonical_snapshot, verify_canonical_snapshot, SnapshotVerificationError,
-    CANONICAL_SNAPSHOT_BYTES, CANONICAL_SNAPSHOT_SHA256,
+    packaged_canonical_snapshot, verify_and_admit_canonical_snapshot, AdmittedCanonicalSnapshot,
+    SnapshotVerificationError, CANONICAL_SNAPSHOT_BYTES, CANONICAL_SNAPSHOT_SHA256,
 };
 use super::base::FrozenLibraryIdentity;
 use super::provider::{
@@ -68,21 +68,23 @@ pub(super) struct DecodedCanonicalLibrary {
     pub(super) identity: FrozenLibraryIdentity,
 }
 
-pub(super) fn admit_packaged_canonical() -> Result<Cow<'static, [u8]>, LibraryInitError> {
+pub(super) fn admit_packaged_canonical() -> Result<AdmittedCanonicalSnapshot, LibraryInitError> {
     #[cfg(test)]
     SNAPSHOT_VALIDATIONS.set(SNAPSHOT_VALIDATIONS.get().saturating_add(1));
     let bytes = packaged_canonical_snapshot().bytes();
-    verify_canonical_snapshot(bytes, packaged_canonical_snapshot().binding())
-        .map_err(map_admission_error)?;
-    Ok(Cow::Borrowed(bytes))
+    verify_and_admit_canonical_snapshot(
+        Cow::Borrowed(bytes),
+        packaged_canonical_snapshot().binding(),
+    )
+    .map_err(map_admission_error)
 }
 
 pub(super) fn decode_admitted_canonical(
-    bytes: Cow<'static, [u8]>,
+    admitted: AdmittedCanonicalSnapshot,
 ) -> Result<DecodedCanonicalLibrary, LibraryInitError> {
     #[cfg(test)]
     SNAPSHOT_DECODES.set(SNAPSHOT_DECODES.get().saturating_add(1));
-    decode_canonical_library_snapshot(bytes)
+    decode_canonical_library_snapshot(admitted)
         .map(|decoded| DecodedCanonicalLibrary {
             runtime: decoded.runtime,
             root_names: decoded.root_names,
@@ -96,11 +98,10 @@ pub(super) fn decode_admitted_canonical(
 #[cfg(test)]
 pub(super) fn admit_canonical_for_test(
     bytes: Vec<u8>,
-) -> Result<Cow<'static, [u8]>, LibraryInitError> {
+) -> Result<AdmittedCanonicalSnapshot, LibraryInitError> {
     SNAPSHOT_VALIDATIONS.set(SNAPSHOT_VALIDATIONS.get().saturating_add(1));
-    verify_canonical_snapshot(&bytes, packaged_canonical_snapshot().binding())
-        .map_err(map_admission_error)?;
-    Ok(Cow::Owned(bytes))
+    verify_and_admit_canonical_snapshot(Cow::Owned(bytes), packaged_canonical_snapshot().binding())
+        .map_err(map_admission_error)
 }
 
 fn map_admission_error(error: SnapshotVerificationError) -> LibraryInitError {

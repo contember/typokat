@@ -47,6 +47,7 @@ use crate::class_semantics::{
 };
 #[cfg(test)]
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
+use crate::library::artifact::AdmittedCanonicalSnapshot;
 #[cfg(test)]
 use crate::snapshot_codec::SnapshotWriter;
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
@@ -79,6 +80,7 @@ const VERSION: u32 = 1;
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const SCHEMA_IDENTITY: &str = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
 const CANONICAL_ARCHIVE_BYTES: usize = 21_000_266;
+#[cfg(test)]
 const CANONICAL_ARCHIVE_SHA256: &str =
     "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
 #[cfg(test)]
@@ -167,6 +169,7 @@ fn codec(stage: SnapshotErrorStage, error: SnapshotCodecError) -> SnapshotError 
     invalid(stage, error.to_string())
 }
 
+#[cfg(test)]
 fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
@@ -4372,9 +4375,7 @@ pub(in crate::check::checker) fn validate_snapshot(
 fn validate_canonical_snapshot(
     bytes: Cow<'static, [u8]>,
 ) -> Result<ValidatedSnapshot, SnapshotError> {
-    if bytes.len() != CANONICAL_ARCHIVE_BYTES
-        || digest32(&bytes) != decode_hex32(CANONICAL_ARCHIVE_SHA256)
-    {
+    if bytes.len() != CANONICAL_ARCHIVE_BYTES {
         return Err(invalid(
             SnapshotErrorStage::HeaderValidation,
             "canonical snapshot identity mismatch",
@@ -5142,9 +5143,9 @@ pub(in crate::check::checker) fn decode_snapshot_bytes_for_test(
 }
 
 pub(crate) fn decode_canonical_library_snapshot(
-    bytes: Cow<'static, [u8]>,
+    admitted: AdmittedCanonicalSnapshot,
 ) -> Result<DecodedFrozenLibrary, SnapshotError> {
-    let validated = validate_canonical_snapshot(bytes)?;
+    let validated = validate_canonical_snapshot(admitted.into_bytes())?;
     decode_canonical_snapshot(validated).map(DecodedFrozenLibrary::from_decoded)
 }
 

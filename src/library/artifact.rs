@@ -8,6 +8,7 @@ use super::compiler::{LibrarySemanticIdentity, COMPILER_SCHEMA_SHA256};
 #[cfg(test)]
 use super::profile::ExactLibraryProfile;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::fmt;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -117,6 +118,16 @@ impl VerifiedCanonicalSnapshot {
     }
 }
 
+pub(crate) struct AdmittedCanonicalSnapshot {
+    bytes: Cow<'static, [u8]>,
+}
+
+impl AdmittedCanonicalSnapshot {
+    pub(crate) fn into_bytes(self) -> Cow<'static, [u8]> {
+        self.bytes
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SnapshotVerificationError {
     ProfileIdentityMismatch {
@@ -212,6 +223,14 @@ pub fn verify_canonical_snapshot(
         sha256: actual_sha256,
         binding,
     })
+}
+
+pub(crate) fn verify_and_admit_canonical_snapshot(
+    bytes: Cow<'static, [u8]>,
+    binding: SnapshotBinding,
+) -> Result<AdmittedCanonicalSnapshot, SnapshotVerificationError> {
+    verify_canonical_snapshot(bytes.as_ref(), binding)?;
+    Ok(AdmittedCanonicalSnapshot { bytes })
 }
 
 fn canonical_semantic_identity() -> LibrarySemanticIdentity {
