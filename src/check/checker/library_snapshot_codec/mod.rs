@@ -38,8 +38,13 @@ use super::FrozenCheckerRuntimeSnapshotParts;
 use crate::binder::bind::{LibraryBinderCheckpointEnds, LibraryBinderUnit};
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
+#[cfg(test)]
+use crate::binder::snapshot::decode_binder_snapshot;
 use crate::binder::snapshot::encode_binder_snapshot;
-use crate::binder::snapshot::{decode_binder_snapshot, snapshot_reference_records};
+use crate::binder::snapshot::{
+    decode_binder_snapshot_with_evidence, snapshot_reference_records,
+    RetainedScopeMapSnapshotEvidence,
+};
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::class_semantics::{
@@ -4832,8 +4837,9 @@ fn decode_canonical_snapshot_with_evidence(
             })?;
         let binder = match std::thread::Builder::new()
             .name("typokat-library-binder-decode".to_owned())
-            .spawn_scoped(scope, || decode_binder_snapshot(binder_section))
-        {
+            .spawn_scoped(scope, || {
+                decode_binder_snapshot_with_evidence(binder_section)
+            }) {
             Ok(binder) => binder,
             Err(_) => {
                 return match interner.join() {
@@ -4894,13 +4900,15 @@ fn decode_canonical_snapshot_with_evidence(
             kind: SnapshotErrorKind::WorkerPanicked { worker: "interner" },
         })?
         .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
-    let binder = binder_result
+    let decoded_binder = binder_result
         .map_err(|_| SnapshotError {
             stage: SnapshotErrorStage::Decode,
             message: "binder decode worker panicked".to_owned(),
             kind: SnapshotErrorKind::WorkerPanicked { worker: "binder" },
         })?
         .map_err(|error| codec(SnapshotErrorStage::Decode, error))?;
+    let binder = decoded_binder.binder;
+    let retained_scope_maps = decoded_binder.retained_scope_maps;
     if interner.store().len() != next.types
         || binder.graph.snapshot_len() != next.scopes
         || binder.symbols.len() != next.symbols
@@ -4919,8 +4927,13 @@ fn decode_canonical_snapshot_with_evidence(
             "decoded runtime counts disagree with next-id prefix",
         ));
     }
-    let evidence =
-        admitted_library_snapshot_evidence(&validated, &next, source_file_count, &binder)?;
+    let evidence = admitted_library_snapshot_evidence(
+        &validated,
+        &next,
+        source_file_count,
+        &binder,
+        retained_scope_maps,
+    )?;
     let roots = decode_root_index(section(&validated, 9)?, &next)?;
     let canonical_roots = collect_root_rows(&binder)
         .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
@@ -5227,6 +5240,7 @@ fn admitted_library_snapshot_evidence(
     next: &NextIds,
     source_file_count: u32,
     binder: &Binder,
+    retained_scope_maps: RetainedScopeMapSnapshotEvidence,
 ) -> Result<AdmittedLibrarySnapshotEvidence, SnapshotError> {
     let mut modules = binder
         .snapshot_module_sources()
@@ -5257,8 +5271,6 @@ fn admitted_library_snapshot_evidence(
         })
         .collect();
     let section_digests = std::array::from_fn(|index| validated.sections[index].digest);
-    let retained_scope_maps = crate::binder::snapshot::encode_retained_scope_maps(binder)
-        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let evidence = AdmittedLibrarySnapshotEvidence {
         section_digests,
         prefixes: LibraryBinderCheckpointEnds {
@@ -5271,7 +5283,7 @@ fn admitted_library_snapshot_evidence(
             next_source: source_count + 1,
         },
         library_units,
-        retained_scope_maps_sha256: digest32(&retained_scope_maps),
+        retained_scope_maps_sha256: retained_scope_maps.sha256(),
     };
     Ok(evidence)
 }

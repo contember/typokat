@@ -13,7 +13,9 @@ use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal, OriginalModuleOrdinal};
 use crate::span::Span;
 use rustc_hash::FxHashMap;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 const BINDER_SNAPSHOT_VERSION: u32 = 2;
 
@@ -3169,7 +3171,29 @@ fn decode_value_map(
     Ok(map)
 }
 
-pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCodecError> {
+pub(crate) struct RetainedScopeMapSnapshotEvidence {
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "retains the authenticated binder byte range")
+    )]
+    bytes: Range<usize>,
+    sha256: [u8; 32],
+}
+
+impl RetainedScopeMapSnapshotEvidence {
+    pub(crate) fn sha256(&self) -> [u8; 32] {
+        self.sha256
+    }
+}
+
+pub(crate) struct DecodedBinderSnapshot {
+    pub(crate) binder: Binder,
+    pub(crate) retained_scope_maps: RetainedScopeMapSnapshotEvidence,
+}
+
+pub(crate) fn decode_binder_snapshot_with_evidence(
+    bytes: &[u8],
+) -> Result<DecodedBinderSnapshot, SnapshotCodecError> {
     let mut reader = SnapshotReader::new(bytes);
     if reader.u32()? != BINDER_SNAPSHOT_VERSION {
         return Err(invalid(&reader, "unsupported binder snapshot version"));
@@ -3193,9 +3217,11 @@ pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCod
             return Err(invalid(&reader, "duplicate module source scope"));
         }
     }
+    let retained_scope_maps_start = reader.position();
     let fn_scopes = decode_scope_map(&mut reader)?;
     let fn_decl_ids = decode_value_map(&mut reader)?;
     let block_scopes = decode_scope_map(&mut reader)?;
+    let retained_scope_maps_end = reader.position();
     reader.finish()?;
     let binder = Binder::from_snapshot_parts(
         graph,
@@ -3215,7 +3241,25 @@ pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCod
         block_scopes,
     );
     validate_binder(&binder, bytes.len())?;
-    Ok(binder)
+    let retained_scope_maps = retained_scope_maps_start..retained_scope_maps_end;
+    let retained_scope_map_bytes = bytes
+        .get(retained_scope_maps.clone())
+        .ok_or_else(|| SnapshotCodecError::invalid(bytes.len(), "retained-map range is invalid"))?;
+    Ok(DecodedBinderSnapshot {
+        binder,
+        retained_scope_maps: RetainedScopeMapSnapshotEvidence {
+            bytes: retained_scope_maps,
+            sha256: Sha256::digest(retained_scope_map_bytes).into(),
+        },
+    })
+}
+
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "preserves the generic binder decode seam")
+)]
+pub(crate) fn decode_binder_snapshot(bytes: &[u8]) -> Result<Binder, SnapshotCodecError> {
+    decode_binder_snapshot_with_evidence(bytes).map(|decoded| decoded.binder)
 }
 
 #[cfg(test)]
@@ -3705,7 +3749,20 @@ mod tests {
     fn binder_snapshot_roundtrips_complete_ast_free_state() {
         let binder = fixture_binder();
         let bytes = encode_binder_snapshot(&binder).expect("binder encodes");
-        let decoded = decode_binder_snapshot(&bytes).expect("binder decodes");
+        let decoded_with_evidence =
+            decode_binder_snapshot_with_evidence(&bytes).expect("binder decodes");
+        let retained_scope_maps =
+            encode_retained_scope_maps(&binder).expect("retained scope maps encode");
+        assert_eq!(
+            &bytes[decoded_with_evidence.retained_scope_maps.bytes.clone()],
+            retained_scope_maps
+        );
+        let retained_scope_maps_sha256: [u8; 32] = Sha256::digest(&retained_scope_maps).into();
+        assert_eq!(
+            decoded_with_evidence.retained_scope_maps.sha256(),
+            retained_scope_maps_sha256
+        );
+        let decoded = decoded_with_evidence.binder;
         assert_eq!(encode_binder_snapshot(&decoded), Ok(bytes));
         assert_eq!(decoded.fn_scopes, binder.fn_scopes);
         assert_eq!(decoded.fn_decl_ids, binder.fn_decl_ids);
