@@ -2190,6 +2190,7 @@ mod tests {
         "src/check/checker/decls/eager_application_cache_spec.rs",
         "src/check/checker/eval/tests.rs",
         "src/check/checker/library_snapshot_codec/spec.rs",
+        "src/check/checker/lexical_events/owner_lookup_spec.rs",
         "src/check/query/dom_source_cold_spec.rs",
         "src/check/query/tests.rs",
     ];
