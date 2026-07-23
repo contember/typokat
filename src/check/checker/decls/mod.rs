@@ -1629,6 +1629,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// annotation in an SCC is lowered before any reserved root is filled.
     fn construct_pending_interface_sccs(&mut self, start: usize, end: usize) {
         let end = end.min(self.type_decls.len());
+        let has_pending_interface = (start..end).any(|index| {
+            matches!(self.type_decls.get(index), Some(TypeDecl::Interface { .. }))
+                && self.type_group_construction_is_pending(TypeGroupId(
+                    u32::try_from(index).expect("type group index fits u32"),
+                ))
+        });
+        if !has_pending_interface {
+            #[cfg(test)]
+            INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| {
+                work.borrow_mut().push(InterfaceSccConstructionWork {
+                    start,
+                    end,
+                    ..InterfaceSccConstructionWork::default()
+                });
+            });
+            return;
+        }
         #[cfg(test)]
         let topology_declaration_scans = self.type_decls.iter().count();
         let topology = interface_heritage_topology(self.binder, &self.type_decls);
