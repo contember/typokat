@@ -11,13 +11,14 @@ use super::base::FrozenLibraryBase;
 use super::compiler::LibraryCompiler;
 use super::profile::ExactLibraryProfile;
 use super::provider::{
-    InitializationMeasurement, LibraryBaseProvider, LibraryInitCause, LibraryInitError,
-    LibraryInitStage,
+    CheckpointAuthenticationViolation, InitializationMeasurement, LibraryBaseProvider,
+    LibraryInitCause, LibraryInitError, LibraryInitStage,
 };
 use super::snapshot::test_support::{
     canonical_bytes_with_mutation_for_test, canonical_projection_from_compiled_for_test,
     pre_admitted_snapshot_case_for_test, ReferenceEndpoint, SnapshotTestMutation,
 };
+use crate::binder::snapshot::RetainedScopeMapEncodingScopeForTest;
 use std::sync::{Arc, Barrier};
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
@@ -270,6 +271,90 @@ fn source_compiled_and_decoded_bases_have_identical_canonical_projection() {
         decoded.root_names_for_test()
     );
     assert_eq!(source_projection.prefixes(), decoded.prefixes_for_test());
+}
+
+#[test]
+fn provider_admission_reuses_authenticated_retained_scope_map_bytes() {
+    let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
+    let source_encoding = RetainedScopeMapEncodingScopeForTest::start();
+    let checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("source binder checkpoint");
+    let stale_checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("second source binder checkpoint");
+    let mut corrupt_checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("third source binder checkpoint");
+    let source_encoding = source_encoding.finish();
+
+    let provider_encoding = RetainedScopeMapEncodingScopeForTest::start();
+    let provider = LibraryBaseProvider::new();
+    let base = acquire(&provider).expect("canonical frozen library base");
+    let provider_encoding = provider_encoding.finish();
+
+    let authentication_encoding = RetainedScopeMapEncodingScopeForTest::start();
+    let authenticated = provider
+        .authenticate_library_binder_checkpoint(checkpoint)
+        .expect("source checkpoint matches admitted retained-map evidence");
+    let authentication_encoding = authentication_encoding.finish();
+
+    corrupt_checkpoint.mutate_function_scopes_for_test();
+    let corrupt_authentication_encoding = RetainedScopeMapEncodingScopeForTest::start();
+    let corrupt_error = match provider.authenticate_library_binder_checkpoint(corrupt_checkpoint) {
+        Ok(_) => panic!("corrupt retained scope map must not authenticate"),
+        Err(error) => error,
+    };
+    let corrupt_authentication_encoding = corrupt_authentication_encoding.finish();
+
+    let stale_snapshot =
+        pre_admitted_snapshot_case_for_test(SnapshotTestMutation::RetainedScopeMapBytesMismatch)
+            .expect("digest-valid stale retained-map fixture");
+    let stale_provider_encoding = RetainedScopeMapEncodingScopeForTest::start();
+    let stale_provider = LibraryBaseProvider::with_pre_admitted_snapshot_for_test(stale_snapshot);
+    acquire(&stale_provider).expect("self-consistent stale snapshot decodes");
+    let stale_provider_encoding = stale_provider_encoding.finish();
+    let stale_authentication_encoding = RetainedScopeMapEncodingScopeForTest::start();
+    let error = match stale_provider.authenticate_library_binder_checkpoint(stale_checkpoint) {
+        Ok(_) => panic!("stale retained-map bytes must not authenticate"),
+        Err(error) => error,
+    };
+    let stale_authentication_encoding = stale_authentication_encoding.finish();
+
+    assert_eq!(base.identity().artifact_sha256(), CANONICAL_SNAPSHOT_SHA256);
+    assert_eq!(authenticated.library_unit_count(), 82);
+    assert_eq!(source_encoding.calls, 3);
+    assert!(source_encoding.rows_visited > 0);
+    assert!(source_encoding.encoded_bytes > 0);
+    assert_eq!(authentication_encoding.calls, 1);
+    assert!(authentication_encoding.rows_visited > 0);
+    assert!(authentication_encoding.encoded_bytes > 0);
+    assert_eq!(corrupt_authentication_encoding.calls, 1);
+    assert!(corrupt_authentication_encoding.rows_visited > 0);
+    assert_eq!(
+        corrupt_error.cause(),
+        &LibraryInitCause::CheckpointAuthenticationRejected {
+            violation: CheckpointAuthenticationViolation::RetainedScopeMapsMismatch,
+        }
+    );
+    assert_eq!(stale_authentication_encoding, Default::default());
+    assert_eq!(error.stage(), LibraryInitStage::ReferenceValidation);
+    assert_eq!(
+        error.cause(),
+        &LibraryInitCause::CheckpointAuthenticationRejected {
+            violation: CheckpointAuthenticationViolation::BinderDigestMismatch,
+        }
+    );
+    assert_eq!(
+        provider_encoding,
+        Default::default(),
+        "ordinary provider admission must authenticate the retained-map bytes already decoded from the binder section"
+    );
+    assert_eq!(
+        stale_provider_encoding,
+        Default::default(),
+        "pre-admitted decoding must derive retained-map evidence from authenticated section bytes"
+    );
 }
 
 #[test]

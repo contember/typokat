@@ -3028,10 +3028,78 @@ pub(crate) fn encode_binder_snapshot(binder: &Binder) -> Result<Vec<u8>, Snapsho
     Ok(writer.into_bytes())
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RetainedScopeMapEncodingWorkForTest {
+    pub(crate) calls: u64,
+    pub(crate) rows_visited: u64,
+    pub(crate) encoded_bytes: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static RETAINED_SCOPE_MAP_ENCODING_CALLS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    static RETAINED_SCOPE_MAP_ENCODING_ROWS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    static RETAINED_SCOPE_MAP_ENCODING_BYTES: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn retained_scope_map_encoding_work_for_test() -> RetainedScopeMapEncodingWorkForTest {
+    RetainedScopeMapEncodingWorkForTest {
+        calls: RETAINED_SCOPE_MAP_ENCODING_CALLS.get(),
+        rows_visited: RETAINED_SCOPE_MAP_ENCODING_ROWS.get(),
+        encoded_bytes: RETAINED_SCOPE_MAP_ENCODING_BYTES.get(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct RetainedScopeMapEncodingScopeForTest(RetainedScopeMapEncodingWorkForTest);
+
+#[cfg(test)]
+impl RetainedScopeMapEncodingScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(retained_scope_map_encoding_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> RetainedScopeMapEncodingWorkForTest {
+        let end = retained_scope_map_encoding_work_for_test();
+        RetainedScopeMapEncodingWorkForTest {
+            calls: end.calls.saturating_sub(self.0.calls),
+            rows_visited: end.rows_visited.saturating_sub(self.0.rows_visited),
+            encoded_bytes: end.encoded_bytes.saturating_sub(self.0.encoded_bytes),
+        }
+    }
+}
+
 pub(crate) fn encode_retained_scope_maps(binder: &Binder) -> Result<Vec<u8>, SnapshotCodecError> {
+    #[cfg(test)]
+    {
+        RETAINED_SCOPE_MAP_ENCODING_CALLS
+            .set(RETAINED_SCOPE_MAP_ENCODING_CALLS.get().saturating_add(1));
+        let rows = binder
+            .fn_scopes
+            .len()
+            .saturating_add(binder.fn_decl_ids.len())
+            .saturating_add(binder.block_scopes.len());
+        RETAINED_SCOPE_MAP_ENCODING_ROWS.set(
+            RETAINED_SCOPE_MAP_ENCODING_ROWS
+                .get()
+                .saturating_add(u64::try_from(rows).unwrap_or(u64::MAX)),
+        );
+    }
     let mut writer = SnapshotWriter::new();
     encode_retained_scope_maps_into(&mut writer, binder)?;
-    Ok(writer.into_bytes())
+    let bytes = writer.into_bytes();
+    #[cfg(test)]
+    RETAINED_SCOPE_MAP_ENCODING_BYTES.set(
+        RETAINED_SCOPE_MAP_ENCODING_BYTES
+            .get()
+            .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+    );
+    Ok(bytes)
 }
 
 fn encode_retained_scope_maps_into(

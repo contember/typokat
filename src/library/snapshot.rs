@@ -321,6 +321,7 @@ pub(super) mod test_support {
         NextClassIdMismatch,
         InternerBucketMismatch,
         RootIndexBinderMismatch,
+        RetainedScopeMapBytesMismatch,
         NonTerminalPublication,
         DanglingReference {
             family: usize,
@@ -1106,6 +1107,38 @@ pub(super) mod test_support {
                     .find(|offset| read_u32(&bytes, *offset).is_ok_and(|id| id != u32::MAX))
                     .ok_or(LibrarySnapshotViolation::InvalidReference)?;
                 write_u32(&mut bytes, id_offset, u32::MAX - 1)?;
+                rehash_section_and_body(&mut bytes, section, directory_end)?;
+            }
+            SnapshotTestMutation::RetainedScopeMapBytesMismatch => {
+                let section = find_section(&sections, 3)?;
+                let payload =
+                    &bytes[section.payload_offset..section.payload_offset + section.payload_len];
+                let mut binder = crate::binder::snapshot::decode_binder_snapshot(payload)
+                    .map_err(|_| LibrarySnapshotViolation::InvalidEncoding)?;
+                let first_key = binder
+                    .fn_scopes
+                    .keys()
+                    .next()
+                    .copied()
+                    .ok_or(LibrarySnapshotViolation::InvalidEncoding)?;
+                let original = binder.fn_scopes[&first_key];
+                let replacement = binder
+                    .fn_scopes
+                    .values()
+                    .copied()
+                    .find(|target| *target != original)
+                    .ok_or(LibrarySnapshotViolation::InvalidEncoding)?;
+                *binder
+                    .fn_scopes
+                    .get_mut(&first_key)
+                    .ok_or(LibrarySnapshotViolation::InvalidEncoding)? = replacement;
+                let payload = crate::binder::snapshot::encode_binder_snapshot(&binder)
+                    .map_err(|_| LibrarySnapshotViolation::InvalidEncoding)?;
+                if payload.len() != section.payload_len {
+                    return Err(LibrarySnapshotViolation::InvalidPayload);
+                }
+                bytes[section.payload_offset..section.payload_offset + section.payload_len]
+                    .copy_from_slice(&payload);
                 rehash_section_and_body(&mut bytes, section, directory_end)?;
             }
             SnapshotTestMutation::NonTerminalPublication => {
