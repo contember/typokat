@@ -2,12 +2,10 @@
 //!
 //! This module is intentionally registered as a RED spec before implementation.
 //!
-//! A completed substitution result is a derived fact of the current semantic
+//! A completed eager substitution is a derived fact of the current semantic
 //! graph, the source `TypeId`, and the sorted argument vector for declaration
-//! parameters that are free in that source. Fresh `Substitution` instances must
-//! therefore reuse a cycle-clean result without reopening the apply graph.
-//! Irrelevant map entries do not distinguish keys, while a distinct relevant
-//! argument does. Any semantic graph mutation invalidates old results.
+//! parameters free in that source. Paths that can retain or clone the mapper use
+//! the whole sorted map instead. Any semantic graph mutation invalidates results.
 //!
 //! Results that observed a raw-id cycle guard are stack-dependent and must not
 //! enter the durable cache. In particular, a child reached inside one live
@@ -17,7 +15,8 @@
 
 use super::*;
 use crate::types::repr::{
-    ConditionalType, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
+    ConditionalType, FunctionType, GenericTypeParam, MappedType, ModifierOp, ObjectType,
+    ParameterType, PropertyType,
 };
 use std::sync::Arc;
 
@@ -325,10 +324,8 @@ fn lazy_conditional_result_does_not_depend_on_the_first_retained_mapper() {
         distributive: true,
         poisoned: false,
     });
-    let number_map =
-        FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.number)]);
-    let string_map =
-        FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.string)]);
+    let number_map = FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.number)]);
+    let string_map = FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.string)]);
 
     let number_result = substitute(&mut interner, source, &number_map);
 
@@ -345,4 +342,119 @@ fn lazy_conditional_result_does_not_depend_on_the_first_retained_mapper() {
         number_result,
         "a durable key must distinguish every mapper entry retained in the result"
     );
+}
+
+#[test]
+fn lazy_conditional_descendant_promotes_the_root_to_a_full_mapper_key() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let relevant_id = TypeParamId(99_270);
+    let retained_id = TypeParamId(99_271);
+    let relevant = interner.intern_type_param(relevant_id, "T");
+    let union = interner.union(vec![wk.number, wk.string]);
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: relevant,
+        extends_ty: wk.unknown,
+        true_branch: relevant,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("value", conditional)],
+        ..Default::default()
+    });
+    let number_map = FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.number)]);
+    let string_map = FxHashMap::from_iter([(relevant_id, union), (retained_id, wk.string)]);
+
+    let _scope = start_substitution_measure();
+    let number_result = substitute(&mut interner, source, &number_map);
+    let after_number = substitution_measure().expect("the apply counter scope must remain enabled");
+    let string_result = substitute(&mut interner, source, &string_map);
+    let after_string = substitution_measure().expect("the apply counter scope must remain enabled");
+
+    assert_ne!(string_result, number_result);
+    assert!(
+        after_string.apply_visits > after_number.apply_visits,
+        "a lazy descendant must make the root distinguish the retained mapper"
+    );
+    assert_eq!(
+        substitute(&mut interner, source, &number_map),
+        number_result
+    );
+    let after_reuse = substitution_measure().expect("the apply counter scope must remain enabled");
+    assert_eq!(after_reuse.apply_visits, after_string.apply_visits);
+}
+
+#[test]
+fn non_distributive_conditionals_remain_relevant_only() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let relevant_id = TypeParamId(99_275);
+    let irrelevant_id = TypeParamId(99_276);
+    let relevant = interner.intern_type_param(relevant_id, "T");
+    let source = interner.intern_conditional(ConditionalType {
+        check: relevant,
+        extends_ty: wk.unknown,
+        true_branch: relevant,
+        false_branch: wk.never,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+    let minimal_map = FxHashMap::from_iter([(relevant_id, wk.number)]);
+    let wider_map = FxHashMap::from_iter([(relevant_id, wk.number), (irrelevant_id, wk.string)]);
+
+    let _scope = start_substitution_measure();
+    let first = substitute(&mut interner, source, &minimal_map);
+    let after_first = substitution_measure().expect("the apply counter scope must remain enabled");
+    assert_eq!(substitute(&mut interner, source, &wider_map), first);
+    let after_reuse = substitution_measure().expect("the apply counter scope must remain enabled");
+    assert_eq!(after_reuse.apply_visits, after_first.apply_visits);
+}
+
+#[test]
+fn homomorphic_mapped_roots_conservatively_key_on_the_full_mapper() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let relevant_id = TypeParamId(99_280);
+    let irrelevant_id = TypeParamId(99_281);
+    let relevant = interner.intern_type_param(relevant_id, "T");
+    let placeholder = interner.intern_mapped_value();
+    let left = interner.intern_object(ObjectType {
+        properties: vec![prop("left", wk.number)],
+        ..Default::default()
+    });
+    let right = interner.intern_object(ObjectType {
+        properties: vec![prop("right", wk.string)],
+        ..Default::default()
+    });
+    let union = interner.union(vec![left, right]);
+    let source = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: relevant,
+        value_template: placeholder,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let minimal_map = FxHashMap::from_iter([(relevant_id, union)]);
+    let wider_map = FxHashMap::from_iter([(relevant_id, union), (irrelevant_id, wk.string)]);
+
+    let _scope = start_substitution_measure();
+    let minimal_result = substitute(&mut interner, source, &minimal_map);
+    let after_minimal =
+        substitution_measure().expect("the apply counter scope must remain enabled");
+    let wider_result = substitute(&mut interner, source, &wider_map);
+    let after_wider = substitution_measure().expect("the apply counter scope must remain enabled");
+
+    assert_eq!(wider_result, minimal_result);
+    assert!(
+        after_wider.apply_visits > after_minimal.apply_visits,
+        "recursive mapper cloning must not reuse a narrower mapper key"
+    );
+    assert_eq!(substitute(&mut interner, source, &wider_map), wider_result);
+    let after_reuse = substitution_measure().expect("the apply counter scope must remain enabled");
+    assert_eq!(after_reuse.apply_visits, after_wider.apply_visits);
 }
