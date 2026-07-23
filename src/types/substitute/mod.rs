@@ -214,6 +214,8 @@ mod completed_memo_spec;
 #[cfg(test)]
 mod cycle_scoped_memo_spec;
 #[cfg(test)]
+mod durable_free_param_summary_spec;
+#[cfg(test)]
 mod measurement_scope_spec;
 #[cfg(test)]
 mod param_relevant_prefilter_spec;
