@@ -102,6 +102,20 @@ fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
     fields
 }
 
+fn source_between<'source>(
+    source: &'source str,
+    start: &str,
+    end: &str,
+    description: &str,
+) -> &'source str {
+    let start = source.find(start).expect(description);
+    let end = source[start..]
+        .find(end)
+        .map(|offset| start + offset)
+        .expect(description);
+    &source[start..end]
+}
+
 fn acquire(
     provider: &LibraryBaseProvider,
 ) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
@@ -355,6 +369,115 @@ fn canonical_provider_rejects_every_changed_byte_at_artifact_admission() {
             "mutation {mutation:?}"
         );
     }
+}
+
+#[test]
+fn canonical_admission_witness_prevents_a_second_full_artifact_digest() {
+    let artifact_source = include_str!("artifact.rs");
+    let snapshot_source = include_str!("snapshot.rs");
+    let provider_source = include_str!("provider.rs");
+    let codec_source = include_str!("../check/checker/library_snapshot_codec/mod.rs");
+
+    let witness_body = artifact_source
+        .split_once("pub(crate) struct AdmittedCanonicalSnapshot {")
+        .expect("canonical admission must produce an opaque artifact witness")
+        .1
+        .split_once("\n}")
+        .expect("canonical admission witness body")
+        .0;
+    assert_eq!(
+        exact_struct_field_names(
+            artifact_source,
+            "pub(crate) struct AdmittedCanonicalSnapshot",
+        ),
+        ["bytes"],
+        "the witness must bind admission to the exact owned or packaged bytes"
+    );
+    assert!(
+        !witness_body.contains("pub"),
+        "admitted canonical bytes must not be directly constructible outside artifact admission"
+    );
+    assert!(
+        artifact_source.contains("pub(crate) fn verify_and_admit_canonical_snapshot(")
+            && artifact_source.contains("verify_canonical_snapshot(bytes.as_ref(), binding)?;")
+            && artifact_source.contains("Ok(AdmittedCanonicalSnapshot { bytes })"),
+        "only successful canonical verification may construct the admission witness"
+    );
+
+    let packaged_admission = source_between(
+        snapshot_source,
+        "pub(super) fn admit_packaged_canonical(",
+        "\npub(super) fn decode_admitted_canonical(",
+        "packaged canonical admission",
+    );
+    assert!(
+        packaged_admission.contains("Result<AdmittedCanonicalSnapshot, LibraryInitError>")
+            && packaged_admission.contains("verify_and_admit_canonical_snapshot("),
+        "packaged admission must return the opaque witness produced by artifact verification"
+    );
+    let test_admission = source_between(
+        snapshot_source,
+        "pub(super) fn admit_canonical_for_test(",
+        "\nfn map_admission_error(",
+        "test canonical admission",
+    );
+    assert!(
+        test_admission.contains("Result<AdmittedCanonicalSnapshot, LibraryInitError>")
+            && test_admission.contains("verify_and_admit_canonical_snapshot("),
+        "test canonical admission must return the same opaque witness"
+    );
+
+    let admitted_decode = source_between(
+        snapshot_source,
+        "pub(super) fn decode_admitted_canonical(",
+        "\n#[cfg(test)]\npub(super) fn admit_canonical_for_test(",
+        "admitted canonical decode route",
+    );
+    assert!(
+        admitted_decode.contains("admitted: AdmittedCanonicalSnapshot")
+            && admitted_decode.contains("decode_canonical_library_snapshot(admitted)"),
+        "the opaque witness must flow intact into the canonical decoder"
+    );
+    assert!(
+        !provider_source.contains("AdmittedCanonicalSnapshot {")
+            && !snapshot_source.contains("AdmittedCanonicalSnapshot {")
+            && !codec_source.contains("AdmittedCanonicalSnapshot {"),
+        "no provider or decoder layer may construct an admission witness directly"
+    );
+
+    let canonical_entry = source_between(
+        codec_source,
+        "pub(crate) fn decode_canonical_library_snapshot(",
+        "\n#[cfg(test)]\npub(crate) fn decode_pre_admitted_library_snapshot(",
+        "canonical snapshot decoder entrypoint",
+    );
+    assert!(
+        canonical_entry.contains("admitted: AdmittedCanonicalSnapshot")
+            && !canonical_entry.contains("Cow<'static, [u8]>"),
+        "the canonical decoder must be callable only with opaque admission evidence"
+    );
+    let canonical_validation = source_between(
+        codec_source,
+        "fn validate_canonical_snapshot(",
+        "\nfn section(",
+        "canonical snapshot validation",
+    );
+    assert!(
+        !canonical_validation.contains("digest32(&bytes)")
+            && !canonical_validation.contains("Sha256::digest(bytes)"),
+        "artifact admission already authenticated every canonical byte; decoding must not hash the full artifact again"
+    );
+
+    let adversarial_entry = source_between(
+        codec_source,
+        "pub(crate) fn decode_pre_admitted_library_snapshot(",
+        "\n#[cfg(test)]\npub(crate) fn projection_from_library_product(",
+        "generic adversarial snapshot decoder",
+    );
+    assert!(
+        adversarial_entry.contains("validate_snapshot(bytes)"),
+        "generic adversarial decode must remain self-validating"
+    );
 }
 
 #[test]
