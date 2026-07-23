@@ -1,14 +1,28 @@
-//! Disabled RED contract for WU5 authenticated replay-index admission.
+//! RED contracts for WU5 authenticated replay admission and binder continuation.
 
 use super::artifact::measure_generation_for_test;
-use super::base::ReplayIndexMutationForTest;
+use super::base::{
+    CheckpointAuthenticationMutationForTest, ReplayIndexMutationForTest,
+    UserDeltaProjectInputForTest,
+};
 use super::compiler::LibraryCompilerWorkScopeForTest;
 use super::provider::{
-    CollisionReplayIndexViolation, InitializationMeasurement, LibraryInitCause, LibraryInitStage,
-    LibrarySnapshotViolation,
+    CheckpointAuthenticationViolation, CollisionReplayIndexViolation, InitializationMeasurement,
+    LibraryInitCause, LibraryInitStage, LibrarySnapshotViolation,
 };
 use super::snapshot::SnapshotWorkScopeForTest;
 use super::{FrozenLibraryBase, LibraryBaseProvider};
+use crate::binder::declaration::TypeGroupId;
+use crate::binder::scope::ScopeId;
+use crate::binder::symbol::SymbolId;
+use crate::check::checker::events::UserEventReservationScopeForTest;
+use crate::check::checker::library_compiler::{
+    UserDeltaForkScopeForTest, UserSourceWorkScopeForTest,
+};
+use crate::check::checker::replay_index::ReplayOwnerSite;
+use crate::check::query::QueryCacheWriteScopeForTest;
+use crate::relate::cache::RelationCacheWriteScopeForTest;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
@@ -202,6 +216,300 @@ fn canonical_replay_index_is_source_reproducible_and_complete() {
     assert_eq!(index.scc_membership, regenerated.scc_membership);
     assert_eq!(index.statement_owners, regenerated.statement_owners);
     assert_eq!(index.baseline_records, regenerated.baseline_records);
+}
+
+struct CheckpointBoundaryScopes {
+    library: LibraryCompilerWorkScopeForTest,
+    snapshot: SnapshotWorkScopeForTest,
+    user: UserSourceWorkScopeForTest,
+    delta: UserDeltaForkScopeForTest,
+    events: UserEventReservationScopeForTest,
+    query: QueryCacheWriteScopeForTest,
+    relation: RelationCacheWriteScopeForTest,
+}
+
+impl CheckpointBoundaryScopes {
+    fn start() -> Self {
+        Self {
+            library: LibraryCompilerWorkScopeForTest::start(),
+            snapshot: SnapshotWorkScopeForTest::start(),
+            user: UserSourceWorkScopeForTest::start(),
+            delta: UserDeltaForkScopeForTest::start(),
+            events: UserEventReservationScopeForTest::start(),
+            query: QueryCacheWriteScopeForTest::start(),
+            relation: RelationCacheWriteScopeForTest::start(),
+        }
+    }
+
+    fn assert_exact_library_only_authentication(self) {
+        let library = self.library.finish();
+        let snapshot = self.snapshot.finish();
+        let user = self.user.finish();
+        let query = self.query.finish();
+        assert_eq!(
+            (library.compiles, library.parses, library.binds),
+            (1, 82, 82)
+        );
+        assert_eq!(library.checks, 0);
+        assert_eq!(snapshot.decodes, 1);
+        assert!(snapshot.validations <= 1);
+        assert_eq!((user.binds, user.checks), (0, 0));
+        assert_eq!(self.delta.finish(), 0);
+        assert_eq!(self.events.finish(), 0);
+        assert_eq!((query.projection, query.evaluator), (0, 0));
+        assert_eq!(self.relation.finish(), 0);
+    }
+}
+
+fn checkpoint_inputs() -> [UserDeltaProjectInputForTest<'static>; 2] {
+    let inputs = [
+        UserDeltaProjectInputForTest {
+            path: "/project/00_augment.ts",
+            source: "interface Array<T> { wu5Checkpoint(): T; }\n",
+        },
+        UserDeltaProjectInputForTest {
+            path: "/project/99_consume.ts",
+            source: "const value: number = [1, 2].wu5Checkpoint();\n",
+        },
+    ];
+    inputs
+}
+
+fn assert_dense(actual: impl IntoIterator<Item = usize>, start: usize, end: usize) {
+    assert_eq!(
+        actual.into_iter().collect::<Vec<_>>(),
+        (start..end).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn exact_library_only_binder_checkpoint_authenticates_before_user_continuation() {
+    let scopes = CheckpointBoundaryScopes::start();
+    let inspection_reached = Cell::new(false);
+    let checkpoint_array_symbol = Cell::new(None::<SymbolId>);
+    let checkpoint_array_type_group = Cell::new(None::<TypeGroupId>);
+    let inspected_library_modules = RefCell::new(Vec::<ScopeId>::new());
+    let admitted_owner_sites = RefCell::new(Vec::<ReplayOwnerSite>::new());
+    let continuation = LibraryBaseProvider::new()
+        .continue_authenticated_library_binder_checkpoint_for_test(
+            &checkpoint_inputs(),
+            None,
+            |checkpoint, admitted_snapshot, admitted_replay| {
+                inspection_reached.set(true);
+                scopes.assert_exact_library_only_authentication();
+                assert_eq!(checkpoint.library_units.len(), 82);
+                assert_eq!(checkpoint.library_units, admitted_snapshot.library_units());
+                for (index, unit) in checkpoint.library_units.iter().enumerate() {
+                    assert_eq!(unit.ordinal.index(), index);
+                    assert_eq!(
+                        usize::try_from(unit.source.0).expect("source key fits usize"),
+                        index + 1
+                    );
+                }
+                assert_eq!(
+                    checkpoint.source_binder_encoding_sha256,
+                    admitted_snapshot
+                        .section_digest(3)
+                        .expect("admitted binder section digest")
+                );
+                assert_eq!(
+                    checkpoint.source_root_encoding_sha256,
+                    admitted_snapshot
+                        .section_digest(9)
+                        .expect("admitted root section digest")
+                );
+                let prefixes = admitted_snapshot.library_prefixes();
+                assert_eq!(checkpoint.ends.scopes, prefixes.scopes);
+                assert_eq!(checkpoint.ends.symbols, prefixes.symbols);
+                assert_eq!(checkpoint.ends.declarations, prefixes.declarations);
+                assert_eq!(checkpoint.ends.type_groups, prefixes.type_groups);
+                assert_eq!(checkpoint.ends.namespaces, prefixes.namespaces);
+                assert_eq!(checkpoint.ends.value_storages, prefixes.value_storages);
+                assert_eq!(checkpoint.ends.next_source, admitted_snapshot.next_source());
+                assert!(checkpoint.array_symbol.index() < checkpoint.ends.symbols);
+                assert!(checkpoint.array_type_group.index() < checkpoint.ends.type_groups);
+                checkpoint_array_symbol.set(Some(checkpoint.array_symbol));
+                checkpoint_array_type_group.set(Some(checkpoint.array_type_group));
+                assert_eq!(admitted_replay.owner_sites.len(), 47_253);
+                inspected_library_modules.replace(
+                    checkpoint
+                        .library_units
+                        .iter()
+                        .map(|unit| unit.module)
+                        .collect(),
+                );
+                admitted_owner_sites.replace(admitted_replay.owner_sites.clone());
+            },
+        )
+        .expect("authenticated binder checkpoint continues through the user files");
+
+    assert!(inspection_reached.get());
+    assert_eq!(
+        checkpoint_array_symbol.get(),
+        Some(continuation.array_symbol_before_augmentation)
+    );
+    assert_eq!(
+        checkpoint_array_type_group.get(),
+        Some(continuation.array_type_group_before_augmentation)
+    );
+    let inspected_library_modules = inspected_library_modules.borrow();
+    let admitted_owner_sites = admitted_owner_sites.borrow();
+    assert_eq!(
+        continuation.mapped_owner_sites.len(),
+        admitted_owner_sites.len()
+    );
+    for (mapped, admitted) in continuation
+        .mapped_owner_sites
+        .iter()
+        .zip(admitted_owner_sites.iter())
+    {
+        assert_eq!(mapped.owner, admitted.owner);
+        assert_eq!(mapped.file_ordinal, admitted.file_ordinal);
+        assert_eq!(mapped.span, admitted.span);
+        assert_eq!(
+            mapped.syntax_module,
+            inspected_library_modules[admitted.file_ordinal.index()]
+        );
+    }
+    assert_eq!(
+        continuation.array_symbol_after_augmentation,
+        continuation.array_symbol_before_augmentation
+    );
+    assert_eq!(
+        continuation.array_type_group_after_augmentation,
+        continuation.array_type_group_before_augmentation
+    );
+    assert_eq!(
+        continuation.consumer_array_type_group,
+        continuation.array_type_group_before_augmentation
+    );
+    assert!(
+        continuation.augmentation_declaration.index() >= continuation.checkpoint_ends.declarations
+    );
+    assert_dense(
+        continuation.appended_scopes.iter().map(|id| id.index()),
+        continuation.checkpoint_ends.scopes,
+        continuation.ends.scopes,
+    );
+    assert_dense(
+        continuation.appended_symbols.iter().map(|id| id.index()),
+        continuation.checkpoint_ends.symbols,
+        continuation.ends.symbols,
+    );
+    assert_dense(
+        continuation
+            .appended_declarations
+            .iter()
+            .map(|id| id.index()),
+        continuation.checkpoint_ends.declarations,
+        continuation.ends.declarations,
+    );
+    assert_dense(
+        continuation
+            .appended_type_groups
+            .iter()
+            .map(|id| id.index()),
+        continuation.checkpoint_ends.type_groups,
+        continuation.ends.type_groups,
+    );
+    assert_dense(
+        continuation.appended_namespaces.iter().map(|id| id.index()),
+        continuation.checkpoint_ends.namespaces,
+        continuation.ends.namespaces,
+    );
+    assert_dense(
+        continuation
+            .appended_value_storages
+            .iter()
+            .map(|id| id.index()),
+        continuation.checkpoint_ends.value_storages,
+        continuation.ends.value_storages,
+    );
+    assert_eq!(continuation.appended_module_sources.len(), 2);
+    assert_dense(
+        continuation
+            .appended_module_sources
+            .iter()
+            .map(|row| usize::try_from(row.source.0).expect("source key fits usize")),
+        continuation.checkpoint_ends.next_source,
+        continuation.ends.next_source,
+    );
+    assert!(continuation
+        .appended_module_sources
+        .iter()
+        .all(|row| continuation.appended_scopes.contains(&row.module)));
+}
+
+#[test]
+fn binder_root_and_prefix_mismatches_fail_before_checkpoint_inspection() {
+    for (mutation, violation) in [
+        (
+            CheckpointAuthenticationMutationForTest::BinderDigest,
+            CheckpointAuthenticationViolation::BinderDigestMismatch,
+        ),
+        (
+            CheckpointAuthenticationMutationForTest::RootDigest,
+            CheckpointAuthenticationViolation::RootDigestMismatch,
+        ),
+        (
+            CheckpointAuthenticationMutationForTest::PrefixNextIds,
+            CheckpointAuthenticationViolation::PrefixMismatch,
+        ),
+    ] {
+        let scopes = CheckpointBoundaryScopes::start();
+        let inspection_reached = Cell::new(false);
+        let error = LibraryBaseProvider::new()
+            .continue_authenticated_library_binder_checkpoint_for_test(
+                &checkpoint_inputs(),
+                Some(mutation),
+                |_, _, _| inspection_reached.set(true),
+            )
+            .expect_err("checkpoint evidence mismatch must fail closed");
+        assert!(!inspection_reached.get(), "{mutation:?}");
+        assert_eq!(error.stage(), LibraryInitStage::ReferenceValidation);
+        assert_eq!(
+            error.cause(),
+            &LibraryInitCause::CheckpointAuthenticationRejected { violation }
+        );
+        scopes.assert_exact_library_only_authentication();
+    }
+}
+
+#[test]
+fn binder_checkpoint_type_boundary_cannot_resume_raw_or_through_wu4() {
+    let binder = include_str!("../binder/bind.rs");
+    let private_compiler = include_str!("../check/checker/library_compiler.rs");
+    let codec = include_str!("../check/checker/library_snapshot_codec/mod.rs");
+    let unauthenticated_offset = binder
+        .find("struct UnauthenticatedLibraryBinderCheckpoint {")
+        .expect("private unauthenticated checkpoint");
+    let unauthenticated_attributes = binder[..unauthenticated_offset]
+        .rsplit_once("\n\n")
+        .map_or(&binder[..unauthenticated_offset], |(_, attributes)| {
+            attributes
+        });
+    let unauthenticated = binder
+        .split_once("struct UnauthenticatedLibraryBinderCheckpoint {")
+        .expect("private unauthenticated checkpoint")
+        .1
+        .split_once("\n}")
+        .expect("unauthenticated checkpoint body")
+        .0;
+    assert!(!unauthenticated.contains("pub"));
+    assert!(!unauthenticated_attributes.contains("Clone"));
+    assert!(binder.contains("struct AuthenticatedLibraryBinderCheckpoint {"));
+    assert!(binder.contains("checkpoint: UnauthenticatedLibraryBinderCheckpoint"));
+    assert!(binder.contains("Result<AuthenticatedLibraryBinderCheckpoint"));
+    assert!(codec.contains("struct AdmittedLibrarySnapshotEvidence {"));
+    let continuation = private_compiler
+        .split_once("fn continue_authenticated_library_binder_checkpoint(")
+        .expect("authenticated continuation entrypoint")
+        .1
+        .split_once("\n}")
+        .expect("authenticated continuation body")
+        .0;
+    assert!(continuation.contains("checkpoint: AuthenticatedLibraryBinderCheckpoint"));
+    assert!(!continuation.contains("resume_frozen_library("));
 }
 
 fn assert_rejected_before_publication(
