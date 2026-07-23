@@ -44,8 +44,8 @@ fn assert_no_semantic_mutation(receipt: &CollisionPreflightReceiptForTest) {
     assert_eq!(receipt.work.delta_forks, 0);
     assert_eq!(receipt.work.delta_local_rows, 0);
     assert_eq!(receipt.work.user_event_reservations, 0);
-    assert_eq!(receipt.work.evaluator_cache_writes, 0);
-    assert_eq!(receipt.work.projection_cache_writes, 0);
+    assert_eq!(receipt.work.durable_evaluator_cache_writes, 0);
+    assert_eq!(receipt.work.durable_projection_cache_writes, 0);
     assert_eq!(receipt.work.relation_cache_writes, 0);
     assert_eq!(receipt.work.private_library_compiles, 0);
 }
@@ -58,6 +58,15 @@ fn assert_shared(receipt: &CollisionPreflightReceiptForTest) {
 
 fn assert_private(receipt: &CollisionPreflightReceiptForTest) {
     assert_eq!(receipt.route, CollisionRouteForTest::PrivateCombined);
+    assert!(!receipt.capability_issued);
+    assert_no_semantic_mutation(receipt);
+}
+
+fn assert_rejected(receipt: &CollisionPreflightReceiptForTest) {
+    assert_eq!(
+        receipt.route,
+        CollisionRouteForTest::RejectedBeforeSemantics
+    );
     assert!(!receipt.capability_issued);
     assert_no_semantic_mutation(receipt);
 }
@@ -298,6 +307,32 @@ import WU5Import = WU5Namespace;
 }
 
 #[test]
+fn import_equals_masks_match_value_and_type_only_binder_slots() {
+    let value = preflight(&[input(
+        "/project/import-equals.ts",
+        "import WU5Value = WU5.Space;\n",
+    )]);
+    assert_shared(&value);
+    assert_eq!(
+        slots(&value, "WU5Value"),
+        BTreeSet::from([
+            PreflightSlotForTest::Value,
+            PreflightSlotForTest::Type,
+            PreflightSlotForTest::Namespace,
+        ])
+    );
+    let typed = preflight(&[input(
+        "/project/import-type-equals.ts",
+        "import type WU5Type = WU5.Space;\n",
+    )]);
+    assert_private(&typed);
+    assert_eq!(
+        slots(&typed, "WU5Type"),
+        BTreeSet::from([PreflightSlotForTest::Type])
+    );
+}
+
+#[test]
 fn binding_pattern_census_collects_every_nested_leaf() {
     let receipt = preflight(&[input(
         "/project/destructuring.ts",
@@ -374,6 +409,30 @@ try { var WU5Try = 1; } catch { var WU5Catch = 1; } finally { var WU5Finally = 1
 }
 
 #[test]
+fn loop_lexicals_and_nested_lexical_declarations_do_not_become_global_roots() {
+    let receipt = preflight(&[input(
+        "/project/nested-lexical.ts",
+        r#"for (let Array = 0; Array < 1; Array++) {}
+{ function RegExp() {} class Promise {} interface Intl {} type Document = number; }
+"#,
+    )]);
+    assert_shared(&receipt);
+    assert!(receipt.candidates.is_empty(), "{:#?}", receipt.candidates);
+}
+
+#[test]
+fn named_function_expressions_do_not_leak_but_declarations_do() {
+    let receipt = preflight(&[input(
+        "/project/function-forms.ts",
+        "const local = function Array() {}; function WU5Declared() {}\n",
+    )]);
+    assert_private(&receipt);
+    assert!(!names(&receipt).contains("Array"));
+    assert!(names(&receipt).contains("local"));
+    assert!(names(&receipt).contains("WU5Declared"));
+}
+
+#[test]
 fn function_class_and_namespace_boundaries_do_not_leak_nested_var_candidates() {
     let receipt = preflight(&[input(
         "/project/boundaries.ts",
@@ -427,6 +486,65 @@ fn external_module_locals_are_ignored_but_declare_global_is_still_censused() {
 }
 
 #[test]
+fn external_module_inventory_finds_nested_global_and_umd_without_reclassifying_local_namespace() {
+    let nested_global = preflight(&[input(
+        "/project/nested-global.ts",
+        "export {}; { global { interface Array<T> { nested: T } } }\n",
+    )]);
+    assert_private(&nested_global);
+    assert_eq!(names(&nested_global), BTreeSet::from(["Array".to_owned()]));
+
+    let nested_umd = preflight(&[input(
+        "/project/nested-umd.d.ts",
+        "declare module 'pkg' { export as namespace NestedUmd; }\n",
+    )]);
+    assert_private(&nested_umd);
+    assert!(nested_umd.reasons.contains("umd-global"));
+
+    let local_namespace = preflight(&[input(
+        "/project/local-namespace.ts",
+        "export {}; namespace Local { export const value = 1; }\n",
+    )]);
+    assert_shared(&local_namespace);
+    assert!(local_namespace.candidates.is_empty());
+}
+
+#[test]
+fn declare_global_value_contributor_mask_matches_global_object_semantics() {
+    let receipt = preflight(&[input(
+        "/project/global-mask.ts",
+        r#"export {};
+declare global {
+  var WU5Var: number;
+  let WU5Let: number;
+  const WU5Const: number;
+  class WU5Class {}
+  enum WU5Enum { Value }
+}
+"#,
+    )]);
+    assert_private(&receipt);
+    for name in ["WU5Let", "WU5Const", "WU5Class", "WU5Enum"] {
+        assert!(
+            !receipt
+                .candidates
+                .iter()
+                .find(|candidate| candidate.name == name)
+                .expect("declare-global candidate")
+                .global_object_contributor
+        );
+    }
+    assert!(
+        receipt
+            .candidates
+            .iter()
+            .find(|candidate| candidate.name == "WU5Var")
+            .expect("declare-global var")
+            .global_object_contributor
+    );
+}
+
+#[test]
 fn global_this_umd_and_classifier_uncertainty_fail_closed() {
     let global_this = preflight(&[input(
         "/project/global-this.d.ts",
@@ -450,6 +568,22 @@ fn global_this_umd_and_classifier_uncertainty_fail_closed() {
         .expect("injected uncertainty returns a receipt");
     assert_private(&uncertain);
     assert!(uncertain.reasons.contains("classifier-uncertainty"));
+}
+
+#[test]
+fn hard_parse_failure_is_rejected_before_semantics() {
+    let receipt = preflight(&[input("/project/broken.ts", "const broken = {")]);
+    assert_rejected(&receipt);
+    assert!(receipt.reasons.contains("parse-rejected"));
+}
+
+#[test]
+fn benign_with_statement_without_global_bindings_stays_shared() {
+    let receipt = preflight(&[input(
+        "/project/with.ts",
+        "declare const object: object; with (object) { object; }\n",
+    )]);
+    assert_shared(&receipt);
 }
 
 #[test]
@@ -575,14 +709,15 @@ fn preflight_finishes_before_any_semantic_mutation() {
 
 #[test]
 fn preflight_work_receipt_detects_every_forbidden_mutation_family() {
-    let calibrated = FrozenLibraryBase::calibrate_preflight_work_receipt_for_test()
+    let calibrated = acquire()
+        .calibrate_preflight_work_receipt_for_test()
         .expect("test-only calibration returns one write per family");
     assert_eq!(calibrated.delta_forks, 1);
-    assert_eq!(calibrated.delta_local_rows, 1);
-    assert_eq!(calibrated.user_event_reservations, 1);
-    assert_eq!(calibrated.evaluator_cache_writes, 1);
-    assert_eq!(calibrated.projection_cache_writes, 1);
-    assert_eq!(calibrated.relation_cache_writes, 1);
+    assert_eq!(calibrated.delta_local_rows, 4);
+    assert_eq!(calibrated.user_event_reservations, 2);
+    assert_eq!(calibrated.durable_evaluator_cache_writes, 1);
+    assert_eq!(calibrated.durable_projection_cache_writes, 1);
+    assert_eq!(calibrated.relation_cache_writes, 2);
     assert_eq!(calibrated.private_library_compiles, 1);
 }
 
