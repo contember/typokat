@@ -162,6 +162,80 @@ const wrongOrdinary: string = parseInt("10");
     );
 }
 
+#[test]
+fn colliding_forms_resolve_same_file_lexical_siblings_before_global_publication() {
+    let receipt = check(&[input(
+        "/project/colliding-lexical-siblings.ts",
+        r#"interface WU5LocalType { marker: number; }
+const WU5LocalValue: WU5LocalType = { marker: 1 };
+class WU5LocalBase { local = WU5LocalValue; }
+
+interface Array<T> extends WU5LocalType { local: WU5LocalType; }
+function parseInt(value: WU5LocalType): WU5LocalType { return WU5LocalValue; }
+class AddEventListenerOptions extends WU5LocalBase { local = WU5LocalValue; }
+namespace Intl {
+  export const local = WU5LocalValue;
+  export interface UsesLocal extends WU5LocalType {}
+}
+
+declare const array: Array<number>;
+declare const listenerOptions: AddEventListenerOptions;
+const wrongArray: string = array.local.marker;
+const wrongFunction: boolean = parseInt(WU5LocalValue).marker;
+const wrongClass: bigint = listenerOptions.local.marker;
+const wrongNamespace: symbol = Intl.local.marker;
+"#,
+    )]);
+
+    assert_private_replay(&receipt);
+    assert!(
+        receipt
+            .normalized_diagnostics
+            .iter()
+            .all(|line| !line.contains("TK2304")),
+        "a global publication target must not replace the syntax module for lookup: {:#?}",
+        receipt.normalized_diagnostics
+    );
+    assert_eq!(
+        receipt
+            .normalized_diagnostics
+            .iter()
+            .filter(|line| line.contains("TK2322"))
+            .count(),
+        4,
+        "resolved sibling types must reach four observable negative assignments"
+    );
+    for seed in [
+        "type:Array",
+        "value:parseInt",
+        "type:AddEventListenerOptions",
+        "namespace:Intl",
+    ] {
+        assert!(receipt.replay_seeds.contains(seed), "{seed}");
+    }
+}
+
+#[test]
+fn nested_hoisted_regexp_collision_cannot_turn_native_errors_false_clean() {
+    let receipt = check(&[input(
+        "/project/nested-regexp-collision.ts",
+        r#"declare const condition: boolean;
+declare const source: { RegExp: number };
+if (condition) {
+  var { RegExp } = source;
+}
+const nativeResult: boolean = /native/.test("native");
+const mustRemainAnError: string = /native/.test("native");
+"#,
+    )]);
+
+    assert_private_replay(&receipt);
+    assert!(receipt.replay_seeds.contains("value:RegExp"));
+    assert!(receipt.replay_seeds.contains("global-object"));
+    assert_eq!(receipt.normalized_diagnostics.len(), 1);
+    assert!(receipt.normalized_diagnostics[0].contains("TK2322"));
+}
+
 fn array_project(reversed: bool) -> Vec<UserDeltaProjectInputForTest<'static>> {
     const AUGMENT_PATH: &str = "/project/augment.ts";
     const CONSUME_PATH: &str = "/project/consume.ts";

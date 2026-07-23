@@ -13,8 +13,11 @@ use super::provider::{
 };
 use super::snapshot::SnapshotWorkScopeForTest;
 use super::{FrozenLibraryBase, LibraryBaseProvider};
+use crate::binder::declaration::DeclarationKind;
 use crate::binder::declaration::TypeGroupId;
-use crate::binder::namespace::{NamespaceValueAttachmentDisposition, SourceFileKind};
+use crate::binder::namespace::{
+    DeclarationOwner, NamespaceValueAttachmentDisposition, SourceFileKind,
+};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::checker::events::UserEventReservationScopeForTest;
@@ -32,6 +35,8 @@ use std::sync::Arc;
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const REPLAY_MANIFEST_IDENTITY: &str =
     "cc125e22a561b069f62f6707e5eb3f8187be0959bb75d8cbfb665266d21c2c95";
+const LEGACY_BINDER_V1_SCHEMA_IDENTITY: &str =
+    "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
 const SNAPSHOT_SECTIONS: [&str; 11] = [
     "store",
     "interner",
@@ -54,6 +59,15 @@ fn acquire() -> Arc<FrozenLibraryBase> {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_hex_32(value: &str) -> [u8; 32] {
+    assert_eq!(value.len(), 64);
+    let mut bytes = [0; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).expect("hex digest");
+    }
+    bytes
 }
 
 fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
@@ -197,6 +211,53 @@ fn canonical_replay_index_is_an_authenticated_eleventh_snapshot_section() {
     assert_eq!(generation_work.source_bytes_read, 0);
     assert_eq!(snapshot_work.validations, 1);
     assert_eq!(snapshot_work.decodes, 1);
+}
+
+#[test]
+fn binder_wire_v2_advances_the_top_level_schema_identity_and_rejects_v1() {
+    const MAGIC: &[u8] = b"typokat-semantic-snapshot";
+    const PROFILE_DIGEST_LEN: usize = 32;
+    const SCHEMA_DIGEST_LEN: usize = 32;
+
+    let packaged = super::artifact::packaged_canonical_snapshot();
+    let schema_offset = MAGIC.len() + 4 + PROFILE_DIGEST_LEN;
+    let schema_end = schema_offset + SCHEMA_DIGEST_LEN;
+    let schema = hex(&packaged.bytes()[schema_offset..schema_end]);
+    assert_ne!(
+        schema, LEGACY_BINDER_V1_SCHEMA_IDENTITY,
+        "adding retained binder maps changes the top-level wire authority"
+    );
+
+    for (label, authority) in [
+        (
+            "codec",
+            include_str!("../check/checker/library_snapshot_codec/mod.rs"),
+        ),
+        ("provider", include_str!("snapshot.rs")),
+        (
+            "snapshot-tool",
+            include_str!("../../tooling/full-lib-snapshot/contract.toml"),
+        ),
+        (
+            "library-base-tool",
+            include_str!("../../tooling/library-base/contract.toml"),
+        ),
+    ] {
+        assert!(authority.contains(&schema), "{label} does not pin wire v2");
+        assert!(
+            !authority.contains(LEGACY_BINDER_V1_SCHEMA_IDENTITY),
+            "{label} still admits the binder-v1 schema"
+        );
+    }
+
+    let mut stale = packaged.bytes().to_vec();
+    stale[schema_offset..schema_end]
+        .copy_from_slice(&decode_hex_32(LEGACY_BINDER_V1_SCHEMA_IDENTITY));
+    let error = match super::snapshot::admit_canonical_for_test(stale) {
+        Ok(_) => panic!("the exact stale-v1 artifact must fail closed"),
+        Err(error) => error,
+    };
+    assert_eq!(error.stage(), LibraryInitStage::ArtifactAdmission);
 }
 
 #[test]
@@ -575,6 +636,33 @@ fn production_frontend_products_feed_full_source_and_authenticated_project_route
 }
 
 #[test]
+fn initialized_provider_authenticates_a_checkpoint_without_a_second_snapshot_decode() {
+    let provider = LibraryBaseProvider::new();
+    let initialized = provider.get().expect("provider initializes once");
+    let profile = ExactLibraryProfile::load_packaged().expect("pinned library profile");
+    let checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("production opaque binder-checkpoint product");
+
+    let snapshot_work = SnapshotWorkScopeForTest::start();
+    let authenticated = provider
+        .authenticate_library_binder_checkpoint(checkpoint)
+        .expect("initialized provider authenticates the checkpoint");
+    let snapshot_work = snapshot_work.finish();
+
+    assert_eq!(authenticated.library_unit_count(), 82);
+    assert_eq!(
+        (snapshot_work.validations, snapshot_work.decodes),
+        (0, 0),
+        "authentication must reuse the provider's admitted identity receipt"
+    );
+    assert!(Arc::ptr_eq(
+        &initialized,
+        &provider.get().expect("provider remains pointer-identical")
+    ));
+}
+
+#[test]
 fn ordinary_check_and_checkpoint_continuation_share_one_project_binding_core() {
     let profile = ExactLibraryProfile::load_packaged().expect("pinned library profile");
     let checkpoint = LibraryCompiler::new()
@@ -828,6 +916,200 @@ fn authoritative_multifile_project_binding_continues_from_the_checkpoint_in_path
                 .lookup_binding_for_test("/project/20_ambient.d.ts", "WU5Ambient")
                 .is_some_and(|binding| binding.namespace.is_some()),
             "declaration scripts participate in the shared script namespace root"
+        );
+    }
+}
+
+#[test]
+fn colliding_declarations_keep_their_syntax_module_as_the_lexical_parent() {
+    const PATH: &str = "/project/colliding-lexical-siblings.ts";
+    const SOURCE: &str = r#"interface WU5LocalType { marker: number; }
+declare const WU5LocalValue: WU5LocalType;
+declare class WU5LocalBase { base: WU5LocalType; }
+interface Array<T> extends WU5LocalType { local: WU5LocalType; }
+declare function parseInt(value: WU5LocalType): WU5LocalType;
+declare class AddEventListenerOptions extends WU5LocalBase { local: WU5LocalType; }
+declare namespace Intl {
+  const local: typeof WU5LocalValue;
+  interface UsesLocal extends WU5LocalType {}
+}
+"#;
+    let continuation = LibraryBaseProvider::new()
+        .continue_authenticated_library_binder_checkpoint_for_test(
+            &[UserDeltaProjectInputForTest {
+                path: PATH,
+                source: SOURCE,
+            }],
+            None,
+            |_, _, _| {},
+        )
+        .expect("colliding declarations retain a usable lexical scope");
+    let source_row = continuation
+        .project_sources_for_test()
+        .iter()
+        .find(|row| row.normalized_path == PATH)
+        .expect("continued source row");
+    let module = source_row.module;
+    let binder = &continuation.bound.binder;
+
+    let declarations = [
+        ("Array", "Array<T>", DeclarationKind::Interface),
+        ("parseInt", "parseInt(value", DeclarationKind::Function),
+        (
+            "AddEventListenerOptions",
+            "AddEventListenerOptions extends",
+            DeclarationKind::Class,
+        ),
+        ("Intl", "Intl {", DeclarationKind::Namespace),
+    ]
+    .map(|(name, needle, kind)| {
+        let start = u32::try_from(SOURCE.find(needle).expect("binding needle"))
+            .expect("binding offset fits u32");
+        let declaration = binder
+            .exact_declaration_at(module, start, kind)
+            .unwrap_or_else(|| panic!("exact {name} declaration"));
+        assert_eq!(
+            declaration.site.scope,
+            Some(module),
+            "{name} must resolve annotations and initializers through its syntax module"
+        );
+        let merge = binder
+            .namespaces
+            .merges()
+            .find(|record| {
+                record.owner == DeclarationOwner::CompilationGlobal && record.name == name
+            })
+            .unwrap_or_else(|| panic!("compilation-global {name} merge"));
+        assert!(
+            merge
+                .declarations
+                .iter()
+                .any(|participant| participant.declaration == declaration.id),
+            "{name} must publish the same lexical declaration into the global merge"
+        );
+        declaration.id
+    });
+
+    let array = continuation
+        .lookup_binding_for_test(PATH, "Array")
+        .expect("continued Array binding");
+    assert_eq!(
+        array.type_group,
+        Some(continuation.array_type_group_before_augmentation),
+        "the lexical Array fragment must extend the authenticated global identity"
+    );
+
+    let function_start = u32::try_from(SOURCE.find("function parseInt").expect("function start"))
+        .expect("function offset fits u32");
+    let function_scope = binder
+        .fn_scopes
+        .get(&(module, function_start))
+        .copied()
+        .expect("continued function scope");
+    assert_eq!(
+        binder
+            .graph
+            .get(function_scope)
+            .and_then(|scope| scope.parent),
+        Some(module),
+        "the colliding function body must retain module-local value lookup"
+    );
+
+    let namespace_merge = binder
+        .namespaces
+        .merges()
+        .find(|record| record.owner == DeclarationOwner::CompilationGlobal && record.name == "Intl")
+        .expect("Intl compilation-global merge");
+    let fragment = namespace_merge
+        .declarations
+        .iter()
+        .find(|participant| participant.declaration == declarations[3])
+        .and_then(|participant| participant.namespace_fragment)
+        .and_then(|fragment| binder.namespaces.fragment(fragment))
+        .expect("continued Intl fragment");
+    assert_eq!(
+        fragment.lexical_parent, module,
+        "the global Intl identity must not replace its fragment's lexical parent"
+    );
+}
+
+#[test]
+fn nested_hoisted_collision_placements_match_the_preflight_binding_leaves() {
+    const PATH: &str = "/project/nested-hoisted-collisions.ts";
+    const SOURCE: &str = r#"declare const condition: boolean;
+declare const values: unknown[];
+declare const source: any;
+{ var RegExp = 1; }
+if (condition) { var Promise = 1; } else { var document = 1; }
+switch (values.length) { case 0: var Map = 1; }
+while (condition) { var Set = 1; break; }
+do { var WeakMap = 1; } while (false);
+for (var Date = 0; Date < 1; Date++) {}
+for (var String in { value: 1 }) {}
+for (var Number of values) {}
+WU5Label: { var Boolean = 1; break WU5Label; }
+try { var Error = 1; } catch { var Function = 1; } finally { var Object = 1; }
+if (condition) {
+  var { document: navigator, nested: [globalThis], ...Intl } = source;
+}
+"#;
+    let inputs = [UserDeltaProjectInputForTest {
+        path: PATH,
+        source: SOURCE,
+    }];
+    let preflight = acquire()
+        .preflight_user_project_for_test(&inputs)
+        .expect("preflight census");
+    let continuation = LibraryBaseProvider::new()
+        .continue_authenticated_library_binder_checkpoint_for_test(&inputs, None, |_, _, _| {})
+        .expect("nested collision continuation");
+    let module = continuation.project_sources_for_test()[0].module;
+    let binder = &continuation.bound.binder;
+    let expected = [
+        "RegExp",
+        "Promise",
+        "document",
+        "Map",
+        "Set",
+        "WeakMap",
+        "Date",
+        "String",
+        "Number",
+        "Boolean",
+        "Error",
+        "Function",
+        "Object",
+        "navigator",
+        "globalThis",
+        "Intl",
+    ];
+
+    for name in expected {
+        assert!(
+            preflight
+                .candidates
+                .iter()
+                .any(|candidate| { candidate.name == name && candidate.global_object_contributor }),
+            "preflight omitted the hoisted binding leaf {name}"
+        );
+        let start = u32::try_from(SOURCE.find(name).expect("unique binding leaf"))
+            .expect("binding offset fits u32");
+        let declaration = binder
+            .exact_declaration_at(module, start, DeclarationKind::Variable)
+            .unwrap_or_else(|| panic!("exact hoisted declaration {name}"));
+        let merge = binder
+            .namespaces
+            .merges()
+            .find(|record| {
+                record.owner == DeclarationOwner::CompilationGlobal && record.name == name
+            })
+            .unwrap_or_else(|| panic!("compilation-global placement for {name}"));
+        assert!(
+            merge
+                .declarations
+                .iter()
+                .any(|participant| participant.declaration == declaration.id),
+            "preflight leaf {name} did not become the exact global merge participant"
         );
     }
 }
