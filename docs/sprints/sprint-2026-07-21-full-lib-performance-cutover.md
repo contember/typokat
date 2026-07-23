@@ -670,3 +670,27 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   binder/semantic prefixes, missing ledger parity, in-process RSS, and a one-project fanout loophole.
   The unchanged production gate passes **1,041 / 0 / 18** plus all integration/conformance/doctest
   targets; clippy, format, and diff checks are clean.
+
+### 2026-07-23 — WU5 exhaustive collision preflight
+
+- Follow-up RED commits `dc2214c` and `3124732` isolate authenticated replay-index admission and
+  preserve the adversarial routing failures found during implementation review. Implementation
+  commit `edec9fa` makes one exhaustive binder-owned source visitor serve two allocation-isolated
+  projections: ordinary binding retains only lexical occurrences, while preflight retains only the
+  global binding census. The canonical filename-to-source-kind classifier is shared by driver,
+  compiler, and preflight.
+- The preflight handles every current OXC statement, declaration, module declaration, binding
+  leaf, global augmentation, UMD, and `globalThis` form before issuing its one-shot shared-delta
+  capability. Parser recovery routes private and a parser panic rejects before semantics. The B14
+  matrix remains exactly **2 shared / 10 private**; nested recoverable `global` and UMD placements
+  cannot escape to the shared route, while external module-local namespaces stay shared.
+- Review rejected the first implementation for a duplicated placement walker and fabricated work
+  calibration, then rejected its first repair for production census allocations, non-exhaustive
+  statement placement, and incompletely calibrated hooks. The final implementation measures actual
+  delta forks, four layered insertion paths, primary and secondary event reservations, durable
+  query writes, relation insert/promotion, and a real private library compilation. Two independent
+  re-reviews are PASS with zero unresolved HIGH or MEDIUM findings.
+- The leader gate passes **1,069 / 0 / 18** library tests plus every integration, conformance, and
+  doctest target. Clippy, format, and diff checks are clean. This closes route selection only;
+  authenticated replay-index admission, the continuable private binder, affected-closure replay,
+  and the collision/fanout performance gates remain open WU5 work.
