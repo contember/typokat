@@ -1750,8 +1750,27 @@ struct ProjectionPlanner<'work, 'memo, L: PublishedClassLookup + ?Sized> {
     visited: FxHashSet<TypeId>,
     planning_tainted: bool,
     first_exhaustion: Option<Exhaustion>,
-    demand_outer_only: bool,
     evaluation_expansions: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SemanticVisitPolicy {
+    Recursive,
+    DemandOuterOnly,
+    RelationRootOuterOnly,
+}
+
+impl SemanticVisitPolicy {
+    fn operand_policy(self) -> Self {
+        match self {
+            Self::RelationRootOuterOnly => Self::Recursive,
+            Self::Recursive | Self::DemandOuterOnly => self,
+        }
+    }
+
+    fn admits_result_recursively(self) -> bool {
+        self == Self::Recursive
+    }
 }
 
 impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'memo, L> {
@@ -1783,7 +1802,6 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             visited: FxHashSet::default(),
             planning_tainted: false,
             first_exhaustion: None,
-            demand_outer_only: false,
             evaluation_expansions: 0,
         }
     }
@@ -1796,7 +1814,6 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn plan_demand(mut self, root: TypeId) -> PlannedQuery<'memo> {
-        self.demand_outer_only = true;
         match self.interner.store().tag(root) {
             TypeTag::ClassInstance => {
                 self.project_class_outer(root);
@@ -1809,7 +1826,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             | TypeTag::Template => {
                 #[cfg(test)]
                 measure_query_demand(|measure| measure.planner_root_visits += 1);
-                self.visit(root);
+                self.visit_demand_outer(root);
             }
             TypeTag::Intrinsic
             | TypeTag::Literal
@@ -1842,7 +1859,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 | TypeTag::Instantiation
                 | TypeTag::Mapped
                 | TypeTag::Template => {
-                    self.visit(root);
+                    self.visit_relation_root(root);
                 }
                 _ => {}
             }
@@ -1855,7 +1872,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 self.project_class_outer(application);
             }
             RelationDemand::Evaluation(ty) => {
-                self.visit(ty);
+                self.visit_relation_root(ty);
             }
         }
     }
@@ -1890,6 +1907,18 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn visit(&mut self, ty: TypeId) -> TypeId {
+        self.visit_with_policy(ty, SemanticVisitPolicy::Recursive)
+    }
+
+    fn visit_demand_outer(&mut self, ty: TypeId) -> TypeId {
+        self.visit_with_policy(ty, SemanticVisitPolicy::DemandOuterOnly)
+    }
+
+    fn visit_relation_root(&mut self, ty: TypeId) -> TypeId {
+        self.visit_with_policy(ty, SemanticVisitPolicy::RelationRootOuterOnly)
+    }
+
+    fn visit_with_policy(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
         #[cfg(test)]
         {
             measure_query_demand(|measure| measure.planner_visits += 1);
@@ -1899,7 +1928,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             if normalized != ty {
                 #[cfg(test)]
                 measure_query_demand(|measure| measure.overlay_hits += 1);
-                self.visit_demand_result(normalized);
+                self.visit_demand_result(normalized, policy);
                 return self.plan.normalize(ty).unwrap_or(normalized);
             }
         }
@@ -1915,19 +1944,21 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         }
 
         let result = match self.interner.store().tag(ty) {
-            TypeTag::ClassInstance if self.demand_outer_only => self.project_class_outer(ty),
+            TypeTag::ClassInstance if !policy.admits_result_recursively() => {
+                self.project_class_outer(ty)
+            }
             TypeTag::ClassInstance => self.project_class(ty),
-            TypeTag::DeferredIndexedAccess => self.evaluate_deferred_indexed(ty),
-            TypeTag::Keyof => self.evaluate_keyof(ty),
+            TypeTag::DeferredIndexedAccess => self.evaluate_deferred_indexed(ty, policy),
+            TypeTag::Keyof => self.evaluate_keyof(ty, policy),
             TypeTag::Conditional
             | TypeTag::Instantiation
             | TypeTag::Union
             | TypeTag::Mapped
-            | TypeTag::Template => self.evaluate_existing(ty),
+            | TypeTag::Template => self.evaluate_existing(ty, policy),
             _ => {
                 let children = query_children(self.interner.store(), ty);
                 for child in children {
-                    self.visit(child);
+                    self.visit_with_policy(child, policy.operand_policy());
                 }
                 ty
             }
@@ -1999,7 +2030,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         projection
     }
 
-    fn evaluate_deferred_indexed(&mut self, ty: TypeId) -> TypeId {
+    fn evaluate_deferred_indexed(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
         let Some(access) = self
             .interner
             .store()
@@ -2011,12 +2042,12 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         let shallow = resolve_deferred_outer_layer(self.interner, ty);
         if shallow != ty {
             self.record_evaluation(ty, shallow);
-            self.visit_demand_result(shallow);
+            self.visit_demand_result(shallow, policy);
             return shallow;
         }
         let mut object = access.object;
         if object_requires_demand(self.interner.store(), object) {
-            object = self.visit(object);
+            object = self.visit_with_policy(object, policy.operand_policy());
             if let Some(constraint) = self
                 .interner
                 .store()
@@ -2024,11 +2055,11 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 .and_then(|parameter| self.interner.store().type_param_constraint(parameter.id))
                 .filter(|constraint| *constraint != object)
             {
-                object = self.visit(constraint);
+                object = self.visit_with_policy(constraint, policy.operand_policy());
             }
         }
         let index = if index_requires_planner_visit(self.interner.store(), access.index) {
-            self.visit(access.index)
+            self.visit_with_policy(access.index, policy.operand_policy())
         } else {
             access.index
         };
@@ -2053,21 +2084,21 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         };
         let result = resolve_deferred_outer_layer(self.interner, rebuilt);
         self.record_evaluation(ty, result);
-        self.visit_demand_result(result);
+        self.visit_demand_result(result, policy);
         result
     }
 
-    fn evaluate_keyof(&mut self, ty: TypeId) -> TypeId {
+    fn evaluate_keyof(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
         let Some(operand) = self.interner.store().keyof_operand(ty) else {
             return ty;
         };
         let shallow = resolve_keyof_outer_layer(self.interner, operand);
         if shallow != ty {
             self.record_evaluation(ty, shallow);
-            self.visit_demand_result(shallow);
+            self.visit_demand_result(shallow, policy);
             return shallow;
         }
-        let operand = self.visit(operand);
+        let operand = self.visit_with_policy(operand, policy.operand_policy());
         let operand = match self.plan.normalize(operand) {
             Ok(operand) => operand,
             Err(reason) => {
@@ -2077,11 +2108,11 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         };
         let result = resolve_keyof_outer_layer(self.interner, operand);
         self.record_evaluation(ty, result);
-        self.visit_demand_result(result);
+        self.visit_demand_result(result, policy);
         result
     }
 
-    fn evaluate_existing(&mut self, ty: TypeId) -> TypeId {
+    fn evaluate_existing(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
         #[cfg(test)]
         measure_query_demand(|measure| measure.pending_evaluations += 1);
         let local = self.working_evaluation_memo.get(&ty).copied();
@@ -2095,13 +2126,13 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 measure_query_demand(|measure| measure.durable_evaluation_hits += 1);
             }
             self.record_evaluation(ty, result);
-            self.visit_demand_result(result);
+            self.visit_demand_result(result, policy);
             return result;
         }
 
         let children = query_children(self.interner.store(), ty);
         for child in children {
-            self.visit(child);
+            self.visit_with_policy(child, policy.operand_policy());
         }
 
         if self.evaluation_expansions >= DEFAULT_STEP_BUDGET {
@@ -2147,23 +2178,26 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             }
         });
         self.record_evaluation(ty, result);
-        self.visit_demand_result(result);
+        self.visit_demand_result(result, policy);
         result
     }
 
-    fn visit_demand_result(&mut self, result: TypeId) {
-        if self.demand_outer_only {
-            match self.interner.store().tag(result) {
-                TypeTag::ClassInstance => {
-                    self.project_class_outer(result);
-                }
-                TypeTag::DeferredIndexedAccess => {
-                    self.visit(result);
-                }
-                _ => {}
+    fn visit_demand_result(&mut self, result: TypeId, policy: SemanticVisitPolicy) {
+        match policy {
+            SemanticVisitPolicy::Recursive => {
+                self.visit_with_policy(result, SemanticVisitPolicy::Recursive);
             }
-        } else {
-            self.visit(result);
+            SemanticVisitPolicy::DemandOuterOnly | SemanticVisitPolicy::RelationRootOuterOnly => {
+                match self.interner.store().tag(result) {
+                    TypeTag::ClassInstance => {
+                        self.project_class_outer(result);
+                    }
+                    TypeTag::DeferredIndexedAccess => {
+                        self.visit_with_policy(result, policy);
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 

@@ -584,6 +584,87 @@ fn identical_deferred_relation_remains_lazy_and_writes_nothing() {
 }
 
 #[test]
+fn overload_relation_does_not_plan_an_unrelated_deferred_result_tail() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (recursive, selected_key, _, _) =
+        object_with_irrelevant_recursive_computations(&mut interner);
+    let container = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("selected", recursive)],
+        ..Default::default()
+    });
+    let deferred = interner.intern_deferred_indexed_access(container, selected_key);
+    let selected_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("selected", wk.number)],
+        ..Default::default()
+    });
+    let overload = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", deferred)],
+        ret: wk.void,
+    });
+    let implementation = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", selected_target)],
+        ret: wk.void,
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .overload_implementation_compatible(overload, implementation);
+
+    assert!(matches!(outcome, RelationOutcome::Yes), "{outcome:?}");
+}
+
+#[test]
+fn lazy_relation_root_must_not_misbranch_conditional_through_class_projection() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(80_000);
+    let key = interner.intern_literal(LiteralValue::String("value".into()));
+    let indexed_object = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let deferred = interner.intern_deferred_indexed_access(indexed_object, key);
+    let template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("selected", deferred)],
+        ..Default::default()
+    });
+    let published = published(class, Vec::new(), template, wk.error);
+    let application = interner.intern_class_instance(class, Vec::new());
+    let extends_ty = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("selected", wk.number)],
+        ..Default::default()
+    });
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: application,
+        extends_ty,
+        true_branch: wk.number,
+        false_branch: wk.string,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(conditional, wk.string);
+
+    assert!(
+        matches!(outcome, RelationOutcome::No(_)),
+        "the conditional is number, so accepting it as string is a false negative: {outcome:?}"
+    );
+}
+
+#[test]
 fn overload_entry_rejects_equal_composite_class_boundaries_without_writes() {
     let mut interner = Interner::with_intrinsics();
     let class = ClassId(80_110);
