@@ -32,6 +32,20 @@ thread_local! {
     static CLASS_ALLOCATION_EVENTS: std::cell::RefCell<Vec<ClassId>> = const {
         std::cell::RefCell::new(Vec::new())
     };
+    static INTERFACE_SCC_CONSTRUCTION_WORK: std::cell::RefCell<Vec<InterfaceSccConstructionWork>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct InterfaceSccConstructionWork {
+    start: usize,
+    end: usize,
+    topology_builds: usize,
+    topology_declaration_scans: usize,
+    scc_builds: usize,
+    scc_candidate_scans: usize,
+    constructed_components: usize,
 }
 
 fn reserve_class_id(next_class_id: &mut u32) -> ClassId {
@@ -55,10 +69,22 @@ pub(super) fn class_allocation_events_for_test() -> Vec<ClassId> {
 }
 
 #[cfg(test)]
+fn reset_interface_scc_construction_work_for_test() {
+    INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| work.borrow_mut().clear());
+}
+
+#[cfg(test)]
+fn interface_scc_construction_work_for_test() -> Vec<InterfaceSccConstructionWork> {
+    INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| work.borrow().clone())
+}
+
+#[cfg(test)]
 mod cycle_tainted_application_cache_spec;
 #[cfg(test)]
 mod eager_application_cache_spec;
 mod interface;
+#[cfg(test)]
+mod interface_scc_pending_spec;
 mod params;
 mod resolve;
 
@@ -1603,7 +1629,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// annotation in an SCC is lowered before any reserved root is filled.
     fn construct_pending_interface_sccs(&mut self, start: usize, end: usize) {
         let end = end.min(self.type_decls.len());
+        #[cfg(test)]
+        let topology_declaration_scans = self.type_decls.iter().count();
         let topology = interface_heritage_topology(self.binder, &self.type_decls);
+        #[cfg(test)]
+        let scc_candidate_scans = (start..end)
+            .filter(|index| {
+                matches!(
+                    self.type_decls.get(*index),
+                    Some(TypeDecl::Interface { .. })
+                )
+            })
+            .count();
         let components = interface_sccs(&self.type_decls, start, end, &topology);
         let mut remaining: Vec<Vec<usize>> = components
             .into_iter()
@@ -1615,6 +1652,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 })
             })
             .collect();
+        #[cfg(test)]
+        let mut constructed_components = 0;
 
         loop {
             let mut progressed = false;
@@ -1624,6 +1663,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let cyclic_heritage =
                         interface_component_has_cycle(&self.type_decls, &component, &topology);
                     self.construct_interface_component(&component, cyclic_heritage, &topology);
+                    #[cfg(test)]
+                    {
+                        constructed_components += 1;
+                    }
                     progressed = true;
                 } else {
                     deferred.push(component);
@@ -1634,6 +1677,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             remaining = deferred;
         }
+        #[cfg(test)]
+        INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| {
+            work.borrow_mut().push(InterfaceSccConstructionWork {
+                start,
+                end,
+                topology_builds: 1,
+                topology_declaration_scans,
+                scc_builds: 1,
+                scc_candidate_scans,
+                constructed_components,
+            });
+        });
     }
 
     fn interface_component_is_ready(
