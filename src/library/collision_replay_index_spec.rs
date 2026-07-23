@@ -11,8 +11,7 @@ use super::snapshot::SnapshotWorkScopeForTest;
 use super::{FrozenLibraryBase, LibraryBaseProvider};
 use std::sync::Arc;
 
-const PROFILE_IDENTITY: &str =
-    "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const REPLAY_MANIFEST_IDENTITY: &str =
     "cc125e22a561b069f62f6707e5eb3f8187be0959bb75d8cbfb665266d21c2c95";
 const SNAPSHOT_SECTIONS: [&str; 11] = [
@@ -65,7 +64,12 @@ fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
                 .strip_suffix(',')
                 .and_then(|declaration| declaration.split_once(':'))
                 .expect("named struct field");
-            fields.push(name.trim().to_owned());
+            fields.push(
+                name.trim()
+                    .strip_prefix("pub(crate) ")
+                    .unwrap_or(name.trim())
+                    .to_owned(),
+            );
             field.clear();
         }
     }
@@ -115,11 +119,17 @@ fn canonical_replay_index_is_an_authenticated_eleventh_snapshot_section() {
     let base = acquire();
     let index = base.replay_index_for_test();
 
-    assert_eq!(base.snapshot_section_inventory_for_test(), SNAPSHOT_SECTIONS);
+    assert_eq!(
+        base.snapshot_section_inventory_for_test(),
+        SNAPSHOT_SECTIONS
+    );
     assert_eq!(index.schema, 1);
     assert_eq!(base.identity().profile_sha256(), PROFILE_IDENTITY);
     assert_eq!(index.canonical_manifest_len(), 10_996_257);
-    assert_eq!(hex(&index.canonical_manifest_sha256), REPLAY_MANIFEST_IDENTITY);
+    assert_eq!(
+        hex(&index.canonical_manifest_sha256),
+        REPLAY_MANIFEST_IDENTITY
+    );
     assert_eq!(
         hex(&base.pinned_replay_manifest_sha256_for_test()),
         REPLAY_MANIFEST_IDENTITY
@@ -167,10 +177,7 @@ fn canonical_replay_index_is_source_reproducible_and_complete() {
     assert_eq!(index.root_slots, regenerated.root_slots);
     assert_eq!(index.owner_sites, regenerated.owner_sites);
     assert_eq!(index.reverse_edges, regenerated.reverse_edges);
-    assert_eq!(
-        index.root_slot_consumers,
-        regenerated.root_slot_consumers
-    );
+    assert_eq!(index.root_slot_consumers, regenerated.root_slot_consumers);
     assert_eq!(index.scc_membership, regenerated.scc_membership);
     assert_eq!(index.statement_owners, regenerated.statement_owners);
     assert_eq!(index.baseline_records, regenerated.baseline_records);
@@ -197,8 +204,8 @@ fn assert_rejected_before_publication(
     let compiler_work = compiler.finish();
 
     assert!(Arc::ptr_eq(&first, &second));
-    assert_eq!(first.stage(), expected_stage);
-    assert_eq!(first.cause(), &expected_cause);
+    assert_eq!(first.stage(), expected_stage, "{mutation:?}");
+    assert_eq!(first.cause(), &expected_cause, "{mutation:?}");
     assert_eq!(
         provider.measurement_for_test(),
         InitializationMeasurement {
@@ -288,7 +295,7 @@ fn replay_index_structural_and_cross_section_corruption_fails_at_its_admission_b
             ReplayIndexMutationForTest::InvalidBooleanTag,
             ReplayIndexMutationForTest::SemanticTrailingBytes,
             ReplayIndexMutationForTest::InvalidOwnerTag,
-            ReplayIndexMutationForTest::SemanticallyEquivalentNoncanonicalEncoding,
+            ReplayIndexMutationForTest::RootNameLengthOverflow,
         ],
         CollisionReplayIndexViolation::InvalidEncoding,
     );
@@ -310,6 +317,8 @@ fn replay_index_structural_and_cross_section_corruption_fails_at_its_admission_b
             ReplayIndexMutationForTest::EmptyRootName,
             ReplayIndexMutationForTest::RootIdOutsidePrefix,
             ReplayIndexMutationForTest::PopulatedRootIndexMismatch,
+            ReplayIndexMutationForTest::MissingCanonicalPopulatedRoot,
+            ReplayIndexMutationForTest::UnusedPlaceholderRoot,
         ],
         CollisionReplayIndexViolation::InvalidRootIndex,
     );
@@ -360,6 +369,7 @@ fn replay_index_structural_and_cross_section_corruption_fails_at_its_admission_b
     reject_family(
         [
             ReplayIndexMutationForTest::NonStatementBaselineCountNonzero,
+            ReplayIndexMutationForTest::NonStatementBaselineDigestNoncanonical,
             ReplayIndexMutationForTest::DuplicateBaseline,
             ReplayIndexMutationForTest::MissingBaseline,
         ],

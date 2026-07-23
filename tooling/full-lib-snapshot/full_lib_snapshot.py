@@ -46,8 +46,8 @@ HARNESS_RECORD_SUFFIX = re.compile(
 STRATEGY = "eager-complete"
 RECORD_KIND = "eager-fast-clean"
 SCHEMA_IDENTITY = hashlib.sha256(
-    b"b7f9c947fd684e45da2ef8f351f9d09c71d1d8330e7f52b7953bb80ef128a311"
-    b"|projection-witness-v1"
+    b"a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65"
+    b"|collision-replay-index-v1"
 ).hexdigest()
 
 
@@ -217,16 +217,16 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "minimum_bytes": 1024 * 1024,
         "regenerations": 2,
         "schema": 1,
-        "canonical_bytes": 10_003_957,
-        "canonical_sha256": "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0",
+        "canonical_bytes": 21_000_266,
+        "canonical_sha256": "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960",
     }:
         raise ContractError("artifact contract differs")
     exact_keys(data["wire"], {"magic", "version", "schema_sha256", "section_names", "section_tags"}, "contract.wire")
     if data["wire"] != {
         "magic": "typokat-semantic-snapshot", "version": 1,
         "schema_sha256": SCHEMA_IDENTITY,
-        "section_names": ["store", "interner", "binder", "decl-types", "published-types", "namespace-terminals", "class-metadata", "semantic-identities", "root-name-index", "next-ids"],
-        "section_tags": list(range(1, 11)),
+        "section_names": ["store", "interner", "binder", "decl-types", "published-types", "namespace-terminals", "class-metadata", "semantic-identities", "root-name-index", "next-ids", "collision-replay-index"],
+        "section_tags": list(range(1, 12)),
     }:
         raise ContractError("snapshot wire contract differs")
     exact_keys(data["sampling"], {"windows", "warmups_per_window", "recorded_per_window", "minimum_window_gap_seconds", "timeout_seconds", "maximum_stdout_bytes", "maximum_stderr_bytes", "maximum_p95_wall_ms", "maximum_peak_rss_kib"}, "contract.sampling")
@@ -1014,11 +1014,13 @@ def validate_identity(value: Any, label: str) -> dict[str, Any]:
 
 def validate_wire_record(wire: Any, artifact_bytes: int, contract: dict[str, Any]) -> dict[str, Any]:
     exact_keys(wire, {"magic", "version", "profile_sha256", "schema_sha256", "section_count", "directory_bytes", "body_bytes", "body_sha256", "sections"}, "snapshot wire evidence")
-    if wire["magic"] != contract["wire"]["magic"] or wire["version"] != 1 or wire["profile_sha256"] != contract["profile_sha256"] or wire["schema_sha256"] != contract["wire"]["schema_sha256"] or wire["section_count"] != 10 or wire["directory_bytes"] != 520:
+    section_count = len(contract["wire"]["section_tags"])
+    directory_bytes = section_count * (2 + 2 + 8 + 8 + 32)
+    if wire["magic"] != contract["wire"]["magic"] or wire["version"] != 1 or wire["profile_sha256"] != contract["profile_sha256"] or wire["schema_sha256"] != contract["wire"]["schema_sha256"] or wire["section_count"] != section_count or wire["directory_bytes"] != directory_bytes:
         raise ContractError("snapshot wire evidence header differs")
-    if not isinstance(wire["body_sha256"], str) or not HEX64.fullmatch(wire["body_sha256"]) or wire["body_bytes"] + len(contract["wire"]["magic"].encode("ascii")) + 4 + 32 + 32 + 4 + 8 + 32 + 520 != artifact_bytes:
+    if not isinstance(wire["body_sha256"], str) or not HEX64.fullmatch(wire["body_sha256"]) or wire["body_bytes"] + len(contract["wire"]["magic"].encode("ascii")) + 4 + 32 + 32 + 4 + 8 + 32 + directory_bytes != artifact_bytes:
         raise ContractError("snapshot wire evidence body differs")
-    if not isinstance(wire["sections"], list) or len(wire["sections"]) != 10:
+    if not isinstance(wire["sections"], list) or len(wire["sections"]) != section_count:
         raise ContractError("snapshot wire evidence section inventory differs")
     expected_offset = artifact_bytes - wire["body_bytes"]
     total = 0

@@ -6,6 +6,7 @@ use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
 use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
+use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::source::LibraryFileOrdinal;
 use crate::span::Span;
 use crate::types::repr::ClassId;
@@ -14,6 +15,13 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
+
+pub(crate) const COLLISION_REPLAY_MANIFEST_SHA256: [u8; 32] = [
+    0xcc, 0x12, 0x5e, 0x22, 0xa5, 0x61, 0xb0, 0x69, 0xf6, 0x2f, 0x67, 0x07, 0xe5, 0xeb, 0x3f, 0x81,
+    0x87, 0xbe, 0x09, 0x59, 0xbb, 0x75, 0xd8, 0xcb, 0xfb, 0x66, 0x52, 0x66, 0xd2, 0x1c, 0x2c, 0x95,
+];
+const COLLISION_REPLAY_MANIFEST_DOMAIN: &[u8] = b"typokat-collision-replay-index-v1";
+const MAX_REPLAY_COLLECTION_ROWS: usize = 1_000_000;
 
 /// Stable semantic publication domains. Tag order is part of the manifest wire contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -170,6 +178,85 @@ pub(crate) struct CollisionReplayIndex {
     pub(crate) canonical_manifest_bytes: Vec<u8>,
     pub(crate) canonical_manifest_sha256: [u8; 32],
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AdmittedCollisionReplayIndex {
+    pub(crate) schema: u32,
+    pub(crate) owner_partition: Vec<ReplayOwner>,
+    pub(crate) root_slots: Vec<ReplayRootSlot>,
+    pub(crate) owner_sites: Vec<ReplayOwnerSite>,
+    pub(crate) reverse_edges: Vec<ReplayReverseEdge>,
+    pub(crate) root_slot_consumers: Vec<ReplayRootConsumer>,
+    pub(crate) scc_membership: Vec<ReplayScc>,
+    pub(crate) statement_owners: Vec<(LibraryEventKey, ReplayOwner)>,
+    pub(crate) baseline_records: Vec<ReplayBaselineRecord>,
+    pub(crate) unowned_demand_count: u64,
+    pub(crate) invalid_owner_site_count: u64,
+    pub(crate) noncanonical_edge_count: u64,
+    pub(crate) typed_reference_coverage_misses: u64,
+    pub(crate) canonical_manifest_len: usize,
+    pub(crate) canonical_manifest_sha256: [u8; 32],
+}
+
+impl AdmittedCollisionReplayIndex {
+    #[cfg(test)]
+    pub(crate) const fn canonical_manifest_len(&self) -> usize {
+        self.canonical_manifest_len
+    }
+
+    #[cfg(test)]
+    pub(crate) fn encode_manifest_for_test(&self) -> Result<Vec<u8>, ReplayIndexGenerationError> {
+        CollisionReplayIndex {
+            schema: self.schema,
+            owner_partition: self.owner_partition.clone(),
+            root_slots: self.root_slots.clone(),
+            owner_sites: self.owner_sites.clone(),
+            reverse_edges: self.reverse_edges.clone(),
+            root_slot_consumers: self.root_slot_consumers.clone(),
+            scc_membership: self.scc_membership.clone(),
+            statement_owners: self.statement_owners.clone(),
+            baseline_records: self.baseline_records.clone(),
+            unowned_demand_count: self.unowned_demand_count,
+            invalid_owner_site_count: self.invalid_owner_site_count,
+            noncanonical_edge_count: self.noncanonical_edge_count,
+            typed_reference_coverage_misses: self.typed_reference_coverage_misses,
+            canonical_manifest_bytes: Vec::new(),
+            canonical_manifest_sha256: self.canonical_manifest_sha256,
+        }
+        .encode()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayIndexAdmissionError {
+    InvalidEncoding,
+    InvalidOwnerPartition,
+    InvalidRootIndex,
+    InvalidDependencyGraph,
+    InvalidOwnerSites,
+    InvalidSccPartition,
+    InvalidStatementPartition,
+    InvalidBaselinePartition,
+    NonzeroGenerationHealthCounter,
+    ManifestIdentityMismatch,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ReplayIndexAdmissionLimits<'roots> {
+    pub(crate) type_groups: usize,
+    pub(crate) value_storages: usize,
+    pub(crate) namespaces: usize,
+    pub(crate) classes: usize,
+    pub(crate) source_files: usize,
+    pub(crate) roots: &'roots [ReplayRootIdentity],
+}
+
+pub(crate) type ReplayRootIdentity = (
+    String,
+    Option<ValueStorageId>,
+    Option<TypeGroupId>,
+    Option<NamespaceId>,
+);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReplayIndexGenerationError {
@@ -765,8 +852,8 @@ impl Drop for ReplayOwnerScope {
 }
 
 impl CollisionReplayIndex {
-    fn encode(&self) -> Result<Vec<u8>, ReplayIndexGenerationError> {
-        let mut bytes = ManifestBytes::new(b"typokat-collision-replay-index-v1");
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, ReplayIndexGenerationError> {
+        let mut bytes = ManifestBytes::new(COLLISION_REPLAY_MANIFEST_DOMAIN);
         bytes.u32(self.schema);
         bytes.usize(self.owner_partition.len())?;
         for owner in &self.owner_partition {
@@ -826,7 +913,545 @@ impl CollisionReplayIndex {
     }
 }
 
+fn invalid_encoding(_: SnapshotCodecError) -> ReplayIndexAdmissionError {
+    ReplayIndexAdmissionError::InvalidEncoding
+}
+
+fn bounded_collection_len(
+    reader: &mut SnapshotReader<'_>,
+    minimum_item_bytes: usize,
+) -> Result<usize, ReplayIndexAdmissionError> {
+    let count = reader
+        .collection_len(minimum_item_bytes)
+        .map_err(invalid_encoding)?;
+    if count > MAX_REPLAY_COLLECTION_ROWS {
+        return Err(ReplayIndexAdmissionError::InvalidEncoding);
+    }
+    Ok(count)
+}
+
+fn read_owner(reader: &mut SnapshotReader<'_>) -> Result<ReplayOwner, ReplayIndexAdmissionError> {
+    Ok(match reader.u8().map_err(invalid_encoding)? {
+        0 => ReplayOwner::TypeGroup(TypeGroupId(reader.u32().map_err(invalid_encoding)?)),
+        1 => ReplayOwner::Value(ValueStorageId(reader.u32().map_err(invalid_encoding)?)),
+        2 => ReplayOwner::Namespace(NamespaceId(reader.u32().map_err(invalid_encoding)?)),
+        3 => ReplayOwner::Class(ClassId(reader.u32().map_err(invalid_encoding)?)),
+        4 => ReplayOwner::GlobalObject,
+        5 => ReplayOwner::Statement(LibraryEventKey {
+            file_ordinal: LibraryFileOrdinal::new(reader.usize().map_err(invalid_encoding)?),
+            source_start: reader.u32().map_err(invalid_encoding)?,
+            event_ordinal: reader.usize().map_err(invalid_encoding)?,
+            record_ordinal: reader.usize().map_err(invalid_encoding)?,
+        }),
+        _ => return Err(ReplayIndexAdmissionError::InvalidEncoding),
+    })
+}
+
+fn read_optional_id(
+    reader: &mut SnapshotReader<'_>,
+) -> Result<Option<u32>, ReplayIndexAdmissionError> {
+    match reader.u8().map_err(invalid_encoding)? {
+        0 => Ok(None),
+        1 => reader.u32().map(Some).map_err(invalid_encoding),
+        _ => Err(ReplayIndexAdmissionError::InvalidEncoding),
+    }
+}
+
+fn owner_in_bounds(owner: ReplayOwner, limits: ReplayIndexAdmissionLimits<'_>) -> bool {
+    match owner {
+        ReplayOwner::TypeGroup(id) => usize::try_from(id.0).is_ok_and(|id| id < limits.type_groups),
+        ReplayOwner::Value(id) => usize::try_from(id.0).is_ok_and(|id| id < limits.value_storages),
+        ReplayOwner::Namespace(id) => usize::try_from(id.0).is_ok_and(|id| id < limits.namespaces),
+        ReplayOwner::Class(id) => usize::try_from(id.0).is_ok_and(|id| id < limits.classes),
+        ReplayOwner::GlobalObject => true,
+        ReplayOwner::Statement(key) => key.file_ordinal.index() < limits.source_files,
+    }
+}
+
+pub(crate) struct DecodedCollisionReplayIndex {
+    index: CollisionReplayIndex,
+    canonical_manifest_len: usize,
+}
+
+pub(crate) fn decode_collision_replay_index(
+    bytes: &[u8],
+) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
+    let mut reader = SnapshotReader::new(bytes);
+    if reader
+        .raw(COLLISION_REPLAY_MANIFEST_DOMAIN.len())
+        .map_err(invalid_encoding)?
+        != COLLISION_REPLAY_MANIFEST_DOMAIN
+        || reader.u32().map_err(invalid_encoding)? != 1
+    {
+        return Err(ReplayIndexAdmissionError::InvalidEncoding);
+    }
+    let schema = 1;
+
+    let owner_count = bounded_collection_len(&mut reader, 1)?;
+    let mut owner_partition = Vec::with_capacity(owner_count);
+    for _ in 0..owner_count {
+        owner_partition.push(read_owner(&mut reader)?);
+    }
+
+    let root_count = bounded_collection_len(&mut reader, 13)?;
+    let mut root_slots = Vec::with_capacity(root_count);
+    for _ in 0..root_count {
+        root_slots.push(ReplayRootSlot {
+            name: reader.string().map_err(invalid_encoding)?.to_owned(),
+            value: read_optional_id(&mut reader)?.map(ValueStorageId),
+            ty: read_optional_id(&mut reader)?.map(TypeGroupId),
+            namespace: read_optional_id(&mut reader)?.map(NamespaceId),
+            global_object_contributor: reader.bool().map_err(invalid_encoding)?,
+            explicit_global_this: reader.bool().map_err(invalid_encoding)?,
+        });
+    }
+
+    let site_count = bounded_collection_len(&mut reader, 17)?;
+    let mut owner_sites = Vec::with_capacity(site_count);
+    for _ in 0..site_count {
+        owner_sites.push(ReplayOwnerSite {
+            owner: read_owner(&mut reader)?,
+            file_ordinal: LibraryFileOrdinal::new(reader.usize().map_err(invalid_encoding)?),
+            span: Span::new(
+                reader.u32().map_err(invalid_encoding)?,
+                reader.u32().map_err(invalid_encoding)?,
+            ),
+        });
+    }
+
+    let edge_count = bounded_collection_len(&mut reader, 2)?;
+    let mut reverse_edges = Vec::with_capacity(edge_count);
+    for _ in 0..edge_count {
+        reverse_edges.push(ReplayReverseEdge {
+            dependency: read_owner(&mut reader)?,
+            consumer: read_owner(&mut reader)?,
+        });
+    }
+
+    let root_consumer_count = bounded_collection_len(&mut reader, 10)?;
+    let mut root_slot_consumers = Vec::with_capacity(root_consumer_count);
+    for _ in 0..root_consumer_count {
+        let name = reader.string().map_err(invalid_encoding)?.to_owned();
+        let slot = match reader.u8().map_err(invalid_encoding)? {
+            0 => RootSlotKind::Value,
+            1 => RootSlotKind::Type,
+            2 => RootSlotKind::Namespace,
+            _ => return Err(ReplayIndexAdmissionError::InvalidDependencyGraph),
+        };
+        root_slot_consumers.push(ReplayRootConsumer {
+            name,
+            slot,
+            consumer: read_owner(&mut reader)?,
+        });
+    }
+
+    let scc_count = bounded_collection_len(&mut reader, 12)?;
+    let mut scc_membership = Vec::with_capacity(scc_count);
+    for _ in 0..scc_count {
+        let replay_ordinal = reader.u32().map_err(invalid_encoding)?;
+        let count = bounded_collection_len(&mut reader, 1)?;
+        let mut owners = Vec::with_capacity(count);
+        for _ in 0..count {
+            owners.push(read_owner(&mut reader)?);
+        }
+        scc_membership.push(ReplayScc {
+            replay_ordinal,
+            owners,
+        });
+    }
+
+    let statement_count = bounded_collection_len(&mut reader, 2)?;
+    let mut statement_owners = Vec::with_capacity(statement_count);
+    for _ in 0..statement_count {
+        let key = match read_owner(&mut reader)? {
+            ReplayOwner::Statement(key) => key,
+            _ => return Err(ReplayIndexAdmissionError::InvalidEncoding),
+        };
+        statement_owners.push((key, read_owner(&mut reader)?));
+    }
+
+    let baseline_count = bounded_collection_len(&mut reader, 41)?;
+    let mut baseline_records = Vec::with_capacity(baseline_count);
+    for _ in 0..baseline_count {
+        let owner = read_owner(&mut reader)?;
+        let record_count = reader.u64().map_err(invalid_encoding)?;
+        let mut digest = [0; 32];
+        digest.copy_from_slice(reader.raw(32).map_err(invalid_encoding)?);
+        baseline_records.push(ReplayBaselineRecord {
+            owner,
+            record_count,
+            digest,
+        });
+    }
+    let unowned_demand_count = reader.u64().map_err(invalid_encoding)?;
+    let invalid_owner_site_count = reader.u64().map_err(invalid_encoding)?;
+    let noncanonical_edge_count = reader.u64().map_err(invalid_encoding)?;
+    let typed_reference_coverage_misses = reader.u64().map_err(invalid_encoding)?;
+    reader.finish().map_err(invalid_encoding)?;
+
+    let decoded = CollisionReplayIndex {
+        schema,
+        owner_partition,
+        root_slots,
+        owner_sites,
+        reverse_edges,
+        root_slot_consumers,
+        scc_membership,
+        statement_owners,
+        baseline_records,
+        unowned_demand_count,
+        invalid_owner_site_count,
+        noncanonical_edge_count,
+        typed_reference_coverage_misses,
+        canonical_manifest_bytes: Vec::new(),
+        canonical_manifest_sha256: Sha256::digest(bytes).into(),
+    };
+    // A successful parse already proves the unique wire form: integers and lengths are
+    // fixed-width big-endian, every discriminant is exact, UTF-8 bytes are retained by
+    // `String`, collection order is retained, and `finish` rejects every suffix. Therefore
+    // decode-then-encode cannot reject anything that this reader accepted.
+    Ok(DecodedCollisionReplayIndex {
+        index: decoded,
+        canonical_manifest_len: bytes.len(),
+    })
+}
+
 #[cfg(test)]
+pub(crate) fn decode_collision_replay_index_for_test(
+    bytes: &[u8],
+) -> Result<CollisionReplayIndex, ReplayIndexAdmissionError> {
+    decode_collision_replay_index(bytes).map(|decoded| decoded.index)
+}
+
+pub(crate) fn admit_decoded_collision_replay_index(
+    decoded: DecodedCollisionReplayIndex,
+    limits: ReplayIndexAdmissionLimits<'_>,
+    expected_manifest_sha256: Option<[u8; 32]>,
+) -> Result<AdmittedCollisionReplayIndex, ReplayIndexAdmissionError> {
+    let canonical_manifest_len = decoded.canonical_manifest_len;
+    let decoded = decoded.index;
+    let expected_nonstatement_count = limits
+        .type_groups
+        .checked_add(limits.value_storages)
+        .and_then(|count| count.checked_add(limits.namespaces))
+        .and_then(|count| count.checked_add(limits.classes))
+        .and_then(|count| count.checked_add(1))
+        .ok_or(ReplayIndexAdmissionError::InvalidOwnerPartition)?;
+    if decoded.owner_partition.len() < expected_nonstatement_count {
+        return Err(ReplayIndexAdmissionError::InvalidOwnerPartition);
+    }
+    let mut expected_nonstatement = Vec::with_capacity(expected_nonstatement_count);
+    for id in 0..limits.type_groups {
+        expected_nonstatement.push(ReplayOwner::TypeGroup(TypeGroupId(
+            u32::try_from(id).map_err(|_| ReplayIndexAdmissionError::InvalidOwnerPartition)?,
+        )));
+    }
+    for id in 0..limits.value_storages {
+        expected_nonstatement.push(ReplayOwner::Value(ValueStorageId(
+            u32::try_from(id).map_err(|_| ReplayIndexAdmissionError::InvalidOwnerPartition)?,
+        )));
+    }
+    for id in 0..limits.namespaces {
+        expected_nonstatement.push(ReplayOwner::Namespace(NamespaceId(
+            u32::try_from(id).map_err(|_| ReplayIndexAdmissionError::InvalidOwnerPartition)?,
+        )));
+    }
+    for id in 0..limits.classes {
+        expected_nonstatement.push(ReplayOwner::Class(ClassId(
+            u32::try_from(id).map_err(|_| ReplayIndexAdmissionError::InvalidOwnerPartition)?,
+        )));
+    }
+    expected_nonstatement.push(ReplayOwner::GlobalObject);
+    if decoded.owner_partition[..expected_nonstatement_count] != expected_nonstatement
+        || decoded
+            .owner_partition
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || decoded
+            .owner_partition
+            .iter()
+            .copied()
+            .any(|owner| !owner_in_bounds(owner, limits))
+    {
+        return Err(ReplayIndexAdmissionError::InvalidOwnerPartition);
+    }
+    let partition = decoded
+        .owner_partition
+        .iter()
+        .copied()
+        .collect::<rustc_hash::FxHashSet<_>>();
+
+    if decoded.root_slots.iter().any(|root| root.name.is_empty())
+        || decoded
+            .root_slots
+            .windows(2)
+            .any(|pair| pair[0].name >= pair[1].name)
+        || decoded.root_slots.iter().any(|root| {
+            !root
+                .value
+                .is_none_or(|id| usize::try_from(id.0).is_ok_and(|id| id < limits.value_storages))
+                || !root
+                    .ty
+                    .is_none_or(|id| usize::try_from(id.0).is_ok_and(|id| id < limits.type_groups))
+                || !root
+                    .namespace
+                    .is_none_or(|id| usize::try_from(id.0).is_ok_and(|id| id < limits.namespaces))
+        })
+    {
+        return Err(ReplayIndexAdmissionError::InvalidRootIndex);
+    }
+    let site_owners = decoded
+        .owner_sites
+        .iter()
+        .map(|site| site.owner)
+        .collect::<rustc_hash::FxHashSet<_>>();
+    if decoded.owner_sites.windows(2).any(|pair| {
+        (
+            pair[0].owner,
+            pair[0].file_ordinal,
+            pair[0].span.start,
+            pair[0].span.end,
+        ) >= (
+            pair[1].owner,
+            pair[1].file_ordinal,
+            pair[1].span.start,
+            pair[1].span.end,
+        )
+    }) || decoded.owner_sites.iter().any(|site| {
+        !partition.contains(&site.owner)
+            || site.file_ordinal.index() >= limits.source_files
+            || site.span.start > site.span.end
+    }) || decoded
+        .owner_partition
+        .iter()
+        .any(|owner| !site_owners.contains(owner))
+    {
+        return Err(ReplayIndexAdmissionError::InvalidOwnerSites);
+    }
+
+    let root_names = decoded
+        .root_slots
+        .iter()
+        .map(|root| root.name.as_str())
+        .collect::<rustc_hash::FxHashSet<_>>();
+    if decoded
+        .reverse_edges
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1])
+        || decoded.reverse_edges.iter().any(|edge| {
+            edge.dependency == edge.consumer
+                || !partition.contains(&edge.dependency)
+                || !partition.contains(&edge.consumer)
+        })
+        || decoded
+            .root_slot_consumers
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || decoded.root_slot_consumers.iter().any(|edge| {
+            !partition.contains(&edge.consumer) || !root_names.contains(edge.name.as_str())
+        })
+    {
+        return Err(ReplayIndexAdmissionError::InvalidDependencyGraph);
+    }
+    let canonical_roots = limits
+        .roots
+        .iter()
+        .map(|root| (root.0.as_str(), (root.1, root.2, root.3)))
+        .collect::<BTreeMap<_, _>>();
+    let populated_roots = decoded
+        .root_slots
+        .iter()
+        .filter(|root| root.value.is_some() || root.ty.is_some() || root.namespace.is_some())
+        .map(|root| (root.name.as_str(), (root.value, root.ty, root.namespace)))
+        .collect::<BTreeMap<_, _>>();
+    let placeholder_names = decoded
+        .root_slots
+        .iter()
+        .filter(|root| root.value.is_none() && root.ty.is_none() && root.namespace.is_none())
+        .map(|root| root.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let consumed_placeholder_names = decoded
+        .root_slot_consumers
+        .iter()
+        .map(|consumer| consumer.name.as_str())
+        .filter(|name| !canonical_roots.contains_key(name))
+        .collect::<BTreeSet<_>>();
+    if populated_roots != canonical_roots || placeholder_names != consumed_placeholder_names {
+        return Err(ReplayIndexAdmissionError::InvalidRootIndex);
+    }
+
+    let mut owner_scc = rustc_hash::FxHashMap::default();
+    for (ordinal, component) in decoded.scc_membership.iter().enumerate() {
+        if component.replay_ordinal
+            != u32::try_from(ordinal).map_err(|_| ReplayIndexAdmissionError::InvalidSccPartition)?
+            || component.owners.is_empty()
+            || component.owners.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+        }
+        for owner in &component.owners {
+            if !partition.contains(owner) || owner_scc.insert(*owner, ordinal).is_some() {
+                return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+            }
+        }
+    }
+    if owner_scc.len() != partition.len() {
+        return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+    }
+    let mut forward = rustc_hash::FxHashMap::<ReplayOwner, Vec<ReplayOwner>>::default();
+    let mut reverse = rustc_hash::FxHashMap::<ReplayOwner, Vec<ReplayOwner>>::default();
+    let mut component_edges = rustc_hash::FxHashSet::default();
+    let mut dependency_counts = vec![0usize; decoded.scc_membership.len()];
+    let mut component_dependents = vec![Vec::new(); decoded.scc_membership.len()];
+    for edge in &decoded.reverse_edges {
+        let dependency_scc = owner_scc[&edge.dependency];
+        let consumer_scc = owner_scc[&edge.consumer];
+        if dependency_scc > consumer_scc {
+            return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+        }
+        if dependency_scc == consumer_scc {
+            forward
+                .entry(edge.consumer)
+                .or_default()
+                .push(edge.dependency);
+            reverse
+                .entry(edge.dependency)
+                .or_default()
+                .push(edge.consumer);
+        } else if component_edges.insert((dependency_scc, consumer_scc)) {
+            dependency_counts[consumer_scc] = dependency_counts[consumer_scc]
+                .checked_add(1)
+                .ok_or(ReplayIndexAdmissionError::InvalidSccPartition)?;
+            component_dependents[dependency_scc].push(consumer_scc);
+        }
+    }
+    fn reaches_component(
+        start: ReplayOwner,
+        adjacency: &rustc_hash::FxHashMap<ReplayOwner, Vec<ReplayOwner>>,
+    ) -> rustc_hash::FxHashSet<ReplayOwner> {
+        let mut reached = rustc_hash::FxHashSet::default();
+        let mut pending = vec![start];
+        while let Some(owner) = pending.pop() {
+            if reached.insert(owner) {
+                pending.extend(adjacency.get(&owner).into_iter().flatten().copied());
+            }
+        }
+        reached
+    }
+    for component in decoded
+        .scc_membership
+        .iter()
+        .filter(|component| component.owners.len() > 1)
+    {
+        let members = component
+            .owners
+            .iter()
+            .copied()
+            .collect::<rustc_hash::FxHashSet<_>>();
+        let start = component.owners[0];
+        if reaches_component(start, &forward) != members
+            || reaches_component(start, &reverse) != members
+        {
+            return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+        }
+    }
+    let mut ready = std::collections::BinaryHeap::new();
+    for (component, count) in dependency_counts.iter().copied().enumerate() {
+        if count == 0 {
+            ready.push(std::cmp::Reverse((
+                decoded.scc_membership[component].owners[0],
+                component,
+            )));
+        }
+    }
+    for expected in 0..decoded.scc_membership.len() {
+        let Some(std::cmp::Reverse((_, component))) = ready.pop() else {
+            return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+        };
+        if component != expected {
+            return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+        }
+        for dependent in component_dependents[component].iter().copied() {
+            dependency_counts[dependent] -= 1;
+            if dependency_counts[dependent] == 0 {
+                ready.push(std::cmp::Reverse((
+                    decoded.scc_membership[dependent].owners[0],
+                    dependent,
+                )));
+            }
+        }
+    }
+    if !ready.is_empty() {
+        return Err(ReplayIndexAdmissionError::InvalidSccPartition);
+    }
+
+    let expected_statements = decoded.owner_partition[expected_nonstatement_count..]
+        .iter()
+        .filter_map(|owner| match owner {
+            ReplayOwner::Statement(key) => Some((*key, *owner)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if expected_statements.len() != decoded.owner_partition.len() - expected_nonstatement_count
+        || decoded.statement_owners != expected_statements
+    {
+        return Err(ReplayIndexAdmissionError::InvalidStatementPartition);
+    }
+    let empty_digest = empty_baseline_digest();
+    if decoded
+        .baseline_records
+        .iter()
+        .map(|record| record.owner)
+        .ne(decoded.owner_partition.iter().copied())
+        || decoded.baseline_records.iter().any(|record| {
+            !matches!(record.owner, ReplayOwner::Statement(_))
+                && (record.record_count != 0 || record.digest != empty_digest)
+        })
+    {
+        return Err(ReplayIndexAdmissionError::InvalidBaselinePartition);
+    }
+    if decoded.unowned_demand_count != 0
+        || decoded.invalid_owner_site_count != 0
+        || decoded.noncanonical_edge_count != 0
+        || decoded.typed_reference_coverage_misses != 0
+    {
+        return Err(ReplayIndexAdmissionError::NonzeroGenerationHealthCounter);
+    }
+    if expected_manifest_sha256
+        .is_some_and(|expected| decoded.canonical_manifest_sha256 != expected)
+    {
+        return Err(ReplayIndexAdmissionError::ManifestIdentityMismatch);
+    }
+
+    Ok(AdmittedCollisionReplayIndex {
+        schema: decoded.schema,
+        owner_partition: decoded.owner_partition,
+        root_slots: decoded.root_slots,
+        owner_sites: decoded.owner_sites,
+        reverse_edges: decoded.reverse_edges,
+        root_slot_consumers: decoded.root_slot_consumers,
+        scc_membership: decoded.scc_membership,
+        statement_owners: decoded.statement_owners,
+        baseline_records: decoded.baseline_records,
+        unowned_demand_count: decoded.unowned_demand_count,
+        invalid_owner_site_count: decoded.invalid_owner_site_count,
+        noncanonical_edge_count: decoded.noncanonical_edge_count,
+        typed_reference_coverage_misses: decoded.typed_reference_coverage_misses,
+        canonical_manifest_len,
+        canonical_manifest_sha256: decoded.canonical_manifest_sha256,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn admit_collision_replay_index(
+    bytes: &[u8],
+    limits: ReplayIndexAdmissionLimits<'_>,
+    expected_manifest_sha256: Option<[u8; 32]>,
+) -> Result<AdmittedCollisionReplayIndex, ReplayIndexAdmissionError> {
+    let decoded = decode_collision_replay_index(bytes)?;
+    admit_decoded_collision_replay_index(decoded, limits, expected_manifest_sha256)
+}
+
 fn empty_baseline_digest() -> [u8; 32] {
     let mut bytes = ManifestBytes::new(b"typokat-collision-replay-owner-records-v1");
     bytes.u64(0);

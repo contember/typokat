@@ -26,8 +26,8 @@ use super::namespace_values::{
 #[cfg(test)]
 use super::replay_index::ReplayReverseEdge;
 use super::replay_index::{
-    baseline_record, CollisionReplayIndex, ReplayDependencyTrace, ReplayIndexGenerationError,
-    ReplayOwner, ReplayOwnerSite, ReplayRootSlot,
+    baseline_record, AdmittedCollisionReplayIndex, CollisionReplayIndex, ReplayDependencyTrace,
+    ReplayIndexGenerationError, ReplayOwner, ReplayOwnerSite, ReplayRootSlot,
 };
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
@@ -96,7 +96,16 @@ pub(crate) struct OwnedLibraryRuntimeState {
     next_type_param: u32,
     next_class_id: u32,
     source_file_count: u32,
-    replay_index: Option<Box<CollisionReplayIndex>>,
+    replay_index: Option<Box<RuntimeCollisionReplayIndex>>,
+}
+
+#[allow(
+    dead_code,
+    reason = "the admitted index is retained for the next private replay slice"
+)]
+enum RuntimeCollisionReplayIndex {
+    Generated(CollisionReplayIndex),
+    Admitted(AdmittedCollisionReplayIndex),
 }
 
 pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
@@ -126,11 +135,12 @@ pub(in crate::check::checker) struct BorrowedLibraryRuntimeSnapshotParts<'runtim
     pub(in crate::check::checker) next_type_param: u32,
     pub(in crate::check::checker) next_class_id: u32,
     pub(in crate::check::checker) source_file_count: u32,
+    pub(in crate::check::checker) replay_index: &'runtime AdmittedCollisionReplayIndex,
 }
 
 pub(crate) struct CompiledLibraryRuntimeProduct {
     pub(in crate::check::checker) _parts: OwnedLibraryRuntimeSnapshotParts,
-    pub(in crate::check::checker) _replay_index: CollisionReplayIndex,
+    pub(crate) _replay_index: CollisionReplayIndex,
 }
 
 pub(crate) fn freeze_library_runtime_product(
@@ -139,7 +149,10 @@ pub(crate) fn freeze_library_runtime_product(
     let replay_index = state
         .replay_index
         .take()
-        .map(|index| *index)
+        .and_then(|index| match *index {
+            RuntimeCollisionReplayIndex::Generated(index) => Some(index),
+            RuntimeCollisionReplayIndex::Admitted(_) => None,
+        })
         .ok_or("source library compiler did not produce a replay index")?;
     state
         .into_snapshot_parts()
@@ -900,6 +913,12 @@ impl OwnedLibraryRuntimeState {
             next_type_param: self.next_type_param,
             next_class_id: self.next_class_id,
             source_file_count: self.source_file_count,
+            replay_index: match self.replay_index.as_deref() {
+                Some(RuntimeCollisionReplayIndex::Admitted(index)) => index,
+                Some(RuntimeCollisionReplayIndex::Generated(_)) | None => {
+                    return Err("runtime does not retain an admitted replay index");
+                }
+            },
         })
     }
 
@@ -941,8 +960,16 @@ impl OwnedLibraryRuntimeState {
         Ok(parts)
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: OwnedLibraryRuntimeSnapshotParts,
+    ) -> Result<Self, &'static str> {
+        Self::from_snapshot_parts_with_replay(parts, None)
+    }
+
+    pub(in crate::check::checker) fn from_snapshot_parts_with_replay(
+        parts: OwnedLibraryRuntimeSnapshotParts,
+        replay_index: Option<AdmittedCollisionReplayIndex>,
     ) -> Result<Self, &'static str> {
         validate_owned_library_snapshot_parts(&parts)?;
         let decl_types = DeclTypes::from_snapshot_slots(parts.decl_types, parts.binder.decl_count)?;
@@ -966,8 +993,26 @@ impl OwnedLibraryRuntimeState {
             next_type_param: parts.next_type_param,
             next_class_id: parts.next_class_id,
             source_file_count: parts.source_file_count,
-            replay_index: None,
+            replay_index: replay_index
+                .map(RuntimeCollisionReplayIndex::Admitted)
+                .map(Box::new),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn admitted_replay_index(&self) -> Option<&AdmittedCollisionReplayIndex> {
+        match self.replay_index.as_deref() {
+            Some(RuntimeCollisionReplayIndex::Admitted(index)) => Some(index),
+            Some(RuntimeCollisionReplayIndex::Generated(_)) | None => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn generated_replay_index(&self) -> Option<&CollisionReplayIndex> {
+        match self.replay_index.as_deref() {
+            Some(RuntimeCollisionReplayIndex::Generated(index)) => Some(index),
+            Some(RuntimeCollisionReplayIndex::Admitted(_)) | None => None,
+        }
     }
 }
 
@@ -3160,7 +3205,9 @@ pub(crate) fn compile_owned_injected_profile(
         next_class_id,
         source_file_count: u32::try_from(canonical.len())
             .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
-        replay_index: Some(Box::new(replay_index)),
+        replay_index: Some(Box::new(RuntimeCollisionReplayIndex::Generated(
+            replay_index,
+        ))),
     };
 
     let run = InjectedProfileRun {
@@ -4388,8 +4435,7 @@ mod tests {
             "#,
         );
         let replay = state
-            .replay_index
-            .as_deref()
+            .generated_replay_index()
             .expect("source compiler retains its replay index");
 
         assert_eq!(replay.unowned_demand_count, 0);
@@ -4409,8 +4455,7 @@ mod tests {
             "#,
         );
         let replay = state
-            .replay_index
-            .as_deref()
+            .generated_replay_index()
             .expect("source compiler retains its replay index");
 
         assert_eq!(replay.unowned_demand_count, 0);
@@ -4448,8 +4493,7 @@ mod tests {
             }
         };
         let replay = state
-            .replay_index
-            .as_deref()
+            .generated_replay_index()
             .expect("source compiler retains its replay index");
 
         for (parent, child) in [
@@ -4557,8 +4601,7 @@ mod tests {
         "#;
         let state = compile_reservation_fixture("root-normalization.d.ts", source);
         let replay = state
-            .replay_index
-            .as_deref()
+            .generated_replay_index()
             .expect("source compiler retains its replay index");
         let root = |name: &str| {
             replay
@@ -4736,12 +4779,10 @@ mod tests {
             .expect("second exact replay index generation");
         let second_elapsed = started.elapsed();
         let first = first_state
-            .replay_index
-            .as_deref()
+            .generated_replay_index()
             .expect("source compiler retains its replay index");
         let second = second_state
-            .replay_index
-            .as_deref()
+            .generated_replay_index()
             .expect("source compiler retains its replay index");
         assert_eq!(
             first.canonical_manifest_bytes,

@@ -70,12 +70,12 @@ isolated source root in both its working directory and
 the authoritative repository root and receives no profile-root variable.
 
 The coordinator itself parses both archives. It requires the exact magic,
-version, profile and schema digests, ten ordered tags with zero reserved bits,
+version, profile and schema digests, eleven ordered tags with zero reserved bits,
 nonempty contiguous sections, exact body length, no trailing bytes, and valid
 body/section SHA-256 values. An archive must be between 1 MiB and 32 MiB.
 The regenerated archive must additionally match the contract's exact canonical
-10,003,957-byte identity
-`af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0`.
+21,000,266-byte identity
+`539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960`.
 The timed route authenticates that complete identity while taking ownership of
 the input bytes. It still compares every decoded reference with the canonical
 wire manifest, but does so as a stream instead of allocating, globally sorting,

@@ -83,9 +83,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-// SHA-256 of the preceding schema identity plus `|projection-witness-v1`.
+// SHA-256 of the preceding schema identity plus `|collision-replay-index-v1`.
 const SNAPSHOT_SCHEMA_IDENTITY: &str =
-    "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
+    "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
 const FAST_CLEAN: &str =
     include_str!("../../../../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 const FAST_ERRORS: &str =
@@ -94,9 +94,9 @@ const FAST_ERRORS: &str =
 // The prototype freezes a simple independently parseable wire header. The integration spec
 // mutates these bytes itself; the implementation cannot choose convenient corruptions.
 const SNAPSHOT_MAGIC: &[u8] = b"typokat-semantic-snapshot";
-const CANONICAL_ARCHIVE_BYTES: usize = 10_003_957;
+const CANONICAL_ARCHIVE_BYTES: usize = 21_000_266;
 const CANONICAL_ARCHIVE_SHA256: &str =
-    "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
+    "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
 const VERSION_OFFSET: usize = SNAPSHOT_MAGIC.len();
 const PROFILE_DIGEST_LEN: usize = 32;
 const SCHEMA_DIGEST_LEN: usize = 32;
@@ -120,7 +120,7 @@ const DIRECTORY_ENTRY_LEN: usize = 2 + 2 + 8 + 8 + 32;
 const ROOT_NAME_INDEX_TAG: u16 = 9;
 const REFERENCE_MANIFEST_TAG: u16 = 8;
 const SNAPSHOT_VERSION: u32 = 1;
-const SECTION_COUNT: usize = 10;
+const SECTION_COUNT: usize = 11;
 const REFERENCE_FAMILY_COUNT: usize = 9;
 const REFERENCE_FAMILY_ENTRY_LEN: usize = 2 + 2 + 8;
 const REFERENCE_MANIFEST_ENTRY_LEN: usize = 1 + 1 + 1 + 1 + 4 + 4;
@@ -625,6 +625,7 @@ fn snapshot_roundtrip_preserves_runtime_projection() {
             "semantic-identities",
             "root-name-index",
             "next-ids",
+            "collision-replay-index",
         ]
     );
 
@@ -1131,6 +1132,7 @@ fn snapshot_contains_no_compiler_working_state() {
             "semantic-identities",
             "root-name-index",
             "next-ids",
+            "collision-replay-index",
         ]
     );
     for family in projection.families() {
@@ -1268,6 +1270,23 @@ fn decoded_user_route_has_no_source_compiler_dependency() {
         canonical_source.matches("std::thread::scope(").count(),
         2,
         "canonical decode must overlap independent state decoding and reference extraction"
+    );
+    assert!(
+        canonical_source.contains("typokat-library-replay-admission"),
+        "replay admission must overlap the second reference-validation phase"
+    );
+    let reference_result = canonical_source
+        .find("let reference_limits = ReferenceLimits::from_canonical_references(")
+        .expect("reference-result precedence boundary");
+    let semantic_result = canonical_source
+        .find("let semantic = semantic_result?;")
+        .expect("semantic-result precedence boundary");
+    let replay_result = canonical_source
+        .find("let replay_index = replay_admission_result")
+        .expect("replay-result precedence boundary");
+    assert!(
+        reference_result < semantic_result && semantic_result < replay_result,
+        "parallel replay admission must be consumed at the original deterministic precedence point"
     );
     for redundant in [
         "build_manifest_references(",

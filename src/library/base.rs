@@ -17,6 +17,10 @@ use crate::check::checker::library_snapshot_codec::{
     recompute_runtime_projection, validate_runtime_references, RuntimeProjectionForTest,
 };
 #[cfg(test)]
+use crate::check::checker::replay_index::{
+    AdmittedCollisionReplayIndex, CollisionReplayIndex, COLLISION_REPLAY_MANIFEST_SHA256,
+};
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -28,7 +32,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[cfg(test)]
-const COMPONENT_NAMES: [&str; 10] = [
+const COMPONENT_NAMES: [&str; 11] = [
     "store",
     "interner",
     "binder",
@@ -39,10 +43,11 @@ const COMPONENT_NAMES: [&str; 10] = [
     "semantic-identities",
     "root-name-index",
     "id-prefixes",
+    "collision-replay-index",
 ];
 
 #[cfg(test)]
-const RUNTIME_FAMILIES: [&str; 10] = [
+const RUNTIME_FAMILIES: [&str; 11] = [
     "store",
     "interner",
     "binder",
@@ -53,6 +58,7 @@ const RUNTIME_FAMILIES: [&str; 10] = [
     "semantic-identities",
     "root-name-index",
     "next-ids",
+    "collision-replay-index",
 ];
 
 #[cfg(test)]
@@ -101,6 +107,95 @@ pub struct FrozenLibraryBase {
     identity: FrozenLibraryIdentity,
     #[cfg(test)]
     structural_probe: Option<NonterminalStructuralTypeProbeForTest>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReplayIndexMutationForTest {
+    MissingSection,
+    WrongSectionTag,
+    WrongSectionDigest,
+    TruncatedSection,
+    TrailingSectionBytes,
+    WrongManifestDomain,
+    UnknownSchema,
+    TruncatedInternalLength,
+    InternalLengthOverflow,
+    InvalidUtf8RootName,
+    InvalidOptionalTag,
+    InvalidBooleanTag,
+    SemanticTrailingBytes,
+    InvalidOwnerTag,
+    RootNameLengthOverflow,
+    MissingOwner,
+    MissingStaleButInRangeOwner,
+    DuplicateOwner,
+    ReorderedOwner,
+    UnknownOwner,
+    MissingGlobalObjectOwner,
+    DuplicateGlobalObjectOwner,
+    DuplicateRoot,
+    EmptyRootName,
+    RootIdOutsidePrefix,
+    PopulatedRootIndexMismatch,
+    MissingCanonicalPopulatedRoot,
+    UnusedPlaceholderRoot,
+    DuplicateReverseEdge,
+    SelfReverseEdge,
+    ReorderedReverseEdge,
+    UnknownReverseEdgeOwner,
+    DuplicateRootConsumer,
+    ReorderedRootConsumer,
+    InvalidRootConsumerSlot,
+    UnknownRootConsumerOwner,
+    UnknownRootConsumerName,
+    MissingOwnerSite,
+    DuplicateOwnerSite,
+    InvalidOwnerSiteSpan,
+    UnknownOwnerSiteOwner,
+    OwnerSiteFileOutsideProfile,
+    InvalidScc,
+    MissingSccOwner,
+    DuplicateSccOwner,
+    ReorderedScc,
+    WrongDependencyFirstScc,
+    WrongStatementOwner,
+    DuplicateStatementOwner,
+    MissingStatementOwner,
+    StatementFileOutsideProfile,
+    ReorderedStatementOwner,
+    NonStatementBaselineCountNonzero,
+    NonStatementBaselineDigestNoncanonical,
+    DuplicateBaseline,
+    MissingBaseline,
+    NonzeroUnownedDemands,
+    NonzeroInvalidOwnerSites,
+    NonzeroNoncanonicalEdges,
+    NonzeroTypedReferenceMisses,
+    SelfConsistentMissingReverseEdge,
+    SelfConsistentMissingRootConsumer,
+    SelfConsistentMissingOwnerSite,
+    SelfConsistentWrongBaseline,
+    SelfConsistentWrongBaselineCount,
+    SelfConsistentWrongRootProvenance,
+    SelfConsistentCrossArtifactSection,
+    SelfConsistentButUnpinned,
+}
+
+#[cfg(test)]
+pub(super) struct RegeneratedReplayIndexForTest {
+    index: CollisionReplayIndex,
+    pub(super) library_source_compiles: u64,
+    pub(super) snapshot_decodes: u64,
+}
+
+#[cfg(test)]
+impl std::ops::Deref for RegeneratedReplayIndexForTest {
+    type Target = CollisionReplayIndex;
+
+    fn deref(&self) -> &Self::Target {
+        &self.index
+    }
 }
 
 #[cfg(test)]
@@ -675,6 +770,41 @@ impl FrozenLibraryBase {
     }
 
     #[cfg(test)]
+    pub(super) fn replay_index_for_test(&self) -> &AdmittedCollisionReplayIndex {
+        self.runtime
+            .admitted_replay_index()
+            .expect("frozen base retains an admitted replay index")
+    }
+
+    #[cfg(test)]
+    pub(super) const fn pinned_replay_manifest_sha256_for_test(&self) -> [u8; 32] {
+        COLLISION_REPLAY_MANIFEST_SHA256
+    }
+
+    #[cfg(test)]
+    pub(super) fn snapshot_section_inventory_for_test(&self) -> [&'static str; 11] {
+        self.recompute_canonical_projection_for_test()
+            .expect("frozen projection")
+            .projection
+            .family_names()
+    }
+
+    #[cfg(test)]
+    pub(super) fn regenerate_replay_index_manifest_for_test(
+    ) -> Result<RegeneratedReplayIndexForTest, String> {
+        let profile = super::profile::ExactLibraryProfile::load_packaged()
+            .map_err(|error| error.to_string())?;
+        let compiled = super::compiler::LibraryCompiler::new()
+            .compile(&profile)
+            .map_err(|error| error.to_string())?;
+        Ok(RegeneratedReplayIndexForTest {
+            index: compiled.replay_index_for_test().clone(),
+            library_source_compiles: 1,
+            snapshot_decodes: 0,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn inventory_for_test(&self) -> FrozenLibraryInventory<'_> {
         FrozenLibraryInventory { base: self }
     }
@@ -1139,7 +1269,7 @@ impl FrozenLibraryInventory<'_> {
         PROJECTION_SUBTABLES.len()
     }
 
-    pub(super) const fn component_names(&self) -> [&'static str; 10] {
+    pub(super) const fn component_names(&self) -> [&'static str; 11] {
         COMPONENT_NAMES
     }
 
@@ -1168,7 +1298,7 @@ impl CanonicalLibraryProjection {
         }
     }
 
-    pub(super) const fn runtime_families(&self) -> &[&'static str; 10] {
+    pub(super) const fn runtime_families(&self) -> &[&'static str; 11] {
         &RUNTIME_FAMILIES
     }
 

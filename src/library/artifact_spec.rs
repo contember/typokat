@@ -14,7 +14,7 @@ use super::profile::{ExactLibraryProfile, LibraryProfileError};
 use std::collections::BTreeSet;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SNAPSHOT_IDENTITY: &str = "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
+const SNAPSHOT_IDENTITY: &str = "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
 const WRONG_IDENTITY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}

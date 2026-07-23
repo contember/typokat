@@ -65,7 +65,7 @@ impl LibraryCompilerWorkScopeForTest {
 }
 
 pub const COMPILER_SCHEMA_SHA256: &str =
-    "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
+    "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryCompilationReport {
@@ -227,6 +227,13 @@ impl CompiledLibrary {
 
     pub const fn runtime_projection(&self) -> &LibraryRuntimeProjection {
         &self.runtime_projection
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn replay_index_for_test(
+        &self,
+    ) -> &crate::check::checker::replay_index::CollisionReplayIndex {
+        &self.runtime_projection._runtime._replay_index
     }
 
     pub const fn semantic_identity(&self) -> &LibrarySemanticIdentity {

@@ -16,8 +16,23 @@ pub enum LibraryInitStage {
     Decode,
     DecodeInterner,
     DecodeBinder,
+    CollisionReplayIndexAdmission,
     ReferenceValidation,
     Publication,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CollisionReplayIndexViolation {
+    InvalidEncoding,
+    InvalidOwnerPartition,
+    InvalidRootIndex,
+    InvalidDependencyGraph,
+    InvalidOwnerSites,
+    InvalidSccPartition,
+    InvalidStatementPartition,
+    InvalidBaselinePartition,
+    NonzeroGenerationHealthCounter,
+    ManifestIdentityMismatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +65,9 @@ pub enum LibraryInitCause {
     },
     WorkerSpawnFailed {
         worker: &'static str,
+    },
+    ReplayIndexRejected {
+        violation: CollisionReplayIndexViolation,
     },
 }
 

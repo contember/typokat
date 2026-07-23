@@ -28,10 +28,15 @@ class SnapshotCoordinatorTests(unittest.TestCase):
 
     def archive_bytes(self) -> bytes:
         magic = self.contract["wire"]["magic"].encode("ascii")
-        payloads = [bytes([ordinal]) * (105_000 + ordinal) for ordinal in range(1, 11)]
+        section_count = len(self.contract["wire"]["section_tags"])
+        entry_size = 2 + 2 + 8 + 8 + 32
+        payloads = [
+            bytes([ordinal]) * (105_000 + ordinal)
+            for ordinal in range(1, section_count + 1)
+        ]
         body = b"".join(payloads)
         fixed = len(magic) + 4 + 32 + 32 + 4 + 8 + 32
-        cursor = fixed + 10 * 52
+        cursor = fixed + section_count * entry_size
         directory = bytearray()
         for tag, payload in zip(self.contract["wire"]["section_tags"], payloads, strict=True):
             directory.extend(tag.to_bytes(2, "big"))
@@ -40,7 +45,7 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             directory.extend(len(payload).to_bytes(8, "big"))
             directory.extend(hashlib.sha256(payload).digest())
             cursor += len(payload)
-        return b"".join([magic, (1).to_bytes(4, "big"), bytes.fromhex(self.contract["profile_sha256"]), bytes.fromhex(self.contract["wire"]["schema_sha256"]), (10).to_bytes(4, "big"), len(body).to_bytes(8, "big"), hashlib.sha256(body).digest(), bytes(directory), body])
+        return b"".join([magic, (1).to_bytes(4, "big"), bytes.fromhex(self.contract["profile_sha256"]), bytes.fromhex(self.contract["wire"]["schema_sha256"]), section_count.to_bytes(4, "big"), len(body).to_bytes(8, "big"), hashlib.sha256(body).digest(), bytes(directory), body])
 
     def harness(self, probe: dict[str, object] | None = None) -> str:
         middle = ""
@@ -99,16 +104,18 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             self.contract["artifact"]["canonical_sha256"],
             self.contract["artifact"]["canonical_bytes"],
         )
-        header_bytes = len(self.contract["wire"]["magic"].encode("ascii")) + 4 + 32 + 32 + 4 + 8 + 32 + 520
+        section_count = len(self.contract["wire"]["section_tags"])
+        directory_bytes = section_count * (2 + 2 + 8 + 8 + 32)
+        header_bytes = len(self.contract["wire"]["magic"].encode("ascii")) + 4 + 32 + 32 + 4 + 8 + 32 + directory_bytes
         body_bytes = artifact_file["bytes"] - header_bytes
-        base = body_bytes // 10
+        base = body_bytes // section_count
         sections = []
         offset = header_bytes
         for ordinal, (tag, name) in enumerate(zip(self.contract["wire"]["section_tags"], self.contract["wire"]["section_names"], strict=True)):
-            size = base if ordinal < 9 else artifact_file["bytes"] - offset
+            size = base if ordinal < section_count - 1 else artifact_file["bytes"] - offset
             sections.append({"ordinal": ordinal, "tag": tag, "name": name, "offset": offset, "bytes": size, "sha256": format(ordinal + 1, "064x")})
             offset += size
-        wire = {"magic": self.contract["wire"]["magic"], "version": 1, "profile_sha256": self.contract["profile_sha256"], "schema_sha256": self.contract["wire"]["schema_sha256"], "section_count": 10, "directory_bytes": 520, "body_bytes": body_bytes, "body_sha256": "8" * 64, "sections": sections}
+        wire = {"magic": self.contract["wire"]["magic"], "version": 1, "profile_sha256": self.contract["profile_sha256"], "schema_sha256": self.contract["wire"]["schema_sha256"], "section_count": section_count, "directory_bytes": directory_bytes, "body_bytes": body_bytes, "body_sha256": "8" * 64, "sections": sections}
         artifact = {**artifact_file, "wire": wire}
         source = {"root": str(snapshot.ROOT.resolve()), "git_commit": "d" * 40, "git_tree": "f" * 40, "git_status": "", "tracked_files": 100, "tracked_bytes": 1000, "tracked_sha256": "e" * 64}
         cargo_command = [str(snapshot.executable("cargo")), *self.contract["libtest"]["build_args"]]
@@ -262,7 +269,10 @@ class SnapshotCoordinatorTests(unittest.TestCase):
             path = Path(temporary) / "snapshot.bin"
             path.write_bytes(self.archive_bytes())
             record = snapshot.parse_snapshot_wire(path, self.contract)
-            self.assertEqual(record["section_count"], 10)
+            self.assertEqual(
+                record["section_count"],
+                len(self.contract["wire"]["section_tags"]),
+            )
             self.assertGreater(record["body_bytes"], 1024 * 1024)
 
     def test_external_wire_parser_rejects_malformed_archives(self) -> None:
@@ -271,12 +281,27 @@ class SnapshotCoordinatorTests(unittest.TestCase):
         cases = {"empty": b"", "truncated": original[:-1]}
         wrong_magic = bytearray(original); wrong_magic[0] ^= 1; cases["wrong-magic"] = bytes(wrong_magic)
         wrong_profile = bytearray(original); wrong_profile[magic_len + 4] ^= 1; cases["wrong-profile"] = bytes(wrong_profile)
+        stale_schema = bytearray(original)
+        schema_offset = magic_len + 4 + 32
+        stale_schema[schema_offset:schema_offset + 32] = bytes.fromhex(
+            "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65"
+        )
+        cases["stale-ten-section-schema"] = bytes(stale_schema)
+        stale_count = bytearray(original)
+        section_count_offset = schema_offset + 32
+        stale_count[section_count_offset:section_count_offset + 4] = (10).to_bytes(4, "big")
+        cases["stale-ten-section-count"] = bytes(stale_count)
         wrong_body = bytearray(original); wrong_body[-1] ^= 1; cases["wrong-body-digest"] = bytes(wrong_body)
         # Directory metadata is outside the body digest: valid hashes must not excuse bad reserved bits.
         reserved = bytearray(original)
         fixed = magic_len + 4 + 32 + 32 + 4 + 8 + 32
         reserved[fixed + 2:fixed + 4] = (1).to_bytes(2, "big")
         cases["digest-valid-reserved-bit"] = bytes(reserved)
+        duplicate_tag = bytearray(original)
+        entry_size = 2 + 2 + 8 + 8 + 32
+        eleventh_tag_offset = fixed + 10 * entry_size
+        duplicate_tag[eleventh_tag_offset:eleventh_tag_offset + 2] = (10).to_bytes(2, "big")
+        cases["duplicate-tenth-section-tag"] = bytes(duplicate_tag)
         gap = bytearray(original)
         offset = int.from_bytes(gap[fixed + 4:fixed + 12], "big")
         gap[fixed + 4:fixed + 12] = (offset + 1).to_bytes(8, "big")

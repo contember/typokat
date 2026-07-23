@@ -41,9 +41,8 @@ mod collision_preflight_spec;
 // #[cfg(test)]
 // mod private_combined_universe_spec;
 
-// Activate after the WU5 authenticated replay index lands.
-// #[cfg(test)]
-// mod collision_replay_index_spec;
+#[cfg(test)]
+mod collision_replay_index_spec;
 
 // Activate after the WU5 replay index and work receipts land.
 // #[cfg(test)]

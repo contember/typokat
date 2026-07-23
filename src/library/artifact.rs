@@ -12,9 +12,9 @@ use std::fmt;
 #[cfg(test)]
 use std::path::PathBuf;
 
-pub const CANONICAL_SNAPSHOT_BYTES: usize = 10_003_957;
+pub const CANONICAL_SNAPSHOT_BYTES: usize = 21_000_266;
 pub const CANONICAL_SNAPSHOT_SHA256: &str =
-    "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
+    "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const DIAGNOSTICS_IDENTITY: &str =
     "34cc5c2c11c7d4199dd1230f88691e97b5afb09f319153d9e56d1a45f3220c86";

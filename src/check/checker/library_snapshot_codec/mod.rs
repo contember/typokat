@@ -23,6 +23,12 @@ use super::library_identities::{
 use super::namespace_values::{
     FrozenNamespaceValueTerminalSnapshot, FrozenNamespaceValueTerminalSnapshotRow,
 };
+#[cfg(test)]
+use super::replay_index::admit_collision_replay_index;
+use super::replay_index::{
+    admit_decoded_collision_replay_index, decode_collision_replay_index, ReplayIndexAdmissionError,
+    ReplayIndexAdmissionLimits, COLLISION_REPLAY_MANIFEST_SHA256,
+};
 use super::type_groups::{
     InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeEnvironmentSnapshotParts,
     PublishedTypeGroup, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
@@ -71,12 +77,12 @@ pub(super) use runtime::check_source_with_decoded_base_for_test;
 const MAGIC: &[u8] = b"typokat-semantic-snapshot";
 const VERSION: u32 = 1;
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SCHEMA_IDENTITY: &str = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
-const CANONICAL_ARCHIVE_BYTES: usize = 10_003_957;
+const SCHEMA_IDENTITY: &str = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
+const CANONICAL_ARCHIVE_BYTES: usize = 21_000_266;
 const CANONICAL_ARCHIVE_SHA256: &str =
-    "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0";
+    "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960";
 #[cfg(test)]
-const SECTION_NAMES: [&str; 10] = [
+const SECTION_NAMES: [&str; 11] = [
     "store",
     "interner",
     "binder",
@@ -87,6 +93,7 @@ const SECTION_NAMES: [&str; 10] = [
     "semantic-identities",
     "root-name-index",
     "next-ids",
+    "collision-replay-index",
 ];
 #[cfg(test)]
 const SUBTABLE_NAMES: [&str; 30] = [
@@ -124,7 +131,7 @@ const SUBTABLE_NAMES: [&str; 30] = [
 ];
 const FIXED_HEADER_LEN: usize = MAGIC.len() + 4 + 32 + 32 + 4 + 8 + 32;
 const DIRECTORY_ENTRY_LEN: usize = 52;
-const SECTION_COUNT: usize = 10;
+const SECTION_COUNT: usize = 11;
 const PROJECTION_WITNESS_VERSION: u32 = 1;
 const PROJECTION_WITNESS_COUNT: usize = 31;
 const ABSENT_ID: u32 = u32::MAX;
@@ -145,6 +152,14 @@ fn invalid(stage: SnapshotErrorStage, message: impl Into<String>) -> SnapshotErr
         stage,
         message: message.into(),
         kind: SnapshotErrorKind::Rejected,
+    }
+}
+
+fn rejected_replay_index(error: ReplayIndexAdmissionError) -> SnapshotError {
+    SnapshotError {
+        stage: SnapshotErrorStage::CollisionReplayIndexAdmission,
+        message: format!("collision replay index rejected: {error:?}"),
+        kind: SnapshotErrorKind::ReplayIndexRejected(error),
     }
 }
 
@@ -202,6 +217,7 @@ pub(crate) enum SnapshotErrorStage {
     ReferenceValidation,
     Publication,
     Decode,
+    CollisionReplayIndexAdmission,
     #[cfg(test)]
     UnsupportedStrategy,
     #[cfg(test)]
@@ -224,6 +240,7 @@ pub(crate) enum SnapshotErrorKind {
     InvalidId { id: u32, limit: usize },
     WorkerSpawnFailed { worker: &'static str },
     WorkerPanicked { worker: &'static str },
+    ReplayIndexRejected(ReplayIndexAdmissionError),
     Rejected,
 }
 
@@ -335,7 +352,7 @@ impl RuntimeProjectionForTest {
         hex(&self.typed_validation_sha256)
     }
 
-    pub(in crate::check::checker) fn family_names(&self) -> [&'static str; 10] {
+    pub(crate) fn family_names(&self) -> [&'static str; 11] {
         SECTION_NAMES
     }
 
@@ -620,7 +637,7 @@ impl DecodedLibraryBase {
         &self.prefix_lengths
     }
 
-    pub(in crate::check::checker) fn section_inventory(&self) -> [&'static str; 10] {
+    pub(in crate::check::checker) fn section_inventory(&self) -> [&'static str; 11] {
         SECTION_NAMES
     }
 
@@ -3842,7 +3859,7 @@ fn build_projection(
 
 #[cfg(test)]
 fn assemble_archive(
-    payloads: &[Vec<u8>; 10],
+    payloads: &[Vec<u8>; 11],
 ) -> Result<(SnapshotArchiveForTest, Vec<DirectorySection>), SnapshotError> {
     let directory_len = SECTION_COUNT
         .checked_mul(DIRECTORY_ENTRY_LEN)
@@ -4003,22 +4020,28 @@ pub(in crate::check::checker) fn compile_snapshot_for_test(
             run.phase_counts.publication_validations + run.phase_counts.statement_check_units,
         );
     });
-    let parts = state
-        .into_snapshot_parts()
+    let product = super::library_compiler::freeze_library_runtime_product(state)
         .map_err(|message| invalid(SnapshotErrorStage::Generation, message))?;
-    encode_snapshot_parts(&parts)
+    encode_snapshot_parts(
+        &product._parts,
+        &product._replay_index.canonical_manifest_bytes,
+    )
 }
 
 #[cfg(test)]
 pub(in crate::check::checker) fn encode_library_runtime_product(
     product: &CompiledLibraryRuntimeProduct,
 ) -> Result<CompiledSnapshotForTest, SnapshotError> {
-    encode_snapshot_parts(&product._parts)
+    encode_snapshot_parts(
+        &product._parts,
+        &product._replay_index.canonical_manifest_bytes,
+    )
 }
 
 #[cfg(test)]
 fn encode_snapshot_parts(
     parts: &OwnedLibraryRuntimeSnapshotParts,
+    replay_index: &[u8],
 ) -> Result<CompiledSnapshotForTest, SnapshotError> {
     encode_snapshot_inputs(SnapshotEncodeInputs {
         interner: &parts.interner,
@@ -4030,6 +4053,7 @@ fn encode_snapshot_parts(
         next_type_param: parts.next_type_param,
         next_class_id: parts.next_class_id,
         source_file_count: parts.source_file_count,
+        replay_index,
     })
 }
 
@@ -4044,6 +4068,7 @@ struct SnapshotEncodeInputs<'parts> {
     next_type_param: u32,
     next_class_id: u32,
     source_file_count: u32,
+    replay_index: &'parts [u8],
 }
 
 #[cfg(test)]
@@ -4134,6 +4159,7 @@ fn encode_snapshot_inputs(
         semantic.bytes,
         root_index,
         next_ids,
+        parts.replay_index.to_vec(),
     ];
     let (archive, sections) = assemble_archive(&payloads)?;
     let projection = build_projection(
@@ -4599,6 +4625,10 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
             "root index disagrees with binder global scope",
         ));
     }
+    let replay_roots = roots
+        .iter()
+        .map(|root| (root.name.clone(), root.value, root.ty, root.namespace))
+        .collect::<Vec<_>>();
     let (store_references, interner_references) = interner
         .snapshot_reference_records()
         .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
@@ -4615,6 +4645,24 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
     let decl_types = decode_decl_types(section(&validated, 4)?, next.types)?;
     let published_types = decode_published(section(&validated, 5)?)?;
     validate_dense_identity_prefixes(&next, &interner, &published_types)?;
+    let replay_index = admit_collision_replay_index(
+        section(&validated, 11)?,
+        ReplayIndexAdmissionLimits {
+            type_groups: next.type_groups,
+            value_storages: next.value_storages,
+            namespaces: next.namespaces,
+            classes: next.classes,
+            source_files: usize::try_from(source_file_count).map_err(|_| {
+                invalid(
+                    SnapshotErrorStage::CollisionReplayIndexAdmission,
+                    "source-file count exceeds usize",
+                )
+            })?,
+            roots: &replay_roots,
+        },
+        None,
+    )
+    .map_err(rejected_replay_index)?;
     let namespace_terminals = decode_namespace_terminals(section(&validated, 6)?)?;
     let runtime = decode_class_metadata(section(&validated, 7)?, namespace_terminals.clone())?;
     let expected_references = build_manifest_references(ManifestInputs {
@@ -4660,19 +4708,23 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
         semantic.manifest_hash,
         typed_validation_sha256,
     );
-    let state = OwnedLibraryRuntimeState::from_snapshot_parts(OwnedLibraryRuntimeSnapshotParts {
-        interner,
-        binder,
-        published_types,
-        decl_types,
-        semantic_identities: semantic.identities,
-        runtime,
-        next_type_param: u32::try_from(next.type_params)
-            .map_err(|_| invalid(SnapshotErrorStage::Decode, "type-param prefix exceeds u32"))?,
-        next_class_id: u32::try_from(next.classes)
-            .map_err(|_| invalid(SnapshotErrorStage::Decode, "class prefix exceeds u32"))?,
-        source_file_count,
-    })
+    let state = OwnedLibraryRuntimeState::from_snapshot_parts_with_replay(
+        OwnedLibraryRuntimeSnapshotParts {
+            interner,
+            binder,
+            published_types,
+            decl_types,
+            semantic_identities: semantic.identities,
+            runtime,
+            next_type_param: u32::try_from(next.type_params).map_err(|_| {
+                invalid(SnapshotErrorStage::Decode, "type-param prefix exceeds u32")
+            })?,
+            next_class_id: u32::try_from(next.classes)
+                .map_err(|_| invalid(SnapshotErrorStage::Decode, "class prefix exceeds u32"))?,
+            source_file_count,
+        },
+        Some(replay_index),
+    )
     .map_err(|message| invalid(SnapshotErrorStage::ReferenceValidation, message))?;
     Ok(DecodedLibraryBase {
         state,
@@ -4696,7 +4748,8 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
     let store_section = section(&validated, 1)?;
     let interner_section = section(&validated, 2)?;
     let binder_section = section(&validated, 3)?;
-    let (interner_result, binder_result) = std::thread::scope(|scope| {
+    let replay_section = section(&validated, 11)?;
+    let (interner_result, binder_result, replay_decode_result) = std::thread::scope(|scope| {
         let interner = std::thread::Builder::new()
             .name("typokat-library-interner-decode".to_owned())
             .spawn_scoped(scope, || {
@@ -4728,7 +4781,40 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
                 };
             }
         };
-        Ok::<_, SnapshotError>((interner.join(), binder.join()))
+        let replay = match std::thread::Builder::new()
+            .name("typokat-library-replay-decode".to_owned())
+            .spawn_scoped(scope, || decode_collision_replay_index(replay_section))
+        {
+            Ok(replay) => replay,
+            Err(_) => {
+                let interner_result = interner.join();
+                let binder_result = binder.join();
+                return match interner_result {
+                    Err(_) => Err(SnapshotError {
+                        stage: SnapshotErrorStage::Decode,
+                        message: "interner decode worker panicked".to_owned(),
+                        kind: SnapshotErrorKind::WorkerPanicked { worker: "interner" },
+                    }),
+                    Ok(Err(error)) => Err(codec(SnapshotErrorStage::ReferenceValidation, error)),
+                    Ok(Ok(_)) => match binder_result {
+                        Err(_) => Err(SnapshotError {
+                            stage: SnapshotErrorStage::Decode,
+                            message: "binder decode worker panicked".to_owned(),
+                            kind: SnapshotErrorKind::WorkerPanicked { worker: "binder" },
+                        }),
+                        Ok(Err(error)) => Err(codec(SnapshotErrorStage::Decode, error)),
+                        Ok(Ok(_)) => Err(SnapshotError {
+                            stage: SnapshotErrorStage::CollisionReplayIndexAdmission,
+                            message: "could not create replay-index decode worker".to_owned(),
+                            kind: SnapshotErrorKind::WorkerSpawnFailed {
+                                worker: "replay-index",
+                            },
+                        }),
+                    },
+                };
+            }
+        };
+        Ok::<_, SnapshotError>((interner.join(), binder.join(), replay.join()))
     })?;
     let interner = interner_result
         .map_err(|_| SnapshotError {
@@ -4777,7 +4863,34 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
             "root index disagrees with binder global scope",
         ));
     }
-    let (interner_references_result, binder_references_result) = std::thread::scope(|scope| {
+    let replay_roots = roots
+        .iter()
+        .map(|root| (root.name.clone(), root.value, root.ty, root.namespace))
+        .collect::<Vec<_>>();
+    let replay_limits = ReplayIndexAdmissionLimits {
+        type_groups: next.type_groups,
+        value_storages: next.value_storages,
+        namespaces: next.namespaces,
+        classes: next.classes,
+        source_files: usize::try_from(source_file_count).map_err(|_| {
+            invalid(
+                SnapshotErrorStage::CollisionReplayIndexAdmission,
+                "source-file count exceeds usize",
+            )
+        })?,
+        roots: &replay_roots,
+    };
+    let semantic_section = section(&validated, 8)?;
+    let decl_types_section = section(&validated, 4)?;
+    let published_types_section = section(&validated, 5)?;
+    let (
+        interner_references_result,
+        binder_references_result,
+        replay_admission_result,
+        semantic_result,
+        decl_types_result,
+        published_types_result,
+    ) = std::thread::scope(|scope| {
         let interner_references = std::thread::Builder::new()
             .name("typokat-library-interner-references".to_owned())
             .spawn_scoped(scope, || interner.snapshot_reference_records())
@@ -4813,7 +4926,71 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
                 };
             }
         };
-        Ok::<_, SnapshotError>((interner_references.join(), binder_references.join()))
+        let replay_admission = match std::thread::Builder::new()
+            .name("typokat-library-replay-admission".to_owned())
+            .spawn_scoped(scope, move || {
+                let replay_decoded = replay_decode_result
+                    .map_err(|_| SnapshotError {
+                        stage: SnapshotErrorStage::CollisionReplayIndexAdmission,
+                        message: "replay-index decode worker panicked".to_owned(),
+                        kind: SnapshotErrorKind::WorkerPanicked {
+                            worker: "replay-index",
+                        },
+                    })?
+                    .map_err(rejected_replay_index)?;
+                admit_decoded_collision_replay_index(
+                    replay_decoded,
+                    replay_limits,
+                    Some(COLLISION_REPLAY_MANIFEST_SHA256),
+                )
+                .map_err(rejected_replay_index)
+            }) {
+            Ok(replay_admission) => replay_admission,
+            Err(_) => {
+                let interner_result = interner_references.join();
+                let binder_result = binder_references.join();
+                return match interner_result {
+                    Err(_) => Err(SnapshotError {
+                        stage: SnapshotErrorStage::ReferenceValidation,
+                        message: "interner reference worker panicked".to_owned(),
+                        kind: SnapshotErrorKind::WorkerPanicked {
+                            worker: "interner-reference",
+                        },
+                    }),
+                    Ok(Err(error)) => Err(codec(SnapshotErrorStage::ReferenceValidation, error)),
+                    Ok(Ok(_)) => match binder_result {
+                        Err(_) => Err(SnapshotError {
+                            stage: SnapshotErrorStage::ReferenceValidation,
+                            message: "binder reference worker panicked".to_owned(),
+                            kind: SnapshotErrorKind::WorkerPanicked {
+                                worker: "binder-reference",
+                            },
+                        }),
+                        Ok(Err(error)) => {
+                            Err(codec(SnapshotErrorStage::ReferenceValidation, error))
+                        }
+                        Ok(Ok(_)) => Err(SnapshotError {
+                            stage: SnapshotErrorStage::CollisionReplayIndexAdmission,
+                            message: "could not create replay-index admission worker".to_owned(),
+                            kind: SnapshotErrorKind::WorkerSpawnFailed {
+                                worker: "replay-index",
+                            },
+                        }),
+                    },
+                };
+            }
+        };
+        let semantic = decode_canonical_semantic_section(semantic_section);
+        let decl_types = decode_decl_types(decl_types_section, next.types);
+        let published_types = decode_published(published_types_section);
+        Ok::<_, SnapshotError>((
+            interner_references.join(),
+            binder_references.join(),
+            replay_admission.join(),
+            semantic,
+            decl_types,
+            published_types,
+        ))
     })?;
     let (store_references, interner_references) = interner_references_result
         .map_err(|_| SnapshotError {
@@ -4840,7 +5017,7 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
         &interner_references,
         &binder_references,
     )?;
-    let semantic = decode_canonical_semantic_section(section(&validated, 8)?)?;
+    let semantic = semantic_result?;
     if semantic.identities.as_ref().is_none_or(|identities| {
         identities
             .iter()
@@ -4851,9 +5028,16 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
             "semantic identity publication is not complete",
         ));
     }
-    let decl_types = decode_decl_types(section(&validated, 4)?, next.types)?;
-    let published_types = decode_published(section(&validated, 5)?)?;
+    let decl_types = decl_types_result?;
+    let published_types = published_types_result?;
     validate_dense_identity_prefixes(&next, &interner, &published_types)?;
+    let replay_index = replay_admission_result.map_err(|_| SnapshotError {
+        stage: SnapshotErrorStage::CollisionReplayIndexAdmission,
+        message: "replay-index admission worker panicked".to_owned(),
+        kind: SnapshotErrorKind::WorkerPanicked {
+            worker: "replay-index",
+        },
+    })??;
     let namespace_terminals = decode_namespace_terminals(section(&validated, 6)?)?;
     let runtime = decode_class_metadata(section(&validated, 7)?, namespace_terminals.clone())?;
     let tail_references = build_tail_manifest_references(TailManifestInputs {
@@ -4895,19 +5079,23 @@ pub(in crate::check::checker) fn decode_canonical_snapshot(
         semantic.manifest_hash,
         typed_validation_sha256,
     );
-    let state = OwnedLibraryRuntimeState::from_snapshot_parts(OwnedLibraryRuntimeSnapshotParts {
-        interner,
-        binder,
-        published_types,
-        decl_types,
-        semantic_identities: semantic.identities,
-        runtime,
-        next_type_param: u32::try_from(next.type_params)
-            .map_err(|_| invalid(SnapshotErrorStage::Decode, "type-param prefix exceeds u32"))?,
-        next_class_id: u32::try_from(next.classes)
-            .map_err(|_| invalid(SnapshotErrorStage::Decode, "class prefix exceeds u32"))?,
-        source_file_count,
-    })
+    let state = OwnedLibraryRuntimeState::from_snapshot_parts_with_replay(
+        OwnedLibraryRuntimeSnapshotParts {
+            interner,
+            binder,
+            published_types,
+            decl_types,
+            semantic_identities: semantic.identities,
+            runtime,
+            next_type_param: u32::try_from(next.type_params).map_err(|_| {
+                invalid(SnapshotErrorStage::Decode, "type-param prefix exceeds u32")
+            })?,
+            next_class_id: u32::try_from(next.classes)
+                .map_err(|_| invalid(SnapshotErrorStage::Decode, "class prefix exceeds u32"))?,
+            source_file_count,
+        },
+        Some(replay_index),
+    )
     .map_err(|message| invalid(SnapshotErrorStage::Publication, message))?;
     Ok(DecodedLibraryBase {
         state,
@@ -4955,7 +5143,11 @@ pub(crate) fn decode_pre_admitted_library_snapshot(
 pub(crate) fn projection_from_library_product(
     product: &CompiledLibraryRuntimeProduct,
 ) -> Result<RuntimeProjectionForTest, SnapshotError> {
-    encode_snapshot_parts(&product._parts).map(|compiled| compiled.projection)
+    encode_snapshot_parts(
+        &product._parts,
+        &product._replay_index.canonical_manifest_bytes,
+    )
+    .map(|compiled| compiled.projection)
 }
 
 #[cfg(test)]
@@ -5071,6 +5263,10 @@ fn next_ids_from_borrowed_parts(
 fn encode_borrowed_snapshot_parts(
     parts: &BorrowedLibraryRuntimeSnapshotParts<'_>,
 ) -> Result<CompiledSnapshotForTest, SnapshotError> {
+    let replay_index = parts
+        .replay_index
+        .encode_manifest_for_test()
+        .map_err(|error| invalid(SnapshotErrorStage::Generation, format!("{error:?}")))?;
     encode_snapshot_inputs(SnapshotEncodeInputs {
         interner: parts.interner,
         binder: parts.binder,
@@ -5081,6 +5277,7 @@ fn encode_borrowed_snapshot_parts(
         next_type_param: parts.next_type_param,
         next_class_id: parts.next_class_id,
         source_file_count: parts.source_file_count,
+        replay_index: &replay_index,
     })
 }
 

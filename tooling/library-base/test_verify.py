@@ -24,8 +24,8 @@ SPEC.loader.exec_module(verify)
 
 
 PROFILE = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
-SCHEMA = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65"
-ARTIFACT = "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0"
+SCHEMA = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599"
+ARTIFACT = "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960"
 TYPED_VALIDATION = "2" * 64
 FILTER = "library::snapshot_base_spec::frozen_library_base_release_probe_once"
 PREFIX = "TYPOKAT_LIBRARY_BASE_PROBE="
@@ -38,7 +38,7 @@ def probe() -> dict[str, object]:
         "profile_sha256": PROFILE,
         "schema_sha256": SCHEMA,
         "artifact_sha256": ARTIFACT,
-        "artifact_bytes": 10_003_957,
+        "artifact_bytes": 21_000_266,
         "typed_validation_sha256": TYPED_VALIDATION,
         "initializations": 1,
         "publications": 1,

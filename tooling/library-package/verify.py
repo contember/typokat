@@ -147,7 +147,7 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         "schema": 1,
         "clean_roots": 2,
         "generations": 2,
-        "artifact_bytes": 10_003_957,
+        "artifact_bytes": 21_000_266,
         "dts_sources": 82,
         "profile_manifest_bytes": 36_558,
         "profile_source_bytes": 2_936_611,
@@ -189,7 +189,7 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         "profile_raw_concat_sha256": (
             "0c68516cfe1dff30ce17425b2566813cf6d00c7f589dd24f31f4ba879b69a267"
         ),
-        "artifact_sha256": "af97017b22c9f8ff3726de9dbd49a3039cf70f2dd5a4fd9df9f71328be721dd0",
+        "artifact_sha256": "539a52fdd66130c35172d2405032e442f52d161dfd2ebcae873a03151a7e2960",
         "license_sha256": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47",
         "third_party_notice_sha256": (
             "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"

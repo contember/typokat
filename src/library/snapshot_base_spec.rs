@@ -21,8 +21,8 @@ use super::snapshot::test_support::{
 use std::sync::{Arc, Barrier};
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const SCHEMA_IDENTITY: &str = "a78ea0521c7c375669bfdb08f0929a5e4b1d0b0d6928de60fbfe09b222a8bc65";
-const EXPECTED_COMPONENTS: [&str; 10] = [
+const SCHEMA_IDENTITY: &str = "88fd84240ad5f574ddb1ee1bed1a631682d3ec15583882a5fbe4d9f9ca97e599";
+const EXPECTED_COMPONENTS: [&str; 11] = [
     "store",
     "interner",
     "binder",
@@ -33,6 +33,7 @@ const EXPECTED_COMPONENTS: [&str; 10] = [
     "semantic-identities",
     "root-name-index",
     "id-prefixes",
+    "collision-replay-index",
 ];
 
 fn assert_send_sync_static<T: Send + Sync + 'static>() {}
@@ -147,7 +148,7 @@ fn canonical_snapshot_decodes_to_complete_frozen_library_base() {
     assert_eq!(identity.artifact_bytes(), CANONICAL_SNAPSHOT_BYTES);
     assert_eq!(inventory.source_file_count(), 82);
     assert_eq!(inventory.reference_count(), 296_414);
-    assert_eq!(inventory.runtime_family_count(), 10);
+    assert_eq!(inventory.runtime_family_count(), 11);
     assert_eq!(inventory.projection_subtable_count(), 31);
     assert_eq!(inventory.component_names(), EXPECTED_COMPONENTS);
     assert_eq!(
@@ -199,7 +200,7 @@ fn source_compiled_and_decoded_bases_have_identical_canonical_projection() {
         timed_projection_sha256,
         source_projection.typed_validation_sha256()
     );
-    assert_eq!(source_projection.runtime_families().len(), 10);
+    assert_eq!(source_projection.runtime_families().len(), 11);
     assert_eq!(source_projection.subtables().len(), 31);
     assert_eq!(
         source_projection
