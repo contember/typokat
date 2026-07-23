@@ -130,6 +130,7 @@ fn concurrent_acquire(
     })
 }
 
+#[cfg(not(debug_assertions))]
 fn count_exact_artifact_occurrences(executable: &[u8], artifact: &[u8]) -> usize {
     const ANCHOR_BYTES: usize = 64;
     assert!(artifact.len() >= ANCHOR_BYTES);
@@ -155,15 +156,8 @@ fn count_exact_artifact_occurrences(executable: &[u8], artifact: &[u8]) -> usize
 }
 
 #[test]
-#[cfg_attr(
-    debug_assertions,
-    ignore = "requires the optimized release libtest artifact layout"
-)]
+#[cfg(not(debug_assertions))]
 fn release_libtest_embeds_one_canonical_snapshot_payload() {
-    assert!(
-        !cfg!(debug_assertions),
-        "run this artifact-layout contract against a release libtest"
-    );
     let executable_path = std::env::current_exe().expect("current release libtest path");
     let executable = std::fs::read(&executable_path).expect("current release libtest bytes");
     let packaged = super::artifact::packaged_canonical_snapshot();

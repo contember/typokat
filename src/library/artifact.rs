@@ -21,8 +21,8 @@ const DIAGNOSTICS_IDENTITY: &str =
 const INCOMPLETES_IDENTITY: &str =
     "8c268088f8afd8048690584008c40a49cd3337b91f345b2e879d625525ccf6d8";
 const LEDGER_IDENTITY: &str = "2837d5a3f65e9e8fa86459ff0784fd795069a7201d17793eecd4b6bc8c14e069";
-const PACKAGED_BYTES: &[u8; CANONICAL_SNAPSHOT_BYTES] =
-    include_bytes!("typescript-6.0.3/canonical.snapshot");
+static PACKAGED_BYTES: [u8; CANONICAL_SNAPSHOT_BYTES] =
+    *include_bytes!("typescript-6.0.3/canonical.snapshot");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotBinding {
@@ -80,7 +80,7 @@ pub struct PackagedCanonicalSnapshot {
 
 impl PackagedCanonicalSnapshot {
     pub const fn bytes(&self) -> &'static [u8] {
-        PACKAGED_BYTES
+        &PACKAGED_BYTES
     }
 
     pub const fn sha256(&self) -> &'static str {
