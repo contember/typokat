@@ -2339,6 +2339,9 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
 mod dom_source_cold_spec;
 
 #[cfg(test)]
+mod deferred_indexed_lazy_spec;
+
+#[cfg(test)]
 mod demand_identity_spec;
 
 #[cfg(test)]
