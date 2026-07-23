@@ -10,8 +10,7 @@ use crate::binder::declaration::{
 };
 use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
-    DeclarationOwner, MergeDisposition, NamespaceId, NamespaceInstanceState, NamespaceTable,
-    SourceUnitKey,
+    NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
 };
 use crate::binder::namespace::{
     collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
@@ -1105,16 +1104,6 @@ impl ProjectBinderBuilder {
             BuilderUseMode::Continuation => {}
         }
         let mut roots = Vec::new();
-        let admitted_global_names = self
-            .state
-            .namespaces
-            .merges()
-            .filter(|record| {
-                record.owner == DeclarationOwner::CompilationGlobal
-                    && record.classification.disposition == MergeDisposition::Admitted
-            })
-            .map(|record| record.name.clone())
-            .collect::<std::collections::HashSet<_>>();
         for (program, unit) in units {
             if self.use_mode == BuilderUseMode::Continuation {
                 let binding_sites = if unit.binding.external_module {
@@ -1129,7 +1118,10 @@ impl ProjectBinderBuilder {
                                 .get(self.compilation_global)
                                 .and_then(|scope| scope.lookup_local(&site.name))
                                 .is_some()
-                                || admitted_global_names.contains(&site.name)
+                                || self
+                                    .state
+                                    .namespaces
+                                    .is_admitted_compilation_global_name(&site.name)
                                 || site.name == "globalThis"
                         })
                         .map(|site| (site.span.start, site.name))
@@ -2404,9 +2396,9 @@ fn binding_name_and_start<'a>(pattern: &'a BindingPattern<'a>) -> Option<(&'a st
 mod tests {
     use super::*;
     use crate::binder::namespace::{
-        DeclarationSyntaxFacts, GlobalIssue, MergeDeclarationKind, MergeDisposition,
-        NamespaceContinuationWorkForTest, NamespaceContinuationWorkScopeForTest, NamespaceOwner,
-        NamespaceValueAttachmentDisposition, VariableKind,
+        DeclarationOwner, DeclarationSyntaxFacts, GlobalIssue, MergeDeclarationKind,
+        MergeDisposition, NamespaceContinuationWorkForTest, NamespaceContinuationWorkScopeForTest,
+        NamespaceOwner, NamespaceValueAttachmentDisposition, VariableKind,
     };
     use crate::source::{CompilationOrigin, LibraryFileOrdinal};
     use crate::types::layered::{BaseWorkLedgerForTest, BaseWorkScopeForTest};

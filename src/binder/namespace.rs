@@ -1156,6 +1156,17 @@ impl NamespaceTable {
         })
     }
 
+    pub(crate) fn is_admitted_compilation_global_name(&self, name: &str) -> bool {
+        let key = MergeKey {
+            owner: DeclarationOwner::CompilationGlobal,
+            name: name.to_owned(),
+        };
+        self.merge_indices
+            .get(&key)
+            .and_then(|index| self.merges.get(*index))
+            .is_some_and(|record| record.classification.disposition == MergeDisposition::Admitted)
+    }
+
     /// Exact source-ordered placement outcomes ready for checker emission.
     pub(crate) fn placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
         let mut issues = self
