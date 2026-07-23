@@ -642,7 +642,8 @@ impl Interner {
         let graph_identity = Arc::clone(store.semantic_graph_identity());
         let interner = Interner {
             store,
-            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
+            free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
+            clean_application_results: CleanApplicationResultCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup,
             reserved_types_base: Arc::new(FxHashMap::default()),
@@ -736,7 +737,8 @@ impl Interner {
         let graph_identity = Arc::clone(store.semantic_graph_identity());
         let interner = Interner {
             store,
-            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
+            free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
+            clean_application_results: CleanApplicationResultCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup,
             reserved_types_base: Arc::new(FxHashMap::default()),

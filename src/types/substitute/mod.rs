@@ -4,6 +4,7 @@
 //! returns the original id on self-referential nominal types; recursive generic
 //! instantiation remains out of scope.
 
+use crate::types::intern::CleanApplicationKey;
 use crate::types::repr::{FunctionType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
@@ -780,6 +781,16 @@ impl<'a> Substitution<'a> {
 
     /// Whether every map key free in `ty` is currently blocked.
     fn effective_free_set_is_empty(&mut self, interner: &mut Interner, ty: TypeId) -> bool {
+        let summary = self.free_param_summary(interner, ty);
+        summary
+            .iter()
+            .all(|id| self.blocked.contains(id) || !self.map.contains_key(id))
+    }
+
+    fn free_param_summary(&mut self, interner: &mut Interner, ty: TypeId) -> Arc<[TypeParamId]> {
+        if let Some(summary) = self.free_param_summaries.get(&ty) {
+            return Arc::clone(summary);
+        }
         let summary = match interner.free_param_summary(ty) {
             Some(summary) => summary,
             None => compute_free_param_summaries(
@@ -791,8 +802,6 @@ impl<'a> Substitution<'a> {
         };
         self.free_param_summaries.insert(ty, Arc::clone(&summary));
         summary
-            .iter()
-            .all(|id| self.blocked.contains(id) || !self.map.contains_key(id))
     }
 
     fn canonical_blocked_context(&self, ty: TypeId) -> Vec<TypeParamId> {
@@ -804,6 +813,23 @@ impl<'a> Substitution<'a> {
             .filter(|id| self.map.contains_key(id) && self.blocked.contains(id))
             .copied()
             .collect()
+    }
+
+    fn clean_application_key(
+        &mut self,
+        interner: &mut Interner,
+        ty: TypeId,
+    ) -> Option<CleanApplicationKey> {
+        if self.map.is_empty() {
+            return None;
+        }
+        let summary = self.free_param_summary(interner, ty);
+        CleanApplicationKey::from_sorted_arguments(
+            ty,
+            summary
+                .iter()
+                .filter_map(|id| self.map.get(id).copied().map(|argument| (*id, argument))),
+        )
     }
 }
 
@@ -838,8 +864,18 @@ pub(crate) fn substitute_with_outcome(
     map: &FxHashMap<TypeParamId, TypeId>,
 ) -> SubstitutionOutcome {
     let mut substitution = Substitution::new(map);
+    let clean_key = substitution.clean_application_key(interner, ty);
+    if let Some(cached) = clean_key
+        .as_ref()
+        .and_then(|key| interner.clean_application_result(key))
+    {
+        return SubstitutionOutcome::CycleClean(cached);
+    }
     let result = substitution.apply(interner, ty);
     if substitution.cycle_epoch == 0 {
+        if let Some(key) = clean_key {
+            interner.publish_clean_application_result(key, result);
+        }
         SubstitutionOutcome::CycleClean(result)
     } else {
         SubstitutionOutcome::CycleTainted(result)

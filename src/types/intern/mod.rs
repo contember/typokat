@@ -33,6 +33,77 @@ struct FreeParamSummaryCache {
     local: FxHashMap<TypeId, Arc<[TypeParamId]>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct CleanApplicationKey {
+    source: TypeId,
+    arguments: SmallVec<[(TypeParamId, TypeId); 4]>,
+}
+
+impl CleanApplicationKey {
+    pub(crate) fn from_sorted_arguments(
+        source: TypeId,
+        arguments: impl IntoIterator<Item = (TypeParamId, TypeId)>,
+    ) -> Option<Self> {
+        let arguments: SmallVec<[(TypeParamId, TypeId); 4]> = arguments.into_iter().collect();
+        debug_assert!(
+            arguments.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "clean application arguments must be sorted and unique"
+        );
+        (!arguments.is_empty()).then_some(Self { source, arguments })
+    }
+}
+
+#[derive(Default)]
+struct CleanApplicationResultCache {
+    graph_identity: Arc<()>,
+    base: Arc<FxHashMap<CleanApplicationKey, TypeId>>,
+    local: FxHashMap<CleanApplicationKey, TypeId>,
+}
+
+impl CleanApplicationResultCache {
+    fn new(graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            base: Arc::new(FxHashMap::default()),
+            local: FxHashMap::default(),
+        }
+    }
+
+    fn align_with(&mut self, graph_identity: &Arc<()>) {
+        if Arc::ptr_eq(&self.graph_identity, graph_identity) {
+            return;
+        }
+        self.graph_identity = Arc::clone(graph_identity);
+        // Frozen-prefix entries contain only immutable base ids.
+        self.local.clear();
+    }
+
+    fn get(&self, key: &CleanApplicationKey) -> Option<TypeId> {
+        self.local.get(key).or_else(|| self.base.get(key)).copied()
+    }
+
+    fn insert(&mut self, key: CleanApplicationKey, result: TypeId) {
+        if !self.base.contains_key(&key) {
+            self.local.entry(key).or_insert(result);
+        }
+    }
+
+    fn freeze_as_base(&mut self) {
+        let mut combined = FxHashMap::default();
+        combined.extend(self.base.iter().map(|(key, &result)| (key.clone(), result)));
+        combined.extend(std::mem::take(&mut self.local));
+        self.base = Arc::new(combined);
+    }
+
+    fn fork_delta(&self, graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            base: Arc::clone(&self.base),
+            local: FxHashMap::default(),
+        }
+    }
+}
+
 impl FreeParamSummaryCache {
     fn new(graph_identity: Arc<()>) -> Self {
         Self {
@@ -207,6 +278,8 @@ pub struct Interner {
     store: Store,
     /// Binder-aware derived summaries for the current immutable type graph.
     free_param_summaries: FreeParamSummaryCache,
+    /// Completed root substitutions that did not observe a recursive stack cut.
+    clean_application_results: CleanApplicationResultCache,
     /// Immutable structural buckets owned by the sealed prefix.
     dedup_base: Arc<FxHashMap<u64, SmallVec<[TypeId; 2]>>>,
     /// Structural hash → interned candidates sharing that hash (architecture
@@ -231,7 +304,8 @@ impl Interner {
         let graph_identity = Arc::clone(store.semantic_graph_identity());
         let mut interner = Interner {
             store,
-            free_param_summaries: FreeParamSummaryCache::new(graph_identity),
+            free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
+            clean_application_results: CleanApplicationResultCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
@@ -318,6 +392,22 @@ impl Interner {
         self.free_param_summaries.insert_batch(summaries);
     }
 
+    pub(crate) fn clean_application_result(&mut self, key: &CleanApplicationKey) -> Option<TypeId> {
+        self.clean_application_results
+            .align_with(self.store.semantic_graph_identity());
+        self.clean_application_results.get(key)
+    }
+
+    pub(crate) fn publish_clean_application_result(
+        &mut self,
+        key: CleanApplicationKey,
+        result: TypeId,
+    ) {
+        self.clean_application_results
+            .align_with(self.store.semantic_graph_identity());
+        self.clean_application_results.insert(key, result);
+    }
+
     /// Seal a complete standalone interner as the immutable shared prefix.
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if !self.dedup_base.is_empty() || !self.reserved_types_base.is_empty() {
@@ -332,8 +422,11 @@ impl Interner {
         }
         self.free_param_summaries
             .align_with(self.store.semantic_graph_identity());
+        self.clean_application_results
+            .align_with(self.store.semantic_graph_identity());
         self.store.freeze_as_base()?;
         self.free_param_summaries.freeze_as_base();
+        self.clean_application_results.freeze_as_base();
         self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
         self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
         Ok(())
@@ -348,7 +441,10 @@ impl Interner {
         let graph_identity = Arc::clone(store.semantic_graph_identity());
         Ok(Self {
             store,
-            free_param_summaries: self.free_param_summaries.fork_delta(graph_identity),
+            free_param_summaries: self
+                .free_param_summaries
+                .fork_delta(Arc::clone(&graph_identity)),
+            clean_application_results: self.clean_application_results.fork_delta(graph_identity),
             dedup_base: Arc::clone(&self.dedup_base),
             dedup: FxHashMap::default(),
             reserved_types_base: Arc::clone(&self.reserved_types_base),
