@@ -2,7 +2,7 @@
 //!
 //! Activate from `substitute/mod.rs` only with the implementation. A memo key is
 //! `(TypeId, blocked ∩ exact free substitution-map keys)` and lives for one
-//! `Substitution` run (large maps conservatively retain every mapped blocker).
+//! `Substitution` run using exact durable free-parameter summaries.
 //! Every completed non-reentry `apply` result, including an
 //! intrinsic or type-parameter leaf, is inserted by the wrapper-level memo rule.
 //! A recursive re-entry taints every active frame whose start cycle epoch changed;
