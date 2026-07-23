@@ -393,6 +393,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         let overload = overloads.entry(name).or_default();
                         overload.unsupported = true;
                         let lowered = sig.type_annotation.as_ref().and_then(|annotation| {
+                            #[cfg(test)]
+                            super::super::declaration_surface_measure::record_eager_interface_property_root();
                             pass.lower_annotation(scope, &annotation.type_annotation)
                         });
                         if lowered.is_none() {
@@ -402,6 +404,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     let ty = match sig.type_annotation.as_ref() {
                         Some(annotation) => {
+                            #[cfg(test)]
+                            super::super::declaration_surface_measure::record_eager_interface_property_root();
                             let Some(ty) =
                                 pass.lower_annotation(scope, &annotation.type_annotation)
                             else {

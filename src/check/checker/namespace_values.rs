@@ -1978,6 +1978,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         annotation: &oxc_ast::ast::TSType<'_>,
     ) -> Option<TypeId> {
+        #[cfg(test)]
+        super::declaration_surface_measure::record_eager_namespace_variable_root();
         let owner = self
             .lexical_events
             .declaration_owner(declaration)
