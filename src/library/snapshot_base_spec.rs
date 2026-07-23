@@ -130,6 +130,54 @@ fn concurrent_acquire(
     })
 }
 
+fn count_exact_artifact_occurrences(executable: &[u8], artifact: &[u8]) -> usize {
+    const ANCHOR_BYTES: usize = 64;
+    assert!(artifact.len() >= ANCHOR_BYTES);
+    let anchor = &artifact[..ANCHOR_BYTES];
+    let mut skips = [ANCHOR_BYTES; 256];
+    for (index, byte) in anchor[..ANCHOR_BYTES - 1].iter().enumerate() {
+        skips[usize::from(*byte)] = ANCHOR_BYTES - index - 1;
+    }
+
+    let mut occurrences = 0;
+    let mut cursor = 0;
+    while let Some(window) = executable.get(cursor..cursor + ANCHOR_BYTES) {
+        if window == anchor {
+            if executable.get(cursor..cursor + artifact.len()) == Some(artifact) {
+                occurrences += 1;
+            }
+            cursor += ANCHOR_BYTES;
+        } else {
+            cursor += skips[usize::from(window[ANCHOR_BYTES - 1])];
+        }
+    }
+    occurrences
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "requires the optimized release libtest artifact layout"
+)]
+fn release_libtest_embeds_one_canonical_snapshot_payload() {
+    assert!(
+        !cfg!(debug_assertions),
+        "run this artifact-layout contract against a release libtest"
+    );
+    let executable_path = std::env::current_exe().expect("current release libtest path");
+    let executable = std::fs::read(&executable_path).expect("current release libtest bytes");
+    let packaged = super::artifact::packaged_canonical_snapshot();
+    let artifact = packaged.bytes();
+
+    assert_eq!(artifact.len(), CANONICAL_SNAPSHOT_BYTES);
+    assert_eq!(
+        count_exact_artifact_occurrences(&executable, artifact),
+        1,
+        "release libtest {} must contain one canonical snapshot payload",
+        executable_path.display()
+    );
+}
+
 #[test]
 fn canonical_snapshot_decodes_to_complete_frozen_library_base() {
     let provider = LibraryBaseProvider::new();
