@@ -35,7 +35,7 @@ pub(in crate::check) fn resolve_keyof_outer_layer(
     }
 }
 
-fn object_requires_demand(store: &Store, object: TypeId) -> bool {
+pub(in crate::check) fn object_requires_demand(store: &Store, object: TypeId) -> bool {
     match store.tag(object) {
         TypeTag::Readonly => store
             .readonly_operand(object)
@@ -52,6 +52,11 @@ fn object_requires_demand(store: &Store, object: TypeId) -> bool {
         | TypeTag::MappedValue => true,
         _ => false,
     }
+}
+
+pub(in crate::check) fn index_requires_planner_visit(store: &Store, index: TypeId) -> bool {
+    // Visiting a type parameter cannot rewrite its nested constraint into the index root.
+    store.tag(index) != TypeTag::TypeParam && index_requires_demand(store, index)
 }
 
 fn index_requires_demand(store: &Store, index: TypeId) -> bool {

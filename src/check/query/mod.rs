@@ -4,7 +4,8 @@
 //! plus query-local normalization overlays, and durable writes promote together.
 
 use crate::check::checker::eval::demand::{
-    resolve_deferred_outer_layer, resolve_keyof_outer_layer,
+    index_requires_planner_visit, object_requires_demand, resolve_deferred_outer_layer,
+    resolve_keyof_outer_layer,
 };
 use crate::check::checker::eval::{ConditionalEvaluator, DEFAULT_STEP_BUDGET};
 use crate::check::infer::{infer_from_types_for_query, Candidates};
@@ -2013,17 +2014,24 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             self.visit_demand_result(shallow);
             return shallow;
         }
-        let mut object = self.visit(access.object);
-        if let Some(constraint) = self
-            .interner
-            .store()
-            .type_param(object)
-            .and_then(|parameter| self.interner.store().type_param_constraint(parameter.id))
-            .filter(|constraint| *constraint != object)
-        {
-            object = self.visit(constraint);
+        let mut object = access.object;
+        if object_requires_demand(self.interner.store(), object) {
+            object = self.visit(object);
+            if let Some(constraint) = self
+                .interner
+                .store()
+                .type_param(object)
+                .and_then(|parameter| self.interner.store().type_param_constraint(parameter.id))
+                .filter(|constraint| *constraint != object)
+            {
+                object = self.visit(constraint);
+            }
         }
-        let index = self.visit(access.index);
+        let index = if index_requires_planner_visit(self.interner.store(), access.index) {
+            self.visit(access.index)
+        } else {
+            access.index
+        };
         let object = match self.plan.normalize(object) {
             Ok(object) => object,
             Err(reason) => {
