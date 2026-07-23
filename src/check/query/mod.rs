@@ -28,6 +28,7 @@ struct AlphaBinderKey {
 }
 
 type IdentitySeen = FxHashSet<(TypeId, TypeId, AlphaBinderKey)>;
+type CompletedIdentityKey = (TypeId, TypeId);
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -338,6 +339,7 @@ impl PublishedClassLookup for PublishedClasses {
 pub(crate) struct SemanticQueryState {
     projection_memo: FxHashMap<TypeId, TypeId>,
     evaluation_memo: FxHashMap<TypeId, TypeId>,
+    completed_identities: FxHashMap<CompletedIdentityKey, bool>,
     relation_cache: RelationCache,
     completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
     completed_relation_no_candidates: FxHashSet<CompletedRelationKey>,
@@ -490,6 +492,21 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         ) {
             return DemandOutcome::Exhausted(reason);
         }
+        if left == right {
+            return DemandOutcome::Ready(true);
+        }
+        let completed_key = Self::completed_identity_key(left, right);
+        if let Some(&identical) = self.state.completed_identities.get(&completed_key) {
+            #[cfg(test)]
+            measure_query_source_cold(|measure| {
+                if identical {
+                    measure.durable_identity_yes_hits += 1;
+                } else {
+                    measure.durable_identity_no_hits += 1;
+                }
+            });
+            return DemandOutcome::Ready(identical);
+        }
         let transaction = ProjectionPlanner::new(
             self.interner,
             self.published,
@@ -515,10 +532,29 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &mut FxHashSet::default(),
             &mut Vec::new(),
         );
-        if matches!(outcome, DemandOutcome::Ready(_)) {
+        if let DemandOutcome::Ready(identical) = &outcome {
             self.commit_plan(transaction.into_commit());
+            #[cfg(test)]
+            measure_query_source_cold(|measure| {
+                if *identical {
+                    measure.durable_identity_yes_inserts += 1;
+                } else {
+                    measure.durable_identity_no_inserts += 1;
+                }
+            });
+            self.state
+                .completed_identities
+                .insert(completed_key, *identical);
         }
         outcome
+    }
+
+    fn completed_identity_key(left: TypeId, right: TypeId) -> CompletedIdentityKey {
+        if left <= right {
+            (left, right)
+        } else {
+            (right, left)
+        }
     }
 
     fn identical_recursive(
@@ -1986,6 +2022,7 @@ fn refresh_semantic_context<L: PublishedClassLookup + ?Sized>(
     if !same_store || !same_publication {
         state.projection_memo.clear();
         state.evaluation_memo.clear();
+        state.completed_identities.clear();
         state.relation_cache = RelationCache::default();
         state.publication_clean.clear();
         state.completed_relations.clear();
