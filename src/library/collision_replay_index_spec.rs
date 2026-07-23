@@ -5,7 +5,8 @@ use super::base::{
     CheckpointAuthenticationMutationForTest, ReplayIndexMutationForTest,
     UserDeltaProjectInputForTest,
 };
-use super::compiler::LibraryCompilerWorkScopeForTest;
+use super::compiler::{LibraryCompiler, LibraryCompilerWorkScopeForTest};
+use super::profile::ExactLibraryProfile;
 use super::provider::{
     CheckpointAuthenticationViolation, CollisionReplayIndexViolation, InitializationMeasurement,
     LibraryInitCause, LibraryInitStage, LibrarySnapshotViolation,
@@ -13,14 +14,17 @@ use super::provider::{
 use super::snapshot::SnapshotWorkScopeForTest;
 use super::{FrozenLibraryBase, LibraryBaseProvider};
 use crate::binder::declaration::TypeGroupId;
+use crate::binder::namespace::{NamespaceValueAttachmentDisposition, SourceFileKind};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::checker::events::UserEventReservationScopeForTest;
 use crate::check::checker::library_compiler::{
-    UserDeltaForkScopeForTest, UserSourceWorkScopeForTest,
+    CanonicalLibraryFrontendWorkScopeForTest, UserDeltaForkScopeForTest, UserSourceWorkScopeForTest,
 };
 use crate::check::checker::replay_index::ReplayOwnerSite;
+use crate::check::checker::AuthoritativeProjectBindingWorkScopeForTest;
 use crate::check::query::QueryCacheWriteScopeForTest;
+use crate::driver::FileInput;
 use crate::relate::cache::RelationCacheWriteScopeForTest;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -259,10 +263,33 @@ impl CheckpointBoundaryScopes {
         assert_eq!((query.projection, query.evaluator), (0, 0));
         assert_eq!(self.relation.finish(), 0);
     }
+
+    fn assert_rejected_before_inspection_or_user_work(self) {
+        let library = self.library.finish();
+        let snapshot = self.snapshot.finish();
+        let user = self.user.finish();
+        let query = self.query.finish();
+        assert_eq!(
+            (
+                library.compiles,
+                library.parses,
+                library.binds,
+                library.checks
+            ),
+            (1, 82, 82, 0)
+        );
+        assert!(snapshot.decodes <= 1);
+        assert!(snapshot.validations <= 1);
+        assert_eq!((user.parses, user.binds, user.checks), (0, 0, 0));
+        assert_eq!(self.delta.finish(), 0);
+        assert_eq!(self.events.finish(), 0);
+        assert_eq!((query.projection, query.evaluator), (0, 0));
+        assert_eq!(self.relation.finish(), 0);
+    }
 }
 
 fn checkpoint_inputs() -> [UserDeltaProjectInputForTest<'static>; 2] {
-    let inputs = [
+    [
         UserDeltaProjectInputForTest {
             path: "/project/00_augment.ts",
             source: "interface Array<T> { wu5Checkpoint(): T; }\n",
@@ -271,8 +298,65 @@ fn checkpoint_inputs() -> [UserDeltaProjectInputForTest<'static>; 2] {
             path: "/project/99_consume.ts",
             source: "const value: number = [1, 2].wu5Checkpoint();\n",
         },
+    ]
+}
+
+fn authoritative_project_inputs(reversed: bool) -> Vec<UserDeltaProjectInputForTest<'static>> {
+    let mut inputs = vec![
+        UserDeltaProjectInputForTest {
+            path: "/project/nested/../00_exports.ts",
+            source: r#"export class WU5ExportedClass {}
+export function wu5ExportedFunction(): number { return 1; }
+"#,
+        },
+        UserDeltaProjectInputForTest {
+            path: "/project/10_imports.ts",
+            source: r#"import { WU5ExportedClass, wu5ExportedFunction } from "./nested/../00_exports";
+import { wu5Missing } from "./missing";
+const instance: WU5ExportedClass = new WU5ExportedClass();
+const importedValue: number = wu5ExportedFunction();
+wu5Missing();
+"#,
+        },
+        UserDeltaProjectInputForTest {
+            path: "/project/20_ambient.d.ts",
+            source: "declare namespace WU5Ambient { interface Entry {} }\n",
+        },
+        UserDeltaProjectInputForTest {
+            path: "/project/25_kind_only_external.mts",
+            source: "interface WU5MtsLocal { value: number }\n",
+        },
+        UserDeltaProjectInputForTest {
+            path: "/project/30_script_use.ts",
+            source: r#"const reservedBeforeDeclaration = WU5ScriptNamespace.value;
+let mustNotSeeMtsLocal: WU5MtsLocal;
+"#,
+        },
+        UserDeltaProjectInputForTest {
+            path: "/project/40_script_declare.ts",
+            source: r#"function WU5Function(): void {}
+namespace WU5Function { export const attached = 1; }
+class WU5Class {}
+namespace WU5Class { export const attached = 2; }
+namespace WU5Standalone { export const attached = 3; }
+namespace WU5ScriptNamespace { export const value = 4; }
+"#,
+        },
     ];
+    if reversed {
+        inputs.reverse();
+    }
     inputs
+}
+
+fn authoritative_driver_inputs(reversed: bool) -> Vec<FileInput> {
+    authoritative_project_inputs(reversed)
+        .into_iter()
+        .map(|input| FileInput {
+            name: input.path.to_owned(),
+            source: input.source.to_owned(),
+        })
+        .collect()
 }
 
 fn assert_dense(actual: impl IntoIterator<Item = usize>, start: usize, end: usize) {
@@ -441,6 +525,314 @@ fn exact_library_only_binder_checkpoint_authenticates_before_user_continuation()
 }
 
 #[test]
+fn production_frontend_products_feed_full_source_and_authenticated_project_routes() {
+    let profile = ExactLibraryProfile::load_packaged().expect("pinned library profile");
+    let compiler_work = LibraryCompilerWorkScopeForTest::start();
+    let frontend_work = CanonicalLibraryFrontendWorkScopeForTest::start();
+    let compiler = LibraryCompiler::new();
+
+    let compiled = compiler
+        .compile(&profile)
+        .expect("production full-source compiler");
+    let checkpoint = compiler
+        .compile_binder_checkpoint(&profile)
+        .expect("production opaque binder-checkpoint product");
+    assert_eq!(checkpoint.library_unit_count(), 82);
+    let provider = LibraryBaseProvider::new();
+    let authenticated = provider
+        .authenticate_library_binder_checkpoint(checkpoint)
+        .expect("production checkpoint admission");
+    assert_eq!(authenticated.library_unit_count(), 82);
+    let continuation = provider
+        .continue_authenticated_library_project_binder(
+            authenticated,
+            authoritative_driver_inputs(false),
+        )
+        .expect("production authenticated project continuation");
+    let frontend_work = frontend_work.finish();
+    let compiler_work = compiler_work.finish();
+
+    assert_eq!(compiled.report().parse_units, 82);
+    assert_eq!(compiled.report().bind_units, 82);
+    assert_eq!(continuation.library_unit_count(), 82);
+    assert_eq!(continuation.project_unit_count(), 6);
+    assert_eq!(continuation.project_sources_for_test().len(), 6);
+    assert_eq!(
+        (
+            compiler_work.compiles,
+            compiler_work.parses,
+            compiler_work.binds,
+            compiler_work.checks
+        ),
+        (2, 164, 164, 82)
+    );
+    assert_eq!(frontend_work.entries, 2);
+    assert_eq!(frontend_work.parse_units, 164);
+    assert_eq!(frontend_work.bind_batches, 2);
+    assert_eq!(frontend_work.bind_units, 164);
+    assert_eq!(frontend_work.full_source_products_consumed, 1);
+    assert_eq!(frontend_work.checkpoint_products_consumed, 1);
+}
+
+#[test]
+fn ordinary_check_and_checkpoint_continuation_share_one_project_binding_core() {
+    let profile = ExactLibraryProfile::load_packaged().expect("pinned library profile");
+    let checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("production opaque binder-checkpoint product");
+    let provider = LibraryBaseProvider::new();
+    let authenticated = provider
+        .authenticate_library_binder_checkpoint(checkpoint)
+        .expect("production checkpoint admission");
+
+    let project_work = AuthoritativeProjectBindingWorkScopeForTest::start();
+    let ordinary_reports = crate::driver::check_project(authoritative_driver_inputs(false));
+    let continuation = provider
+        .continue_authenticated_library_project_binder(
+            authenticated,
+            authoritative_driver_inputs(false),
+        )
+        .expect("authenticated project continuation");
+    let project_work = project_work.finish();
+
+    assert_eq!(ordinary_reports.len(), 6);
+    assert!(ordinary_reports
+        .iter()
+        .all(|report| report.output.parse_errors.is_empty()));
+    assert_eq!(project_work.entries, 2);
+    assert_eq!(project_work.fresh_project_seed_entries, 1);
+    assert_eq!(project_work.authenticated_checkpoint_seed_entries, 1);
+    assert_eq!(project_work.bound_units, 12);
+    assert_eq!(project_work.typed_products_produced, 2);
+    assert_eq!(project_work.ordinary_check_products_consumed, 1);
+    assert_eq!(project_work.continuation_route_products_consumed, 1);
+    assert_eq!(project_work.fresh_project_products.len(), 1);
+    assert_eq!(project_work.authenticated_checkpoint_products.len(), 1);
+    assert_eq!(
+        project_work.fresh_project_products[0].normalized_per_path_binding_shape,
+        project_work.authenticated_checkpoint_products[0].normalized_per_path_binding_shape
+    );
+    assert_eq!(
+        project_work.authenticated_checkpoint_products[0].normalized_per_path_binding_shape,
+        continuation.normalized_per_path_binding_shape_for_test()
+    );
+    assert_eq!(
+        project_work.fresh_project_products[0].normalized_import_export_shape,
+        project_work.authenticated_checkpoint_products[0].normalized_import_export_shape
+    );
+    assert_eq!(
+        project_work.authenticated_checkpoint_products[0].normalized_import_export_shape,
+        continuation.normalized_import_export_shape_for_test()
+    );
+    assert_eq!(
+        project_work.fresh_project_products[0].normalized_namespace_shape,
+        project_work.authenticated_checkpoint_products[0].normalized_namespace_shape
+    );
+    assert_eq!(
+        project_work.authenticated_checkpoint_products[0].normalized_namespace_shape,
+        continuation.normalized_namespace_shape_for_test()
+    );
+}
+
+#[test]
+fn authoritative_multifile_project_binding_continues_from_the_checkpoint_in_path_order() {
+    let bind = |reversed| {
+        LibraryBaseProvider::new()
+            .continue_authenticated_library_binder_checkpoint_for_test(
+                &authoritative_project_inputs(reversed),
+                None,
+                |_, _, _| {},
+            )
+            .expect("authoritative project binder continuation")
+    };
+    let forward = bind(false);
+    let reverse = bind(true);
+
+    let expected_paths = [
+        "/project/00_exports.ts",
+        "/project/10_imports.ts",
+        "/project/20_ambient.d.ts",
+        "/project/25_kind_only_external.mts",
+        "/project/30_script_use.ts",
+        "/project/40_script_declare.ts",
+    ];
+    assert_eq!(
+        forward.normalized_per_path_binding_shape_for_test(),
+        reverse.normalized_per_path_binding_shape_for_test(),
+        "opposite caller order preserves per-path binding shape without requiring equal numeric identities"
+    );
+
+    for (continuation, reversed) in [(&forward, false), (&reverse, true)] {
+        let rows = continuation.project_sources_for_test();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.normalized_path.as_str())
+                .collect::<Vec<_>>(),
+            expected_paths
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.source_file_kind)
+                .collect::<Vec<_>>(),
+            [
+                SourceFileKind::ImplementationTs,
+                SourceFileKind::ImplementationTs,
+                SourceFileKind::DeclarationTs,
+                SourceFileKind::ImplementationMts,
+                SourceFileKind::ImplementationTs,
+                SourceFileKind::ImplementationTs,
+            ]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.external_module)
+                .collect::<Vec<_>>(),
+            [true, true, false, true, false, false]
+        );
+        let expected_original_ordinals = if reversed {
+            [5, 4, 3, 2, 1, 0]
+        } else {
+            [0, 1, 2, 3, 4, 5]
+        };
+        let expected_unit_slots = if reversed {
+            [4, 5, 3, 2, 1, 0]
+        } else {
+            [0, 1, 2, 3, 4, 5]
+        };
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.original_module_ordinal.index())
+                .collect::<Vec<_>>(),
+            expected_original_ordinals
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.unit_slot.index())
+                .collect::<Vec<_>>(),
+            expected_unit_slots
+        );
+        assert_dense(
+            rows.iter()
+                .map(|row| usize::try_from(row.source.0).expect("source key fits usize")),
+            continuation.checkpoint_ends.next_source,
+            continuation.ends.next_source,
+        );
+        assert!(rows
+            .iter()
+            .all(|row| continuation.appended_scopes.contains(&row.module)));
+
+        let exported_class = continuation
+            .lookup_binding_for_test("/project/00_exports.ts", "WU5ExportedClass")
+            .expect("exported class binding");
+        let imported_class = continuation
+            .lookup_binding_for_test("/project/10_imports.ts", "WU5ExportedClass")
+            .expect("imported class binding");
+        assert_ne!(exported_class.symbol, imported_class.symbol);
+        assert_eq!(exported_class.value, imported_class.value);
+        assert_eq!(exported_class.type_group, imported_class.type_group);
+        assert!(exported_class.value.is_some());
+        assert!(exported_class.type_group.is_some());
+
+        let exported_function = continuation
+            .lookup_binding_for_test("/project/00_exports.ts", "wu5ExportedFunction")
+            .expect("exported function binding");
+        let imported_function = continuation
+            .lookup_binding_for_test("/project/10_imports.ts", "wu5ExportedFunction")
+            .expect("imported function binding");
+        assert_ne!(exported_function.symbol, imported_function.symbol);
+        assert_eq!(exported_function.value, imported_function.value);
+        assert!(exported_function.value.is_some());
+
+        let missing = continuation
+            .lookup_binding_for_test("/project/10_imports.ts", "wu5Missing")
+            .expect("missing import placeholder binding");
+        assert!(missing.value.is_some());
+        assert!(missing.blocks_type_lookup);
+        assert_eq!(
+            continuation.import_placeholders_for_test("/project/10_imports.ts"),
+            missing.value.into_iter().collect::<Vec<_>>()
+        );
+
+        let mts_local = continuation
+            .lookup_binding_for_test("/project/25_kind_only_external.mts", "WU5MtsLocal")
+            .expect("kind-only external module local");
+        assert!(mts_local.type_group.is_some());
+        assert!(
+            continuation
+                .lookup_binding_for_test("/project/30_script_use.ts", "WU5MtsLocal")
+                .is_none(),
+            "the .mts-only external classification keeps its declaration module-local"
+        );
+
+        let reserved = continuation
+            .script_namespace_root_reservation_for_test("WU5ScriptNamespace")
+            .expect("script namespace root reservation");
+        for path in ["/project/30_script_use.ts", "/project/40_script_declare.ts"] {
+            let binding = continuation
+                .lookup_binding_for_test(path, "WU5ScriptNamespace")
+                .expect("reserved script namespace lookup");
+            assert_eq!(binding.symbol, reserved);
+            assert!(binding.namespace.is_some());
+            assert!(binding.value.is_some());
+        }
+        let script_namespace_storage = continuation
+            .standalone_namespace_value_storage_for_test(
+                "/project/40_script_declare.ts",
+                "WU5ScriptNamespace",
+            )
+            .expect("reserved script namespace value storage");
+        assert_eq!(
+            continuation
+                .lookup_binding_for_test("/project/30_script_use.ts", "WU5ScriptNamespace")
+                .and_then(|binding| binding.value),
+            Some(script_namespace_storage)
+        );
+
+        for (name, disposition) in [
+            (
+                "WU5Function",
+                NamespaceValueAttachmentDisposition::AdmittedFunction,
+            ),
+            (
+                "WU5Class",
+                NamespaceValueAttachmentDisposition::AdmittedClass,
+            ),
+        ] {
+            let binding = continuation
+                .lookup_binding_for_test("/project/40_script_declare.ts", name)
+                .expect("script namespace value binding");
+            assert_eq!(
+                continuation.attached_namespace_value_disposition_for_test(
+                    "/project/40_script_declare.ts",
+                    name
+                ),
+                Some(disposition),
+                "{name}"
+            );
+            assert!(binding.value.is_some(), "{name}");
+            assert!(binding.namespace.is_some(), "{name}");
+        }
+        let standalone = continuation
+            .lookup_binding_for_test("/project/40_script_declare.ts", "WU5Standalone")
+            .expect("standalone namespace binding");
+        let standalone_storage = continuation
+            .standalone_namespace_value_storage_for_test(
+                "/project/40_script_declare.ts",
+                "WU5Standalone",
+            )
+            .expect("standalone namespace value storage");
+        assert_eq!(standalone.value, Some(standalone_storage));
+        assert!(standalone.namespace.is_some());
+        assert!(
+            continuation
+                .lookup_binding_for_test("/project/20_ambient.d.ts", "WU5Ambient")
+                .is_some_and(|binding| binding.namespace.is_some()),
+            "declaration scripts participate in the shared script namespace root"
+        );
+    }
+}
+
+#[test]
 fn binder_root_and_prefix_mismatches_fail_before_checkpoint_inspection() {
     for (mutation, violation) in [
         (
@@ -476,6 +868,41 @@ fn binder_root_and_prefix_mismatches_fail_before_checkpoint_inspection() {
 }
 
 #[test]
+fn retained_function_and_block_scope_map_corruption_fails_before_user_work() {
+    for (mutation, violation) in [
+        (
+            CheckpointAuthenticationMutationForTest::FunctionScopes,
+            CheckpointAuthenticationViolation::RetainedScopeMapsMismatch,
+        ),
+        (
+            CheckpointAuthenticationMutationForTest::FunctionDeclarationIds,
+            CheckpointAuthenticationViolation::RetainedScopeMapsMismatch,
+        ),
+        (
+            CheckpointAuthenticationMutationForTest::BlockScopes,
+            CheckpointAuthenticationViolation::RetainedScopeMapsMismatch,
+        ),
+    ] {
+        let scopes = CheckpointBoundaryScopes::start();
+        let inspection_reached = Cell::new(false);
+        let error = LibraryBaseProvider::new()
+            .continue_authenticated_library_binder_checkpoint_for_test(
+                &authoritative_project_inputs(false),
+                Some(mutation),
+                |_, _, _| inspection_reached.set(true),
+            )
+            .expect_err("retained scope-map corruption must fail closed");
+        assert!(!inspection_reached.get(), "{mutation:?}");
+        assert_eq!(error.stage(), LibraryInitStage::ReferenceValidation);
+        assert_eq!(
+            error.cause(),
+            &LibraryInitCause::CheckpointAuthenticationRejected { violation }
+        );
+        scopes.assert_rejected_before_inspection_or_user_work();
+    }
+}
+
+#[test]
 fn binder_checkpoint_type_boundary_cannot_resume_raw_or_through_wu4() {
     let binder = include_str!("../binder/bind.rs");
     let private_compiler = include_str!("../check/checker/library_compiler.rs");
@@ -502,7 +929,7 @@ fn binder_checkpoint_type_boundary_cannot_resume_raw_or_through_wu4() {
     assert!(binder.contains("Result<AuthenticatedLibraryBinderCheckpoint"));
     assert!(codec.contains("struct AdmittedLibrarySnapshotEvidence {"));
     let continuation = private_compiler
-        .split_once("fn continue_authenticated_library_binder_checkpoint(")
+        .split_once("fn continue_authenticated_library_project_binder(")
         .expect("authenticated continuation entrypoint")
         .1
         .split_once("\n}")
