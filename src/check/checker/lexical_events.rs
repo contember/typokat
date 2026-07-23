@@ -19,6 +19,55 @@ use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! {
+    static LEXICAL_OWNER_INDEX_PROBES: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    static DECLARATION_RESERVATION_INDEX_PROBES: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_lexical_owner_index_probe_for_test() {
+    LEXICAL_OWNER_INDEX_PROBES.set(LEXICAL_OWNER_INDEX_PROBES.get().saturating_add(1));
+}
+
+#[cfg(test)]
+fn record_declaration_reservation_index_probe_for_test() {
+    DECLARATION_RESERVATION_INDEX_PROBES
+        .set(DECLARATION_RESERVATION_INDEX_PROBES.get().saturating_add(1));
+}
+
+#[cfg(test)]
+pub(crate) struct LexicalOwnerLookupScope(u64);
+
+#[cfg(test)]
+impl LexicalOwnerLookupScope {
+    pub(crate) fn start() -> Self {
+        Self(LEXICAL_OWNER_INDEX_PROBES.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        LEXICAL_OWNER_INDEX_PROBES.get().saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct DeclarationReservationLookupScope(u64);
+
+#[cfg(test)]
+impl DeclarationReservationLookupScope {
+    pub(crate) fn start() -> Self {
+        Self(DECLARATION_RESERVATION_INDEX_PROBES.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        DECLARATION_RESERVATION_INDEX_PROBES
+            .get()
+            .saturating_sub(self.0)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ClassSiteId(usize);
 
@@ -241,11 +290,15 @@ pub(super) trait LexicalReservationAllocator {
 #[derive(Debug)]
 pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     top_level: Vec<TopLevelReservation<Ticket>>,
+    top_level_by_source: FxHashMap<(SourceOrdinal, u32), usize>,
     nested_statements: Vec<NestedStatementReservation<Ticket>>,
+    nested_statements_by_source: FxHashMap<(SourceOrdinal, u32), usize>,
     declarators: Vec<DeclaratorReservation<Ticket>>,
+    declarators_by_source: FxHashMap<(SourceOrdinal, u32), usize>,
     initializers: Vec<InitializerReservation<Ticket>>,
     classes: Vec<ClassReservation<Ticket>>,
     members: Vec<MemberReservation<Ticket>>,
+    members_by_source: FxHashMap<(SourceOrdinal, u32), usize>,
     callables: Vec<CallableReservation<Ticket>>,
     expression_site_tickets: Vec<SiteTickets<Ticket>>,
     #[cfg(test)]
@@ -261,18 +314,22 @@ pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     classes_by_source: BTreeMap<(SourceOrdinal, u32), Vec<ClassSiteId>>,
     callables_by_source: BTreeMap<(SourceOrdinal, u32), Vec<CallableSiteId>>,
     initializers_by_source: FxHashMap<(SourceUnit, u32), usize>,
-    declaration_owners: FxHashMap<DeclId, LexicalOwner<Ticket>>,
+    declaration_reservations_by_decl: FxHashMap<DeclId, usize>,
 }
 
 impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
     fn default() -> Self {
         Self {
             top_level: Vec::new(),
+            top_level_by_source: FxHashMap::default(),
             nested_statements: Vec::new(),
+            nested_statements_by_source: FxHashMap::default(),
             declarators: Vec::new(),
+            declarators_by_source: FxHashMap::default(),
             initializers: Vec::new(),
             classes: Vec::new(),
             members: Vec::new(),
+            members_by_source: FxHashMap::default(),
             callables: Vec::new(),
             expression_site_tickets: Vec::new(),
             #[cfg(test)]
@@ -287,7 +344,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             classes_by_source: BTreeMap::new(),
             callables_by_source: BTreeMap::new(),
             initializers_by_source: FxHashMap::default(),
-            declaration_owners: FxHashMap::default(),
+            declaration_reservations_by_decl: FxHashMap::default(),
         }
     }
 }
@@ -590,18 +647,26 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                 Some(self.reserve_callable(source, event, tickets, None, function, allocator)?);
         }
         if top_level {
+            let index = self.top_level.len();
             self.top_level.push(TopLevelReservation {
                 source,
                 tickets,
                 class: class_site,
                 callable,
             });
+            self.top_level_by_source
+                .entry((source.ordinal(), source.source_start))
+                .or_insert(index);
         } else {
+            let index = self.nested_statements.len();
             self.nested_statements.push(NestedStatementReservation {
                 source,
                 tickets,
                 callable,
             });
+            self.nested_statements_by_source
+                .entry((source.ordinal(), source.source_start))
+                .or_insert(index);
         }
 
         if let Some(declaration) = statement_variable_declaration(statement) {
@@ -722,8 +787,12 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             };
             let (event, primary) = allocator.reserve_event(source.source_start);
             let tickets = reserve_site_tickets(event, primary, allocator)?;
+            let index = self.declarators.len();
             self.declarators
                 .push(DeclaratorReservation { source, tickets });
+            self.declarators_by_source
+                .entry((source.ordinal(), source.source_start))
+                .or_insert(index);
             if let Some(initializer) = &declarator.init {
                 self.reserve_initializer(source.unit, initializer, allocator);
                 self.reserve_expression(source, initializer, allocator)?;
@@ -1181,10 +1250,13 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         declaration_span: Span,
         binding_span: Span,
     ) -> Result<(), ReservationStateError> {
-        let reservation = self
+        let index = *self
             .declarations_by_binding
             .get(&(source, binding_span.start, binding_span.end))
-            .and_then(|index| self.declarations.get(*index))
+            .ok_or(ReservationStateError::MissingDeclarationOwner(declaration))?;
+        let reservation = self
+            .declarations
+            .get(index)
             .ok_or(ReservationStateError::MissingDeclarationOwner(declaration))?;
         assert_eq!(
             reservation.kind, kind,
@@ -1194,10 +1266,8 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             reservation.declaration_span, declaration_span,
             "declaration node span must match source prewalk"
         );
-        let owner = LexicalOwner {
-            ticket: reservation.owner,
-        };
-        self.declaration_owners.insert(declaration, owner);
+        self.declaration_reservations_by_decl
+            .insert(declaration, index);
         Ok(())
     }
 
@@ -1217,7 +1287,10 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     }
 
     pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner<Ticket>> {
-        self.declaration_owners.get(&declaration).copied()
+        self.declaration_reservation(declaration)
+            .map(|reservation| LexicalOwner {
+                ticket: reservation.owner,
+            })
     }
 
     pub(crate) fn declaration_source(&self, declaration: DeclId) -> Option<SourceSite> {
@@ -1229,10 +1302,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         &self,
         declaration: DeclId,
     ) -> Option<&DeclarationReservation<Ticket>> {
-        let owner = self.declaration_owner(declaration)?;
-        self.declarations
-            .iter()
-            .find(|reservation| reservation.owner == owner.ticket)
+        #[cfg(test)]
+        record_declaration_reservation_index_probe_for_test();
+        self.declaration_reservations_by_decl
+            .get(&declaration)
+            .and_then(|index| self.declarations.get(*index))
     }
 
     pub(crate) fn interface_occurrence_owner(
@@ -1273,37 +1347,33 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             };
             return Some(LexicalOwner { ticket });
         }
-        let site = self
-            .declarators
-            .iter()
-            .find(|site| {
-                site.source.ordinal() == source && site.source.source_start == source_start
-            })
-            .map(|site| site.tickets)
-            .or_else(|| {
-                self.nested_statements
-                    .iter()
-                    .find(|site| {
-                        site.source.ordinal() == source && site.source.source_start == source_start
-                    })
-                    .map(|site| site.tickets)
-            })
-            .or_else(|| {
-                self.members
-                    .iter()
-                    .find(|site| {
-                        site.source.ordinal() == source && site.source.source_start == source_start
-                    })
-                    .map(|site| site.tickets)
-            })
-            .or_else(|| {
-                self.top_level
-                    .iter()
-                    .find(|site| {
-                        site.source.ordinal() == source && site.source.source_start == source_start
-                    })
-                    .map(|site| site.tickets)
-            })?;
+        #[cfg(test)]
+        record_lexical_owner_index_probe_for_test();
+        let site = if let Some(index) = self.declarators_by_source.get(&(source, source_start)) {
+            self.declarators.get(*index).map(|site| site.tickets)
+        } else {
+            #[cfg(test)]
+            record_lexical_owner_index_probe_for_test();
+            if let Some(index) = self
+                .nested_statements_by_source
+                .get(&(source, source_start))
+            {
+                self.nested_statements.get(*index).map(|site| site.tickets)
+            } else {
+                #[cfg(test)]
+                record_lexical_owner_index_probe_for_test();
+                if let Some(index) = self.members_by_source.get(&(source, source_start)) {
+                    self.members.get(*index).map(|site| site.tickets)
+                } else {
+                    #[cfg(test)]
+                    record_lexical_owner_index_probe_for_test();
+                    self.top_level_by_source
+                        .get(&(source, source_start))
+                        .and_then(|index| self.top_level.get(*index))
+                        .map(|site| site.tickets)
+                }
+            }
+        }?;
         let ticket = match phase {
             LexicalOwnerPhase::Immediate | LexicalOwnerPhase::Body => site.immediate,
             LexicalOwnerPhase::Deferred => site.deferred,
@@ -1652,7 +1722,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     self.reserve_expression(element_source, value, allocator)?;
                 }
             }
+            let member_index = self.members.len();
             self.members.push(member);
+            self.members_by_source
+                .entry((element_source.ordinal(), element_source.source_start))
+                .or_insert(member_index);
             self.classes[id.0].members.push(member_id);
             match element {
                 ClassElement::MethodDefinition(method) => {
