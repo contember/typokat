@@ -694,3 +694,29 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   doctest target. Clippy, format, and diff checks are clean. This closes route selection only;
   authenticated replay-index admission, the continuable private binder, affected-closure replay,
   and the collision/fanout performance gates remain open WU5 work.
+
+### 2026-07-23 — WU5 collision replay dependency index generation
+
+- Commit `8b588ca` instruments the one authoritative source compilation with typed semantic
+  producer/consumer ownership and emits a canonical dependency-to-consumer replay graph. The
+  exact 82-file profile has **45,925 owners**, **2,238 root slots**, **47,253 owner sites**,
+  **9,922 reverse edges**, **6,940 root edges**, **45,241 SCCs**, **42,496 statement owners**, and
+  **45,925 baseline records**. Its 10,996,257-byte manifest is deterministic with SHA-256
+  `cc125e22a561b069f62f6707e5eb3f8187be0959bb75d8cbfb665266d21c2c95`; all unowned-demand,
+  invalid-site, noncanonical-edge, and typed-reference coverage counters are zero.
+- The tracer covers type groups, values, namespaces, classes, global-object contributors, and
+  statements without retaining AST state. Replay-aware lookup wrappers own semantic demands;
+  an exhaustive recursively discovered source guard rejects unmanifested raw resolver/storage
+  access, including cfg-test and nested-query bypasses. Exact root normalization uses independent
+  binder evidence and a strict two-way census rather than existing checker storage.
+- Full-suite review exposed class-application state/surface conflation and an over-filtered nested
+  `global` census. The first now uses a state-only class requirement after one traced observation.
+  The second separates exact replay candidates from conservative preflight-only candidates:
+  legal external augmentations are exact, direct script augmentations are rejected, and nested or
+  uncertain placements route private without contaminating snapshot roots. Independent re-reviews
+  are PASS.
+- The final leader gate passes **1,103 / 0 / 19** library tests plus all integration,
+  conformance, and doctest targets; clippy, format, and diff checks are clean. This commit generates
+  the index but deliberately leaves the snapshot at ten sections. Persisted section admission,
+  the continuable private binder, closure replay, and collision/fanout performance gates remain
+  open WU5 work.
