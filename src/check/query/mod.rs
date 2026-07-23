@@ -2125,4 +2125,7 @@ mod dom_source_cold_spec;
 mod identity_memo_spec;
 
 #[cfg(test)]
+mod resolved_subtree_spec;
+
+#[cfg(test)]
 mod tests;
