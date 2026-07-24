@@ -772,3 +772,60 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   replay, and the collision/fanout 2x gates. The final window retains only 0.683 ms p95 headroom, so
   later WU5/WU8 work must preserve or improve startup rather than treating this checkpoint as
   surplus budget.
+
+### 2026-07-24 — WU8 transactional declaration planning and replay closure bounds
+
+- Leader baseline at `933bfd5` in a pristine worktree: **1,217 passed / 11 failed / 19 ignored**.
+  Seven of those failures were the RED specs of this batch (`9d0acb6`, `586133d`, plus
+  `user_delta_project_scale_spec::per_check_allocation_and_traversal_do_not_scale_with_frozen_base_size`);
+  the other four are the stale packaged snapshot, below.
+- Commit `9d47612` splits the declaration-surface planner into a plan phase over `&self` and a
+  commit phase that interns only on success. The 82-file profile's **4,072** zero-argument
+  interface-property roots now commit **zero** recipe rows and zero durable edges
+  (`RecipeArenaMeasure { durable_rows: 0, durable_edges: 0, reachable_rows: 0, reachable_edges: 0 }`,
+  `eager_materialization_roots = 0`); the 8-pad and 512-pad deferred shapes are identical at
+  `{ durable_rows: 6, durable_edges: 4 }`. The source-compiled archive drops **19,039,216 →
+  19,025,866 bytes**, SHA-256 `590bf4727d61a0638b7a889ece9e0705182e8efcf580b1d61ef73d0131f21646`,
+  reproducible across two runs; its pin moves with it.
+- Two semantic corrections rode along and are the reason this is not a pure perf commit. Interface
+  arity now reads `recovery_params`, which **recovers a dropped `TK2314`** on a merged generic
+  interface reached through a lazy property (matches `tsc` byte for byte). A published template is
+  taken lazily only when `TypeTag::Object`, so the frozen prelude's `OmitThisParameter<T>` marker
+  keeps its specialized argument.
+- Independent adversarial review of the planner returned FAIL on three findings, all applied before
+  the commit: hand-rolled `free_params` diverged from the canonical derivation on `Application` and
+  the zero-argument arms and was guarded only by `debug_assert_eq!` — in release an under-reported
+  vector silently drops the specialization mapper in `intern_declared` (the derivation is memoized
+  and now runs once per committed row, measured neutral, and `src/types/intern/declared.rs` returned
+  to byte-identical with HEAD); the commit-time dependency check was provably dead code, since
+  `Binder::resolve_type` *is* `resolve_type_traced(…, || {})`; and the `RawAccessAllowance` reason
+  claimed authentication where only replay happens. The review reported the diff byte-identical to
+  HEAD over **462 fixtures and 874 official-corpus files**, `tsc --strict` parity on 11 probes, and
+  could not break the `TypeTag::Object` gate with injected conditional/mapped/keyof zero-parameter
+  aliases or Object-tagged generic templates at root, array, tuple and `readonly` positions.
+- Independent adversarial review of the `dfa62b4` replay closure **passed it on soundness** —
+  complete and exactly equal to the pre-`dfa62b4` DFS over 520,000 fuzz graphs, deterministic
+  cross-process (the one hash container is never iterated) — and disproved the suspected duplicate
+  `ClassId`-across-components pathology, which is linear. It instead found that memoizing only at
+  query roots re-walks a shared pass-through spine once per root, i.e. a regression against the code
+  `dfa62b4` replaced, invisible to every committed counter.
+- RED `0d79bc8` adds an `owner_expression_visits` counter over the actual per-expression traversal
+  and replaces the wall-clock probe with a deterministic guard. Implementation `bc59c9f` flattens
+  the expression vector in one ascending pass (it is already topologically ordered; the precondition
+  is now asserted): **131,840 → 2,305** visits at 256×256 and **2,100,224 → 9,217** at 1024×1024, so
+  growth tracks the 4× input growth exactly (3.999×) at ~8× under budget, with the completeness pin
+  unchanged. It also promotes the Kahn drain guard to a real `assert_eq!` — an undrained
+  condensation would admit unauthenticated replay dependencies, and the debug-only guard vanished in
+  release.
+- The ascending pass is a trade, not a universal win: full memoization is quadratic on an
+  accumulating chain (33,406 visits at depth 256, 526,846 at 1,024) where root-only memoization was
+  linear. Per-class owner closure is transitive-closure-hard, so only the set representation can
+  bound both shapes. The real profile builds **44** owner expressions, so neither bound is live;
+  filed as backlog `85`. The review also surfaced a pre-existing reachable panic — a function-local
+  `interface` aborts the check worker — filed as backlog `84`.
+- Final leader gate on the clean tree at `9d47612`: **1,226 passed / 4 failed / 19 ignored**, clippy
+  `--all-targets -D warnings` clean, and every integration target green (conformance 14, divergences,
+  manifest, surface, incomplete-outcome, class-id-exhaustion). The four remaining failures are the
+  packaged `canonical.snapshot`, last regenerated at `90ff28d` and therefore stale since before this
+  batch. **Regeneration and the pin family in `src/library/artifact.rs` remain open**, and must run
+  from a clean committed tree via `tooling/library-package/verify.py`.
