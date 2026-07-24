@@ -840,3 +840,143 @@ const mismatch: number[] = left.conflict;
         ]
     );
 }
+
+#[test]
+fn merged_interface_recovery_binders_preserve_invalid_arity_diagnostics() {
+    let source = r#"interface Recovery<T> {
+  first: T;
+}
+interface Recovery<U> {
+  second: U;
+}
+type EagerBad = Recovery<number>;
+interface Holder {
+  lazyBad: Recovery<number>;
+}
+declare const recovered: Recovery<number, string>;
+const first: number = recovered.first;
+const second: string = recovered.second;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(
+        run.output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code,
+                &run.source[diagnostic.span.range()],
+                diagnostic.message.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                DiagnosticCode::TK2428,
+                "Recovery",
+                "All declarations of 'Recovery' must have identical type parameters",
+            ),
+            (
+                DiagnosticCode::TK2428,
+                "Recovery",
+                "All declarations of 'Recovery' must have identical type parameters",
+            ),
+            (
+                DiagnosticCode::TK2314,
+                "Recovery<number>",
+                "Generic type 'Recovery<T, U>' requires 2 type argument(s)",
+            ),
+            (
+                DiagnosticCode::TK2314,
+                "Recovery<number>",
+                "Generic type 'Recovery<T, U>' requires 2 type argument(s)",
+            ),
+        ],
+        "the lazy property must retain the eager reference's recovery arity and source order"
+    );
+}
+
+fn nested_array_annotation(depth: usize) -> String {
+    format!("number{}", "[]".repeat(depth))
+}
+
+fn assert_undemanded_declared_property_depth_contract(depth: usize) {
+    const ANNOTATION_DEPTH_BUDGET: usize = 200;
+
+    let annotation = nested_array_annotation(depth);
+    let exhaustion_span = nested_array_annotation(depth - ANNOTATION_DEPTH_BUDGET);
+    let source = format!(
+        "type EagerDepth = {annotation};\n\
+         interface LazyDepth {{\n\
+           undemanded: {annotation};\n\
+         }}\n\
+         type Later = MissingAfterDepth;\n"
+    );
+    let run = check_measured(source);
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "depth={depth}: {:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "depth={depth}: {:?}",
+        run.output.incomplete
+    );
+    assert_eq!(
+        run.output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code,
+                &run.source[diagnostic.span.range()],
+                diagnostic.message.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                DiagnosticCode::TK2589,
+                exhaustion_span.as_str(),
+                "Type instantiation is excessively deep and possibly infinite.",
+            ),
+            (
+                DiagnosticCode::TK2589,
+                exhaustion_span.as_str(),
+                "Type instantiation is excessively deep and possibly infinite.",
+            ),
+            (
+                DiagnosticCode::TK2304,
+                "MissingAfterDepth",
+                "Cannot find name 'MissingAfterDepth'",
+            ),
+        ],
+        "depth={depth}: lazy fallback must match eager depth handling and record order"
+    );
+    assert_eq!(
+        run.measure.eager_materialization_roots, 1,
+        "depth={depth}: the over-budget property must use bounded eager lowering"
+    );
+    assert_eq!(
+        run.recipes,
+        RecipeArenaMeasure::default(),
+        "depth={depth}: an over-budget plan must publish no recipe rows"
+    );
+}
+
+#[test]
+fn undemanded_declared_property_respects_eager_annotation_depth_budget() {
+    assert_undemanded_declared_property_depth_contract(201);
+}
+
+#[test]
+fn larger_undemanded_declared_property_depth_terminates_deterministically() {
+    assert_undemanded_declared_property_depth_contract(400);
+}
