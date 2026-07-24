@@ -2384,58 +2384,401 @@ struct TerminalClassDependencyValidationWork {
     class_summary_items: u64,
 }
 
+fn intern_terminal_semantic_node(
+    nodes: &mut rustc_hash::FxHashMap<(u8, u32), usize>,
+    semantic_edges: &mut Vec<Vec<usize>>,
+    reverse_edges: &mut Vec<Vec<usize>>,
+    class_edges: &mut Vec<Vec<ClassId>>,
+    key: (u8, u32),
+) -> usize {
+    if let Some(node) = nodes.get(&key) {
+        return *node;
+    }
+    let node = semantic_edges.len();
+    nodes.insert(key, node);
+    semantic_edges.push(Vec::new());
+    reverse_edges.push(Vec::new());
+    class_edges.push(Vec::new());
+    node
+}
+
+enum TerminalOwnerExpression {
+    Owner(ReplayOwner),
+    Union(Vec<usize>),
+}
+
+fn terminal_expression_owners<'a>(
+    expressions: &[TerminalOwnerExpression],
+    root: usize,
+    cache: &'a mut Vec<Option<Vec<ReplayOwner>>>,
+    seen: &mut Vec<u32>,
+    epoch: &mut u32,
+) -> &'a [ReplayOwner] {
+    cache.resize_with(expressions.len(), || None);
+    if cache[root].is_none() {
+        if *epoch == u32::MAX {
+            seen.fill(0);
+            *epoch = 1;
+        } else {
+            *epoch += 1;
+        }
+        seen.resize(expressions.len(), 0);
+        let mut owners = Vec::new();
+        let mut pending = vec![root];
+        while let Some(expression) = pending.pop() {
+            if seen[expression] == *epoch {
+                continue;
+            }
+            seen[expression] = *epoch;
+            if let Some(cached) = &cache[expression] {
+                owners.extend_from_slice(cached);
+                continue;
+            }
+            match &expressions[expression] {
+                TerminalOwnerExpression::Owner(owner) => owners.push(*owner),
+                TerminalOwnerExpression::Union(inputs) => {
+                    pending.extend(inputs.iter().copied());
+                }
+            }
+        }
+        owners.sort_unstable();
+        owners.dedup();
+        cache[root] = Some(owners);
+    }
+    cache[root]
+        .as_deref()
+        .expect("terminal owner expression was cached")
+}
+
+#[cfg(test)]
+fn record_terminal_semantic_nodes(
+    work: &mut Option<&mut TerminalClassDependencyValidationWork>,
+    count: usize,
+) {
+    if let Some(work) = work.as_deref_mut() {
+        work.semantic_node_visits = work
+            .semantic_node_visits
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    }
+}
+
+#[cfg(test)]
+fn record_terminal_semantic_edges(
+    work: &mut Option<&mut TerminalClassDependencyValidationWork>,
+    count: usize,
+) {
+    if let Some(work) = work.as_deref_mut() {
+        work.semantic_edge_probes = work
+            .semantic_edge_probes
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    }
+}
+
+#[cfg(test)]
+fn record_terminal_class_edges(
+    work: &mut Option<&mut TerminalClassDependencyValidationWork>,
+    count: usize,
+) {
+    if let Some(work) = work.as_deref_mut() {
+        work.class_edge_probes = work
+            .class_edge_probes
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    }
+}
+
+#[cfg(test)]
+fn record_terminal_class_summary_items(
+    work: &mut Option<&mut TerminalClassDependencyValidationWork>,
+    count: usize,
+) {
+    if let Some(work) = work.as_deref_mut() {
+        work.class_summary_items = work
+            .class_summary_items
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    }
+}
+
 fn require_terminal_class_dependency_closure(
     trace: &ReplayDependencyTrace,
-    semantic_edges: &BTreeMap<(u8, u32), Vec<(u8, u32)>>,
-    class_edges: &BTreeMap<(u8, u32), Vec<ClassId>>,
+    sparse_semantic_edges: &BTreeMap<(u8, u32), Vec<(u8, u32)>>,
+    sparse_class_edges: &BTreeMap<(u8, u32), Vec<ClassId>>,
     direct: BTreeMap<ReplayOwner, Vec<TypeId>>,
     #[cfg(test)] mut work: Option<&mut TerminalClassDependencyValidationWork>,
 ) {
     const TYPE_DOMAIN: u8 = 1;
 
-    for (owner, roots) in direct {
+    let mut nodes = rustc_hash::FxHashMap::default();
+    let mut semantic_edges = Vec::<Vec<usize>>::new();
+    let mut reverse_edges = Vec::<Vec<usize>>::new();
+    let mut class_edges = Vec::<Vec<ClassId>>::new();
+    for (source_key, targets) in sparse_semantic_edges {
+        let source = intern_terminal_semantic_node(
+            &mut nodes,
+            &mut semantic_edges,
+            &mut reverse_edges,
+            &mut class_edges,
+            *source_key,
+        );
+        for target_key in targets {
+            let target = intern_terminal_semantic_node(
+                &mut nodes,
+                &mut semantic_edges,
+                &mut reverse_edges,
+                &mut class_edges,
+                *target_key,
+            );
+            semantic_edges[source].push(target);
+            reverse_edges[target].push(source);
+        }
+    }
+    for (source_key, classes) in sparse_class_edges {
+        let source = intern_terminal_semantic_node(
+            &mut nodes,
+            &mut semantic_edges,
+            &mut reverse_edges,
+            &mut class_edges,
+            *source_key,
+        );
+        #[cfg(test)]
+        {
+            record_terminal_class_edges(&mut work, classes.len());
+            record_terminal_class_summary_items(&mut work, classes.len());
+        }
+        class_edges[source].extend(classes.iter().copied());
+    }
+    for roots in direct.values() {
+        for root in roots {
+            intern_terminal_semantic_node(
+                &mut nodes,
+                &mut semantic_edges,
+                &mut reverse_edges,
+                &mut class_edges,
+                (TYPE_DOMAIN, root.0),
+            );
+        }
+    }
+    for classes in &mut class_edges {
+        classes.sort_unstable();
+        classes.dedup();
+    }
+
+    // Condense cycles before propagating terminal classes across shared tails.
+    let node_count = semantic_edges.len();
+    let mut finish_order = Vec::with_capacity(node_count);
+    let mut seen = vec![false; node_count];
+    for start in 0..node_count {
+        if seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        #[cfg(test)]
+        record_terminal_semantic_nodes(&mut work, 1);
+        let mut pending = vec![(start, 0_usize)];
+        while let Some((node, next_edge)) = pending.last_mut() {
+            if *next_edge == semantic_edges[*node].len() {
+                finish_order.push(*node);
+                pending.pop();
+                continue;
+            }
+            let target = semantic_edges[*node][*next_edge];
+            *next_edge += 1;
+            #[cfg(test)]
+            record_terminal_semantic_edges(&mut work, 1);
+            if !seen[target] {
+                seen[target] = true;
+                #[cfg(test)]
+                record_terminal_semantic_nodes(&mut work, 1);
+                pending.push((target, 0));
+            }
+        }
+    }
+
+    let mut component_of = vec![usize::MAX; node_count];
+    let mut component_count = 0;
+    while let Some(start) = finish_order.pop() {
+        if component_of[start] != usize::MAX {
+            continue;
+        }
+        component_of[start] = component_count;
+        let mut pending = vec![start];
+        while let Some(node) = pending.pop() {
+            #[cfg(test)]
+            record_terminal_semantic_nodes(&mut work, 1);
+            for source in &reverse_edges[node] {
+                #[cfg(test)]
+                record_terminal_semantic_edges(&mut work, 1);
+                if component_of[*source] == usize::MAX {
+                    component_of[*source] = component_count;
+                    pending.push(*source);
+                }
+            }
+        }
+        component_count += 1;
+    }
+
+    let mut component_dependencies = vec![Vec::<usize>::new(); component_count];
+    let mut component_dependents = vec![Vec::<usize>::new(); component_count];
+    let mut component_classes = vec![Vec::<ClassId>::new(); component_count];
+    for node in 0..node_count {
+        #[cfg(test)]
+        record_terminal_semantic_nodes(&mut work, 1);
+        let component = component_of[node];
+        #[cfg(test)]
+        {
+            record_terminal_class_edges(&mut work, class_edges[node].len());
+            record_terminal_class_summary_items(&mut work, class_edges[node].len());
+        }
+        component_classes[component].extend_from_slice(&class_edges[node]);
+        for target in &semantic_edges[node] {
+            #[cfg(test)]
+            record_terminal_semantic_edges(&mut work, 1);
+            let dependency = component_of[*target];
+            if component != dependency {
+                component_dependencies[component].push(dependency);
+            }
+        }
+    }
+    for classes in &mut component_classes {
+        classes.sort_unstable();
+        classes.dedup();
+    }
+    for dependencies in &mut component_dependencies {
+        dependencies.sort_unstable();
+        dependencies.dedup();
+    }
+    for (component, dependencies) in component_dependencies.iter().enumerate() {
+        for dependency in dependencies {
+            component_dependents[*dependency].push(component);
+        }
+    }
+
+    let mut expressions = direct
+        .keys()
+        .copied()
+        .map(TerminalOwnerExpression::Owner)
+        .collect::<Vec<_>>();
+    let owner_expressions = direct
+        .keys()
+        .copied()
+        .enumerate()
+        .map(|(expression, owner)| (owner, expression))
+        .collect::<BTreeMap<_, _>>();
+    let mut component_owner_inputs = vec![Vec::<usize>::new(); component_count];
+    for (owner, roots) in &direct {
         #[cfg(test)]
         if let Some(work) = work.as_deref_mut() {
             work.owner_root_summaries = work
                 .owner_root_summaries
                 .saturating_add(u64::try_from(roots.len()).unwrap_or(u64::MAX));
         }
-        let mut pending = roots
-            .into_iter()
-            .map(|ty| (TYPE_DOMAIN, ty.0))
-            .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
-        while let Some(node) = pending.pop() {
-            if !visited.insert(node) {
-                continue;
+        let expression = owner_expressions[owner];
+        for root in roots {
+            let node = nodes[&(TYPE_DOMAIN, root.0)];
+            component_owner_inputs[component_of[node]].push(expression);
+        }
+    }
+
+    // Owner expressions stay persistent across pass-through chains. They are
+    // flattened only where terminal classes make the owner × class output real.
+    let mut unresolved_dependents = component_dependents
+        .iter()
+        .map(Vec::len)
+        .collect::<Vec<_>>();
+    let mut ready = unresolved_dependents
+        .iter()
+        .enumerate()
+        .filter_map(|(component, count)| (*count == 0).then_some(component))
+        .collect::<Vec<_>>();
+    let mut processed_components = 0;
+    let mut class_owner_inputs = BTreeMap::<ClassId, Vec<usize>>::new();
+    while let Some(component) = ready.pop() {
+        processed_components += 1;
+        #[cfg(test)]
+        record_terminal_semantic_nodes(&mut work, 1);
+
+        component_owner_inputs[component].sort_unstable();
+        component_owner_inputs[component].dedup();
+        let owner_expression = match component_owner_inputs[component].as_slice() {
+            [] => None,
+            [expression] => Some(*expression),
+            inputs => {
+                let expression = expressions.len();
+                expressions.push(TerminalOwnerExpression::Union(inputs.to_vec()));
+                Some(expression)
             }
+        };
+
+        if let Some(expression) = owner_expression {
             #[cfg(test)]
-            if let Some(work) = work.as_deref_mut() {
-                work.semantic_node_visits = work.semantic_node_visits.saturating_add(1);
+            {
+                record_terminal_class_edges(&mut work, component_classes[component].len());
+                record_terminal_class_summary_items(&mut work, component_classes[component].len());
             }
-            if let Some(classes) = class_edges.get(&node) {
-                #[cfg(test)]
-                if let Some(work) = work.as_deref_mut() {
-                    work.class_edge_probes = work
-                        .class_edge_probes
-                        .saturating_add(u64::try_from(classes.len()).unwrap_or(u64::MAX));
-                    work.class_summary_items = work
-                        .class_summary_items
-                        .saturating_add(u64::try_from(classes.len()).unwrap_or(u64::MAX));
-                }
-                for class in classes {
-                    trace.require_dependency(owner, ReplayOwner::Class(*class));
-                }
+            for class in &component_classes[component] {
+                class_owner_inputs
+                    .entry(*class)
+                    .or_default()
+                    .push(expression);
             }
-            if let Some(targets) = semantic_edges.get(&node) {
-                #[cfg(test)]
-                if let Some(work) = work.as_deref_mut() {
-                    work.semantic_edge_probes = work
-                        .semantic_edge_probes
-                        .saturating_add(u64::try_from(targets.len()).unwrap_or(u64::MAX));
-                }
-                pending.extend(targets.iter().copied());
+            for dependency in component_dependencies[component].iter().copied() {
+                component_owner_inputs[dependency].push(expression);
             }
+        }
+
+        for dependency in component_dependencies[component].iter().copied() {
+            #[cfg(test)]
+            record_terminal_semantic_edges(&mut work, 1);
+            unresolved_dependents[dependency] -= 1;
+            if unresolved_dependents[dependency] == 0 {
+                ready.push(dependency);
+            }
+        }
+    }
+    debug_assert_eq!(processed_components, component_count);
+
+    let mut expression_cache = Vec::new();
+    let mut expression_seen = Vec::new();
+    let mut expression_epoch = 0;
+    let mut class_expressions = Vec::with_capacity(class_owner_inputs.len());
+    for (class, mut inputs) in class_owner_inputs {
+        inputs.sort_unstable();
+        inputs.dedup();
+        let expression = match inputs.as_slice() {
+            [expression] => *expression,
+            inputs => {
+                let expression = expressions.len();
+                expressions.push(TerminalOwnerExpression::Union(inputs.to_vec()));
+                expression
+            }
+        };
+        class_expressions.push((class, expression));
+    }
+    let mut query_expressions = class_expressions
+        .iter()
+        .map(|(_, expression)| *expression)
+        .collect::<Vec<_>>();
+    query_expressions.sort_unstable();
+    query_expressions.dedup();
+    for expression in query_expressions {
+        terminal_expression_owners(
+            &expressions,
+            expression,
+            &mut expression_cache,
+            &mut expression_seen,
+            &mut expression_epoch,
+        );
+    }
+    for (class, expression) in class_expressions {
+        let owners = expression_cache[expression]
+            .as_deref()
+            .expect("terminal class owner expression was cached");
+        #[cfg(test)]
+        {
+            record_terminal_class_edges(&mut work, owners.len());
+            record_terminal_class_summary_items(&mut work, owners.len());
+        }
+        for owner in owners {
+            trace.require_dependency(*owner, ReplayOwner::Class(class));
         }
     }
 }
