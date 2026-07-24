@@ -12,9 +12,12 @@ use super::reporting_record::CheckerRecord;
 use crate::diagnostics::DiagnosticCode;
 use crate::driver::CheckOutput;
 use crate::source::LibraryFileOrdinal;
+use crate::types::repr::DeclaredRecipeNode;
+use crate::types::store::TypeId;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+use std::collections::BTreeSet;
 
 const SMALL_PADDING: usize = 8;
 const LARGE_PADDING: usize = 128;
@@ -23,6 +26,70 @@ struct MeasuredRun {
     source: String,
     output: CheckOutput,
     measure: DeclarationSurfaceMeasure,
+    recipes: RecipeArenaMeasure,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RecipeArenaMeasure {
+    durable_rows: usize,
+    durable_edges: usize,
+    reachable_rows: usize,
+    reachable_edges: usize,
+}
+
+fn recipe_arena_measure(interner: &crate::types::Interner) -> RecipeArenaMeasure {
+    let store = interner.store();
+    let recipes = store
+        .snapshot_declared_recipes()
+        .map(|(id, recipe)| (id, recipe.node.clone()))
+        .collect::<Vec<_>>();
+    let mut pending = (0..store.len())
+        .filter_map(|index| {
+            store
+                .declared_type(TypeId(u32::try_from(index).expect("store index fits u32")))
+                .map(|declared| declared.recipe)
+        })
+        .collect::<Vec<_>>();
+    let mut reachable = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !reachable.insert(id) {
+            continue;
+        }
+        let recipe = store
+            .declared_recipe(id)
+            .expect("declared root references a durable recipe");
+        match &recipe.node {
+            DeclaredRecipeNode::Type(_) => {}
+            DeclaredRecipeNode::Array(child) | DeclaredRecipeNode::Readonly(child) => {
+                pending.push(*child);
+            }
+            DeclaredRecipeNode::Tuple { elements, rest } => {
+                pending.extend(elements.iter().copied());
+                pending.extend(rest.iter().map(|(_, recipe)| *recipe));
+            }
+            DeclaredRecipeNode::Application { arguments, .. } => {
+                pending.extend(arguments.iter().copied());
+            }
+        }
+    }
+    let edges = |node: &DeclaredRecipeNode| match node {
+        DeclaredRecipeNode::Type(_) => 0,
+        DeclaredRecipeNode::Array(_) | DeclaredRecipeNode::Readonly(_) => 1,
+        DeclaredRecipeNode::Tuple { elements, rest } => {
+            elements.len() + usize::from(rest.is_some())
+        }
+        DeclaredRecipeNode::Application { arguments, .. } => arguments.len(),
+    };
+    RecipeArenaMeasure {
+        durable_rows: recipes.len(),
+        durable_edges: recipes.iter().map(|(_, node)| edges(node)).sum(),
+        reachable_rows: reachable.len(),
+        reachable_edges: recipes
+            .iter()
+            .filter(|(id, _)| reachable.contains(id))
+            .map(|(_, node)| edges(node))
+            .sum(),
+    }
 }
 
 fn check_measured(source: String) -> MeasuredRun {
@@ -33,6 +100,7 @@ fn check_measured(source: String) -> MeasuredRun {
     let parse_errors = parsed.diagnostics.iter().map(ToString::to_string).collect();
     let mut interner = crate::types::Interner::with_intrinsics();
     let checked = super::check_program(&mut interner, &parsed.program);
+    let recipes = recipe_arena_measure(&interner);
     let output = CheckOutput {
         diagnostics: checked.diagnostics,
         parse_errors,
@@ -46,7 +114,131 @@ fn check_measured(source: String) -> MeasuredRun {
         source,
         output,
         measure,
+        recipes,
     }
+}
+
+fn existing_reference_surface_source(properties: usize) -> String {
+    let mut source = String::from("interface Existing {}\ninterface ExistingSurface {\n");
+    for index in 0..properties {
+        source.push_str(&format!("  p{index:04}: Existing;\n"));
+    }
+    source.push_str("}\n");
+    source
+}
+
+fn mixed_existing_and_deferred_surface_source(existing_properties: usize) -> String {
+    let mut source = String::from(
+        "interface Existing {}\n\
+         interface Box<T> {}\n\
+         interface MixedSurface {\n",
+    );
+    for index in 0..existing_properties {
+        source.push_str(&format!("  p{index:04}: Existing;\n"));
+    }
+    source.push_str(
+        "  strings: Box<string[]>;\n\
+         numbers: Box<number[]>;\n\
+         }\n",
+    );
+    source
+}
+
+#[test]
+fn zero_argument_existing_references_do_not_create_recipes_or_eager_relower() {
+    const EXISTING_REFERENCE_ROOTS: usize = 4_072;
+
+    let run = check_measured(existing_reference_surface_source(EXISTING_REFERENCE_ROOTS));
+    assert_clean(&run);
+    assert_eq!(
+        run.measure.eligible_interface_property_roots,
+        u64::try_from(EXISTING_REFERENCE_ROOTS).expect("root count fits u64")
+    );
+    assert_eq!(
+        run.measure.eager_materialization_roots, 0,
+        "an already-frozen zero-argument interface root must be reused directly"
+    );
+    assert_eq!(
+        run.recipes,
+        RecipeArenaMeasure::default(),
+        "existing roots must add neither durable recipe rows nor recipe dependency edges"
+    );
+}
+
+#[test]
+fn durable_recipe_work_scales_with_deferred_nodes_not_existing_roots() {
+    let small = check_measured(mixed_existing_and_deferred_surface_source(8));
+    let large = check_measured(mixed_existing_and_deferred_surface_source(512));
+    assert_clean(&small);
+    assert_clean(&large);
+
+    let expected = RecipeArenaMeasure {
+        durable_rows: 6,
+        durable_edges: 4,
+        reachable_rows: 6,
+        reachable_edges: 4,
+    };
+    assert_eq!(small.recipes, expected, "small={:#?}", small.recipes);
+    assert_eq!(large.recipes, expected, "large={:#?}", large.recipes);
+    assert_eq!(
+        small.measure.eager_materialization_roots, 0,
+        "small mixed surface must classify Existing without eager relowering"
+    );
+    assert_eq!(
+        large.measure.eager_materialization_roots, 0,
+        "existing-root padding must not add eager lowering work"
+    );
+}
+
+#[test]
+fn partial_recipe_failure_commits_no_rows_or_dependency_edges() {
+    let source = r#"interface PartialFailureSurface {
+  first: [string[], number | boolean];
+  second: MissingSecond;
+  third: [boolean[], string | number];
+  fourth: MissingFourth;
+}
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(
+        run.output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code,
+                &run.source[diagnostic.span.range()],
+                diagnostic.message.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                DiagnosticCode::TK2304,
+                "MissingSecond",
+                "Cannot find name 'MissingSecond'",
+            ),
+            (
+                DiagnosticCode::TK2304,
+                "MissingFourth",
+                "Cannot find name 'MissingFourth'",
+            ),
+        ],
+        "fallback diagnostics and source order are part of the transaction contract"
+    );
+    assert_eq!(
+        run.recipes,
+        RecipeArenaMeasure::default(),
+        "a failed root plan must publish neither partial rows nor dependency edges"
+    );
 }
 
 fn assert_clean(run: &MeasuredRun) {
