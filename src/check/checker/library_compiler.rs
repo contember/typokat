@@ -5354,6 +5354,112 @@ mod tests {
     }
 
     #[test]
+    fn terminal_class_validator_deduplicates_repeated_class_across_shared_tail() {
+        const TYPE_DOMAIN: u8 = 1;
+        const OWNER_COUNT: usize = 64;
+        const SHARED_DEPTH: usize = 128;
+
+        let owners = (0..OWNER_COUNT)
+            .map(|index| {
+                ReplayOwner::TypeGroup(TypeGroupId(
+                    u32::try_from(index).expect("owner id fits u32"),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let class = ClassId(7);
+        let shared_tail = (0..SHARED_DEPTH)
+            .map(|index| {
+                (
+                    TYPE_DOMAIN,
+                    10_000 + u32::try_from(index).expect("semantic id fits u32"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut semantic_edges = BTreeMap::<(u8, u32), Vec<(u8, u32)>>::new();
+        let mut direct = BTreeMap::<ReplayOwner, Vec<TypeId>>::new();
+        for (index, owner) in owners.iter().copied().enumerate() {
+            let root = TypeId(u32::try_from(index).expect("root type id fits u32"));
+            direct.insert(owner, vec![root]);
+            semantic_edges.insert((TYPE_DOMAIN, root.0), vec![shared_tail[0]]);
+        }
+        for pair in shared_tail.windows(2) {
+            semantic_edges.insert(pair[0], vec![pair[1]]);
+        }
+        let class_edges = shared_tail
+            .iter()
+            .copied()
+            .map(|node| (node, vec![class]))
+            .collect::<BTreeMap<_, _>>();
+
+        let trace = ReplayDependencyTrace::default();
+        for owner in &owners {
+            trace.enter(*owner);
+            trace.demand(ReplayOwner::Class(class));
+            trace.leave(*owner);
+        }
+        let mut work = TerminalClassDependencyValidationWork::default();
+        require_terminal_class_dependency_closure(
+            &trace,
+            &semantic_edges,
+            &class_edges,
+            direct,
+            Some(&mut work),
+        );
+
+        let mut partition = owners.clone();
+        partition.push(ReplayOwner::Class(class));
+        let sites = partition
+            .iter()
+            .copied()
+            .map(|owner| ReplayOwnerSite {
+                owner,
+                file_ordinal: LibraryFileOrdinal::new(0),
+                span: Span::new(0, 1),
+            })
+            .collect::<Vec<_>>();
+        let baselines = partition
+            .iter()
+            .copied()
+            .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
+            .collect::<Vec<_>>();
+        let replay = trace
+            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .expect("repeated class references retain their exact terminal-class oracle");
+        let expected_edges = owners
+            .iter()
+            .map(|owner| ReplayReverseEdge {
+                dependency: ReplayOwner::Class(class),
+                consumer: *owner,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            replay
+                .reverse_edges
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            expected_edges
+        );
+
+        let semantic_node_count = OWNER_COUNT + SHARED_DEPTH;
+        let semantic_edge_count = OWNER_COUNT + SHARED_DEPTH - 1;
+        let class_edge_count = SHARED_DEPTH;
+        let output_edge_count = OWNER_COUNT;
+        let linear_input_and_output = semantic_node_count
+            + semantic_edge_count
+            + class_edge_count
+            + output_edge_count
+            + OWNER_COUNT;
+        assert!(
+            work.class_summary_items
+                <= 6 * u64::try_from(linear_input_and_output)
+                    .expect("validation input and output fit u64"),
+            "repeated terminal classes must be deduplicated before owner expansion: \
+             input+output={linear_input_and_output}, work={work:?}"
+        );
+    }
+
+    #[test]
     fn terminal_class_validator_summary_work_is_output_sensitive_for_unique_chain() {
         const TYPE_DOMAIN: u8 = 1;
         const ROOTED_DEPTH: usize = 1_024;
