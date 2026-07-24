@@ -2374,6 +2374,68 @@ struct ReplayTerminalValidationInputs<'a> {
     semantic_identities: Option<&'a LibrarySemanticIdentities>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TerminalClassDependencyValidationWork {
+    owner_root_summaries: u64,
+    semantic_node_visits: u64,
+    semantic_edge_probes: u64,
+    class_edge_probes: u64,
+}
+
+fn require_terminal_class_dependency_closure(
+    trace: &ReplayDependencyTrace,
+    semantic_edges: &BTreeMap<(u8, u32), Vec<(u8, u32)>>,
+    class_edges: &BTreeMap<(u8, u32), Vec<ClassId>>,
+    direct: BTreeMap<ReplayOwner, Vec<TypeId>>,
+    #[cfg(test)] mut work: Option<&mut TerminalClassDependencyValidationWork>,
+) {
+    const TYPE_DOMAIN: u8 = 1;
+
+    for (owner, roots) in direct {
+        #[cfg(test)]
+        if let Some(work) = work.as_deref_mut() {
+            work.owner_root_summaries = work
+                .owner_root_summaries
+                .saturating_add(u64::try_from(roots.len()).unwrap_or(u64::MAX));
+        }
+        let mut pending = roots
+            .into_iter()
+            .map(|ty| (TYPE_DOMAIN, ty.0))
+            .collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+        while let Some(node) = pending.pop() {
+            if !visited.insert(node) {
+                continue;
+            }
+            #[cfg(test)]
+            if let Some(work) = work.as_deref_mut() {
+                work.semantic_node_visits = work.semantic_node_visits.saturating_add(1);
+            }
+            if let Some(classes) = class_edges.get(&node) {
+                #[cfg(test)]
+                if let Some(work) = work.as_deref_mut() {
+                    work.class_edge_probes = work
+                        .class_edge_probes
+                        .saturating_add(u64::try_from(classes.len()).unwrap_or(u64::MAX));
+                }
+                for class in classes {
+                    trace.require_dependency(owner, ReplayOwner::Class(*class));
+                }
+            }
+            if let Some(targets) = semantic_edges.get(&node) {
+                #[cfg(test)]
+                if let Some(work) = work.as_deref_mut() {
+                    work.semantic_edge_probes = work
+                        .semantic_edge_probes
+                        .saturating_add(u64::try_from(targets.len()).unwrap_or(u64::MAX));
+                }
+                pending.extend(targets.iter().copied());
+            }
+        }
+    }
+}
+
 fn validate_terminal_class_dependencies(
     trace: &ReplayDependencyTrace,
     interner: &Interner,
@@ -2561,26 +2623,14 @@ fn validate_terminal_class_dependencies(
         }
     }
 
-    for (owner, roots) in direct {
-        let mut pending = roots
-            .into_iter()
-            .map(|ty| (TYPE_DOMAIN, ty.0))
-            .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
-        while let Some(node) = pending.pop() {
-            if !visited.insert(node) {
-                continue;
-            }
-            if let Some(classes) = class_edges.get(&node) {
-                for class in classes {
-                    trace.require_dependency(owner, ReplayOwner::Class(*class));
-                }
-            }
-            if let Some(targets) = semantic_edges.get(&node) {
-                pending.extend(targets.iter().copied());
-            }
-        }
-    }
+    require_terminal_class_dependency_closure(
+        trace,
+        &semantic_edges,
+        &class_edges,
+        direct,
+        #[cfg(test)]
+        None,
+    );
     Ok(())
 }
 
@@ -5079,6 +5129,223 @@ mod tests {
                 ReplayIndexGenerationError::TypedReferenceCoverage { .. }
             ),
             "declared recipe template dependency was invisible to terminal validation: {error:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_class_validator_preserves_cycles_duplicates_and_multiple_classes() {
+        const TYPE_DOMAIN: u8 = 1;
+        const DECLARED_RECIPE_DOMAIN: u8 = 10;
+
+        let owner = ReplayOwner::TypeGroup(TypeGroupId(0));
+        let classes = [ClassId(7), ClassId(11)];
+        let semantic_edges = BTreeMap::from([
+            ((TYPE_DOMAIN, 0), vec![(DECLARED_RECIPE_DOMAIN, 10)]),
+            (
+                (DECLARED_RECIPE_DOMAIN, 10),
+                vec![(TYPE_DOMAIN, 11), (TYPE_DOMAIN, 11)],
+            ),
+            ((TYPE_DOMAIN, 11), vec![(DECLARED_RECIPE_DOMAIN, 10)]),
+        ]);
+        let class_edges = BTreeMap::from([
+            ((DECLARED_RECIPE_DOMAIN, 10), vec![classes[0], classes[0]]),
+            ((TYPE_DOMAIN, 11), vec![classes[1]]),
+        ]);
+        let direct = BTreeMap::from([(owner, vec![TypeId(0)])]);
+
+        let trace = ReplayDependencyTrace::default();
+        trace.enter(owner);
+        for class in classes {
+            trace.demand(ReplayOwner::Class(class));
+        }
+        trace.leave(owner);
+        require_terminal_class_dependency_closure(
+            &trace,
+            &semantic_edges,
+            &class_edges,
+            direct,
+            None,
+        );
+
+        let partition = vec![
+            owner,
+            ReplayOwner::Class(classes[0]),
+            ReplayOwner::Class(classes[1]),
+        ];
+        let sites = partition
+            .iter()
+            .copied()
+            .map(|owner| ReplayOwnerSite {
+                owner,
+                file_ordinal: LibraryFileOrdinal::new(0),
+                span: Span::new(0, 1),
+            })
+            .collect::<Vec<_>>();
+        let baselines = partition
+            .iter()
+            .copied()
+            .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
+            .collect::<Vec<_>>();
+        let replay = trace
+            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .expect("cycles and duplicate edges retain both terminal classes");
+        assert_eq!(
+            replay
+                .reverse_edges
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ReplayReverseEdge {
+                    dependency: ReplayOwner::Class(classes[0]),
+                    consumer: owner,
+                },
+                ReplayReverseEdge {
+                    dependency: ReplayOwner::Class(classes[1]),
+                    consumer: owner,
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn terminal_class_validator_processes_a_shared_semantic_tail_once() {
+        const TYPE_DOMAIN: u8 = 1;
+        const DECLARED_RECIPE_DOMAIN: u8 = 10;
+        const OWNER_COUNT: usize = 64;
+        const SHARED_DEPTH: usize = 128;
+
+        let owners = (0..OWNER_COUNT)
+            .map(|index| {
+                ReplayOwner::TypeGroup(TypeGroupId(
+                    u32::try_from(index).expect("owner id fits u32"),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let classes = [ClassId(7), ClassId(11), ClassId(13)];
+        let shared_tail = (0..SHARED_DEPTH)
+            .map(|index| {
+                let domain = if index % 2 == 0 {
+                    DECLARED_RECIPE_DOMAIN
+                } else {
+                    TYPE_DOMAIN
+                };
+                (
+                    domain,
+                    10_000 + u32::try_from(index).expect("semantic id fits u32"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut semantic_edges = BTreeMap::<(u8, u32), Vec<(u8, u32)>>::new();
+        let mut direct = BTreeMap::<ReplayOwner, Vec<TypeId>>::new();
+        for (index, owner) in owners.iter().copied().enumerate() {
+            let root = TypeId(u32::try_from(index).expect("root type id fits u32"));
+            direct.insert(owner, vec![root]);
+            semantic_edges
+                .entry((TYPE_DOMAIN, root.0))
+                .or_default()
+                .push(shared_tail[0]);
+        }
+        for pair in shared_tail.windows(2) {
+            semantic_edges
+                .entry(pair[0])
+                .or_default()
+                .extend([pair[1], pair[1]]);
+        }
+        semantic_edges
+            .entry(*shared_tail.last().expect("non-empty shared tail"))
+            .or_default()
+            .push(shared_tail[SHARED_DEPTH / 2]);
+
+        let mut class_edges = BTreeMap::<(u8, u32), Vec<ClassId>>::new();
+        class_edges
+            .entry(shared_tail[SHARED_DEPTH / 4])
+            .or_default()
+            .extend([classes[0], classes[0]]);
+        class_edges
+            .entry(shared_tail[SHARED_DEPTH / 2])
+            .or_default()
+            .push(classes[1]);
+        class_edges
+            .entry(*shared_tail.last().expect("non-empty shared tail"))
+            .or_default()
+            .push(classes[2]);
+
+        let trace = ReplayDependencyTrace::default();
+        for owner in &owners {
+            trace.enter(*owner);
+            for class in classes {
+                trace.demand(ReplayOwner::Class(class));
+            }
+            trace.leave(*owner);
+        }
+        let mut work = TerminalClassDependencyValidationWork::default();
+        require_terminal_class_dependency_closure(
+            &trace,
+            &semantic_edges,
+            &class_edges,
+            direct,
+            Some(&mut work),
+        );
+
+        let mut partition = owners.clone();
+        partition.extend(classes.into_iter().map(ReplayOwner::Class));
+        let sites = partition
+            .iter()
+            .copied()
+            .map(|owner| ReplayOwnerSite {
+                owner,
+                file_ordinal: LibraryFileOrdinal::new(0),
+                span: Span::new(0, 1),
+            })
+            .collect::<Vec<_>>();
+        let baselines = partition
+            .iter()
+            .copied()
+            .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
+            .collect::<Vec<_>>();
+        let replay = trace
+            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .expect("cycles and duplicate semantic edges preserve the exact class oracle");
+        let expected_edges = owners
+            .iter()
+            .flat_map(|owner| {
+                classes.iter().map(move |class| ReplayReverseEdge {
+                    dependency: ReplayOwner::Class(*class),
+                    consumer: *owner,
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            replay
+                .reverse_edges
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            expected_edges,
+            "shared-tail summarization must not change the owner-to-class oracle"
+        );
+
+        let unique_semantic_nodes = OWNER_COUNT + SHARED_DEPTH;
+        assert_eq!(
+            work.owner_root_summaries,
+            u64::try_from(OWNER_COUNT).expect("owner count fits u64")
+        );
+        let linear_input_size = unique_semantic_nodes
+            + semantic_edges.values().map(Vec::len).sum::<usize>()
+            + class_edges.values().map(Vec::len).sum::<usize>()
+            + OWNER_COUNT;
+        let measured_work = work
+            .owner_root_summaries
+            .saturating_add(work.semantic_node_visits)
+            .saturating_add(work.semantic_edge_probes)
+            .saturating_add(work.class_edge_probes);
+        assert!(
+            measured_work
+                <= 4 * u64::try_from(linear_input_size).expect("validation input fits u64"),
+            "terminal dependency validation must stay O(V + E + owners), not owners * depth: \
+             input={linear_input_size}, work={work:?}"
         );
     }
 
