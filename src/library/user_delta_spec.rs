@@ -33,6 +33,15 @@ const ISOLATION_SOURCE: &str = concat!(
     "export const value = DeltaSpace.label;\n",
 );
 
+const PUBLISHED_TEMPLATE_PATH: &str = "/project/published-template.ts";
+const PUBLISHED_TEMPLATE_SOURCE: &str = r#"interface Holder {
+    x: OmitThisParameter<string>;
+}
+declare const holder: Holder;
+const accepted: string = holder.x;
+const rejected: number = holder.x;
+"#;
+
 const BASE_ROW_FAMILIES: &str = concat!(
     "store.rows,store.payload-tables,store.type-param-constraints,store.frozen-type-params,",
     "store.template-names,interner.dedup-buckets,interner.reserved-terminals,interner.well-known,",
@@ -257,6 +266,22 @@ fn user_check_performs_no_library_work_snapshot_work_or_base_row_clones() {
     assert!(receipt.work.user_source_parses > 0);
     assert!(receipt.work.user_source_binds > 0);
     assert!(receipt.work.user_source_checks > 0);
+}
+
+#[test]
+fn packaged_omit_this_parameter_template_preserves_specialized_user_surface() {
+    let base = acquire();
+    let receipt = check_source(&base, PUBLISHED_TEMPLATE_PATH, PUBLISHED_TEMPLATE_SOURCE);
+
+    assert_eq!(
+        receipt.normalized_diagnostics(),
+        [concat!(
+            "/project/published-template.ts:6:7-6:15 TK2322 ",
+            "Type 'string' is not assignable to type 'number'"
+        )],
+        "the frozen base's published template must preserve its specialized argument"
+    );
+    assert!(receipt.incompletes.is_empty(), "{:#?}", receipt.incompletes);
 }
 
 #[test]

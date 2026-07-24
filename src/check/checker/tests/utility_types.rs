@@ -6,7 +6,7 @@ use super::super::{
     expected_trusted_prelude_incomplete, trusted_prelude_records_are_clean, PRELUDE_SOURCE,
 };
 use crate::binder::bind_module_with_prelude;
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, DiagnosticCode};
 use crate::driver::{check_project, check_source, FileInput};
 use crate::source::ModuleOrdinal;
 use crate::span::Span;
@@ -200,6 +200,45 @@ Math.abs(\"wrong\");
 
     assert_eq!(diags(src), expected);
     assert_eq!(project_diags(src), expected);
+}
+
+#[test]
+fn published_omit_this_parameter_marker_preserves_specialized_declaration_surface() {
+    let source = r#"interface Holder {
+  x: OmitThisParameter<string>;
+}
+declare const holder: Holder;
+const accepted: string = holder.x;
+const rejected: number = holder.x;
+"#;
+    let output = check_source(source);
+    assert!(
+        output.parse_errors.is_empty(),
+        "{:?}",
+        output.parse_errors
+    );
+    assert!(
+        output.incomplete.is_empty(),
+        "{:?}",
+        output.incomplete
+    );
+    assert_eq!(
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code,
+                &source[diagnostic.span.range()],
+                diagnostic.message.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [(
+            DiagnosticCode::TK2322,
+            "rejected",
+            "Type 'string' is not assignable to type 'number'",
+        )],
+        "the frozen prelude's published marker must retain its applied argument"
+    );
 }
 
 /// User type/value declarations shadow only their matching prelude spaces in both modes.
