@@ -2382,6 +2382,7 @@ struct TerminalClassDependencyValidationWork {
     semantic_edge_probes: u64,
     class_edge_probes: u64,
     class_summary_items: u64,
+    owner_expression_visits: u64,
 }
 
 fn intern_terminal_semantic_node(
@@ -2413,6 +2414,7 @@ fn terminal_expression_owners<'a>(
     cache: &'a mut Vec<Option<Vec<ReplayOwner>>>,
     seen: &mut Vec<u32>,
     epoch: &mut u32,
+    #[cfg(test)] work: &mut Option<&mut TerminalClassDependencyValidationWork>,
 ) -> &'a [ReplayOwner] {
     cache.resize_with(expressions.len(), || None);
     if cache[root].is_none() {
@@ -2426,6 +2428,9 @@ fn terminal_expression_owners<'a>(
         let mut owners = Vec::new();
         let mut pending = vec![root];
         while let Some(expression) = pending.pop() {
+            // Counted per popped node, so a re-walked pass-through chain is visible.
+            #[cfg(test)]
+            record_terminal_owner_expression_visits(work, 1);
             if seen[expression] == *epoch {
                 continue;
             }
@@ -2494,6 +2499,18 @@ fn record_terminal_class_summary_items(
     if let Some(work) = work.as_deref_mut() {
         work.class_summary_items = work
             .class_summary_items
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    }
+}
+
+#[cfg(test)]
+fn record_terminal_owner_expression_visits(
+    work: &mut Option<&mut TerminalClassDependencyValidationWork>,
+    count: usize,
+) {
+    if let Some(work) = work.as_deref_mut() {
+        work.owner_expression_visits = work
+            .owner_expression_visits
             .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
     }
 }
@@ -2766,6 +2783,8 @@ fn require_terminal_class_dependency_closure(
             &mut expression_cache,
             &mut expression_seen,
             &mut expression_epoch,
+            #[cfg(test)]
+            &mut work,
         );
     }
     for (class, expression) in class_expressions {
@@ -5910,6 +5929,192 @@ mod tests {
                     .expect("validation input and output fit u64"),
             "terminal-class summaries must be root-relevant and output-sensitive, not copy every \
              suffix's growing class set: input+output={linear_input_and_output}, work={work:?}"
+        );
+    }
+
+    /// Shared *owner-expression* spine: a chain of `L` components each merging the
+    /// same cross owner, so every spine component mints a fresh two-input
+    /// `TerminalOwnerExpression::Union` whose owner set stays tiny (`{seed, cross}`).
+    /// `M` sibling components hang off the tail, each with its own owner and its own
+    /// terminal class, so each becomes a *separate* query root that is not an
+    /// ancestor of any other. No spine union is ever a query root, so a
+    /// summarizer that memoises only at roots re-walks the whole spine once per
+    /// sibling — Θ(M · L) work for Θ(M) output.
+    fn shared_union_spine_probe(
+        spine_len: usize,
+        siblings: usize,
+        demand_first_sibling: bool,
+    ) -> (u64, TerminalClassDependencyValidationWork) {
+        const TYPE_DOMAIN: u8 = 1;
+        let spine = |index: usize| {
+            (
+                TYPE_DOMAIN,
+                1_000_000 + u32::try_from(index).expect("spine id fits u32"),
+            )
+        };
+        let cross = (TYPE_DOMAIN, 2_000_000_u32);
+        let sibling = |index: usize| {
+            (
+                TYPE_DOMAIN,
+                3_000_000 + u32::try_from(index).expect("sibling id fits u32"),
+            )
+        };
+        let sibling_root = |index: usize| {
+            (
+                TYPE_DOMAIN,
+                4_000_000 + u32::try_from(index).expect("sibling root id fits u32"),
+            )
+        };
+
+        let mut semantic_edges = BTreeMap::<(u8, u32), Vec<(u8, u32)>>::new();
+        let mut class_edges = BTreeMap::<(u8, u32), Vec<ClassId>>::new();
+        let mut direct = BTreeMap::<ReplayOwner, Vec<TypeId>>::new();
+
+        let seed_owner = ReplayOwner::TypeGroup(TypeGroupId(0));
+        let cross_owner = ReplayOwner::TypeGroup(TypeGroupId(1));
+        for index in 0..spine_len - 1 {
+            semantic_edges
+                .entry(spine(index))
+                .or_default()
+                .push(spine(index + 1));
+        }
+        for index in 0..spine_len {
+            semantic_edges.entry(cross).or_default().push(spine(index));
+        }
+        direct.insert(seed_owner, vec![TypeId(spine(0).1)]);
+        direct.insert(cross_owner, vec![TypeId(cross.1)]);
+
+        let classes = (0..siblings)
+            .map(|index| ClassId(100 + u32::try_from(index).expect("class id fits u32")))
+            .collect::<Vec<_>>();
+        let sibling_owners = (0..siblings)
+            .map(|index| {
+                ReplayOwner::TypeGroup(TypeGroupId(
+                    2 + u32::try_from(index).expect("owner id fits u32"),
+                ))
+            })
+            .collect::<Vec<_>>();
+        for index in 0..siblings {
+            semantic_edges
+                .entry(spine(spine_len - 1))
+                .or_default()
+                .push(sibling(index));
+            semantic_edges
+                .entry(sibling_root(index))
+                .or_default()
+                .push(sibling(index));
+            direct.insert(sibling_owners[index], vec![TypeId(sibling_root(index).1)]);
+            class_edges
+                .entry(sibling(index))
+                .or_default()
+                .push(classes[index]);
+        }
+
+        let trace = ReplayDependencyTrace::default();
+        if demand_first_sibling {
+            // Only the first sibling owner's edge is authenticated; every other
+            // emitted pair stays a coverage miss, which the caller counts.
+            trace.enter(sibling_owners[0]);
+            trace.demand(ReplayOwner::Class(classes[0]));
+            trace.leave(sibling_owners[0]);
+        }
+
+        let mut work = TerminalClassDependencyValidationWork::default();
+        require_terminal_class_dependency_closure(
+            &trace,
+            &semantic_edges,
+            &class_edges,
+            direct,
+            Some(&mut work),
+        );
+
+        let error = trace
+            .finish(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0)
+            .expect_err("the probe authenticates at most one emitted pair");
+        let ReplayIndexGenerationError::TypedReferenceCoverage { count, .. } = error else {
+            panic!("terminal closure must report its unauthenticated pairs: {error:?}");
+        };
+        (count, work)
+    }
+
+    /// Input + output size of the shared-union-spine shape: semantic nodes and
+    /// edges, class edges, owner roots, and the emitted owner × class pairs.
+    fn shared_union_spine_input_and_output(spine_len: usize, siblings: usize) -> usize {
+        let semantic_nodes = spine_len + 1 + 2 * siblings;
+        let semantic_edges = (spine_len - 1) + spine_len + 2 * siblings;
+        let class_edges = siblings;
+        let owner_roots = 2 + siblings;
+        let output_pairs = 3 * siblings;
+        semantic_nodes + semantic_edges + class_edges + owner_roots + output_pairs
+    }
+
+    #[test]
+    fn terminal_class_validator_shared_union_spine_stays_complete() {
+        const BASE: usize = 256;
+
+        // Completeness: each class must still summarize to exactly its three
+        // owners {seed, cross, own}, and an authenticated pair must be seen.
+        let (base_misses, base_work) = shared_union_spine_probe(BASE, BASE, false);
+        let (authenticated_misses, _) = shared_union_spine_probe(BASE, BASE, true);
+        assert_eq!(
+            base_misses,
+            u64::try_from(3 * BASE).expect("pair count fits u64"),
+            "each sibling class must summarize to exactly its three owners"
+        );
+        assert_eq!(
+            authenticated_misses,
+            base_misses - 1,
+            "authenticating one owner-class edge must retire exactly one pair"
+        );
+
+        // The graph-build / SCC / Kahn counters stay linear on this shape — none
+        // of them observes the owner-expression traversal, which the companion
+        // `..._summary_is_output_sensitive` spec pins separately.
+        let input_and_output = shared_union_spine_input_and_output(BASE, BASE);
+        let counted = base_work
+            .owner_root_summaries
+            .saturating_add(base_work.semantic_node_visits)
+            .saturating_add(base_work.semantic_edge_probes)
+            .saturating_add(base_work.class_edge_probes)
+            .saturating_add(base_work.class_summary_items);
+        assert!(
+            counted <= 6 * u64::try_from(input_and_output).expect("input fits u64"),
+            "the committed counters are blind to the owner-expression traversal: \
+             input+output={input_and_output}, work={base_work:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_class_validator_shared_union_spine_summary_is_output_sensitive() {
+        const BASE: usize = 256;
+        const SCALED: usize = 1_024;
+
+        let (base_misses, base_work) = shared_union_spine_probe(BASE, BASE, false);
+        let (scaled_misses, scaled_work) = shared_union_spine_probe(SCALED, SCALED, false);
+        assert_eq!(
+            base_misses,
+            u64::try_from(3 * BASE).expect("pair count fits u64"),
+            "each sibling class must summarize to exactly its three owners"
+        );
+        assert_eq!(
+            scaled_misses,
+            u64::try_from(3 * SCALED).expect("pair count fits u64"),
+            "each sibling class must summarize to exactly its three owners"
+        );
+
+        // Two sizes, so a super-linear summary is visible as a ratio and not
+        // just as a budget overrun on one arbitrary shape.
+        let base_budget = 6 * u64::try_from(shared_union_spine_input_and_output(BASE, BASE))
+            .expect("validation input and output fit u64");
+        let scaled_budget = 6 * u64::try_from(shared_union_spine_input_and_output(SCALED, SCALED))
+            .expect("validation input and output fit u64");
+        let base_visits = base_work.owner_expression_visits;
+        let scaled_visits = scaled_work.owner_expression_visits;
+        assert!(
+            base_visits <= base_budget && scaled_visits <= scaled_budget,
+            "owner-expression summarization must stay O(inputs + owners), not owners * spine \
+             length: {BASE}x{BASE} visited {base_visits} (budget {base_budget}), \
+             {SCALED}x{SCALED} visited {scaled_visits} (budget {scaled_budget})"
         );
     }
 
