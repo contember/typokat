@@ -882,12 +882,12 @@ const second: string = recovered.second;
             (
                 DiagnosticCode::TK2428,
                 "Recovery",
-                "All declarations of 'Recovery' must have identical type parameters",
+                "All declarations of 'Recovery' must have identical type parameters.",
             ),
             (
                 DiagnosticCode::TK2428,
                 "Recovery",
-                "All declarations of 'Recovery' must have identical type parameters",
+                "All declarations of 'Recovery' must have identical type parameters.",
             ),
             (
                 DiagnosticCode::TK2314,
