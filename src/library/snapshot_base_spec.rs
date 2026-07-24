@@ -206,7 +206,7 @@ fn canonical_snapshot_decodes_to_complete_frozen_library_base() {
     assert_eq!(inventory.source_file_count(), 82);
     assert_eq!(inventory.reference_count(), 296_414);
     assert_eq!(inventory.runtime_family_count(), 11);
-    assert_eq!(inventory.projection_subtable_count(), 31);
+    assert_eq!(inventory.projection_subtable_count(), 32);
     assert_eq!(inventory.component_names(), EXPECTED_COMPONENTS);
     assert_eq!(
         inventory.root_name_count(),
@@ -258,7 +258,7 @@ fn source_compiled_and_decoded_bases_have_identical_canonical_projection() {
         source_projection.typed_validation_sha256()
     );
     assert_eq!(source_projection.runtime_families().len(), 11);
-    assert_eq!(source_projection.subtables().len(), 31);
+    assert_eq!(source_projection.subtables().len(), 32);
     assert_eq!(
         source_projection
             .reference_family_counts()

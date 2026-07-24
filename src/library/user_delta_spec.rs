@@ -44,7 +44,8 @@ const rejected: number = holder.x;
 
 const BASE_ROW_FAMILIES: &str = concat!(
     "store.rows,store.payload-tables,store.type-param-constraints,store.frozen-type-params,",
-    "store.template-names,interner.dedup-buckets,interner.reserved-terminals,interner.well-known,",
+    "store.template-names,interner.dedup-buckets,interner.reserved-terminals,",
+    "interner.declared-recipes,interner.well-known,",
     "binder.scopes,binder.symbols,binder.declarations,binder.declaration-site-index,",
     "binder.type-groups,binder.namespaces,binder.namespace-indexes,binder.module-sources,",
     "decl-types.slots,published-types.groups,published-types.classes,namespace-terminals,",

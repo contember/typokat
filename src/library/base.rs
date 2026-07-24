@@ -62,7 +62,7 @@ const RUNTIME_FAMILIES: [&str; 11] = [
 ];
 
 #[cfg(test)]
-const PROJECTION_SUBTABLES: [&str; 31] = [
+const PROJECTION_SUBTABLES: [&str; 32] = [
     "store.rows",
     "store.payload-tables",
     "store.type-param-constraints",
@@ -70,6 +70,7 @@ const PROJECTION_SUBTABLES: [&str; 31] = [
     "store.template-names",
     "interner.dedup-buckets",
     "interner.reserved-terminals",
+    "interner.declared-recipes",
     "interner.well-known",
     "binder.scopes",
     "binder.symbols",
@@ -1340,7 +1341,7 @@ impl CanonicalLibraryProjection {
         &RUNTIME_FAMILIES
     }
 
-    pub(super) const fn subtables(&self) -> &[&'static str; 31] {
+    pub(super) const fn subtables(&self) -> &[&'static str; 32] {
         &PROJECTION_SUBTABLES
     }
 
