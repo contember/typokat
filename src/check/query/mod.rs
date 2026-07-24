@@ -2130,7 +2130,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             return result;
         }
 
-        let children = query_children(self.interner.store(), ty);
+        let children = self.evaluation_prerequisites(ty, policy);
         for child in children {
             self.visit_with_policy(child, policy.operand_policy());
         }
@@ -2180,6 +2180,22 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         self.record_evaluation(ty, result);
         self.visit_demand_result(result, policy);
         result
+    }
+
+    fn evaluation_prerequisites(&self, ty: TypeId, policy: SemanticVisitPolicy) -> Vec<TypeId> {
+        if policy == SemanticVisitPolicy::RelationRootOuterOnly
+            && self.interner.store().tag(ty) == TypeTag::Instantiation
+            && self
+                .interner
+                .store()
+                .instantiation_type(ty)
+                .is_some_and(|instantiation| {
+                    self.interner.store().tag(instantiation.base) == TypeTag::Object
+                })
+        {
+            return Vec::new();
+        }
+        query_children(self.interner.store(), ty)
     }
 
     fn visit_demand_result(&mut self, result: TypeId, policy: SemanticVisitPolicy) {
