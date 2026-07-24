@@ -98,6 +98,9 @@ pub enum TypeTag {
     /// identity and are resolved by the class-aware demand boundary, never by the
     /// legacy alias evaluator.
     DeferredIndexedAccess = 18,
+    /// An AST-free declaration annotation recipe plus its canonical mapper.
+    /// Materialization happens only at the semantic-query demand boundary.
+    Declared = 19,
 }
 
 impl TypeTag {
@@ -122,6 +125,7 @@ impl TypeTag {
             TypeTag::Keyof => 16,
             TypeTag::ClassInstance => 17,
             TypeTag::DeferredIndexedAccess => 18,
+            TypeTag::Declared => 19,
         }
     }
 }
@@ -700,6 +704,49 @@ pub struct ClassInstanceType {
 pub struct DeferredIndexedAccessType {
     pub object: TypeId,
     pub index: TypeId,
+}
+
+/// Stable identity of an AST-free declaration annotation recipe.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DeclaredRecipeId(pub u32);
+
+impl DeclaredRecipeId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// The supported declaration-surface syntax after query-free planning.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DeclaredRecipeNode {
+    Type(TypeId),
+    Array(DeclaredRecipeId),
+    Tuple {
+        elements: Vec<DeclaredRecipeId>,
+        rest: Option<(usize, DeclaredRecipeId)>,
+    },
+    Readonly(DeclaredRecipeId),
+    Application {
+        template: TypeId,
+        parameters: Vec<TypeParamId>,
+        arguments: Vec<DeclaredRecipeId>,
+    },
+}
+
+/// One hash-consed recipe and its canonical free declaration parameters.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DeclaredTypeRecipe {
+    pub node: DeclaredRecipeNode,
+    pub free_params: Vec<TypeParamId>,
+}
+
+/// A declaration recipe application. Mapper keys are sorted, unique, and
+/// restricted to the recipe's free parameters.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DeclaredType {
+    pub recipe: DeclaredRecipeId,
+    pub mapper: Vec<(TypeParamId, TypeId)>,
 }
 
 /// Mapped-type modifier arithmetic (`?`/`readonly`) — identity-bearing and folded

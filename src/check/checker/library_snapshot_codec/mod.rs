@@ -3508,6 +3508,7 @@ fn store_projection_subtables(store: &Store) -> Vec<(u64, Vec<u8>)> {
             TypeTag::MappedValue => None,
             TypeTag::Template => store.template_type(id).map(debug_bytes),
             TypeTag::Keyof => store.keyof_operand(id).map(|value| debug_bytes(&value)),
+            TypeTag::Declared => store.declared_type(id).map(debug_bytes),
         };
         if let Some(payload) = payload {
             if !matches!(
@@ -3526,6 +3527,11 @@ fn store_projection_subtables(store: &Store) -> Vec<(u64, Vec<u8>)> {
             }
         }
         rows.push(0xff);
+    }
+    for (_, recipe) in store.snapshot_declared_recipes() {
+        payload_count += 1;
+        payloads.extend_from_slice(&debug_bytes(recipe));
+        payloads.push(0xff);
     }
     let constraints = store.snapshot_type_param_constraints();
     let frozen = store.snapshot_frozen_type_params();

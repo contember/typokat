@@ -28,6 +28,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 const MAX_ANNOTATION_DEPTH: u32 = 200;
 
 mod composites;
+mod declared;
 mod functions;
 mod signatures;
 mod type_operators;

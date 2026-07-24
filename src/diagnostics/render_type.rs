@@ -1,7 +1,8 @@
 //! Type rendering for diagnostic messages (the corpus display format).
 
-use crate::types::repr::TypeTag;
+use crate::types::repr::{DeclaredRecipeId, DeclaredRecipeNode, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
+use rustc_hash::FxHashMap;
 
 /// The name of the parameter at `index` of a function-typed id, if `id` is a
 /// function type with that position. Used to phrase a `Parameter` reason; falls
@@ -18,9 +19,22 @@ const ELLIPSIS: &str = "...";
 struct RenderContext {
     output: String,
     rendering: Vec<TypeId>,
+    overlays: Vec<FxHashMap<TypeParamId, RenderBinding>>,
+    overlay_limit: usize,
     remaining_chars: usize,
     depth: usize,
     truncated: bool,
+}
+
+#[derive(Clone, Copy)]
+enum RenderBinding {
+    Type(TypeId),
+    Recipe(DeclaredRecipeId),
+}
+
+struct OverlayFrame {
+    previous_limit: usize,
+    hidden: Vec<FxHashMap<TypeParamId, RenderBinding>>,
 }
 
 impl RenderContext {
@@ -28,6 +42,8 @@ impl RenderContext {
         Self {
             output: String::new(),
             rendering: Vec::new(),
+            overlays: Vec::new(),
+            overlay_limit: 0,
             remaining_chars: DISPLAY_CHAR_LIMIT,
             depth: 0,
             truncated: false,
@@ -97,6 +113,9 @@ fn render_type_inner(store: &Store, id: TypeId, widen: bool, context: &mut Rende
 }
 
 fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut RenderContext) {
+    if render_overlay_binding(store, id, context) {
+        return;
+    }
     match store.tag(id) {
         TypeTag::Intrinsic => context.append(
             store
@@ -221,7 +240,7 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                     }
                     // tsc parenthesizes an intersection element inside a union
                     // (`(A & B) | C`), so the `&`/`|` precedence reads correctly.
-                    let parenthesized = store.tag(member) == TypeTag::Intersection;
+                    let parenthesized = render_tag(store, member, context) == TypeTag::Intersection;
                     if parenthesized {
                         context.append("(");
                     }
@@ -247,8 +266,10 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                     if index > 0 {
                         context.append(" & ");
                     }
-                    let parenthesized =
-                        matches!(store.tag(member), TypeTag::Union | TypeTag::Function);
+                    let parenthesized = matches!(
+                        render_tag(store, member, context),
+                        TypeTag::Union | TypeTag::Function
+                    );
                     if parenthesized {
                         context.append("(");
                     }
@@ -276,7 +297,7 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
         // postfix `[]` would bind ambiguously, matching tsc display.
         TypeTag::Array => match store.array_type(id) {
             Some(array) => {
-                let parenthesized = array_element_needs_parens(store, array.element);
+                let parenthesized = array_element_needs_parens(store, array.element, context);
                 if parenthesized {
                     context.append("(");
                 }
@@ -447,7 +468,8 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                     return;
                 }
                 context.rendering.push(id);
-                let parenthesized = indexed_access_object_needs_parens(store, access.object);
+                let parenthesized =
+                    indexed_access_object_needs_parens(store, access.object, context);
                 if parenthesized {
                     context.append("(");
                 }
@@ -494,6 +516,144 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
             }
             None => context.append("<unsupported>"),
         },
+        TypeTag::Declared => match store.declared_type(id) {
+            Some(declared) => {
+                if context.rendering.contains(&id) {
+                    context.append(ELLIPSIS);
+                    return;
+                }
+                context.rendering.push(id);
+                let overlay = declared
+                    .mapper
+                    .iter()
+                    .map(|(parameter, ty)| (*parameter, RenderBinding::Type(*ty)))
+                    .collect();
+                let frame = push_overlay(context, overlay);
+                render_declared_recipe(store, declared.recipe, context);
+                pop_overlay(context, frame);
+                context.rendering.pop();
+            }
+            None => context.append("<unsupported>"),
+        },
+    }
+}
+
+fn render_overlay_binding(store: &Store, id: TypeId, context: &mut RenderContext) -> bool {
+    let Some(parameter) = store.type_param(id) else {
+        return false;
+    };
+    let Some((layer, binding)) = overlay_binding(context, parameter.id, context.overlay_limit)
+    else {
+        return false;
+    };
+    let previous_limit = context.overlay_limit;
+    context.overlay_limit = layer;
+    match binding {
+        RenderBinding::Type(ty) => render_type_inner(store, ty, false, context),
+        RenderBinding::Recipe(recipe) => render_declared_recipe(store, recipe, context),
+    }
+    context.overlay_limit = previous_limit;
+    true
+}
+
+fn overlay_binding(
+    context: &RenderContext,
+    parameter: TypeParamId,
+    limit: usize,
+) -> Option<(usize, RenderBinding)> {
+    context.overlays[..limit]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(layer, overlay)| {
+            overlay
+                .get(&parameter)
+                .copied()
+                .map(|binding| (layer, binding))
+        })
+}
+
+fn push_overlay(
+    context: &mut RenderContext,
+    overlay: FxHashMap<TypeParamId, RenderBinding>,
+) -> OverlayFrame {
+    let previous_limit = context.overlay_limit;
+    let hidden = context.overlays.split_off(previous_limit);
+    context.overlays.push(overlay);
+    context.overlay_limit = context.overlays.len();
+    OverlayFrame {
+        previous_limit,
+        hidden,
+    }
+}
+
+fn pop_overlay(context: &mut RenderContext, frame: OverlayFrame) {
+    context.overlays.pop();
+    context.overlays.extend(frame.hidden);
+    context.overlay_limit = frame.previous_limit;
+}
+
+fn render_declared_recipe(store: &Store, recipe: DeclaredRecipeId, context: &mut RenderContext) {
+    let Some(recipe) = store.declared_recipe(recipe) else {
+        context.append("<unsupported>");
+        return;
+    };
+    match &recipe.node {
+        DeclaredRecipeNode::Type(ty) => render_type_inner(store, *ty, false, context),
+        DeclaredRecipeNode::Array(element) => {
+            let parenthesized = declared_recipe_needs_array_parens(store, *element, context);
+            if parenthesized {
+                context.append("(");
+            }
+            render_declared_recipe(store, *element, context);
+            if parenthesized {
+                context.append(")");
+            }
+            context.append("[]");
+        }
+        DeclaredRecipeNode::Tuple { elements, rest } => {
+            context.append("[");
+            for (index, element) in elements.iter().enumerate() {
+                if index > 0 {
+                    context.append(", ");
+                }
+                if rest.is_some_and(|(position, _)| position == index) {
+                    context.append("...");
+                    render_declared_recipe(store, rest.expect("checked rest").1, context);
+                    context.append(", ");
+                }
+                render_declared_recipe(store, *element, context);
+            }
+            if let Some((position, rest)) = rest {
+                if *position == elements.len() {
+                    if !elements.is_empty() {
+                        context.append(", ");
+                    }
+                    context.append("...");
+                    render_declared_recipe(store, *rest, context);
+                }
+            }
+            context.append("]");
+        }
+        DeclaredRecipeNode::Readonly(operand) => {
+            context.append("readonly ");
+            render_declared_recipe(store, *operand, context);
+        }
+        DeclaredRecipeNode::Application {
+            template,
+            parameters,
+            arguments,
+        } => {
+            let overlay = parameters
+                .iter()
+                .copied()
+                .zip(arguments.iter().copied())
+                .map(|(parameter, recipe)| (parameter, RenderBinding::Recipe(recipe)))
+                .collect();
+            let frame = push_overlay(context, overlay);
+            render_type_inner(store, *template, false, context);
+            pop_overlay(context, frame);
+        }
     }
 }
 
@@ -649,17 +809,32 @@ fn render_tuple_rest(
 
 /// Whether an array element type must be parenthesized before postfix `[]`.
 /// Unions and functions would bind ambiguously; other element types render bare.
-fn array_element_needs_parens(store: &Store, element: TypeId) -> bool {
+fn array_element_needs_parens(store: &Store, element: TypeId, context: &RenderContext) -> bool {
     matches!(
-        store.tag(element),
+        render_tag(store, element, context),
+        TypeTag::Union | TypeTag::Function | TypeTag::Intersection | TypeTag::Readonly
+    )
+}
+
+fn declared_recipe_needs_array_parens(
+    store: &Store,
+    recipe: DeclaredRecipeId,
+    context: &RenderContext,
+) -> bool {
+    matches!(
+        declared_recipe_tag(store, recipe, context, context.overlay_limit),
         TypeTag::Union | TypeTag::Function | TypeTag::Intersection | TypeTag::Readonly
     )
 }
 
 /// Postfix indexed access must delimit lower-precedence object forms.
-fn indexed_access_object_needs_parens(store: &Store, object: TypeId) -> bool {
+fn indexed_access_object_needs_parens(
+    store: &Store,
+    object: TypeId,
+    context: &RenderContext,
+) -> bool {
     matches!(
-        store.tag(object),
+        render_tag(store, object, context),
         TypeTag::Union
             | TypeTag::Intersection
             | TypeTag::Function
@@ -667,6 +842,76 @@ fn indexed_access_object_needs_parens(store: &Store, object: TypeId) -> bool {
             | TypeTag::Readonly
             | TypeTag::Keyof
     )
+}
+
+fn render_tag(store: &Store, id: TypeId, context: &RenderContext) -> TypeTag {
+    render_tag_with_limit(store, id, context, context.overlay_limit)
+}
+
+fn render_tag_with_limit(
+    store: &Store,
+    id: TypeId,
+    context: &RenderContext,
+    limit: usize,
+) -> TypeTag {
+    if let Some(parameter) = store.type_param(id) {
+        if let Some((layer, binding)) = overlay_binding(context, parameter.id, limit) {
+            return match binding {
+                RenderBinding::Type(ty) => render_tag_with_limit(store, ty, context, layer),
+                RenderBinding::Recipe(recipe) => declared_recipe_tag(store, recipe, context, layer),
+            };
+        }
+    }
+    if let Some(declared) = store.declared_type(id) {
+        return declared_recipe_tag_with_mapper(
+            store,
+            declared.recipe,
+            &declared.mapper,
+            context,
+            limit,
+        );
+    }
+    store.tag(id)
+}
+
+fn declared_recipe_tag(
+    store: &Store,
+    recipe: DeclaredRecipeId,
+    context: &RenderContext,
+    limit: usize,
+) -> TypeTag {
+    declared_recipe_tag_with_mapper(store, recipe, &[], context, limit)
+}
+
+fn declared_recipe_tag_with_mapper(
+    store: &Store,
+    recipe: DeclaredRecipeId,
+    mapper: &[(TypeParamId, TypeId)],
+    context: &RenderContext,
+    limit: usize,
+) -> TypeTag {
+    let Some(recipe) = store.declared_recipe(recipe) else {
+        return TypeTag::Intrinsic;
+    };
+    match &recipe.node {
+        DeclaredRecipeNode::Type(ty) => {
+            if let Some(parameter) = store.type_param(*ty) {
+                if let Some((_, mapped)) = mapper
+                    .iter()
+                    .find(|(candidate, _)| *candidate == parameter.id)
+                {
+                    return render_tag_with_limit(store, *mapped, context, limit);
+                }
+            }
+            render_tag_with_limit(store, *ty, context, limit)
+        }
+        DeclaredRecipeNode::Array(_) => TypeTag::Array,
+        DeclaredRecipeNode::Tuple { .. } => TypeTag::Tuple,
+        DeclaredRecipeNode::Readonly(_) => TypeTag::Readonly,
+        DeclaredRecipeNode::Application { template, .. } => {
+            render_tag_with_limit(store, *template, context, limit)
+        }
+    }
 }
 
 fn render_literal(lit: &crate::types::repr::LiteralValue, context: &mut RenderContext) {

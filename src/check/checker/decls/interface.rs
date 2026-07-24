@@ -404,14 +404,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     let ty = match sig.type_annotation.as_ref() {
                         Some(annotation) => {
-                            #[cfg(test)]
-                            super::super::declaration_surface_measure::record_eager_interface_property_root();
-                            let Some(ty) =
-                                pass.lower_annotation(scope, &annotation.type_annotation)
-                            else {
-                                return;
-                            };
-                            ty
+                            if let Some(ty) = pass.try_plan_declared_interface_property_annotation(
+                                scope,
+                                &annotation.type_annotation,
+                            ) {
+                                #[cfg(test)]
+                                super::super::declaration_surface_measure::record_planned_interface_property_root();
+                                ty
+                            } else {
+                                #[cfg(test)]
+                                super::super::declaration_surface_measure::record_eager_interface_property_root();
+                                let Some(ty) =
+                                    pass.lower_annotation(scope, &annotation.type_annotation)
+                                else {
+                                    return;
+                                };
+                                ty
+                            }
                         }
                         // tsc treats annotationless interface properties as `any`.
                         None => pass.interner.well_known().any,

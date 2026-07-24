@@ -1270,28 +1270,30 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         ty: TypeId,
     ) -> DemandOutcome<TypeId> {
-        self.with_semantic_query_transaction(|pass| {
-            let ty = match pass.demand_apparent_type(ty) {
-                DemandOutcome::Ready(ty) => ty,
+        self.with_semantic_query_transaction(|pass| pass.demand_composite_apparent_type_inner(ty))
+    }
+
+    fn demand_composite_apparent_type_inner(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
+        let ty = match self.demand_apparent_type(ty) {
+            DemandOutcome::Ready(ty) => ty,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
+            }
+        };
+        let Some(members) = self.interner.store().union_members(ty) else {
+            return DemandOutcome::Ready(ty);
+        };
+        let members = members.to_vec();
+        let mut apparent = Vec::with_capacity(members.len());
+        for member in members {
+            match self.demand_apparent_type(member) {
+                DemandOutcome::Ready(member) => apparent.push(member),
                 DemandOutcome::Exhausted(exhaustion) => {
                     return DemandOutcome::Exhausted(exhaustion);
                 }
-            };
-            let Some(members) = pass.interner.store().union_members(ty) else {
-                return DemandOutcome::Ready(ty);
-            };
-            let members = members.to_vec();
-            let mut apparent = Vec::with_capacity(members.len());
-            for member in members {
-                match pass.demand_apparent_type(member) {
-                    DemandOutcome::Ready(member) => apparent.push(member),
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion);
-                    }
-                }
             }
-            DemandOutcome::Ready(pass.interner.union(apparent))
-        })
+        }
+        DemandOutcome::Ready(self.interner.union(apparent))
     }
 
     /// Demand a composite and merge an intersection's visible object surface in
@@ -1300,19 +1302,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         ty: TypeId,
     ) -> DemandOutcome<TypeId> {
-        self.with_semantic_query_transaction(|pass| {
-            let ty = match pass.demand_composite_apparent_type(ty) {
-                DemandOutcome::Ready(ty) => ty,
-                DemandOutcome::Exhausted(exhaustion) => {
-                    return DemandOutcome::Exhausted(exhaustion);
-                }
-            };
-            match pass.intersection_apparent_object(ty) {
-                DemandOutcome::Ready(Some(apparent)) => DemandOutcome::Ready(apparent),
-                DemandOutcome::Ready(None) => DemandOutcome::Ready(ty),
-                DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        self.with_semantic_query_transaction(|pass| pass.demand_structural_apparent_type_inner(ty))
+    }
+
+    pub(in crate::check::checker) fn demand_structural_apparent_type_inner(
+        &mut self,
+        ty: TypeId,
+    ) -> DemandOutcome<TypeId> {
+        let ty = match self.demand_composite_apparent_type_inner(ty) {
+            DemandOutcome::Ready(ty) => ty,
+            DemandOutcome::Exhausted(exhaustion) => {
+                return DemandOutcome::Exhausted(exhaustion);
             }
-        })
+        };
+        match self.intersection_apparent_object_inner(ty) {
+            DemandOutcome::Ready(Some(apparent)) => DemandOutcome::Ready(apparent),
+            DemandOutcome::Ready(None) => DemandOutcome::Ready(ty),
+            DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        }
     }
 
     /// Promote semantic-query writes only when the whole consumer completes.

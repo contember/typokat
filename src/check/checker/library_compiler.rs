@@ -713,6 +713,7 @@ impl OwnedLibraryRuntimeState {
     pub(crate) fn identity_ends_for_test(&self) -> OwnedBaseFinalIdentityEnds {
         OwnedBaseFinalIdentityEnds {
             store: self.interner.store().len(),
+            declared_recipes: self.interner.store().snapshot_declared_recipes().count(),
             type_params: usize::try_from(self.next_type_param)
                 .expect("type parameter end fits usize"),
             classes: usize::try_from(self.next_class_id).expect("class end fits usize"),
@@ -795,7 +796,8 @@ impl OwnedLibraryRuntimeState {
             ("store.template-names", store[4]),
             ("interner.dedup-buckets", interner[0]),
             ("interner.reserved-terminals", interner[1]),
-            ("interner.well-known", interner[2]),
+            ("interner.declared-recipes", interner[2]),
+            ("interner.well-known", interner[3]),
             ("binder.scopes", binder[0]),
             ("binder.symbols", binder[1]),
             ("binder.declarations", binder[2]),
@@ -1204,6 +1206,7 @@ pub(crate) struct OwnedBaseReferenceSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct OwnedBaseFinalIdentityEnds {
     pub(crate) store: usize,
+    pub(crate) declared_recipes: usize,
     pub(crate) type_params: usize,
     pub(crate) classes: usize,
     pub(crate) scopes: usize,
@@ -1238,9 +1241,23 @@ pub(crate) struct OwnedBaseContinuationWitness {
 }
 
 #[cfg(test)]
-fn store_prefix_digest(store: &Store, len: usize) -> Result<String, String> {
+fn store_prefix_digest(
+    store: &Store,
+    type_len: usize,
+    declared_recipe_len: usize,
+) -> Result<String, String> {
     let mut bytes = CanonicalBytes::domain(b"typokat-owned-base-store-prefix-v1");
-    for index in 0..len {
+    bytes
+        .usize(declared_recipe_len)
+        .map_err(|error| format!("{error:?}"))?;
+    for index in 0..declared_recipe_len {
+        let recipe = crate::types::repr::DeclaredRecipeId(
+            u32::try_from(index).map_err(|_| "declared recipe prefix overflow")?,
+        );
+        encode_declared_recipe_row(&mut bytes, store, recipe)
+            .map_err(|error| format!("{error:?}"))?;
+    }
+    for index in 0..type_len {
         let id = TypeId(u32::try_from(index).map_err(|_| "type id prefix overflow")?);
         encode_store_row(&mut bytes, store, id).map_err(|error| format!("{error:?}"))?;
     }
@@ -1277,6 +1294,7 @@ fn base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<us
         7 => Some(ends.type_groups),
         8 => Some(ends.namespaces),
         9 => Some(ends.value_storages),
+        10 => Some(ends.declared_recipes),
         _ => None,
     }
 }
@@ -1578,6 +1596,7 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
     OwnedBaseFinalIdentityWitness {
         ends: OwnedBaseFinalIdentityEnds {
             store: interner.store().len(),
+            declared_recipes: interner.store().snapshot_declared_recipes().count(),
             type_params: usize::try_from(next_type_param).expect("type parameter end fits usize"),
             classes: usize::try_from(next_class_id).expect("class end fits usize"),
             scopes: binder.graph.snapshot_len(),
@@ -2178,10 +2197,80 @@ fn encode_store_row(
             bytes.type_id(access.object);
             bytes.type_id(access.index);
         }
+        TypeTag::Declared => {
+            let declared = store.declared_type(id).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection("missing declared payload".to_owned())
+            })?;
+            bytes.u32(declared.recipe.0);
+            bytes.usize(declared.mapper.len())?;
+            for (parameter, value) in &declared.mapper {
+                bytes.u32(parameter.0);
+                bytes.type_id(*value);
+            }
+        }
     }
     bytes.bool(store.template_name(id).is_some());
     if let Some(name) = store.template_name(id) {
         bytes.string(name)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn encode_declared_recipe_row(
+    bytes: &mut CanonicalBytes,
+    store: &Store,
+    id: crate::types::repr::DeclaredRecipeId,
+) -> Result<(), InjectedProfileError> {
+    use crate::types::repr::DeclaredRecipeNode;
+    let recipe = store.declared_recipe(id).ok_or_else(|| {
+        InjectedProfileError::CanonicalProjection("missing declared recipe".to_owned())
+    })?;
+    match &recipe.node {
+        DeclaredRecipeNode::Type(ty) => {
+            bytes.byte(0);
+            bytes.type_id(*ty);
+        }
+        DeclaredRecipeNode::Array(element) => {
+            bytes.byte(1);
+            bytes.u32(element.0);
+        }
+        DeclaredRecipeNode::Tuple { elements, rest } => {
+            bytes.byte(2);
+            bytes.usize(elements.len())?;
+            for element in elements {
+                bytes.u32(element.0);
+            }
+            bytes.bool(rest.is_some());
+            if let Some((position, rest)) = rest {
+                bytes.usize(*position)?;
+                bytes.u32(rest.0);
+            }
+        }
+        DeclaredRecipeNode::Readonly(operand) => {
+            bytes.byte(3);
+            bytes.u32(operand.0);
+        }
+        DeclaredRecipeNode::Application {
+            template,
+            parameters,
+            arguments,
+        } => {
+            bytes.byte(4);
+            bytes.type_id(*template);
+            bytes.usize(parameters.len())?;
+            for parameter in parameters {
+                bytes.u32(parameter.0);
+            }
+            bytes.usize(arguments.len())?;
+            for argument in arguments {
+                bytes.u32(argument.0);
+            }
+        }
+    }
+    bytes.usize(recipe.free_params.len())?;
+    for parameter in &recipe.free_params {
+        bytes.u32(parameter.0);
     }
     Ok(())
 }
@@ -2300,19 +2389,26 @@ fn validate_terminal_class_dependencies(
     } = inputs;
     const TYPE_DOMAIN: u8 = 1;
     const CLASS_DOMAIN: u8 = 3;
+    const DECLARED_RECIPE_DOMAIN: u8 = 10;
 
     let references = interner
         .typed_reference_records_for_replay_generation()
         .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?;
-    let mut type_edges: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-    let mut class_edges: BTreeMap<u32, Vec<ClassId>> = BTreeMap::new();
+    let mut semantic_edges: BTreeMap<(u8, u32), Vec<(u8, u32)>> = BTreeMap::new();
+    let mut class_edges: BTreeMap<(u8, u32), Vec<ClassId>> = BTreeMap::new();
     for (owner_domain, target_domain, _, owner, target) in references {
-        if owner_domain != TYPE_DOMAIN {
+        if !matches!(owner_domain, TYPE_DOMAIN | DECLARED_RECIPE_DOMAIN) {
             continue;
         }
         match target_domain {
-            TYPE_DOMAIN => type_edges.entry(owner).or_default().push(target),
-            CLASS_DOMAIN => class_edges.entry(owner).or_default().push(ClassId(target)),
+            TYPE_DOMAIN | DECLARED_RECIPE_DOMAIN => semantic_edges
+                .entry((owner_domain, owner))
+                .or_default()
+                .push((target_domain, target)),
+            CLASS_DOMAIN => class_edges
+                .entry((owner_domain, owner))
+                .or_default()
+                .push(ClassId(target)),
             _ => {}
         }
     }
@@ -2466,18 +2562,21 @@ fn validate_terminal_class_dependencies(
     }
 
     for (owner, roots) in direct {
-        let mut pending = roots.into_iter().map(|ty| ty.0).collect::<Vec<_>>();
+        let mut pending = roots
+            .into_iter()
+            .map(|ty| (TYPE_DOMAIN, ty.0))
+            .collect::<Vec<_>>();
         let mut visited = BTreeSet::new();
-        while let Some(ty) = pending.pop() {
-            if !visited.insert(ty) {
+        while let Some(node) = pending.pop() {
+            if !visited.insert(node) {
                 continue;
             }
-            if let Some(classes) = class_edges.get(&ty) {
+            if let Some(classes) = class_edges.get(&node) {
                 for class in classes {
                     trace.require_dependency(owner, ReplayOwner::Class(*class));
                 }
             }
-            if let Some(targets) = type_edges.get(&ty) {
+            if let Some(targets) = semantic_edges.get(&node) {
                 pending.extend(targets.iter().copied());
             }
         }
@@ -3810,14 +3909,16 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         replay_index: _,
     } = state;
     let base_store_len = interner.store().len();
+    let base_declared_recipe_len = interner.store().snapshot_declared_recipes().count();
     let base_store_digest = verify_store_prefix
-        .then(|| store_prefix_digest(interner.store(), base_store_len))
+        .then(|| store_prefix_digest(interner.store(), base_store_len, base_declared_recipe_len))
         .transpose()?;
     let base_type_group_count = binder.type_groups.len();
     let base_namespace_count = binder.namespaces.len();
     let base_decl_count = binder.decl_count;
     let base_identity_ends = OwnedBaseFinalIdentityEnds {
         store: base_store_len,
+        declared_recipes: base_declared_recipe_len,
         type_params: usize::try_from(next_type_param).expect("base type parameter end fits usize"),
         classes: usize::try_from(next_class_id).expect("base class end fits usize"),
         scopes: binder.graph.snapshot_len(),
@@ -3915,7 +4016,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
     let final_store_len = final_identity.ends.store;
     let store_prefix_stable = base_store_digest
         .map(|base_store_digest| {
-            store_prefix_digest(interner.store(), base_store_len)
+            store_prefix_digest(interner.store(), base_store_len, base_declared_recipe_len)
                 .map(|final_store_digest| final_store_digest == base_store_digest)
         })
         .transpose()?;
@@ -4871,6 +4972,175 @@ mod tests {
         assert_eq!(replay.invalid_owner_site_count, 0);
         assert_eq!(replay.noncanonical_edge_count, 0);
         assert_eq!(replay.typed_reference_coverage_misses, 0);
+    }
+
+    #[test]
+    fn terminal_class_validator_follows_declared_recipe_template_dependencies() {
+        const DECLARED_RECIPE_DOMAIN: u8 = 10;
+        const TYPE_DOMAIN: u8 = 1;
+        const CLASS_DOMAIN: u8 = 3;
+
+        let state = compile_reservation_fixture(
+            "replay-declared-recipe-class-template.d.ts",
+            r#"
+                declare class RecipeDependency {}
+                interface RecipeTemplate<T> {
+                    item: T;
+                    dependency: RecipeDependency;
+                }
+                interface RecipeConsumer {
+                    nested: RecipeTemplate<string>[];
+                }
+            "#,
+        );
+        let consumer_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "RecipeConsumer")
+            .expect("consumer type group")
+            .id;
+        let consumer_template = published_template_type(&state, "RecipeConsumer");
+        let (store_references, _) = state.interner.snapshot_reference_records_for_test();
+        let mut pending = vec![(TYPE_DOMAIN, consumer_template.0, false)];
+        let mut visited = BTreeSet::new();
+        let mut reaches_class_through_recipe = false;
+        while let Some((domain, owner, crossed_recipe)) = pending.pop() {
+            if !visited.insert((domain, owner, crossed_recipe)) {
+                continue;
+            }
+            for &(owner_domain, target_domain, _, row, target) in &store_references {
+                if owner_domain != domain || row != owner {
+                    continue;
+                }
+                if target_domain == CLASS_DOMAIN && crossed_recipe {
+                    reaches_class_through_recipe = true;
+                    break;
+                }
+                if matches!(target_domain, TYPE_DOMAIN | DECLARED_RECIPE_DOMAIN) {
+                    pending.push((
+                        target_domain,
+                        target,
+                        crossed_recipe || target_domain == DECLARED_RECIPE_DOMAIN,
+                    ));
+                }
+            }
+            if reaches_class_through_recipe {
+                break;
+            }
+        }
+        assert!(
+            reaches_class_through_recipe,
+            "fixture must expose Type -> Recipe -> Type/Class dependency reachability"
+        );
+
+        let trace = ReplayDependencyTrace::new(BTreeMap::new());
+        let replay = state
+            .generated_replay_index()
+            .expect("source compiler retains its replay index");
+        for edge in &replay.reverse_edges {
+            if edge.consumer == ReplayOwner::TypeGroup(consumer_group) {
+                continue;
+            }
+            trace.enter(edge.consumer);
+            trace.demand(edge.dependency);
+            trace.leave(edge.consumer);
+        }
+        let runtime = state
+            .runtime
+            .snapshot_parts()
+            .expect("runtime snapshot parts");
+        validate_terminal_class_dependencies(
+            &trace,
+            &state.interner,
+            ReplayTerminalValidationInputs {
+                binder: &state.binder,
+                published: &state.published_types,
+                decl_types: &state.decl_types,
+                namespace_terminals: &runtime.namespace_terminals,
+                runtime: &runtime,
+                semantic_identities: state.semantic_identities.as_ref(),
+            },
+        )
+        .expect("terminal validation enumerates canonical references");
+        let error = trace
+            .finish(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            )
+            .expect_err("omitting the consumer dependency must fail typed coverage");
+        assert!(
+            matches!(
+                error,
+                ReplayIndexGenerationError::TypedReferenceCoverage { .. }
+            ),
+            "declared recipe template dependency was invisible to terminal validation: {error:?}"
+        );
+    }
+
+    #[test]
+    fn declared_recipe_domain_uses_independent_base_and_local_ends() {
+        const DECLARED_RECIPE_DOMAIN: u8 = 10;
+        const TYPE_DOMAIN: u8 = 1;
+
+        let state = compile_reservation_fixture(
+            "declared-recipe-domain-ends.d.ts",
+            "interface RecipeOwner { values: string[]; }",
+        );
+        let base = owned_state_identity_ends(&state);
+        let recipe_end = state.interner.store().snapshot_declared_recipes().count();
+        assert!(recipe_end > 0, "fixture must plan declaration recipes");
+
+        let mut summary = OwnedBaseReferenceSummary::default();
+        classify_live_reference(
+            &mut summary,
+            &base,
+            DECLARED_RECIPE_DOMAIN,
+            0,
+            TYPE_DOMAIN,
+            u32::try_from(base.store).expect("store end fits u32"),
+        );
+        classify_live_reference(
+            &mut summary,
+            &base,
+            DECLARED_RECIPE_DOMAIN,
+            u32::try_from(recipe_end).expect("recipe end fits u32"),
+            TYPE_DOMAIN,
+            0,
+        );
+
+        assert_eq!(
+            summary,
+            OwnedBaseReferenceSummary {
+                base_to_delta: 1,
+                delta_to_base: 1,
+                delta_to_delta: 0,
+            },
+            "recipe rows must be classified against their own frozen prefix"
+        );
+    }
+
+    #[test]
+    fn store_prefix_digest_authenticates_unreferenced_planned_recipes() {
+        let mut interner = Interner::with_intrinsics();
+        let prefix_len = interner.store().len();
+        let recipe_prefix_len = interner.store().snapshot_declared_recipes().count();
+        let before = store_prefix_digest(interner.store(), prefix_len, recipe_prefix_len)
+            .expect("initial prefix digest");
+        let string = interner.well_known().string;
+        interner.intern_declared_recipe(crate::types::repr::DeclaredRecipeNode::Type(string));
+        let planned_recipe_prefix_len = interner.store().snapshot_declared_recipes().count();
+        let after = store_prefix_digest(interner.store(), prefix_len, planned_recipe_prefix_len)
+            .expect("prefix digest after recipe planning");
+
+        assert_ne!(
+            after, before,
+            "an unreferenced recipe row is still authenticated prefix state"
+        );
     }
 
     #[test]
@@ -6257,6 +6527,7 @@ mod tests {
     fn owned_state_identity_ends(state: &OwnedLibraryRuntimeState) -> OwnedBaseFinalIdentityEnds {
         OwnedBaseFinalIdentityEnds {
             store: state.interner.store().len(),
+            declared_recipes: state.interner.store().snapshot_declared_recipes().count(),
             type_params: usize::try_from(state.next_type_param)
                 .expect("base type parameter end fits usize"),
             classes: usize::try_from(state.next_class_id).expect("base class end fits usize"),

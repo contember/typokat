@@ -50,6 +50,7 @@ pub(in crate::check) fn object_requires_demand(store: &Store, object: TypeId) ->
         | TypeTag::TypeParam
         | TypeTag::Infer
         | TypeTag::MappedValue => true,
+        TypeTag::Declared => true,
         _ => false,
     }
 }
@@ -81,6 +82,7 @@ fn index_requires_demand(store: &Store, index: TypeId) -> bool {
         | TypeTag::DeferredIndexedAccess
         | TypeTag::Infer
         | TypeTag::MappedValue => true,
+        TypeTag::Declared => true,
         _ => false,
     }
 }

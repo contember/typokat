@@ -1978,8 +1978,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         annotation: &oxc_ast::ast::TSType<'_>,
     ) -> Option<TypeId> {
-        #[cfg(test)]
-        super::declaration_surface_measure::record_eager_namespace_variable_root();
         let owner = self
             .lexical_events
             .declaration_owner(declaration)
@@ -1987,6 +1985,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .ticket;
         let lower = |pass: &mut Self| {
             pass.with_ticket_effects(owner, |pass| {
+                if let Some(ty) = pass.try_plan_declared_annotation(scope, annotation) {
+                    #[cfg(test)]
+                    super::declaration_surface_measure::record_planned_namespace_variable_root();
+                    return Some(ty);
+                }
+                #[cfg(test)]
+                super::declaration_surface_measure::record_eager_namespace_variable_root();
                 let (result, child_failures) =
                     pass.lower_namespace_type_surface(scope, annotation, owner);
                 let (ty, primary_failure) = match result {

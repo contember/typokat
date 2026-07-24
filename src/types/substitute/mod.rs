@@ -275,6 +275,13 @@ fn for_each_apply_child(
         | TypeTag::Literal
         | TypeTag::Infer
         | TypeTag::MappedValue => {}
+        TypeTag::Declared => {
+            if let Some(declared) = store.declared_type(ty) {
+                for &(_, value) in &declared.mapper {
+                    visit(value);
+                }
+            }
+        }
         TypeTag::Object => {
             // Unfilled reserved objects have no accessor row → no children
             // (sound: `apply_object` returns them untouched).
@@ -448,9 +455,28 @@ fn compute_application_summaries(
     let mut full_mapper: FxHashSet<TypeId> = FxHashSet::default();
 
     while let Some(ty) = pending.pop() {
-        let (own_parameter, node_binders, retains_mapper, children) = {
+        let (own_parameters, node_binders, retains_mapper, children) = {
             let store = interner.store();
-            let own_parameter = store.type_param(ty).map(|parameter| parameter.id);
+            let mut own_parameters = store
+                .type_param(ty)
+                .map(|parameter| vec![parameter.id])
+                .unwrap_or_default();
+            if let Some(declared) = store.declared_type(ty) {
+                let mapped: FxHashSet<_> = declared
+                    .mapper
+                    .iter()
+                    .map(|(parameter, _)| *parameter)
+                    .collect();
+                if let Some(recipe) = store.declared_recipe(declared.recipe) {
+                    own_parameters.extend(
+                        recipe
+                            .free_params
+                            .iter()
+                            .copied()
+                            .filter(|parameter| !mapped.contains(parameter)),
+                    );
+                }
+            }
             let node_binders = store.function_type(ty).map_or_else(Vec::new, |function| {
                 function
                     .type_params
@@ -467,7 +493,7 @@ fn compute_application_summaries(
                 |child| children.push(child),
             );
             (
-                own_parameter,
+                own_parameters,
                 node_binders,
                 retains_full_mapper(store, ty),
                 children,
@@ -475,7 +501,7 @@ fn compute_application_summaries(
         };
 
         let value = values.entry(ty).or_default();
-        if let Some(parameter) = own_parameter {
+        for parameter in own_parameters {
             value.insert(parameter);
         }
         if retains_mapper {
@@ -573,6 +599,16 @@ fn compute_application_summaries(
         free_params,
         key_mode,
     }
+}
+
+pub(crate) fn derived_free_params(interner: &mut Interner, ty: TypeId) -> Arc<[TypeParamId]> {
+    compute_application_summaries(
+        interner,
+        #[cfg(test)]
+        None,
+        ty,
+    )
+    .free_params
 }
 
 /// A substitution `TypeParamId → TypeId` plus the cycle guard, applied over the
@@ -782,6 +818,7 @@ impl<'a> Substitution<'a> {
                 TypeTag::Template => self.apply_template(interner, ty),
                 TypeTag::Keyof => self.apply_keyof(interner, ty),
                 TypeTag::DeferredIndexedAccess => self.apply_deferred_indexed_access(interner, ty),
+                TypeTag::Declared => self.apply_declared(interner, ty),
                 // An `infer` binder (M25) / a mapped-value placeholder (M26) is a **bound**
                 // node-scoped variable, never a free declaration parameter — the no-capture
                 // rule (ADR-0002): substitution must leave it alone (the evaluator resolves

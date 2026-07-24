@@ -305,7 +305,9 @@ fn contains_free_keyof_operand(store: &crate::types::store::Store, ty: TypeId) -
         #[cfg(test)]
         measure_deferred_keyof(|measure| measure.node_visits += 1);
         match store.tag(t) {
-            TypeTag::TypeParam | TypeTag::Infer | TypeTag::MappedValue => return true,
+            TypeTag::TypeParam | TypeTag::Infer | TypeTag::MappedValue | TypeTag::Declared => {
+                return true
+            }
             _ => push_node_children(store, t, &mut stack, false),
         }
     }
@@ -404,6 +406,7 @@ fn push_node_children(
                 stack.push(access.index);
             }
         }
+        TypeTag::Declared => {}
         TypeTag::Intrinsic
         | TypeTag::Literal
         | TypeTag::TypeParam

@@ -6,7 +6,7 @@ use crate::snapshot_codec::SnapshotWriter;
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::hash::StructuralKey;
 use crate::types::repr::{
-    ClassInstanceType, DeferredIndexedAccessType, FunctionType, TemplateType,
+    ClassInstanceType, DeclaredRecipeNode, DeferredIndexedAccessType, FunctionType, TemplateType,
 };
 
 const VERSION: u32 = 1;
@@ -17,6 +17,7 @@ const CONTAINER_DOMAIN: u8 = 0;
 const TYPE_DOMAIN: u8 = 1;
 const TYPE_PARAM_DOMAIN: u8 = 2;
 const CLASS_DOMAIN: u8 = 3;
+const DECLARED_RECIPE_DOMAIN: u8 = 10;
 const INTERNER_BUCKET_DOMAIN: u8 = 16;
 
 // Store TypeId owners reuse these relationship fields across payload kinds.
@@ -26,6 +27,14 @@ const CLASS_IDENTITY_FIELD: u8 = 2;
 const CONSTRAINT_FIELD: u8 = 3;
 const DEFAULT_FIELD: u8 = 4;
 const DECLARING_CLASS_FIELD: u8 = 5;
+const DECLARED_RECIPE_FIELD: u8 = 6;
+
+// Declared-recipe rows are identities separate from the TypeId arena.
+const RECIPE_TYPE_FIELD: u8 = 0;
+const RECIPE_PARAMETER_FIELD: u8 = 1;
+const RECIPE_CHILD_FIELD: u8 = 2;
+const RECIPE_FREE_PARAMETER_FIELD: u8 = 3;
+const ROW_IDENTITY_FIELD: u8 = 31;
 
 // Store metadata container fields.
 const CONSTRAINT_OWNER_FIELD: u8 = 6;
@@ -215,6 +224,98 @@ impl Interner {
     ) -> Result<Vec<SnapshotReferenceRecord>, SnapshotCodecError> {
         let store = &self.store;
         let mut references = Vec::new();
+        let recipe_start = if local_side_columns {
+            store.declared_recipe_base_len()
+        } else {
+            0
+        };
+        for (recipe_id, recipe) in store.snapshot_declared_recipes().skip(recipe_start) {
+            references.push(reference(
+                DECLARED_RECIPE_DOMAIN,
+                DECLARED_RECIPE_DOMAIN,
+                ROW_IDENTITY_FIELD,
+                recipe_id.0,
+                recipe_id.0,
+            ));
+            match &recipe.node {
+                DeclaredRecipeNode::Type(ty) => references.push(reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_DOMAIN,
+                    RECIPE_TYPE_FIELD,
+                    recipe_id.0,
+                    ty.0,
+                )),
+                DeclaredRecipeNode::Array(child) | DeclaredRecipeNode::Readonly(child) => {
+                    references.push(reference(
+                        DECLARED_RECIPE_DOMAIN,
+                        DECLARED_RECIPE_DOMAIN,
+                        RECIPE_CHILD_FIELD,
+                        recipe_id.0,
+                        child.0,
+                    ))
+                }
+                DeclaredRecipeNode::Tuple { elements, rest } => {
+                    references.extend(elements.iter().map(|child| {
+                        reference(
+                            DECLARED_RECIPE_DOMAIN,
+                            DECLARED_RECIPE_DOMAIN,
+                            RECIPE_CHILD_FIELD,
+                            recipe_id.0,
+                            child.0,
+                        )
+                    }));
+                    if let Some((_, child)) = rest {
+                        references.push(reference(
+                            DECLARED_RECIPE_DOMAIN,
+                            DECLARED_RECIPE_DOMAIN,
+                            RECIPE_CHILD_FIELD,
+                            recipe_id.0,
+                            child.0,
+                        ));
+                    }
+                }
+                DeclaredRecipeNode::Application {
+                    template,
+                    parameters,
+                    arguments,
+                } => {
+                    references.push(reference(
+                        DECLARED_RECIPE_DOMAIN,
+                        TYPE_DOMAIN,
+                        RECIPE_TYPE_FIELD,
+                        recipe_id.0,
+                        template.0,
+                    ));
+                    references.extend(parameters.iter().map(|parameter| {
+                        reference(
+                            DECLARED_RECIPE_DOMAIN,
+                            TYPE_PARAM_DOMAIN,
+                            RECIPE_PARAMETER_FIELD,
+                            recipe_id.0,
+                            parameter.0,
+                        )
+                    }));
+                    references.extend(arguments.iter().map(|child| {
+                        reference(
+                            DECLARED_RECIPE_DOMAIN,
+                            DECLARED_RECIPE_DOMAIN,
+                            RECIPE_CHILD_FIELD,
+                            recipe_id.0,
+                            child.0,
+                        )
+                    }));
+                }
+            }
+            references.extend(recipe.free_params.iter().map(|parameter| {
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_PARAM_DOMAIN,
+                    RECIPE_FREE_PARAMETER_FIELD,
+                    recipe_id.0,
+                    parameter.0,
+                )
+            }));
+        }
         for raw_owner in start..store.len() {
             let owner = TypeId(
                 u32::try_from(raw_owner).map_err(|_| validation("snapshot TypeId exceeds u32"))?,
@@ -415,6 +516,22 @@ impl Interner {
                     })?;
                     push_type_operand(&mut references, owner, access.object);
                     push_type_operand(&mut references, owner, access.index);
+                }
+                TypeTag::Declared => {
+                    let declared = store
+                        .declared_type(owner)
+                        .ok_or_else(|| validation("validated declared payload is missing"))?;
+                    references.push(reference(
+                        TYPE_DOMAIN,
+                        DECLARED_RECIPE_DOMAIN,
+                        DECLARED_RECIPE_FIELD,
+                        owner.0,
+                        declared.recipe.0,
+                    ));
+                    for &(parameter, value) in &declared.mapper {
+                        push_type_param_identity(&mut references, owner, parameter);
+                        push_type_operand(&mut references, owner, value);
+                    }
                 }
             }
         }
@@ -640,7 +757,7 @@ impl Interner {
         let well_known = well_known_from_ids(ids);
 
         let graph_identity = Arc::clone(store.semantic_graph_identity());
-        let interner = Interner {
+        let mut interner = Interner {
             store,
             free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
             application_key_modes: DerivedGraphCache::new(Arc::clone(&graph_identity)),
@@ -648,6 +765,8 @@ impl Interner {
             clean_application_results: DerivedGraphCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup,
+            declared_recipe_base: Arc::new(FxHashMap::default()),
+            declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types,
             well_known,
@@ -655,6 +774,11 @@ impl Interner {
             user_delta_drop_witness: None,
         };
         interner.validate_snapshot()?;
+        interner.declared_recipe_local = interner
+            .store
+            .snapshot_declared_recipes()
+            .map(|(id, recipe)| (recipe.clone(), id))
+            .collect();
         Ok(interner)
     }
 
@@ -737,7 +861,7 @@ impl Interner {
             *id = TypeId(reader.u32()?);
         }
         let graph_identity = Arc::clone(store.semantic_graph_identity());
-        let interner = Interner {
+        let mut interner = Interner {
             store,
             free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
             application_key_modes: DerivedGraphCache::new(Arc::clone(&graph_identity)),
@@ -745,6 +869,8 @@ impl Interner {
             clean_application_results: DerivedGraphCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup,
+            declared_recipe_base: Arc::new(FxHashMap::default()),
+            declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types,
             well_known: well_known_from_ids(ids),
@@ -752,6 +878,11 @@ impl Interner {
             user_delta_drop_witness: None,
         };
         interner.validate_snapshot()?;
+        interner.declared_recipe_local = interner
+            .store
+            .snapshot_declared_recipes()
+            .map(|(id, recipe)| (recipe.clone(), id))
+            .collect();
         Ok(interner)
     }
 
@@ -783,7 +914,7 @@ impl Interner {
         Ok(interner)
     }
 
-    fn validate_snapshot(&self) -> Result<(), SnapshotCodecError> {
+    fn validate_snapshot(&mut self) -> Result<(), SnapshotCodecError> {
         let len = self.store.len();
         if len < WELL_KNOWN_COUNT {
             return Err(validation("store is missing canonical intrinsic rows"));
@@ -813,6 +944,24 @@ impl Interner {
             if !self.contains_reserved_type(id) {
                 return Err(validation(
                     "template display name is not attached to a reservation",
+                ));
+            }
+        }
+
+        for recipe_index in 0..self.store.snapshot_declared_recipes().count() {
+            let recipe_id = DeclaredRecipeId(
+                u32::try_from(recipe_index)
+                    .map_err(|_| validation("declared recipe index exceeds u32"))?,
+            );
+            let recipe = self
+                .store
+                .declared_recipe(recipe_id)
+                .ok_or_else(|| validation("declared recipe row is missing"))?
+                .clone();
+            let derived = self.derive_declared_recipe_free_params(&recipe.node);
+            if derived != recipe.free_params {
+                return Err(validation(
+                    "declared recipe free parameters do not match the derived set",
                 ));
             }
         }
@@ -1101,6 +1250,15 @@ fn structural_hash_for_id(store: &Store, id: TypeId) -> Result<u64, SnapshotCode
                 index: access.index,
             })
         }
+        TypeTag::Declared => {
+            let declared = store
+                .declared_type(id)
+                .ok_or_else(|| validation("declared payload is missing"))?;
+            structural_hash(&StructuralKey::Declared {
+                recipe: declared.recipe,
+                mapper: &declared.mapper,
+            })
+        }
     };
     Ok(hash)
 }
@@ -1151,6 +1309,7 @@ fn structurally_equal(
         TypeTag::DeferredIndexedAccess => {
             deferred_access(store, left)? == deferred_access(store, right)?
         }
+        TypeTag::Declared => store.declared_type(left) == store.declared_type(right),
     };
     Ok(equal)
 }
@@ -1254,10 +1413,11 @@ fn deferred_access(
 mod tests {
     use super::*;
     use crate::types::repr::{
-        ClassId, ConditionalType, FunctionType, GenericTypeParam, MappedType, ModifierOp,
-        ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType,
-        Visibility,
+        ClassId, ConditionalType, DeclaredRecipeNode, DeclaredTypeRecipe, FunctionType,
+        GenericTypeParam, MappedType, ModifierOp, ObjectType, ParameterType, PropertyType,
+        TemplateType, TupleRestType, TupleType, Visibility,
     };
+    use crate::types::substitute::SubstitutionOutcome;
 
     struct RichFixture {
         interner: Interner,
@@ -1391,6 +1551,239 @@ mod tests {
             class_instance,
             indexed,
         }
+    }
+
+    #[test]
+    fn declared_recipe_roundtrip_freezes_and_materializes_in_an_isolated_suffix() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter_id = TypeParamId(41);
+        let parameter = interner.intern_type_param(parameter_id, "T");
+        let leaf = interner.intern_declared_recipe(DeclaredRecipeNode::Type(parameter));
+        let array = interner.intern_declared_recipe(DeclaredRecipeNode::Array(leaf));
+        let application = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template: parameter,
+            parameters: vec![parameter_id],
+            arguments: vec![array],
+        });
+        let string = interner.well_known().string;
+        let declared = interner.intern_declared(array, [(parameter_id, string)]);
+        let recipe_records = interner
+            .snapshot_reference_records_for_test()
+            .0
+            .into_iter()
+            .filter(|record| {
+                record.0 == DECLARED_RECIPE_DOMAIN || record.1 == DECLARED_RECIPE_DOMAIN
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recipe_records,
+            vec![
+                reference(
+                    TYPE_DOMAIN,
+                    DECLARED_RECIPE_DOMAIN,
+                    DECLARED_RECIPE_FIELD,
+                    declared.0,
+                    array.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_DOMAIN,
+                    RECIPE_TYPE_FIELD,
+                    leaf.0,
+                    parameter.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_DOMAIN,
+                    RECIPE_TYPE_FIELD,
+                    application.0,
+                    parameter.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_PARAM_DOMAIN,
+                    RECIPE_PARAMETER_FIELD,
+                    application.0,
+                    parameter_id.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_PARAM_DOMAIN,
+                    RECIPE_FREE_PARAMETER_FIELD,
+                    leaf.0,
+                    parameter_id.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_PARAM_DOMAIN,
+                    RECIPE_FREE_PARAMETER_FIELD,
+                    array.0,
+                    parameter_id.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    TYPE_PARAM_DOMAIN,
+                    RECIPE_FREE_PARAMETER_FIELD,
+                    application.0,
+                    parameter_id.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    DECLARED_RECIPE_DOMAIN,
+                    RECIPE_CHILD_FIELD,
+                    array.0,
+                    leaf.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    DECLARED_RECIPE_DOMAIN,
+                    RECIPE_CHILD_FIELD,
+                    application.0,
+                    array.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    DECLARED_RECIPE_DOMAIN,
+                    ROW_IDENTITY_FIELD,
+                    leaf.0,
+                    leaf.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    DECLARED_RECIPE_DOMAIN,
+                    ROW_IDENTITY_FIELD,
+                    array.0,
+                    array.0,
+                ),
+                reference(
+                    DECLARED_RECIPE_DOMAIN,
+                    DECLARED_RECIPE_DOMAIN,
+                    ROW_IDENTITY_FIELD,
+                    application.0,
+                    application.0,
+                ),
+            ]
+        );
+
+        let mut writer = SnapshotWriter::new();
+        interner
+            .write_snapshot_for_test(&mut writer)
+            .expect("declared snapshot encodes");
+        let bytes = writer.into_bytes();
+        let mut reader = SnapshotReader::new(&bytes);
+        let mut restored =
+            Interner::read_snapshot_for_test(&mut reader).expect("declared snapshot decodes");
+        reader.finish().expect("snapshot is exact");
+        let restored_string = restored.well_known().string;
+        let expected_array = restored.intern_array(restored_string);
+        assert_eq!(
+            restored.materialize_declared(declared),
+            Some(SubstitutionOutcome::CycleClean(expected_array))
+        );
+
+        restored.freeze_as_base().expect("restored base freezes");
+        let mut fork = restored.fork_delta().expect("restored base forks");
+        let materialized = fork
+            .materialize_declared(declared)
+            .expect("base recipe materializes");
+        let SubstitutionOutcome::CycleClean(materialized) = materialized else {
+            panic!("acyclic declared recipe materializes cycle-clean");
+        };
+        assert_eq!(
+            fork.store()
+                .array_type(materialized)
+                .map(|array| array.element),
+            Some(fork.well_known().string)
+        );
+        assert!(restored.store().shares_base_rows_with(fork.store()));
+        assert_eq!(restored.base_index_family_sharing_with(&fork), [true; 4]);
+        let string = fork.well_known().string;
+        fork.intern_declared_recipe(DeclaredRecipeNode::Type(string));
+        assert_eq!(fork.local_index_row_counts_for_test(), [0, 0, 1, 0]);
+    }
+
+    fn assert_declared_snapshot_rejects(interner: &Interner, expected: &str) {
+        let bytes = interner
+            .encode_snapshot_bytes_for_test()
+            .expect("corrupt test state still encodes");
+        let error = match Interner::decode_snapshot_bytes_for_test(&bytes) {
+            Ok(_) => panic!("noncanonical declared recipe must reject"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(expected),
+            "expected {expected:?}, got {error}"
+        );
+    }
+
+    #[test]
+    fn declared_recipe_snapshot_rejects_noncanonical_recipe_state() {
+        let build_leaf = || {
+            let mut interner = Interner::with_intrinsics();
+            let parameter_id = TypeParamId(41);
+            let parameter = interner.intern_type_param(parameter_id, "T");
+            let leaf = interner.intern_declared_recipe(DeclaredRecipeNode::Type(parameter));
+            (interner, parameter_id, parameter, leaf)
+        };
+
+        let (mut duplicate, _, _, leaf) = build_leaf();
+        duplicate.store.push_declared_recipe(
+            duplicate
+                .store
+                .declared_recipe(leaf)
+                .expect("leaf exists")
+                .clone(),
+        );
+        assert_declared_snapshot_rejects(&duplicate, "duplicate identities");
+
+        let (mut wrong_free, _, parameter, leaf) = build_leaf();
+        wrong_free.store.replace_local_declared_recipe_for_test(
+            leaf,
+            DeclaredTypeRecipe {
+                node: DeclaredRecipeNode::Type(parameter),
+                free_params: Vec::new(),
+            },
+        );
+        assert_declared_snapshot_rejects(&wrong_free, "derived set");
+
+        let (mut duplicate_parameters, parameter_id, parameter, leaf) = build_leaf();
+        let application =
+            duplicate_parameters.intern_declared_recipe(DeclaredRecipeNode::Application {
+                template: parameter,
+                parameters: vec![parameter_id],
+                arguments: vec![leaf],
+            });
+        duplicate_parameters
+            .store
+            .replace_local_declared_recipe_for_test(
+                application,
+                DeclaredTypeRecipe {
+                    node: DeclaredRecipeNode::Application {
+                        template: parameter,
+                        parameters: vec![parameter_id, parameter_id],
+                        arguments: vec![leaf, leaf],
+                    },
+                    free_params: vec![parameter_id],
+                },
+            );
+        assert_declared_snapshot_rejects(&duplicate_parameters, "contain duplicates");
+
+        let (mut bad_rest, parameter_id, _, leaf) = build_leaf();
+        let tuple = bad_rest.intern_declared_recipe(DeclaredRecipeNode::Tuple {
+            elements: vec![leaf],
+            rest: None,
+        });
+        bad_rest.store.replace_local_declared_recipe_for_test(
+            tuple,
+            DeclaredTypeRecipe {
+                node: DeclaredRecipeNode::Tuple {
+                    elements: vec![leaf],
+                    rest: Some((2, leaf)),
+                },
+                free_params: vec![parameter_id],
+            },
+        );
+        assert_declared_snapshot_rejects(&bad_rest, "rest position");
     }
 
     fn rich_interner() -> Interner {

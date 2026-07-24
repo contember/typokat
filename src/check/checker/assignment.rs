@@ -21,6 +21,7 @@ use oxc_ast::ast::{
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
+use rustc_hash::FxHashMap;
 
 struct MemberAssignmentTarget {
     ty: TypeId,
@@ -639,18 +640,194 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         expr: &Expression<'_>,
         target_ty: TypeId,
     ) -> DemandOutcome<Vec<Diagnostic>> {
-        let target_ty = match self.demand_structural_apparent_type(target_ty) {
-            DemandOutcome::Ready(target_ty) => target_ty,
+        self.with_semantic_query_transaction(|pass| {
+            let mut normalized = FxHashMap::default();
+            let demanded = match pass.demand_structural_apparent_type_inner(target_ty) {
+                DemandOutcome::Ready(demanded) => demanded,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            normalized.insert(target_ty, demanded);
+            normalized.insert(demanded, demanded);
+            match pass.prepare_declared_excess_property_targets(expr, demanded, &mut normalized) {
+                DemandOutcome::Ready(()) => DemandOutcome::Ready(check_excess_properties(
+                    pass.interner.store(),
+                    expr,
+                    target_ty,
+                    &normalized,
+                )),
+                DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+            }
+        })
+    }
+
+    fn prepare_declared_excess_property_targets(
+        &mut self,
+        expr: &Expression<'_>,
+        target_ty: TypeId,
+        normalized: &mut FxHashMap<TypeId, TypeId>,
+    ) -> DemandOutcome<()> {
+        let demanded = match self.demand_declared_literal_shape(target_ty, normalized) {
+            DemandOutcome::Ready(demanded) => demanded,
             DemandOutcome::Exhausted(exhaustion) => {
                 return DemandOutcome::Exhausted(exhaustion);
             }
         };
-        DemandOutcome::Ready(check_excess_properties(
-            self.interner.store(),
-            expr,
-            target_ty,
-        ))
+        let target_ty = contextual_literal_target(self.interner.store(), demanded);
+
+        match expr {
+            Expression::ParenthesizedExpression(parenthesized) => self
+                .prepare_declared_excess_property_targets(
+                    &parenthesized.expression,
+                    target_ty,
+                    normalized,
+                ),
+            Expression::ObjectExpression(literal) => {
+                let Some(target) = self.interner.store().object_type(target_ty).cloned() else {
+                    return DemandOutcome::Ready(());
+                };
+                for member in &literal.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = member else {
+                        continue;
+                    };
+                    let Some(name) = property.key.static_name() else {
+                        continue;
+                    };
+                    let child = match target.property(&name) {
+                        Some(target_property) => Some(target_property.ty),
+                        None if is_numeric_property_name(&name) => {
+                            target.number_index.or(target.string_index)
+                        }
+                        None => target.string_index,
+                    };
+                    let Some(child) = child else {
+                        continue;
+                    };
+                    match self.prepare_declared_excess_property_targets(
+                        &property.value,
+                        child,
+                        normalized,
+                    ) {
+                        DemandOutcome::Ready(()) => {}
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion);
+                        }
+                    }
+                }
+                DemandOutcome::Ready(())
+            }
+            Expression::ArrayExpression(array) => {
+                let children = if let Some(tuple) = self.interner.store().tuple_type(target_ty) {
+                    array
+                        .elements
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, element)| {
+                            Some((element.as_expression()?, *tuple.elements.get(index)?))
+                        })
+                        .collect::<Vec<_>>()
+                } else if let Some(array_type) = self.interner.store().array_type(target_ty) {
+                    array
+                        .elements
+                        .iter()
+                        .filter_map(|element| {
+                            element
+                                .as_expression()
+                                .map(|expression| (expression, array_type.element))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for (expression, child) in children {
+                    match self
+                        .prepare_declared_excess_property_targets(expression, child, normalized)
+                    {
+                        DemandOutcome::Ready(()) => {}
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion);
+                        }
+                    }
+                }
+                DemandOutcome::Ready(())
+            }
+            _ => DemandOutcome::Ready(()),
+        }
     }
+
+    fn demand_declared_literal_shape(
+        &mut self,
+        target_ty: TypeId,
+        normalized: &mut FxHashMap<TypeId, TypeId>,
+    ) -> DemandOutcome<TypeId> {
+        let tag = self.interner.store().tag(target_ty);
+        let demanded = match tag {
+            TypeTag::Declared => match self.evaluate_type(target_ty) {
+                DemandOutcome::Ready(demanded) => demanded,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            },
+            TypeTag::Readonly => {
+                let Some(operand) = self.interner.store().readonly_operand(target_ty) else {
+                    return DemandOutcome::Ready(target_ty);
+                };
+                let operand = match self.demand_declared_literal_shape(operand, normalized) {
+                    DemandOutcome::Ready(operand) => operand,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion);
+                    }
+                };
+                if is_excess_literal_shape(self.interner.store(), operand) {
+                    operand
+                } else {
+                    target_ty
+                }
+            }
+            TypeTag::Union => {
+                let Some(members) = self.interner.store().union_members(target_ty) else {
+                    return DemandOutcome::Ready(target_ty);
+                };
+                let members = members.to_vec();
+                let mut shape = None;
+                for member in members {
+                    if self.interner.store().intrinsic_kind(member)
+                        == Some(crate::types::repr::IntrinsicKind::Undefined)
+                    {
+                        continue;
+                    }
+                    if shape.is_some() {
+                        return DemandOutcome::Ready(target_ty);
+                    }
+                    let member = match self.demand_declared_literal_shape(member, normalized) {
+                        DemandOutcome::Ready(member) => member,
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion);
+                        }
+                    };
+                    if !is_excess_literal_shape(self.interner.store(), member) {
+                        return DemandOutcome::Ready(target_ty);
+                    }
+                    shape = Some(member);
+                }
+                shape.unwrap_or(target_ty)
+            }
+            _ => target_ty,
+        };
+        if demanded != target_ty {
+            normalized.insert(target_ty, demanded);
+            normalized.insert(demanded, demanded);
+        }
+        DemandOutcome::Ready(demanded)
+    }
+}
+
+fn is_excess_literal_shape(store: &Store, ty: TypeId) -> bool {
+    matches!(
+        store.tag(ty),
+        TypeTag::Object | TypeTag::Array | TypeTag::Tuple
+    )
 }
 
 /// Recursive excess-property check. M19 index signatures suppress unknown keys
@@ -660,9 +837,10 @@ pub(in crate::check::checker) fn check_excess_properties(
     store: &Store,
     expr: &Expression<'_>,
     target_ty: TypeId,
+    normalized: &FxHashMap<TypeId, TypeId>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    collect_excess_properties(store, expr, target_ty, &mut diagnostics);
+    collect_excess_properties(store, expr, target_ty, normalized, &mut diagnostics);
     diagnostics
 }
 
@@ -670,24 +848,32 @@ fn collect_excess_properties(
     store: &Store,
     expr: &Expression<'_>,
     target_ty: TypeId,
+    normalized: &FxHashMap<TypeId, TypeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let target_ty = normalized.get(&target_ty).copied().unwrap_or(target_ty);
     let target_ty = contextual_literal_target(store, target_ty);
     match expr {
         Expression::ParenthesizedExpression(paren) => {
-            collect_excess_properties(store, &paren.expression, target_ty, diagnostics);
+            collect_excess_properties(store, &paren.expression, target_ty, normalized, diagnostics);
         }
         Expression::ObjectExpression(literal) => {
             // M31: a fresh literal against an intersection target is excess-checked against
             // the MERGED key set (a single check, never per-member — see the function).
             if store.tag(target_ty) == TypeTag::Intersection {
-                check_intersection_object_excess(store, literal, target_ty, diagnostics);
+                check_intersection_object_excess(
+                    store,
+                    literal,
+                    target_ty,
+                    normalized,
+                    diagnostics,
+                );
             } else {
-                check_object_excess_properties(store, literal, target_ty, diagnostics);
+                check_object_excess_properties(store, literal, target_ty, normalized, diagnostics);
             }
         }
         Expression::ArrayExpression(array) => {
-            check_array_excess_properties(store, array, target_ty, diagnostics);
+            check_array_excess_properties(store, array, target_ty, normalized, diagnostics);
         }
         _ => {}
     }
@@ -697,6 +883,7 @@ fn check_object_excess_properties(
     store: &Store,
     literal: &oxc_ast::ast::ObjectExpression<'_>,
     target_ty: TypeId,
+    normalized: &FxHashMap<TypeId, TypeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(target_obj) = store.object_type(target_ty) else {
@@ -729,7 +916,7 @@ fn check_object_excess_properties(
                 // Optional members are `T | undefined`; recurse through the object
                 // part instead of bailing on the union container.
                 let recurse_ty = excess_recursion_target(store, target_prop.ty);
-                collect_excess_properties(store, &prop.value, recurse_ty, diagnostics);
+                collect_excess_properties(store, &prop.value, recurse_ty, normalized, diagnostics);
             }
             None => {
                 // M19: index signatures suppress accepted keys; numeric keys prefer
@@ -745,7 +932,13 @@ fn check_object_excess_properties(
                         // value still gets its own excess check against the index value
                         // type (the helper self-guards: a no-op unless `prop.value` is a
                         // fresh object literal and `value_ty` is an object type).
-                        collect_excess_properties(store, &prop.value, value_ty, diagnostics);
+                        collect_excess_properties(
+                            store,
+                            &prop.value,
+                            value_ty,
+                            normalized,
+                            diagnostics,
+                        );
                     }
                     None => {
                         diagnostics.push(Diagnostic::excess_property(
@@ -767,12 +960,13 @@ fn check_intersection_object_excess(
     store: &Store,
     literal: &oxc_ast::ast::ObjectExpression<'_>,
     ty: TypeId,
+    normalized: &FxHashMap<TypeId, TypeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(members) = store.intersection_members(ty) else {
         return;
     };
-    check_object_excess_against_members(store, literal, members, diagnostics);
+    check_object_excess_against_members(store, literal, members, normalized, diagnostics);
 }
 
 /// Excess-check a fresh object literal against a merged member set. Matched keys
@@ -781,6 +975,7 @@ fn check_object_excess_against_members(
     store: &Store,
     literal: &oxc_ast::ast::ObjectExpression<'_>,
     members: &[TypeId],
+    normalized: &FxHashMap<TypeId, TypeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // The rendered target joins the members with ` & ` (matches the intersection's own
@@ -812,7 +1007,13 @@ fn check_object_excess_against_members(
             })
             .collect();
         if !contributors.is_empty() {
-            check_excess_against_members(store, &prop.value, &contributors, diagnostics);
+            check_excess_against_members(
+                store,
+                &prop.value,
+                &contributors,
+                normalized,
+                diagnostics,
+            );
             continue;
         }
 
@@ -829,7 +1030,13 @@ fn check_object_excess_against_members(
         });
         match index_value {
             Some(value_ty) => {
-                check_excess_against_members(store, &prop.value, &[value_ty], diagnostics);
+                check_excess_against_members(
+                    store,
+                    &prop.value,
+                    &[value_ty],
+                    normalized,
+                    diagnostics,
+                );
             }
             None => {
                 diagnostics.push(Diagnostic::excess_property(
@@ -848,17 +1055,30 @@ fn check_excess_against_members(
     store: &Store,
     expr: &Expression<'_>,
     members: &[TypeId],
+    normalized: &FxHashMap<TypeId, TypeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match members {
         [] => {}
-        [single] => collect_excess_properties(store, expr, *single, diagnostics),
+        [single] => collect_excess_properties(store, expr, *single, normalized, diagnostics),
         _ => match expr {
             Expression::ParenthesizedExpression(paren) => {
-                check_excess_against_members(store, &paren.expression, members, diagnostics);
+                check_excess_against_members(
+                    store,
+                    &paren.expression,
+                    members,
+                    normalized,
+                    diagnostics,
+                );
             }
             Expression::ObjectExpression(literal) => {
-                check_object_excess_against_members(store, literal, members, diagnostics);
+                check_object_excess_against_members(
+                    store,
+                    literal,
+                    members,
+                    normalized,
+                    diagnostics,
+                );
             }
             _ => {}
         },
@@ -869,6 +1089,7 @@ fn check_array_excess_properties(
     store: &Store,
     array: &oxc_ast::ast::ArrayExpression<'_>,
     target_ty: TypeId,
+    normalized: &FxHashMap<TypeId, TypeId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if let Some(tuple) = store.tuple_type(target_ty) {
@@ -880,7 +1101,7 @@ fn check_array_excess_properties(
                 continue;
             };
             let target = excess_recursion_target(store, target);
-            collect_excess_properties(store, expr, target, diagnostics);
+            collect_excess_properties(store, expr, target, normalized, diagnostics);
         }
         return;
     }
@@ -893,7 +1114,7 @@ fn check_array_excess_properties(
         let Some(expr) = element.as_expression() else {
             continue;
         };
-        collect_excess_properties(store, expr, target, diagnostics);
+        collect_excess_properties(store, expr, target, normalized, diagnostics);
     }
 }
 

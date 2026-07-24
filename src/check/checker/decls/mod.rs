@@ -299,6 +299,12 @@ fn for_each_object_alias_type_operand(store: &Store, owner: TypeId, mut visit: i
             visit(access.object);
             visit(access.index);
         }
+        TypeTag::Declared => {
+            let declared = store.declared_type(owner).expect("declared payload");
+            for (_, value) in &declared.mapper {
+                visit(*value);
+            }
+        }
     }
 }
 

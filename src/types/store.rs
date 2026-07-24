@@ -9,9 +9,10 @@ use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::hash::StableHash;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{
-    ArrayType, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, FunctionType,
-    InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType, TemplateType,
-    TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    ArrayType, ClassInstanceType, ConditionalType, DeclaredRecipeId, DeclaredType,
+    DeclaredTypeRecipe, DeferredIndexedAccessType, FunctionType, InstantiationType, IntrinsicKind,
+    LiteralValue, MappedType, ObjectType, TemplateType, TupleType, TypeFlags, TypeParamId,
+    TypeParamType, TypeTag,
 };
 use crate::types::repr::{
     GenericTypeParam, ModifierOp, ParameterType, PropertyType, TupleRestType, Visibility,
@@ -90,6 +91,10 @@ pub struct Store {
     class_instances: LayeredVec<ClassInstanceType>,
     /// Immutable deferred indexed-access operand pairs.
     deferred_indexed_accesses: LayeredVec<DeferredIndexedAccessType>,
+    /// AST-free declaration recipes, shared independently of their applications.
+    declared_recipes: LayeredVec<DeclaredTypeRecipe>,
+    /// Declaration-recipe applications addressed by `TypeTag::Declared`.
+    declared_types: LayeredVec<DeclaredType>,
     /// Mapped types (M26). Addressed by the `payload` of a `Mapped`-tagged row. The
     /// whole [`MappedType`] is its structural identity. A `MappedValue` placeholder row
     /// carries no side-table entry (payload `0`), like an intrinsic.
@@ -196,6 +201,8 @@ impl Store {
         self.instantiations.freeze_as_base()?;
         self.class_instances.freeze_as_base()?;
         self.deferred_indexed_accesses.freeze_as_base()?;
+        self.declared_recipes.freeze_as_base()?;
+        self.declared_types.freeze_as_base()?;
         self.mapped.freeze_as_base()?;
         self.templates.freeze_as_base()?;
         self.type_param_constraints.freeze_as_base()?;
@@ -225,6 +232,8 @@ impl Store {
             instantiations: self.instantiations.fork_delta()?,
             class_instances: self.class_instances.fork_delta()?,
             deferred_indexed_accesses: self.deferred_indexed_accesses.fork_delta()?,
+            declared_recipes: self.declared_recipes.fork_delta()?,
+            declared_types: self.declared_types.fork_delta()?,
             mapped: self.mapped.fork_delta()?,
             templates: self.templates.fork_delta()?,
             type_param_constraints: self.type_param_constraints.fork_delta()?,
@@ -251,6 +260,8 @@ impl Store {
                 || self.instantiations.local_len() != 0
                 || self.class_instances.local_len() != 0
                 || self.deferred_indexed_accesses.local_len() != 0
+                || self.declared_recipes.local_len() != 0
+                || self.declared_types.local_len() != 0
                 || self.mapped.local_len() != 0
                 || self.templates.local_len() != 0
                 || self.type_param_constraints.local_len() != 0
@@ -285,6 +296,10 @@ impl Store {
             && self
                 .deferred_indexed_accesses
                 .shares_base_with(&other.deferred_indexed_accesses)
+            && self
+                .declared_recipes
+                .shares_base_with(&other.declared_recipes)
+            && self.declared_types.shares_base_with(&other.declared_types)
             && self.mapped.shares_base_with(&other.mapped)
             && self.templates.shares_base_with(&other.templates)
             && self
@@ -318,6 +333,10 @@ impl Store {
             && self
                 .deferred_indexed_accesses
                 .shares_base_with(&other.deferred_indexed_accesses)
+            && self
+                .declared_recipes
+                .shares_base_with(&other.declared_recipes)
+            && self.declared_types.shares_base_with(&other.declared_types)
             && self.mapped.shares_base_with(&other.mapped)
             && self.templates.shares_base_with(&other.templates)
             && self.stable_hash.shares_base_with(&other.stable_hash);
@@ -350,6 +369,8 @@ impl Store {
                 + self.instantiations.local_len()
                 + self.class_instances.local_len()
                 + self.deferred_indexed_accesses.local_len()
+                + self.declared_recipes.local_len()
+                + self.declared_types.local_len()
                 + self.mapped.local_len()
                 + self.templates.local_len()
                 + self.stable_hash.local_len(),
@@ -488,6 +509,18 @@ impl Store {
             return None;
         }
         self.deferred_indexed_accesses
+            .get(usize::try_from(self.payload(id)).ok()?)
+    }
+
+    pub fn declared_recipe(&self, id: DeclaredRecipeId) -> Option<&DeclaredTypeRecipe> {
+        self.declared_recipes.get(id.index())
+    }
+
+    pub fn declared_type(&self, id: TypeId) -> Option<&DeclaredType> {
+        if self.tag(id) != TypeTag::Declared {
+            return None;
+        }
+        self.declared_types
             .get(usize::try_from(self.payload(id)).ok()?)
     }
 
@@ -806,6 +839,32 @@ impl Store {
         self.push(TypeTag::DeferredIndexedAccess, flags, payload)
     }
 
+    pub(crate) fn push_declared_recipe(&mut self, recipe: DeclaredTypeRecipe) -> DeclaredRecipeId {
+        let id = DeclaredRecipeId(
+            u32::try_from(self.declared_recipes.len()).expect("declared recipe id fits u32"),
+        );
+        self.declared_recipes.push_local(recipe);
+        id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_local_declared_recipe_for_test(
+        &mut self,
+        id: DeclaredRecipeId,
+        recipe: DeclaredTypeRecipe,
+    ) {
+        *self
+            .declared_recipes
+            .get_mut_local(id.index())
+            .expect("test recipe belongs to the local suffix") = recipe;
+    }
+
+    pub(crate) fn push_declared(&mut self, declared: DeclaredType, flags: TypeFlags) -> TypeId {
+        let payload = u32::try_from(self.declared_types.len()).expect("declared payload fits u32");
+        self.declared_types.push_local(declared);
+        self.push(TypeTag::Declared, flags, payload)
+    }
+
     /// Append an infer-binder row (M25). Internal — `Interner` owns dedup (by index).
     /// The de Bruijn index is stored inline in `payload`.
     pub(crate) fn push_infer(&mut self, index: u32, flags: TypeFlags) -> TypeId {
@@ -891,6 +950,24 @@ impl Store {
         self.template_names.keys().copied()
     }
 
+    pub(crate) fn snapshot_declared_recipes(
+        &self,
+    ) -> impl Iterator<Item = (DeclaredRecipeId, &DeclaredTypeRecipe)> + '_ {
+        self.declared_recipes
+            .iter()
+            .enumerate()
+            .map(|(index, recipe)| {
+                (
+                    DeclaredRecipeId(u32::try_from(index).expect("recipe id fits u32")),
+                    recipe,
+                )
+            })
+    }
+
+    pub(crate) fn declared_recipe_base_len(&self) -> usize {
+        self.declared_recipes.base_len()
+    }
+
     pub(crate) fn local_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
         self.template_names.local_iter().map(|(&id, _)| id)
     }
@@ -905,7 +982,7 @@ impl Store {
                 "snapshot cannot encode a store with a non-empty delta",
             ));
         }
-        writer.u32(1);
+        writer.u32(2);
         writer.usize(self.tag.len())?;
         for index in 0..self.tag.len() {
             writer.u8(self.tag[index].discriminant());
@@ -998,6 +1075,66 @@ impl Store {
             writer.u32(access.index.0);
         }
 
+        writer.usize(self.declared_recipes.len())?;
+        for recipe in &self.declared_recipes {
+            match &recipe.node {
+                crate::types::repr::DeclaredRecipeNode::Type(ty) => {
+                    writer.u8(0);
+                    writer.u32(ty.0);
+                }
+                crate::types::repr::DeclaredRecipeNode::Array(element) => {
+                    writer.u8(1);
+                    writer.u32(element.0);
+                }
+                crate::types::repr::DeclaredRecipeNode::Tuple { elements, rest } => {
+                    writer.u8(2);
+                    writer.usize(elements.len())?;
+                    for element in elements {
+                        writer.u32(element.0);
+                    }
+                    writer.bool(rest.is_some());
+                    if let Some((position, recipe)) = rest {
+                        writer.usize(*position)?;
+                        writer.u32(recipe.0);
+                    }
+                }
+                crate::types::repr::DeclaredRecipeNode::Readonly(operand) => {
+                    writer.u8(3);
+                    writer.u32(operand.0);
+                }
+                crate::types::repr::DeclaredRecipeNode::Application {
+                    template,
+                    parameters,
+                    arguments,
+                } => {
+                    writer.u8(4);
+                    writer.u32(template.0);
+                    writer.usize(parameters.len())?;
+                    for parameter in parameters {
+                        writer.u32(parameter.0);
+                    }
+                    writer.usize(arguments.len())?;
+                    for argument in arguments {
+                        writer.u32(argument.0);
+                    }
+                }
+            }
+            writer.usize(recipe.free_params.len())?;
+            for parameter in &recipe.free_params {
+                writer.u32(parameter.0);
+            }
+        }
+
+        writer.usize(self.declared_types.len())?;
+        for declared in &self.declared_types {
+            writer.u32(declared.recipe.0);
+            writer.usize(declared.mapper.len())?;
+            for (parameter, value) in &declared.mapper {
+                writer.u32(parameter.0);
+                writer.u32(value.0);
+            }
+        }
+
         writer.usize(self.mapped.len())?;
         for mapped in &self.mapped {
             writer.bool(mapped.homomorphic);
@@ -1046,7 +1183,8 @@ impl Store {
         reader: &mut SnapshotReader<'_>,
     ) -> Result<Self, SnapshotCodecError> {
         let version_offset = reader.position();
-        if reader.u32()? != 1 {
+        let version = reader.u32()?;
+        if !matches!(version, 1 | 2) {
             return Err(SnapshotCodecError::invalid(
                 version_offset,
                 "unsupported store snapshot version",
@@ -1175,6 +1313,82 @@ impl Store {
             });
         }
 
+        let mut declared_recipes = Vec::new();
+        if version >= 2 {
+            let recipe_count = reader.collection_len(5)?;
+            declared_recipes.reserve(recipe_count);
+            for _ in 0..recipe_count {
+                let offset = reader.position();
+                let node = match reader.u8()? {
+                    0 => crate::types::repr::DeclaredRecipeNode::Type(TypeId(reader.u32()?)),
+                    1 => crate::types::repr::DeclaredRecipeNode::Array(DeclaredRecipeId(
+                        reader.u32()?,
+                    )),
+                    2 => {
+                        let count = reader.collection_len(4)?;
+                        let mut elements = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            elements.push(DeclaredRecipeId(reader.u32()?));
+                        }
+                        let rest = if reader.bool()? {
+                            Some((reader.usize()?, DeclaredRecipeId(reader.u32()?)))
+                        } else {
+                            None
+                        };
+                        crate::types::repr::DeclaredRecipeNode::Tuple { elements, rest }
+                    }
+                    3 => crate::types::repr::DeclaredRecipeNode::Readonly(DeclaredRecipeId(
+                        reader.u32()?,
+                    )),
+                    4 => {
+                        let template = TypeId(reader.u32()?);
+                        let parameter_count = reader.collection_len(4)?;
+                        let mut parameters = Vec::with_capacity(parameter_count);
+                        for _ in 0..parameter_count {
+                            parameters.push(TypeParamId(reader.u32()?));
+                        }
+                        let argument_count = reader.collection_len(4)?;
+                        let mut arguments = Vec::with_capacity(argument_count);
+                        for _ in 0..argument_count {
+                            arguments.push(DeclaredRecipeId(reader.u32()?));
+                        }
+                        crate::types::repr::DeclaredRecipeNode::Application {
+                            template,
+                            parameters,
+                            arguments,
+                        }
+                    }
+                    _ => {
+                        return Err(SnapshotCodecError::invalid(
+                            offset,
+                            "invalid declared recipe discriminant",
+                        ))
+                    }
+                };
+                let free_count = reader.collection_len(4)?;
+                let mut free_params = Vec::with_capacity(free_count);
+                for _ in 0..free_count {
+                    free_params.push(TypeParamId(reader.u32()?));
+                }
+                declared_recipes.push(DeclaredTypeRecipe { node, free_params });
+            }
+        }
+
+        let mut declared_types = Vec::new();
+        if version >= 2 {
+            let declared_count = reader.collection_len(8)?;
+            declared_types.reserve(declared_count);
+            for _ in 0..declared_count {
+                let recipe = DeclaredRecipeId(reader.u32()?);
+                let mapper_count = reader.collection_len(8)?;
+                let mut mapper = Vec::with_capacity(mapper_count);
+                for _ in 0..mapper_count {
+                    mapper.push((TypeParamId(reader.u32()?), TypeId(reader.u32()?)));
+                }
+                declared_types.push(DeclaredType { recipe, mapper });
+            }
+        }
+
         let mapped_count = reader.collection_len(12)?;
         let mut mapped = Vec::with_capacity(mapped_count);
         for _ in 0..mapped_count {
@@ -1280,6 +1494,8 @@ impl Store {
             instantiations: instantiations.into(),
             class_instances: class_instances.into(),
             deferred_indexed_accesses: deferred_indexed_accesses.into(),
+            declared_recipes: declared_recipes.into(),
+            declared_types: declared_types.into(),
             mapped: mapped.into(),
             templates: templates.into(),
             type_param_constraints: type_param_constraints.into(),
@@ -1294,7 +1510,7 @@ impl Store {
     fn validate_snapshot_layout(&self) -> Result<(), SnapshotCodecError> {
         let len = self.len();
         let valid_type = |id: TypeId| id.index() < len;
-        let mut payload_counts = [0usize; 14];
+        let mut payload_counts = [0usize; 15];
         for index in 0..len {
             if self.stable_hash[index] != StableHash::default() {
                 return Err(snapshot_validation(
@@ -1349,6 +1565,7 @@ impl Store {
             self.instantiations.len(),
             self.class_instances.len(),
             self.deferred_indexed_accesses.len(),
+            self.declared_types.len(),
             self.mapped.len(),
             self.templates.len(),
         ];
@@ -1434,6 +1651,85 @@ impl Store {
         for access in &self.deferred_indexed_accesses {
             validate_type_id(access.object, len)?;
             validate_type_id(access.index, len)?;
+        }
+        let mut seen_declared_recipes = FxHashSet::default();
+        for (index, recipe) in self.declared_recipes.iter().enumerate() {
+            if !seen_declared_recipes.insert(recipe) {
+                return Err(snapshot_validation(
+                    "declared recipes contain duplicate identities",
+                ));
+            }
+            let valid_recipe = |recipe: DeclaredRecipeId| recipe.index() < index;
+            match &recipe.node {
+                crate::types::repr::DeclaredRecipeNode::Type(ty) => validate_type_id(*ty, len)?,
+                crate::types::repr::DeclaredRecipeNode::Array(element)
+                | crate::types::repr::DeclaredRecipeNode::Readonly(element) => {
+                    if !valid_recipe(*element) {
+                        return Err(snapshot_validation(
+                            "declared recipe child is not an earlier row",
+                        ));
+                    }
+                }
+                crate::types::repr::DeclaredRecipeNode::Tuple { elements, rest } => {
+                    if elements.iter().any(|element| !valid_recipe(*element))
+                        || rest.is_some_and(|(_, rest)| !valid_recipe(rest))
+                    {
+                        return Err(snapshot_validation(
+                            "declared tuple recipe child is not an earlier row",
+                        ));
+                    }
+                    if rest.is_some_and(|(position, _)| position > elements.len()) {
+                        return Err(snapshot_validation(
+                            "declared tuple recipe rest position is out of range",
+                        ));
+                    }
+                }
+                crate::types::repr::DeclaredRecipeNode::Application {
+                    template,
+                    parameters,
+                    arguments,
+                } => {
+                    validate_type_id(*template, len)?;
+                    if parameters.len() != arguments.len()
+                        || arguments.iter().any(|argument| !valid_recipe(*argument))
+                    {
+                        return Err(snapshot_validation(
+                            "declared application recipe is malformed",
+                        ));
+                    }
+                    let mut canonical_parameters = parameters.clone();
+                    canonical_parameters.sort_unstable();
+                    canonical_parameters.dedup();
+                    if canonical_parameters.len() != parameters.len() {
+                        return Err(snapshot_validation(
+                            "declared application parameters contain duplicates",
+                        ));
+                    }
+                }
+            }
+            if !recipe.free_params.windows(2).all(|pair| pair[0] < pair[1]) {
+                return Err(snapshot_validation(
+                    "declared recipe free parameters are not canonical",
+                ));
+            }
+        }
+        for declared in &self.declared_types {
+            if declared.recipe.index() >= self.declared_recipes.len()
+                || !declared.mapper.windows(2).all(|pair| pair[0].0 < pair[1].0)
+            {
+                return Err(snapshot_validation(
+                    "declared application mapper is not canonical",
+                ));
+            }
+            let recipe = &self.declared_recipes[declared.recipe.index()];
+            for (parameter, value) in &declared.mapper {
+                if recipe.free_params.binary_search(parameter).is_err() {
+                    return Err(snapshot_validation(
+                        "declared application mapper key is not free",
+                    ));
+                }
+                validate_type_id(*value, len)?;
+            }
         }
         for mapped in &self.mapped {
             validate_type_id(mapped.key_source, len)?;
@@ -1547,8 +1843,9 @@ fn cold_table_index(tag: TypeTag) -> Option<usize> {
         TypeTag::Instantiation => Some(9),
         TypeTag::ClassInstance => Some(10),
         TypeTag::DeferredIndexedAccess => Some(11),
-        TypeTag::Mapped => Some(12),
-        TypeTag::Template => Some(13),
+        TypeTag::Declared => Some(12),
+        TypeTag::Mapped => Some(13),
+        TypeTag::Template => Some(14),
         TypeTag::Intrinsic
         | TypeTag::Readonly
         | TypeTag::Infer
@@ -1786,6 +2083,7 @@ fn read_type_tag(value: u8, offset: usize) -> Result<TypeTag, SnapshotCodecError
         16 => Ok(TypeTag::Keyof),
         17 => Ok(TypeTag::ClassInstance),
         18 => Ok(TypeTag::DeferredIndexedAccess),
+        19 => Ok(TypeTag::Declared),
         _ => Err(SnapshotCodecError::invalid(
             offset,
             "invalid type tag discriminant",

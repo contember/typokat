@@ -80,3 +80,23 @@ pub(super) fn record_eager_namespace_variable_root() {
         measure.eager_materialization_roots += 1;
     });
 }
+
+pub(super) fn record_planned_interface_property_root() {
+    update(|measure| measure.eligible_interface_property_roots += 1);
+}
+
+pub(super) fn record_planned_namespace_variable_root() {
+    update(|measure| measure.eligible_namespace_variable_roots += 1);
+}
+
+pub(crate) fn record_demand_materialization_root() {
+    update(|measure| measure.demand_materialization_roots += 1);
+}
+
+pub(crate) fn record_materialization_memo_hit() {
+    update(|measure| measure.materialization_memo_hits += 1);
+}
+
+pub(crate) fn record_materialization_memo_insert() {
+    update(|measure| measure.materialization_memo_inserts += 1);
+}

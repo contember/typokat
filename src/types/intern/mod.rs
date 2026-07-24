@@ -4,6 +4,7 @@
 //! structural comparison. Intrinsics intern first, giving stable `WellKnown` ids.
 
 mod composites;
+mod declared;
 mod operators;
 mod snapshot;
 #[cfg(test)]
@@ -11,8 +12,8 @@ mod tests;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    ConditionalType, IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType,
-    PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, IntrinsicKind, LiteralValue, MappedType,
+    ObjectType, ParameterType, PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -320,6 +321,8 @@ pub struct Interner {
     /// §3.3). `SmallVec` because collisions are rare; the common case is a
     /// 1-element bucket.
     dedup: FxHashMap<u64, SmallVec<[TypeId; 2]>>,
+    declared_recipe_base: Arc<FxHashMap<DeclaredTypeRecipe, DeclaredRecipeId>>,
+    declared_recipe_local: FxHashMap<DeclaredTypeRecipe, DeclaredRecipeId>,
     /// Immutable nominal reservation terminals owned by the sealed prefix.
     reserved_types_base: Arc<FxHashMap<TypeId, ReservedType>>,
     /// Nominal placeholder rows are mutable exactly once, as one validated batch.
@@ -344,6 +347,8 @@ impl Interner {
             clean_application_results: DerivedGraphCache::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
+            declared_recipe_base: Arc::new(FxHashMap::default()),
+            declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types: FxHashMap::default(),
             // Placeholder; overwritten below before any use.
@@ -473,7 +478,10 @@ impl Interner {
 
     /// Seal a complete standalone interner as the immutable shared prefix.
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
-        if !self.dedup_base.is_empty() || !self.reserved_types_base.is_empty() {
+        if !self.dedup_base.is_empty()
+            || !self.reserved_types_base.is_empty()
+            || !self.declared_recipe_base.is_empty()
+        {
             return Err("interner is already sealed");
         }
         if self
@@ -497,13 +505,17 @@ impl Interner {
         self.deferred_keyof_results.freeze_as_base();
         self.clean_application_results.freeze_as_base();
         self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
+        self.declared_recipe_base = Arc::new(std::mem::take(&mut self.declared_recipe_local));
         self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
         Ok(())
     }
 
     /// Create an isolated interner suffix over this sealed prefix.
     pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
-        if !self.dedup.is_empty() || !self.reserved_types.is_empty() {
+        if !self.dedup.is_empty()
+            || !self.reserved_types.is_empty()
+            || !self.declared_recipe_local.is_empty()
+        {
             return Err("interner base has an unpublished suffix");
         }
         let store = self.store.fork_delta()?;
@@ -522,6 +534,8 @@ impl Interner {
             clean_application_results: self.clean_application_results.fork_delta(graph_identity),
             dedup_base: Arc::clone(&self.dedup_base),
             dedup: FxHashMap::default(),
+            declared_recipe_base: Arc::clone(&self.declared_recipe_base),
+            declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::clone(&self.reserved_types_base),
             reserved_types: FxHashMap::default(),
             well_known: self.well_known,
@@ -563,19 +577,21 @@ impl Interner {
     }
 
     #[cfg(test)]
-    pub(crate) fn base_index_family_sharing_with(&self, other: &Self) -> [bool; 3] {
+    pub(crate) fn base_index_family_sharing_with(&self, other: &Self) -> [bool; 4] {
         [
             Arc::ptr_eq(&self.dedup_base, &other.dedup_base),
             Arc::ptr_eq(&self.reserved_types_base, &other.reserved_types_base),
+            Arc::ptr_eq(&self.declared_recipe_base, &other.declared_recipe_base),
             self.well_known == other.well_known,
         ]
     }
 
     #[cfg(test)]
-    pub(crate) fn local_index_row_counts_for_test(&self) -> [usize; 3] {
+    pub(crate) fn local_index_row_counts_for_test(&self) -> [usize; 4] {
         [
             self.dedup.values().map(SmallVec::len).sum(),
             self.reserved_types.len(),
+            self.declared_recipe_local.len(),
             0,
         ]
     }
@@ -589,13 +605,16 @@ impl Interner {
     fn has_nonempty_delta(&self) -> bool {
         self.store.has_nonempty_delta()
             || (self.store.is_sealed_base()
-                && (!self.dedup.is_empty() || !self.reserved_types.is_empty()))
+                && (!self.dedup.is_empty()
+                    || !self.reserved_types.is_empty()
+                    || !self.declared_recipe_local.is_empty()))
     }
 
     #[cfg(test)]
     pub(crate) fn shares_base_indexes_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.dedup_base, &other.dedup_base)
             && Arc::ptr_eq(&self.reserved_types_base, &other.reserved_types_base)
+            && Arc::ptr_eq(&self.declared_recipe_base, &other.declared_recipe_base)
     }
 
     fn register_reserved_type(&mut self, id: TypeId, kind: ReservedTypeKind) -> TypeId {

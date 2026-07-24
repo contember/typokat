@@ -349,6 +349,43 @@ impl<'a> Substitution<'a> {
         }
     }
 
+    /// Compose an outer substitution into a declaration recipe's mapper without
+    /// walking or materializing the recipe body.
+    pub(super) fn apply_declared(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {
+        let Some(declared) = interner.store().declared_type(ty).cloned() else {
+            return ty;
+        };
+        let free_params = interner
+            .store()
+            .declared_recipe(declared.recipe)
+            .expect("declared application recipe exists")
+            .free_params
+            .clone();
+        let existing: FxHashMap<_, _> = declared.mapper.iter().copied().collect();
+        let mut changed = false;
+        let mut mapper = Vec::new();
+        for parameter in free_params {
+            if let Some(value) = existing.get(&parameter).copied() {
+                let substituted = self.apply(interner, value);
+                changed |= substituted != value;
+                mapper.push((parameter, substituted));
+                continue;
+            }
+            if self.blocked.contains(&parameter) {
+                continue;
+            }
+            if let Some(value) = self.map.get(&parameter).copied() {
+                changed = true;
+                mapper.push((parameter, value));
+            }
+        }
+        if changed {
+            interner.intern_declared(declared.recipe, mapper)
+        } else {
+            ty
+        }
+    }
+
     /// Substitute class arguments in declaration order without interpreting the
     /// application as an alias instantiation.
     pub(super) fn apply_class_instance(&mut self, interner: &mut Interner, ty: TypeId) -> TypeId {

@@ -733,6 +733,25 @@ impl<'a> Relater<'a> {
                         pending.push(access.index);
                     }
                 }
+                TypeTag::Declared => {
+                    if let Some(declared) = self.store.declared_type(current) {
+                        let replaced = declared
+                            .mapper
+                            .iter()
+                            .any(|(mapped, _)| *mapped == parameter);
+                        if !replaced
+                            && self
+                                .store
+                                .declared_recipe(declared.recipe)
+                                .is_some_and(|recipe| {
+                                    recipe.free_params.binary_search(&parameter).is_ok()
+                                })
+                        {
+                            return true;
+                        }
+                        pending.extend(declared.mapper.iter().map(|(_, value)| *value));
+                    }
+                }
                 TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
             }
         }

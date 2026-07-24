@@ -2186,20 +2186,28 @@ mod tests {
     }
 
     const TEST_ONLY_REPLAY_SOURCE_PATHS: &[&str] = &[
+        "src/check/checker/declaration_surface_lazy_spec.rs",
+        "src/check/checker/declaration_surface_measure.rs",
         "src/check/checker/decls/cycle_tainted_application_cache_spec.rs",
         "src/check/checker/decls/eager_application_cache_spec.rs",
         "src/check/checker/decls/interface_scc_pending_spec.rs",
+        "src/check/checker/eval/deferred_keyof_cache_spec.rs",
         "src/check/checker/eval/tests.rs",
         "src/check/checker/library_snapshot_codec/spec.rs",
         "src/check/checker/lexical_events/owner_lookup_spec.rs",
+        "src/check/query/deferred_indexed_lazy_spec.rs",
         "src/check/query/demand_identity_spec.rs",
         "src/check/query/dom_source_cold_spec.rs",
+        "src/check/query/event_listener_union_scaling_spec.rs",
         "src/check/query/identity_memo_spec.rs",
+        "src/check/query/instantiation_root_lazy_spec.rs",
+        "src/check/query/relation_root_lazy_spec.rs",
         "src/check/query/tests.rs",
     ];
 
     const EXPECTED_PRODUCTION_REPLAY_SOURCE_PATHS: &[&str] = &[
         "src/check/checker/annotations/composites.rs",
+        "src/check/checker/annotations/declared.rs",
         "src/check/checker/annotations/functions.rs",
         "src/check/checker/annotations/mod.rs",
         "src/check/checker/annotations/signatures.rs",

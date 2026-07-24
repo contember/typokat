@@ -117,6 +117,11 @@ impl<'a> Relater<'a> {
                         stack.push(access.index);
                     }
                 }
+                TypeTag::Declared => {
+                    if let Some(declared) = self.store.declared_type(t) {
+                        stack.extend(declared.mapper.iter().map(|(_, value)| *value));
+                    }
+                }
                 // A nested conditional rebinds its own infer indices — do not descend.
                 // A mapped type (M26) is related as a deferred node (never traversed for
                 // its own infer binders), and a mapped-value placeholder is not an infer.

@@ -935,6 +935,11 @@ fn walk_identity(
                     stack.extend([access.object, access.index]);
                 }
             }
+            TypeTag::Declared => {
+                if let Some(declared) = store.declared_type(ty) {
+                    stack.extend(declared.mapper.iter().map(|(_, value)| *value));
+                }
+            }
         }
     }
 }

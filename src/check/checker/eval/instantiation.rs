@@ -681,7 +681,8 @@ impl<'a> ConditionalEvaluator<'a> {
             | TypeTag::TypeParam
             | TypeTag::Conditional
             | TypeTag::Mapped
-            | TypeTag::MappedValue => identity(),
+            | TypeTag::MappedValue
+            | TypeTag::Declared => identity(),
             TypeTag::Object => {
                 let Some(object) = self.interner.store().object_type(ty).cloned() else {
                     return identity();

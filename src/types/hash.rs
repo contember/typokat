@@ -4,8 +4,8 @@
 //! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
-    ClassId, GenericTypeParam, IntrinsicKind, LiteralValue, ModifierOp, ParameterType,
-    PropertyType, TupleType, TypeParamId, TypeTag,
+    ClassId, DeclaredRecipeId, GenericTypeParam, IntrinsicKind, LiteralValue, ModifierOp,
+    ParameterType, PropertyType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
@@ -113,6 +113,10 @@ pub enum StructuralKey<'a> {
     DeferredIndexedAccess {
         object: TypeId,
         index: TypeId,
+    },
+    Declared {
+        recipe: DeclaredRecipeId,
+        mapper: &'a [(TypeParamId, TypeId)],
     },
 }
 
@@ -337,6 +341,15 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             TypeTag::DeferredIndexedAccess.hash_discriminant(&mut h);
             object.0.hash(&mut h);
             index.0.hash(&mut h);
+        }
+        StructuralKey::Declared { recipe, mapper } => {
+            TypeTag::Declared.hash_discriminant(&mut h);
+            recipe.0.hash(&mut h);
+            mapper.len().hash(&mut h);
+            for (parameter, argument) in *mapper {
+                parameter.0.hash(&mut h);
+                argument.0.hash(&mut h);
+            }
         }
         StructuralKey::Template { texts, holes } => {
             TypeTag::Template.hash_discriminant(&mut h);

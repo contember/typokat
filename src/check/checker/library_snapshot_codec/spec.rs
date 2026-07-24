@@ -94,9 +94,10 @@ const FAST_ERRORS: &str =
 // The prototype freezes a simple independently parseable wire header. The integration spec
 // mutates these bytes itself; the implementation cannot choose convenient corruptions.
 const SNAPSHOT_MAGIC: &[u8] = b"typokat-semantic-snapshot";
-const CANONICAL_ARCHIVE_BYTES: usize = 21_003_926;
-const CANONICAL_ARCHIVE_SHA256: &str =
-    "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f";
+// Source-cold compilation has its own pin; the packaged canonical snapshot stays backward-readable.
+const SOURCE_COMPILED_ARCHIVE_BYTES: usize = 19_039_216;
+const SOURCE_COMPILED_ARCHIVE_SHA256: &str =
+    "3e4dbf50019ff054bcfb6a06d429ba0af1a28a2212b0b6c68d216d89d7417485";
 const VERSION_OFFSET: usize = SNAPSHOT_MAGIC.len();
 const PROFILE_DIGEST_LEN: usize = 32;
 const SCHEMA_DIGEST_LEN: usize = 32;
@@ -420,10 +421,10 @@ fn decode_exact_profile(strategy: SnapshotDecodeStrategy) -> DecodedLibraryBase 
 #[test]
 fn exact_profile_archive_identity_is_pinned() {
     let archive = compile_exact_profile().archive().as_bytes();
-    assert_eq!(archive.len(), CANONICAL_ARCHIVE_BYTES);
+    assert_eq!(archive.len(), SOURCE_COMPILED_ARCHIVE_BYTES);
     assert_eq!(
         format!("{:x}", Sha256::digest(archive)),
-        CANONICAL_ARCHIVE_SHA256
+        SOURCE_COMPILED_ARCHIVE_SHA256
     );
 }
 

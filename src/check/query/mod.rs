@@ -16,6 +16,7 @@ use crate::relate::{
 };
 use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
+use crate::types::substitute::SubstitutionOutcome;
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
@@ -566,18 +567,21 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             );
         }
         if let DemandOutcome::Ready(identical) = &outcome {
+            let cache_tainted = transaction.cache_tainted;
             self.commit_plan(transaction.into_commit());
-            #[cfg(test)]
-            measure_query_source_cold(|measure| {
-                if *identical {
-                    measure.durable_identity_yes_inserts += 1;
-                } else {
-                    measure.durable_identity_no_inserts += 1;
-                }
-            });
-            self.state
-                .completed_identities
-                .insert(completed_key, *identical);
+            if !cache_tainted {
+                #[cfg(test)]
+                measure_query_source_cold(|measure| {
+                    if *identical {
+                        measure.durable_identity_yes_inserts += 1;
+                    } else {
+                        measure.durable_identity_no_inserts += 1;
+                    }
+                });
+                self.state
+                    .completed_identities
+                    .insert(completed_key, *identical);
+            }
         }
         outcome
     }
@@ -1409,7 +1413,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 let commit_cache = matches!(
                     attempt,
                     RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
-                ) && !planner.planning_tainted;
+                ) && !planner.planning_tainted
+                    && !planner.cache_tainted;
                 let cache = relater.finish_planned(commit_cache);
                 (attempt, cache)
             };
@@ -1431,10 +1436,13 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
         let commit_plan =
             !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
+        let cache_tainted = transaction.cache_tainted;
         self.state.relation_cache = relation_cache;
         if commit_plan {
             self.commit_plan(transaction.into_commit());
-            self.remember_completed_relation(completed_key, &outcome);
+            if !cache_tainted {
+                self.remember_completed_relation(completed_key, &outcome);
+            }
         }
         outcome
     }
@@ -1578,7 +1586,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 let commit_cache = matches!(
                     attempt,
                     RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
-                ) && !planner.planning_tainted;
+                ) && !planner.planning_tainted
+                    && !planner.cache_tainted;
                 let cache = relater.finish_planned(commit_cache);
                 (attempt, cache)
             };
@@ -1699,6 +1708,7 @@ impl RelationNormalization for ProjectionPlan<'_> {
             | TypeTag::Instantiation
             | TypeTag::Mapped
             | TypeTag::Template
+            | TypeTag::Declared
                 if !self.resolved_evaluations.contains(&ty)
                     && self
                         .durable_evaluation_memo
@@ -1717,6 +1727,7 @@ struct PlannedQuery<'a> {
     pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
     next_type_param: u32,
     planning_tainted: bool,
+    cache_tainted: bool,
     first_exhaustion: Option<Exhaustion>,
 }
 
@@ -1728,9 +1739,17 @@ struct PendingQueryCommit {
 
 impl PlannedQuery<'_> {
     fn into_commit(self) -> PendingQueryCommit {
+        let (pending_projection_writes, pending_evaluator_writes) = if self.cache_tainted {
+            (FxHashMap::default(), FxHashMap::default())
+        } else {
+            (
+                self.pending_projection_writes,
+                self.pending_evaluator_writes,
+            )
+        };
         PendingQueryCommit {
-            pending_projection_writes: self.pending_projection_writes,
-            pending_evaluator_writes: self.pending_evaluator_writes,
+            pending_projection_writes,
+            pending_evaluator_writes,
             next_type_param: self.next_type_param,
         }
     }
@@ -1749,6 +1768,7 @@ struct ProjectionPlanner<'work, 'memo, L: PublishedClassLookup + ?Sized> {
     visiting: FxHashSet<TypeId>,
     visited: FxHashSet<TypeId>,
     planning_tainted: bool,
+    cache_tainted: bool,
     first_exhaustion: Option<Exhaustion>,
     evaluation_expansions: u32,
 }
@@ -1801,6 +1821,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             visiting: FxHashSet::default(),
             visited: FxHashSet::default(),
             planning_tainted: false,
+            cache_tainted: false,
             first_exhaustion: None,
             evaluation_expansions: 0,
         }
@@ -1824,6 +1845,11 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             | TypeTag::Instantiation
             | TypeTag::Mapped
             | TypeTag::Template => {
+                #[cfg(test)]
+                measure_query_demand(|measure| measure.planner_root_visits += 1);
+                self.visit_demand_outer(root);
+            }
+            TypeTag::Declared => {
                 #[cfg(test)]
                 measure_query_demand(|measure| measure.planner_root_visits += 1);
                 self.visit_demand_outer(root);
@@ -1859,6 +1885,9 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 | TypeTag::Instantiation
                 | TypeTag::Mapped
                 | TypeTag::Template => {
+                    self.visit_relation_root(root);
+                }
+                TypeTag::Declared => {
                     self.visit_relation_root(root);
                 }
                 _ => {}
@@ -1902,6 +1931,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             pending_evaluator_writes,
             next_type_param: self.next_type_param,
             planning_tainted: self.planning_tainted,
+            cache_tainted: self.cache_tainted,
             first_exhaustion: self.first_exhaustion,
         }
     }
@@ -1955,6 +1985,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             | TypeTag::Union
             | TypeTag::Mapped
             | TypeTag::Template => self.evaluate_existing(ty, policy),
+            TypeTag::Declared => self.evaluate_declared(ty, policy),
             _ => {
                 let children = query_children(self.interner.store(), ty);
                 for child in children {
@@ -2182,6 +2213,39 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         result
     }
 
+    fn evaluate_declared(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
+        if let Some(result) = self
+            .working_evaluation_memo
+            .get(&ty)
+            .or_else(|| self.durable_evaluation_memo.get(&ty))
+            .copied()
+        {
+            #[cfg(test)]
+            crate::check::checker::declaration_surface_measure::record_materialization_memo_hit();
+            self.record_evaluation(ty, result);
+            self.visit_demand_result(result, policy);
+            return result;
+        }
+        #[cfg(test)]
+        crate::check::checker::declaration_surface_measure::record_demand_materialization_root();
+        let outcome = self
+            .interner
+            .materialize_declared(ty)
+            .expect("declared tag has one valid application payload");
+        let result = match outcome {
+            SubstitutionOutcome::CycleClean(result) => result,
+            SubstitutionOutcome::CycleTainted(result) => {
+                self.cache_tainted = true;
+                result
+            }
+        };
+        #[cfg(test)]
+        crate::check::checker::declaration_surface_measure::record_materialization_memo_insert();
+        self.record_evaluation(ty, result);
+        self.visit_demand_result(result, policy);
+        result
+    }
+
     fn evaluation_prerequisites(&self, ty: TypeId, policy: SemanticVisitPolicy) -> Vec<TypeId> {
         if policy == SemanticVisitPolicy::RelationRootOuterOnly
             && self.interner.store().tag(ty) == TypeTag::Instantiation
@@ -2208,7 +2272,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                     TypeTag::ClassInstance => {
                         self.project_class_outer(result);
                     }
-                    TypeTag::DeferredIndexedAccess => {
+                    TypeTag::DeferredIndexedAccess | TypeTag::Declared => {
                         self.visit_with_policy(result, policy);
                     }
                     _ => {}
@@ -2389,6 +2453,9 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
         TypeTag::DeferredIndexedAccess => store
             .deferred_indexed_access_type(ty)
             .map_or_else(Vec::new, |access| vec![access.object, access.index]),
+        TypeTag::Declared => store.declared_type(ty).map_or_else(Vec::new, |declared| {
+            declared.mapper.iter().map(|(_, value)| *value).collect()
+        }),
         TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => Vec::new(),
     }
 }

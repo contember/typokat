@@ -46,7 +46,7 @@ mod context;
 #[cfg(test)]
 mod declaration_surface_lazy_spec;
 #[cfg(test)]
-mod declaration_surface_measure;
+pub(crate) mod declaration_surface_measure;
 mod decls;
 pub(in crate::check) mod eval;
 pub(crate) mod events;

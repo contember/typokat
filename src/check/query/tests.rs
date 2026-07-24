@@ -1,8 +1,9 @@
 use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
 use crate::types::repr::{
-    ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
-    ObjectType, ParameterType, PropertyType, TemplateType, TypeParamId, Visibility,
+    ClassId, ConditionalType, DeclaredRecipeNode, FunctionType, GenericTypeParam, LiteralValue,
+    MappedType, ModifierOp, ObjectType, ParameterType, PropertyType, TemplateType, TypeParamId,
+    Visibility,
 };
 
 fn published(
@@ -2232,6 +2233,98 @@ fn tainted_transaction_discards_local_delta_and_preserves_parent() {
         DemandOutcome::Exhausted(Exhaustion::EvaluationBudget)
     );
     assert_eq!(state.evaluation_memo, original);
+}
+
+#[test]
+fn cycle_tainted_declared_roots_recompute_per_context_without_durable_promotion() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(99_251);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let a = interner.reserve_object();
+    let b = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("back", a),
+            PropertyType::public("value", parameter),
+        ],
+        ..Default::default()
+    });
+    interner.fill_object(
+        a,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("child", b),
+                PropertyType::public("value", parameter),
+            ],
+            ..Default::default()
+        },
+    );
+
+    let b_inside_a = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("back", a),
+            PropertyType::public("value", wk.number),
+        ],
+        ..Default::default()
+    });
+    let expected_a = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("child", b_inside_a),
+            PropertyType::public("value", wk.number),
+        ],
+        ..Default::default()
+    });
+    let a_inside_b = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("child", b),
+            PropertyType::public("value", wk.number),
+        ],
+        ..Default::default()
+    });
+    let expected_b = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("back", a_inside_b),
+            PropertyType::public("value", wk.number),
+        ],
+        ..Default::default()
+    });
+
+    let number = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.number));
+    let a_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: a,
+        parameters: vec![parameter_id],
+        arguments: vec![number],
+    });
+    let b_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: b,
+        parameters: vec![parameter_id],
+        arguments: vec![number],
+    });
+    let a_root = interner.intern_declared(a_recipe, []);
+    let b_root = interner.intern_declared(b_recipe, []);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(a_root),
+        DemandOutcome::Ready(expected_a)
+    );
+    assert!(
+        state.evaluation_memo.is_empty(),
+        "a cycle-tainted result must not become durable"
+    );
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(b_root),
+        DemandOutcome::Ready(expected_b)
+    );
+    assert!(
+        state.evaluation_memo.is_empty(),
+        "the second root must recompute in its own live-stack context"
+    );
+    assert_ne!(expected_a, expected_b);
 }
 
 #[test]

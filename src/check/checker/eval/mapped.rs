@@ -907,9 +907,11 @@ impl<'a> ConditionalEvaluator<'a> {
         let identity = |result| MappedRewriteFrame::Identity { ty, result };
         match self.interner.store().tag(ty) {
             TypeTag::MappedValue => identity(value),
-            TypeTag::Intrinsic | TypeTag::Literal | TypeTag::TypeParam | TypeTag::Infer => {
-                identity(ty)
-            }
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::TypeParam
+            | TypeTag::Infer
+            | TypeTag::Declared => identity(ty),
             TypeTag::Mapped => {
                 let Some(mapped) = self.interner.store().mapped_type(ty).copied() else {
                     return identity(ty);

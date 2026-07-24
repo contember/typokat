@@ -530,7 +530,8 @@ impl<'a> ConditionalEvaluator<'a> {
                 | TypeTag::Instantiation
                 | TypeTag::Mapped
                 | TypeTag::Keyof
-                | TypeTag::DeferredIndexedAccess => return true,
+                | TypeTag::DeferredIndexedAccess
+                | TypeTag::Declared => return true,
                 TypeTag::Object => {
                     if let Some(object) = store.object_type(t) {
                         stack.extend(object.properties.iter().map(|p| p.ty));

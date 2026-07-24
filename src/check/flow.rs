@@ -369,7 +369,8 @@ fn literal_could_equal_property(
         | TypeTag::Mapped
         | TypeTag::MappedValue
         | TypeTag::Keyof
-        | TypeTag::DeferredIndexedAccess => true,
+        | TypeTag::DeferredIndexedAccess
+        | TypeTag::Declared => true,
     }
 }
 
@@ -626,7 +627,8 @@ fn member_matches_typeof(
         | TypeTag::Mapped
         | TypeTag::MappedValue
         | TypeTag::Keyof
-        | TypeTag::DeferredIndexedAccess => false,
+        | TypeTag::DeferredIndexedAccess
+        | TypeTag::Declared => false,
     }
 }
 

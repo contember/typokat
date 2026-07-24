@@ -316,6 +316,25 @@ fn free_type_params(store: &Store, root: TypeId) -> FxHashSet<TypeParamId> {
                 visit(store, access.object, bound, free, seen);
                 visit(store, access.index, bound, free, seen);
             }
+            TypeTag::Declared => {
+                let declared = store.declared_type(ty).expect("declared payload");
+                let recipe = store
+                    .declared_recipe(declared.recipe)
+                    .expect("declared recipe");
+                for parameter in &recipe.free_params {
+                    if !bound.contains(parameter)
+                        && !declared
+                            .mapper
+                            .iter()
+                            .any(|(mapped, _)| mapped == parameter)
+                    {
+                        free.insert(*parameter);
+                    }
+                }
+                for (_, value) in &declared.mapper {
+                    visit(store, *value, bound, free, seen);
+                }
+            }
             TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
         }
     }
@@ -791,9 +810,21 @@ const wrong: string = value.next.b;
                     } else {
                         assert_eq!(
                             interner.store().tag(next),
-                            TypeTag::Object,
-                            "{name}.next may eagerly project its frozen dependency"
+                            TypeTag::Declared,
+                            "{name}.next must defer its frozen dependency application"
                         );
+                        let declared = interner
+                            .store()
+                            .declared_type(next)
+                            .expect("declared dependency application");
+                        let recipe = interner
+                            .store()
+                            .declared_recipe(declared.recipe)
+                            .expect("declared dependency recipe");
+                        assert!(matches!(
+                            recipe.node,
+                            crate::types::repr::DeclaredRecipeNode::Application { .. }
+                        ));
                     }
                     assert_published_types_are_owner_closed(interner.store(), group);
                 }
