@@ -3090,6 +3090,15 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .and_then(|binding| binding.ty)
     }
 
+    pub(in crate::check::checker) fn peek_type_decl_id_untraced(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<crate::binder::declaration::TypeGroupId> {
+        let symbol = self.binder.resolve_type(scope, name)?;
+        self.binder.symbols.get(symbol)?.ty
+    }
+
     pub(in crate::check::checker) fn value_decl_id_replay(
         &self,
         scope: ScopeId,

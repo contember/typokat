@@ -95,9 +95,9 @@ const FAST_ERRORS: &str =
 // mutates these bytes itself; the implementation cannot choose convenient corruptions.
 const SNAPSHOT_MAGIC: &[u8] = b"typokat-semantic-snapshot";
 // Source-cold compilation has its own pin; the packaged canonical snapshot stays backward-readable.
-const SOURCE_COMPILED_ARCHIVE_BYTES: usize = 19_039_216;
+const SOURCE_COMPILED_ARCHIVE_BYTES: usize = 19_025_866;
 const SOURCE_COMPILED_ARCHIVE_SHA256: &str =
-    "3e4dbf50019ff054bcfb6a06d429ba0af1a28a2212b0b6c68d216d89d7417485";
+    "590bf4727d61a0638b7a889ece9e0705182e8efcf580b1d61ef73d0131f21646";
 const VERSION_OFFSET: usize = SNAPSHOT_MAGIC.len();
 const PROFILE_DIGEST_LEN: usize = 32;
 const SCHEMA_DIGEST_LEN: usize = 32;

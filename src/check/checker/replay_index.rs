@@ -2615,6 +2615,7 @@ mod tests {
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_value_binding(scope, name);", count: 1, reason: "no-trace value binding fast path" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_value(scope, name);", count: 1, reason: "no-trace value fast path" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_type(scope, name);", count: 1, reason: "no-trace type fast path" },
+            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "let symbol = self.binder.resolve_type(scope, name)?;", count: 1, reason: "speculative planner read; dependency replayed on commit; fallback performs canonical traced lowering" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_qualified_type_path(scope, segments);", count: 1, reason: "no-trace qualified fast path" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: ".classes().published_class(class)", count: 1, reason: "instrumented class delegate" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.decl_types.get(storage);", count: 1, reason: "no-trace decl fast path" },
