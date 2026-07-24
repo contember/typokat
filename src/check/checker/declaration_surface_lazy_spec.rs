@@ -6,6 +6,7 @@
 use super::declaration_surface_measure::{
     declaration_surface_measure, start_declaration_surface_measure, DeclarationSurfaceMeasure,
 };
+use super::eval::DEFAULT_STEP_BUDGET;
 use super::library_compiler::{compile_owned_injected_profile, InjectedLibrarySource};
 use super::reporting_record::CheckerRecord;
 use crate::diagnostics::DiagnosticCode;
@@ -266,10 +267,7 @@ const outer: Outer = {
     );
     assert_eq!(run.output.diagnostics.len(), 1);
     assert_eq!(run.output.diagnostics[0].code, DiagnosticCode::TK2353);
-    assert_eq!(
-        &run.source[run.output.diagnostics[0].span.range()],
-        "extra"
-    );
+    assert_eq!(&run.source[run.output.diagnostics[0].span.range()], "extra");
 }
 
 #[test]
@@ -326,6 +324,176 @@ const outer: Outer = {
             ),
         ]
     );
+}
+
+#[test]
+fn direct_declared_application_assignment_renders_specialized_arguments() {
+    let source = r#"interface Box<T> {
+  value: T;
+}
+interface UsesBoxes {
+  text: Box<string>;
+}
+declare const boxes: UsesBoxes;
+const mismatch: Box<number> = boxes.text;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(run.output.diagnostics.len(), 1);
+    assert_eq!(run.output.diagnostics[0].code, DiagnosticCode::TK2322);
+    assert_eq!(
+        run.output.diagnostics[0].message,
+        "Type '{ value: string }' is not assignable to type '{ value: number }'"
+    );
+}
+
+#[test]
+fn nested_declared_application_assignment_renders_specialized_arguments() {
+    let source = r#"interface Leaf<T> {
+  value: T;
+}
+interface Mid<T> {
+  leaf: Leaf<T>;
+}
+interface Holder {
+  mid: Mid<string>;
+}
+declare const holder: Holder;
+const mismatch: Mid<number> = holder.mid;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(run.output.diagnostics.len(), 1);
+    assert_eq!(run.output.diagnostics[0].code, DiagnosticCode::TK2322);
+    assert_eq!(
+        run.output.diagnostics[0].message,
+        "Type '{ leaf: { value: string } }' is not assignable to type '{ leaf: { value: number } }'"
+    );
+}
+
+#[test]
+fn declared_application_index_signature_renders_specialized_arguments() {
+    let source = r#"interface Dict<T> {
+  [key: string]: T;
+  value: T;
+}
+interface Holder {
+  strings: Dict<string>;
+}
+declare const holder: Holder;
+const mismatch: Dict<number> = holder.strings;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(run.output.diagnostics.len(), 1);
+    assert_eq!(run.output.diagnostics[0].code, DiagnosticCode::TK2322);
+    assert_eq!(
+        run.output.diagnostics[0].message,
+        "Type '{ [x: string]: string; value: string }' is not assignable to type '{ [x: string]: number; value: number }'"
+    );
+}
+
+#[test]
+fn declared_application_call_and_construct_signatures_render_specialized_arguments() {
+    let source = r#"interface Callable<T> {
+  (value: T): T;
+  new (value: T): { value: T };
+  value: T;
+}
+interface Holder {
+  callable: Callable<string>;
+}
+declare const holder: Holder;
+const mismatch: Callable<number> = holder.callable;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(run.output.diagnostics.len(), 1);
+    assert_eq!(run.output.diagnostics[0].code, DiagnosticCode::TK2322);
+    assert_eq!(
+        run.output.diagnostics[0].message,
+        "Type '{ (value: string): string; new (value: string): { value: string }; value: string }' is not assignable to type '{ (value: number): number; new (value: number): { value: number }; value: number }'"
+    );
+}
+
+#[test]
+fn earlier_excess_diagnostic_survives_later_child_demand_exhaustion() {
+    let mut source = String::from("type Exhaustion0000 = { known: number };\n");
+    for depth in 1..=DEFAULT_STEP_BUDGET + 1 {
+        source.push_str(&format!(
+            "type Exhaustion{depth:04} = number extends number ? Exhaustion{:04} : never;\n",
+            depth - 1
+        ));
+    }
+    source.push_str(&format!(
+        "interface ExhaustionTarget {{\n\
+           first: {{ known: number }};\n\
+           later: Exhaustion{:04};\n\
+         }}\n\
+         const value: ExhaustionTarget = {{\n\
+           first: {{ known: 1, extra: true }},\n\
+           later: {{ known: 1 }},\n\
+         }};\n",
+        DEFAULT_STEP_BUDGET + 1
+    ));
+
+    let run = check_measured(source);
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::TK2589),
+        "the later child must exercise semantic-demand exhaustion: {:?}",
+        run.output.diagnostics
+    );
+    let excess = run
+        .output
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::TK2353)
+        .expect("the earlier source-ordered excess diagnostic must be retained");
+    assert_eq!(&run.source[excess.span.range()], "extra");
 }
 
 #[test]
