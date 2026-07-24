@@ -239,6 +239,96 @@ const mismatch: number = boxes.text.value;
 }
 
 #[test]
+fn nested_excess_property_through_declared_application_is_retained() {
+    let source = r#"interface Box<T> {
+  value: T;
+}
+interface Outer {
+  inner: Box<number>;
+}
+const outer: Outer = {
+  inner: {
+    value: 1,
+    extra: true,
+  },
+};
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(run.output.diagnostics.len(), 1);
+    assert_eq!(run.output.diagnostics[0].code, DiagnosticCode::TK2353);
+    assert_eq!(
+        &run.source[run.output.diagnostics[0].span.range()],
+        "extra"
+    );
+}
+
+#[test]
+fn undemanded_declared_application_diagnostics_render_specialized_arguments() {
+    let source = r#"interface Box<T> {
+  value: T;
+}
+interface Outer {
+  text: Box<string>;
+  count: Box<number>;
+}
+const outer: Outer = {
+  text: {
+    value: "ok",
+    textExtra: true,
+  },
+  count: {
+    value: 1,
+    countExtra: true,
+  },
+};
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(
+        run.output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code,
+                &run.source[diagnostic.span.range()],
+                diagnostic.message.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                DiagnosticCode::TK2353,
+                "textExtra",
+                "Object literal may only specify known properties, and 'textExtra' does not exist in type '{ value: string }'.",
+            ),
+            (
+                DiagnosticCode::TK2353,
+                "countExtra",
+                "Object literal may only specify known properties, and 'countExtra' does not exist in type '{ value: number }'.",
+            ),
+        ]
+    );
+}
+
+#[test]
 fn recursive_declared_property_terminates_without_cross_mapper_contamination() {
     let source = r#"interface RecursiveNode<T> {
   value: T;
