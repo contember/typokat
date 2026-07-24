@@ -2408,51 +2408,40 @@ enum TerminalOwnerExpression {
     Union(Vec<usize>),
 }
 
-fn terminal_expression_owners<'a>(
+/// Flattens every owner expression in one ascending pass. A `Union` is always
+/// minted after the inputs it merges, so the vector is already topologically
+/// ordered and each expression is summarized exactly once — memoizing only at
+/// query roots re-walked shared pass-through chains once per root.
+fn terminal_expression_owners(
     expressions: &[TerminalOwnerExpression],
-    root: usize,
-    cache: &'a mut Vec<Option<Vec<ReplayOwner>>>,
-    seen: &mut Vec<u32>,
-    epoch: &mut u32,
     #[cfg(test)] work: &mut Option<&mut TerminalClassDependencyValidationWork>,
-) -> &'a [ReplayOwner] {
-    cache.resize_with(expressions.len(), || None);
-    if cache[root].is_none() {
-        if *epoch == u32::MAX {
-            seen.fill(0);
-            *epoch = 1;
-        } else {
-            *epoch += 1;
-        }
-        seen.resize(expressions.len(), 0);
-        let mut owners = Vec::new();
-        let mut pending = vec![root];
-        while let Some(expression) = pending.pop() {
-            // Counted per popped node, so a re-walked pass-through chain is visible.
-            #[cfg(test)]
-            record_terminal_owner_expression_visits(work, 1);
-            if seen[expression] == *epoch {
-                continue;
-            }
-            seen[expression] = *epoch;
-            if let Some(cached) = &cache[expression] {
-                owners.extend_from_slice(cached);
-                continue;
-            }
-            match &expressions[expression] {
-                TerminalOwnerExpression::Owner(owner) => owners.push(*owner),
-                TerminalOwnerExpression::Union(inputs) => {
-                    pending.extend(inputs.iter().copied());
+) -> Vec<Vec<ReplayOwner>> {
+    let mut owners = Vec::<Vec<ReplayOwner>>::with_capacity(expressions.len());
+    for (expression, node) in expressions.iter().enumerate() {
+        #[cfg(test)]
+        record_terminal_owner_expression_visits(work, 1);
+        match node {
+            TerminalOwnerExpression::Owner(owner) => owners.push(vec![*owner]),
+            TerminalOwnerExpression::Union(inputs) => {
+                let mut merged = Vec::new();
+                for input in inputs.iter().copied() {
+                    // Ascending order is the precondition of this pass; a forward
+                    // reference would silently truncate the owner closure.
+                    assert!(
+                        input < expression,
+                        "owner expression {expression} merges a later input {input}"
+                    );
+                    #[cfg(test)]
+                    record_terminal_owner_expression_visits(work, owners[input].len());
+                    merged.extend_from_slice(&owners[input]);
                 }
+                merged.sort_unstable();
+                merged.dedup();
+                owners.push(merged);
             }
         }
-        owners.sort_unstable();
-        owners.dedup();
-        cache[root] = Some(owners);
     }
-    cache[root]
-        .as_deref()
-        .expect("terminal owner expression was cached")
+    owners
 }
 
 #[cfg(test)]
@@ -2751,11 +2740,13 @@ fn require_terminal_class_dependency_closure(
             }
         }
     }
-    debug_assert_eq!(processed_components, component_count);
+    // An undrained condensation would emit no classes for the stranded components,
+    // i.e. silently admit unauthenticated replay dependencies.
+    assert_eq!(
+        processed_components, component_count,
+        "the terminal condensation is acyclic and must drain completely"
+    );
 
-    let mut expression_cache = Vec::new();
-    let mut expression_seen = Vec::new();
-    let mut expression_epoch = 0;
     let mut class_expressions = Vec::with_capacity(class_owner_inputs.len());
     for (class, mut inputs) in class_owner_inputs {
         inputs.sort_unstable();
@@ -2770,27 +2761,13 @@ fn require_terminal_class_dependency_closure(
         };
         class_expressions.push((class, expression));
     }
-    let mut query_expressions = class_expressions
-        .iter()
-        .map(|(_, expression)| *expression)
-        .collect::<Vec<_>>();
-    query_expressions.sort_unstable();
-    query_expressions.dedup();
-    for expression in query_expressions {
-        terminal_expression_owners(
-            &expressions,
-            expression,
-            &mut expression_cache,
-            &mut expression_seen,
-            &mut expression_epoch,
-            #[cfg(test)]
-            &mut work,
-        );
-    }
+    let expression_owners = terminal_expression_owners(
+        &expressions,
+        #[cfg(test)]
+        &mut work,
+    );
     for (class, expression) in class_expressions {
-        let owners = expression_cache[expression]
-            .as_deref()
-            .expect("terminal class owner expression was cached");
+        let owners = &expression_owners[expression];
         #[cfg(test)]
         {
             record_terminal_class_edges(&mut work, owners.len());
