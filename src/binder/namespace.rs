@@ -208,57 +208,42 @@ impl NamespaceContinuationWorkScopeForTest {
 
 #[cfg(test)]
 thread_local! {
-    static PLACEMENT_SYNTAX_WRITE_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static PLACEMENT_SYNTAX_READ_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_ROW_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Participant comparisons spent locating a placement row by `DeclId`.
+/// Placement participant rows visited to resolve one declaration — the merge-group rows
+/// `push_placement` compares, plus every by-declaration syntax read it answers.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct PlacementSyntaxWorkForTest {
-    write_probes: u64,
-    read_probes: u64,
+struct PlacementLookupWorkForTest {
+    row_probes: u64,
 }
 
 #[cfg(test)]
-impl PlacementSyntaxWorkForTest {
-    fn probes(self) -> u64 {
-        self.write_probes + self.read_probes
+fn placement_lookup_work_for_test() -> PlacementLookupWorkForTest {
+    PlacementLookupWorkForTest {
+        row_probes: PLACEMENT_ROW_PROBES.get(),
     }
 }
 
 #[cfg(test)]
-fn placement_syntax_work_for_test() -> PlacementSyntaxWorkForTest {
-    PlacementSyntaxWorkForTest {
-        write_probes: PLACEMENT_SYNTAX_WRITE_PROBES.get(),
-        read_probes: PLACEMENT_SYNTAX_READ_PROBES.get(),
-    }
+fn record_placement_row_probe() {
+    PLACEMENT_ROW_PROBES.set(PLACEMENT_ROW_PROBES.get() + 1);
 }
 
 #[cfg(test)]
-fn record_placement_syntax_write_probe() {
-    PLACEMENT_SYNTAX_WRITE_PROBES.set(PLACEMENT_SYNTAX_WRITE_PROBES.get() + 1);
-}
+struct PlacementLookupWorkScopeForTest(PlacementLookupWorkForTest);
 
 #[cfg(test)]
-fn record_placement_syntax_read_probe() {
-    PLACEMENT_SYNTAX_READ_PROBES.set(PLACEMENT_SYNTAX_READ_PROBES.get() + 1);
-}
-
-#[cfg(test)]
-struct PlacementSyntaxWorkScopeForTest(PlacementSyntaxWorkForTest);
-
-#[cfg(test)]
-impl PlacementSyntaxWorkScopeForTest {
+impl PlacementLookupWorkScopeForTest {
     fn start() -> Self {
-        Self(placement_syntax_work_for_test())
+        Self(placement_lookup_work_for_test())
     }
 
-    fn finish(self) -> PlacementSyntaxWorkForTest {
-        let end = placement_syntax_work_for_test();
-        PlacementSyntaxWorkForTest {
-            write_probes: end.write_probes.saturating_sub(self.0.write_probes),
-            read_probes: end.read_probes.saturating_sub(self.0.read_probes),
+    fn finish(self) -> PlacementLookupWorkForTest {
+        let end = placement_lookup_work_for_test();
+        PlacementLookupWorkForTest {
+            row_probes: end.row_probes.saturating_sub(self.0.row_probes),
         }
     }
 }
@@ -4044,10 +4029,6 @@ fn publish_continuation_hoisted_variables(state: &mut BindState, unit: Compilati
             DeclarationSpaces::VALUE,
             unit.binding.declaration_file(),
             unit,
-        );
-        set_placement_syntax(
-            state,
-            declaration,
             DeclarationSyntaxFacts::Variable(VariableKind::Var),
         );
     }
@@ -4900,8 +4881,8 @@ fn bind_named_declaration_with_syntax(
         spaces,
         ambient,
         unit,
+        syntax,
     );
-    set_placement_syntax(state, declaration, syntax);
     let legal_global_type = context.global.is_some()
         && owner == DeclarationOwner::CompilationGlobal
         && matches!(
@@ -5064,7 +5045,7 @@ fn bind_module_declaration(
         NamespaceOwner::FragmentPrivate(fragment) => DeclarationOwner::NamespacePrivate(fragment),
         NamespaceOwner::CompilationGlobal => DeclarationOwner::CompilationGlobal,
     };
-    push_placement(
+    if let Some(participant) = push_placement(
         state,
         placement_owner,
         identifier.name.as_str(),
@@ -5073,15 +5054,9 @@ fn bind_module_declaration(
         DeclarationSpaces::NAMESPACE,
         context.ambient || declaration.declare || unit.binding.declaration_file(),
         unit,
-    );
-    for participants in state.namespaces.placements.local_values_mut() {
-        if let Some(participant) = participants
-            .iter_mut()
-            .find(|participant| participant.declaration == declaration_id)
-        {
-            participant.namespace_fragment = Some(fragment);
-            break;
-        }
+        DeclarationSyntaxFacts::None,
+    ) {
+        participant.namespace_fragment = Some(fragment);
     }
     if context.member_owner().is_some() {
         let site = state
@@ -5984,8 +5959,11 @@ fn bind_global(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_placement(
-    state: &mut BindState,
+/// Places `declaration` under `owner`/`name` and returns its row, so a caller that has
+/// more to record reaches it through this one merge-key lookup instead of hunting for
+/// the row it just wrote across every placement in the project.
+fn push_placement<'state>(
+    state: &'state mut BindState,
     owner: DeclarationOwner,
     name: &str,
     declaration: DeclId,
@@ -5993,7 +5971,8 @@ fn push_placement(
     spaces: DeclarationSpaces,
     ambient: bool,
     unit: CompilationUnit,
-) {
+    syntax: DeclarationSyntaxFacts,
+) -> Option<&'state mut MergeParticipant> {
     let span = state
         .declarations
         .get(declaration)
@@ -6015,7 +5994,7 @@ fn push_placement(
         binding_span,
         ambient,
         spaces,
-        syntax: DeclarationSyntaxFacts::None,
+        syntax,
         namespace_fragment: None,
         namespace_instance: None,
     };
@@ -6026,42 +6005,39 @@ fn push_placement(
         },
         Vec::new,
     ) else {
-        return;
+        return None;
     };
-    if !entries.iter().any(|entry| entry.declaration == declaration) {
-        entries.push(participant);
-    }
-}
-
-fn set_placement_syntax(
-    state: &mut BindState,
-    declaration: DeclId,
-    syntax: DeclarationSyntaxFacts,
-) {
-    for participants in state.namespaces.placements.local_values_mut() {
-        if let Some(participant) = participants.iter_mut().find(|participant| {
-            #[cfg(test)]
-            record_placement_syntax_write_probe();
-            participant.declaration == declaration
-        }) {
-            participant.syntax = syntax;
-            return;
+    // A merge group holds one row per declaration sharing the name, never the project.
+    let index = match entries.iter().position(|entry| {
+        #[cfg(test)]
+        record_placement_row_probe();
+        entry.declaration == declaration
+    }) {
+        Some(index) => index,
+        None => {
+            entries.push(participant);
+            entries.len() - 1
         }
+    };
+    let row = entries.get_mut(index)?;
+    row.syntax = syntax;
+    // Mirror the row's facts so the by-declaration read is a lookup, not a scan. Only a
+    // row this build actually placed contributes, so a sealed base still answers `None`.
+    if syntax == DeclarationSyntaxFacts::None {
+        state.placement_syntax.remove(&declaration);
+    } else {
+        state.placement_syntax.insert(declaration, syntax);
     }
+    Some(row)
 }
 
 fn placement_syntax(state: &BindState, declaration: DeclId) -> Option<DeclarationSyntaxFacts> {
-    state
-        .namespaces
-        .placements
-        .local_iter()
-        .flat_map(|(_, participants)| participants)
-        .find(|participant| {
-            #[cfg(test)]
-            record_placement_syntax_read_probe();
-            participant.declaration == declaration
-        })
-        .map(|participant| participant.syntax)
+    let syntax = state.placement_syntax.get(&declaration).copied();
+    #[cfg(test)]
+    if syntax.is_some() {
+        record_placement_row_probe();
+    }
+    syntax
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6442,27 +6418,28 @@ mod tests {
     /// cost a bounded number of participant probes — never a scan of the whole project.
     const PLACEMENT_SYNTAX_PROBES_PER_DECLARATION: u64 = 4;
 
-    /// Half plain top-level declarations (which only write the syntax facts) and half
-    /// namespace members (whose member rows read them back), so both lookups are measured.
-    fn placement_syntax_probe_work(declarations: u64) -> PlacementSyntaxWorkForTest {
-        let half = declarations / 2;
-        let top_level = (0..half)
-            .map(|index| format!("declare const value{index}: number;\n"))
+    /// One group is a top-level declaration (which only writes syntax facts), a namespace
+    /// (whose fragment is back-patched onto the row), and a member of it (whose member row
+    /// reads the facts back) — every by-declaration placement lookup in one workload.
+    fn placement_syntax_probe_work(groups: u64) -> PlacementLookupWorkForTest {
+        let source = (0..groups)
+            .map(|index| {
+                format!(
+                    "declare const value{index}: number;\n\
+                     declare namespace Space{index} {{ const member{index}: number; }}\n"
+                )
+            })
             .collect::<String>();
-        let members = (0..half)
-            .map(|index| format!("const member{index}: number;\n"))
-            .collect::<String>();
-        let source = format!("{top_level}declare namespace Space {{\n{members}}}\n");
-        let scope = PlacementSyntaxWorkScopeForTest::start();
+        let scope = PlacementLookupWorkScopeForTest::start();
         let binder = bind(&source, false);
         let work = scope.finish();
         assert_eq!(
             u64::try_from(binder.namespaces.placements.local_len())
                 .expect("placement bucket count fits u64"),
-            declarations + 1,
-            "each declaration owns one placement bucket, plus the namespace itself"
+            3 * groups,
+            "each group places a constant, a namespace, and a namespace member"
         );
-        let last_member = format!("member{}", half - 1);
+        let last_member = format!("member{}", groups - 1);
         assert_eq!(
             binder
                 .namespaces
@@ -6472,6 +6449,17 @@ mod tests {
                 .map(|member| member.syntax),
             Some(DeclarationSyntaxFacts::Variable(VariableKind::Const)),
             "the member row carries the syntax facts read back from its placement"
+        );
+        assert!(
+            binder
+                .namespaces
+                .placements
+                .local_iter()
+                .flat_map(|(_, participants)| participants)
+                .filter(|participant| participant.namespace_fragment.is_some())
+                .count()
+                == usize::try_from(groups).expect("group count fits usize"),
+            "each namespace row keeps the fragment back-patched onto it"
         );
         work
     }
@@ -6484,22 +6472,52 @@ mod tests {
         let small = placement_syntax_probe_work(SMALL);
         let scaled = placement_syntax_probe_work(SCALED);
 
-        let growth = scaled.probes() / small.probes().max(1);
+        let growth = scaled.row_probes / small.row_probes.max(1);
         assert!(
             growth <= 2 * SCALED / SMALL,
             "placement participant probes grew {growth}x while the declaration count grew {}x \
              ({small:?} -> {scaled:?}) — the lookup scans every placement per declaration",
             SCALED / SMALL
         );
-        for (declarations, work) in [(SMALL, small), (SCALED, scaled)] {
+        for (groups, work) in [(SMALL, small), (SCALED, scaled)] {
+            let declarations = 3 * groups;
             let budget = PLACEMENT_SYNTAX_PROBES_PER_DECLARATION * declarations;
             assert!(
-                work.probes() <= budget,
+                work.row_probes <= budget,
                 "{declarations} declarations spent {} placement participant probes, \
                  over the budget of {budget} ({work:?})",
-                work.probes()
+                work.row_probes
             );
         }
+    }
+
+    /// The three by-declaration lookups this guard covers all resolve through
+    /// `push_placement` now. Only the one-shot instance-state pass may still walk every
+    /// placement row, so a reintroduced per-declaration scan cannot slip past the counter.
+    #[test]
+    fn placement_rows_are_scanned_only_by_the_one_shot_instance_state_pass() {
+        // The escaped needle never matches itself, so the split isolates production code.
+        let production = include_str!("namespace.rs")
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("production region precedes the test module");
+        assert_eq!(
+            production
+                .matches("self.placements.local_values_mut()")
+                .count(),
+            1,
+            "the only surviving full pass is the instance-state back-patch"
+        );
+        assert_eq!(
+            production.matches("placements.local_values_mut()").count(),
+            1,
+            "no caller may reintroduce a per-declaration scan over every placement"
+        );
+        assert_eq!(
+            production.matches("placements.local_iter()").count(),
+            0,
+            "the by-declaration read resolves through the placement index"
+        );
     }
 
     fn bind_snapshot_validation_library() -> Binder {

@@ -10,7 +10,7 @@ use crate::binder::declaration::{
 };
 use crate::binder::namespace::{
     allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
-    NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
+    DeclarationSyntaxFacts, NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
 };
 use crate::binder::namespace::{
     collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
@@ -366,6 +366,7 @@ impl AuthenticatedLibraryBinderCheckpoint {
                     fn_scopes,
                     fn_decl_ids,
                     block_scopes,
+                    placement_syntax: FxHashMap::default(),
                     current_module: module,
                     next_value_storage: decl_count,
                     next_source_key,
@@ -825,6 +826,10 @@ pub(crate) struct BindState {
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
     block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// Syntax facts of the placement row each declaration bound by *this* build owns.
+    /// Build-local on purpose: the readers only ever ask about the local placement
+    /// delta, so a sealed base contributes no entry — exactly as the scan it replaces.
+    pub(super) placement_syntax: FxHashMap<DeclId, DeclarationSyntaxFacts>,
     /// The module scope currently being bound — the disambiguating half of the
     /// scope-map keys (backlog 58). Set before each module's body is walked.
     pub(crate) current_module: ScopeId,
@@ -1053,6 +1058,7 @@ impl ProjectBinderBuilder {
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
+            placement_syntax: FxHashMap::default(),
             current_module: ScopeId(0),
             next_value_storage: 0,
             next_source_key: SourceUnitKey(1),
@@ -1436,6 +1442,7 @@ impl ProjectBinderBuilder {
                     fn_scopes: FxHashMap::default(),
                     fn_decl_ids: FxHashMap::default(),
                     block_scopes: FxHashMap::default(),
+                    placement_syntax: FxHashMap::default(),
                     current_module: module,
                     next_value_storage: decl_count,
                     next_source_key,
