@@ -9,7 +9,7 @@ use crate::binder::declaration::{
     TypeGroupFragment, TypeGroupId, TypeGroupTable, ValueStorageId,
 };
 use crate::binder::namespace::{
-    allocate_dormant_namespace_value_storages, bind_namespace_metadata, CompilationUnit,
+    allocate_dormant_namespace_value_storages, collect_project_namespace_metadata, CompilationUnit,
     DeclarationSyntaxFacts, NamespaceId, NamespaceInstanceState, NamespaceTable, SourceUnitKey,
 };
 use crate::binder::namespace::{
@@ -329,7 +329,9 @@ impl AuthenticatedLibraryBinderCheckpoint {
         self.checkpoint.library_units.len()
     }
 
-    pub(crate) fn into_continuation(self) -> (ProjectBinderBuilder, Vec<LibraryBinderUnit>) {
+    pub(crate) fn into_continuation<'ast>(
+        self,
+    ) -> (ProjectBinderBuilder<'ast>, Vec<LibraryBinderUnit>) {
         let UnauthenticatedLibraryBinderCheckpoint {
             binder,
             library_units,
@@ -379,6 +381,7 @@ impl AuthenticatedLibraryBinderCheckpoint {
                 use_mode: BuilderUseMode::Continuation,
                 empty_prelude: true,
                 continuation_publication_plans: FxHashMap::default(),
+                pending_namespace_modules: Vec::new(),
                 #[cfg(test)]
                 frozen_global_augmentation_count: None,
             },
@@ -1016,7 +1019,7 @@ pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) ->
 }
 
 /// Incremental binder for one serial project graph (M29 slice 1).
-pub(crate) struct ProjectBinderBuilder {
+pub(crate) struct ProjectBinderBuilder<'ast> {
     state: BindState,
     prelude_module: ScopeId,
     compilation_global: ScopeId,
@@ -1025,8 +1028,19 @@ pub(crate) struct ProjectBinderBuilder {
     use_mode: BuilderUseMode,
     empty_prelude: bool,
     continuation_publication_plans: FxHashMap<SourceUnitKey, ContinuationPublicationPlan>,
+    /// Modules collected but not yet classified. Only `finish`/`finish_frozen_library_continuation`
+    /// drain this, so a project cannot reach a `Binder` without exactly one classification pass.
+    pending_namespace_modules: Vec<PendingNamespaceModule<'ast>>,
     #[cfg(test)]
     frozen_global_augmentation_count: Option<usize>,
+}
+
+/// One collected module awaiting the project-wide classification pass.
+struct PendingNamespaceModule<'ast> {
+    module: ScopeId,
+    program: &'ast Program<'ast>,
+    /// Restored for this module's fill so continuation publication stays per-module.
+    publication: Option<ContinuationPublicationPlan>,
 }
 
 struct ContinuationPublicationPlan {
@@ -1044,7 +1058,7 @@ enum BuilderUseMode {
     Continuation,
 }
 
-impl ProjectBinderBuilder {
+impl<'ast> ProjectBinderBuilder<'ast> {
     /// Bind the prelude first so its checker storage keeps the low id ranges.
     pub(crate) fn new(prelude: &Program<'_>) -> Self {
         let mut state = BindState {
@@ -1090,14 +1104,15 @@ impl ProjectBinderBuilder {
             use_mode: BuilderUseMode::Pristine,
             empty_prelude: prelude.body.is_empty(),
             continuation_publication_plans: FxHashMap::default(),
+            pending_namespace_modules: Vec::new(),
             #[cfg(test)]
             frozen_global_augmentation_count: None,
         }
     }
 
-    pub(crate) fn reserve_script_namespace_roots<'ast>(
+    pub(crate) fn reserve_script_namespace_roots<'a>(
         &mut self,
-        units: impl IntoIterator<Item = (&'ast Program<'ast>, CompilationUnit)>,
+        units: impl IntoIterator<Item = (&'a Program<'a>, CompilationUnit)>,
     ) {
         #[cfg(test)]
         match self.use_mode {
@@ -1216,10 +1231,11 @@ impl ProjectBinderBuilder {
     }
 
     /// Add one project module. Imported symbols are declared before local names so
-    /// declarations in this file can reference imports during reserve/fill.
+    /// declarations in this file can reference imports during reserve/fill. Namespace
+    /// classification is deferred to the finish that drains `pending_namespace_modules`.
     pub(crate) fn add_module(
         &mut self,
-        program: &Program<'_>,
+        program: &'ast Program<'ast>,
         imports: &[ImportedSymbol],
         unit: CompilationUnit,
     ) -> (ScopeId, Vec<ImportPlaceholder>) {
@@ -1257,7 +1273,7 @@ impl ProjectBinderBuilder {
                 unit,
                 self.compilation_global,
             );
-            bind_namespace_metadata(
+            collect_project_namespace_metadata(
                 &mut self.state,
                 module,
                 program,
@@ -1265,10 +1281,9 @@ impl ProjectBinderBuilder {
                 self.compilation_global,
                 self.script_namespace_root,
             );
-            self.state.continuation_publication = None;
         } else {
             bind_statements(&mut self.state, module, &program.body);
-            bind_namespace_metadata(
+            collect_project_namespace_metadata(
                 &mut self.state,
                 module,
                 program,
@@ -1277,11 +1292,35 @@ impl ProjectBinderBuilder {
                 self.script_namespace_root,
             );
         }
+        // The attachment fill publishes through the same plan, so it travels with the module
+        // instead of being dropped at the end of this call.
+        let publication = self.state.continuation_publication.take();
+        self.pending_namespace_modules.push(PendingNamespaceModule {
+            module,
+            program,
+            publication,
+        });
         (module, placeholders)
     }
 
+    /// Classify the accumulated project once, then fill the value attachments each module
+    /// contributes — the shape `try_add_library_modules` already uses. Draining here is what
+    /// makes a missed classification impossible: `Binder` is only reachable through a finish.
+    fn finalize_pending_namespaces(&mut self) {
+        if self.pending_namespace_modules.is_empty() {
+            return;
+        }
+        finalize_namespace_metadata(&mut self.state);
+        for pending in std::mem::take(&mut self.pending_namespace_modules) {
+            self.state.current_module = pending.module;
+            self.state.continuation_publication = pending.publication;
+            fill_namespace_value_attachments(&mut self.state, pending.program);
+            self.state.continuation_publication = None;
+        }
+    }
+
     /// Bind declaration-library files into one shared global identity domain.
-    pub(crate) fn try_add_library_modules<'ast>(
+    pub(crate) fn try_add_library_modules(
         &mut self,
         units: &[(&'ast Program<'ast>, CompilationUnit)],
     ) -> Result<Vec<ScopeId>, LibraryBinderError> {
@@ -1367,7 +1406,7 @@ impl ProjectBinderBuilder {
     }
 
     #[cfg(test)]
-    pub(crate) fn add_library_modules<'ast>(
+    pub(crate) fn add_library_modules(
         &mut self,
         units: &[(&'ast Program<'ast>, CompilationUnit)],
     ) -> Vec<ScopeId> {
@@ -1376,6 +1415,7 @@ impl ProjectBinderBuilder {
     }
 
     pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
+        self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
         self.state
             .namespaces
@@ -1455,6 +1495,7 @@ impl ProjectBinderBuilder {
                 use_mode: BuilderUseMode::Continuation,
                 empty_prelude: true,
                 continuation_publication_plans: FxHashMap::default(),
+                pending_namespace_modules: Vec::new(),
                 frozen_global_augmentation_count: Some(frozen_global_augmentation_count),
             },
             next_source,
@@ -1475,6 +1516,7 @@ impl ProjectBinderBuilder {
         {
             return Err("frozen-library continuation does not yet admit declare global");
         }
+        self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
         self.state
             .graph

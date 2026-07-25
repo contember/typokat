@@ -1587,9 +1587,9 @@ fn bind_fresh_project_programs(
     Ok(bound)
 }
 
-fn bind_authoritative_project_core(
-    mut builder: ProjectBinderBuilder,
-    units: &[ProjectProgram<'_>],
+fn bind_authoritative_project_core<'ast>(
+    mut builder: ProjectBinderBuilder<'ast>,
+    units: &[ProjectProgram<'ast>],
     source_offset: u32,
     lexical_events: &LexicalReservations,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
@@ -2078,7 +2078,7 @@ fn placeholder_import(import: &ProjectImport) -> ImportedSymbol {
 }
 
 fn collect_exports(
-    builder: &ProjectBinderBuilder,
+    builder: &ProjectBinderBuilder<'_>,
     scope: ScopeId,
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
@@ -2116,7 +2116,7 @@ fn collect_exports(
 }
 
 fn collect_declaration_export(
-    builder: &ProjectBinderBuilder,
+    builder: &ProjectBinderBuilder<'_>,
     scope: ScopeId,
     decl: &Declaration<'_>,
     surface: &mut ExportSurface,
@@ -2195,7 +2195,7 @@ fn collect_declaration_export(
 }
 
 struct ListExportContext<'a> {
-    builder: &'a ProjectBinderBuilder,
+    builder: &'a ProjectBinderBuilder<'a>,
     scope: ScopeId,
     surface: &'a mut ExportSurface,
     module_ordinal: ModuleOrdinal,

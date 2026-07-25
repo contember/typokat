@@ -4079,8 +4079,9 @@ pub(super) fn fill_namespace_value_attachments(state: &mut BindState, program: &
     bind_namespace_value_attachment_members(state, program);
 }
 
-/// Production wrapper retaining the serial project's current phase boundary.
-pub(crate) fn bind_namespace_metadata(
+/// Everything one project module contributes on its own. Classification is a whole-project
+/// pass, so the builder runs it once after the module loop instead of once per module.
+pub(crate) fn collect_project_namespace_metadata(
     state: &mut BindState,
     module: ScopeId,
     program: &Program<'_>,
@@ -4098,8 +4099,6 @@ pub(crate) fn bind_namespace_metadata(
         NamespaceMetadataRoot::Module,
     );
     publish_continuation_hoisted_variables(state, unit);
-    finalize_namespace_metadata(state);
-    fill_namespace_value_attachments(state, program);
 }
 
 fn publish_continuation_hoisted_variables(state: &mut BindState, unit: CompilationUnit) {
