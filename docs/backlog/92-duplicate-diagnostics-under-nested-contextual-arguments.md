@@ -35,9 +35,12 @@ The copies are byte-identical — same code, same message, same span — so this
 not several distinct errors that happen to share a line. It is not recorded in
 [`divergences.md`](../reference/divergences.md).
 
-The conformance corpus does not catch it: markers assert that an expected diagnostic *is present*
-by substring, not how many times, and no fixture nests contextual arguments deeply enough for the
-doubling to be visible.
+The conformance corpus does not catch it, but **not** because markers are presence-only:
+`compare_fixture_output` step 1 (`tests/conformance.rs:681-693`) already compares the sorted
+*multiset* of codes per line — `sorted_codes` does not dedup — so one `// error[TK2304]` marker on a
+line emitting `2^d` copies fails today. Only the optional `: substring` is presence-like, and it is
+subordinate to the code multiset. What hid this is simply that **no fixture nests contextual
+arguments deeply enough** for the doubling to appear. No harness or marker-format change is needed.
 
 ## Approach / acceptance
 
@@ -55,10 +58,9 @@ Two constraints found while prototyping that fix:
 - So this is a change to the event/ticket model, not a local edit. Deciding *which* walk retains is
   the design question: the committed walk sees instantiated contextual types, the raw walk does not.
 
-Acceptance: the repro above reports exactly one `TK2304` at every depth from 1 to 12, cross-checked
-against real `tsc --strict`; a fixture pins the count, which requires the conformance harness to
-assert occurrence counts rather than mere presence (`tests/cases/README.md` — the same gap that hid
-[`90`](./90-assignability-span-precision.md)); the corpus stays green and the official-suite ratchet
+Acceptance: the repro above reports exactly one `TK2304` at every depth from 1 to 12 on **all four**
+shapes below, cross-checked against real `tsc --strict`; a fixture pins the count (the existing
+marker format already suffices — see above); the corpus stays green and the official-suite ratchet
 shows no regressions.
 
 Deduplicating identical records at the reporting boundary would mask this more cheaply, but it
@@ -66,27 +68,33 @@ treats the symptom — the duplicate work is still done, and it would hide the n
 the emission fix; if the cheap route is taken deliberately, record it in `divergences.md` with the
 reason.
 
-**The duplicate count and the residual time exponent are the same `2^d`.** One retaining walk per
-level fixes both at once, so this item closes the performance problem too and no separate perf item
-is needed after it.
+**Emissions and walks are two different problems that happen to share the exponent.** Making one walk
+per level stop retaining fixes the duplication *everywhere*, but leaves walk counts — and therefore
+time — unchanged. Collapsing base 2/3 → base 1 additionally needs the memo below. Both are required
+before `contextual_rewalk_scaling_spec` goes green; do not expect the emission fix alone to do it.
 
-## Which shapes are affected (measured, 2026-07-25)
+## Which shapes are affected (measured, 2026-07-25/26)
 
-The discriminator is whether the parameter type is a **bare type variable** or **structurally
-contains one**:
+**The duplication is universal — every shape doubles at `2^d`.** It is the two *retaining* walks, and
+every shape has both. Verified at HEAD against `tsc 6.0.3 --strict`, which reports 1 in every cell:
 
-| signature | shape | walks |
-|---|---|---|
-| `object<T>(shape: T)` — bare `T` | candidate inference never re-walks | already base 2 |
-| `wrap<T>(value: { inner: T })`, `run<T>(step: (v: number) => T)` | structured | base 3 |
-| `describe(fn: () => void)` — non-generic | no inference phase | already base 2 |
+| signature | duplicates at depth 1–6 | walks | debug time @ d=12 |
+|---|---|---|---|
+| `run<T>(step: (v: number) => T)` — structured | 2, 4, 8, 16, 32, 64 | base 3 | 30.2 s |
+| `wrap<T>(value: { inner: T })` — structured | 2, 4, 8, 16, 32, 64 | base 3 | 21.7 s |
+| `shapeOf<T>(shape: T)` — bare `T` | 2, 4, 8, 16, 32, 64 | base 2 | 0.64 s |
+| `describe(fn: () => unknown)` — non-generic | 2, 4, 8, 16, 32, 64 | base 2 | 0.50 s |
 
-This matters for scoping the fix: real `zod` is `object<T extends ZodRawShape>(shape: T)` and real
-`describe`/`it` are non-generic, so the shapes that actually hang in the wild are the **base-2**
-ones — and base 2 is exactly what this item removes. Structurally-embedded generics (`map`, `filter`,
-`then`, `pipe`, `reduce`) are the base-3 ones, and nested generic callbacks realistically reach depth
-3–5, ceiling ~6, where the cost is 2.8–8 ms and imperceptible. Schema builders routinely reach depth
-8–12: 40 zod-style schemas at depth 12 is 525 lines and **1.11 s**.
+The bare-`T` / non-generic rows are base 2 because candidate inference never re-walks them (no
+inference phase at all, in the non-generic case) — that is a statement about **walks and time**, not
+about emissions. An earlier revision of this item wrongly implied the two tracked together.
+
+Why it matters for scoping: real `zod` is `object<T extends ZodRawShape>(shape: T)` and real
+`describe`/`it` are non-generic, so the shapes that hang in the wild are the base-2 ones — and their
+*time* problem is untouched by memoization. Structurally-embedded generics (`map`, `filter`, `then`,
+`pipe`, `reduce`) are the base-3 ones, and nested generic callbacks realistically reach depth 3–5,
+ceiling ~6, where the cost is 2.8–8 ms and imperceptible. Schema builders routinely reach depth 8–12:
+40 zod-style schemas at depth 12 is 525 lines and **1.11 s**.
 
 A verified prototype memoizing the effect-discarding walk (base 3 → base 2, output-neutral, 70–83×
 at depth 14) was built and deliberately **not** landed: it fires zero times on every realistic shape
@@ -98,7 +106,7 @@ retains — at that point memoizing the other two is what takes this from base 2
 
 `src/check/checker/calls.rs` (`check_call_arguments`, `retain_contextual_arrow_checks`),
 `src/check/checker/expr.rs`, `src/check/checker/context.rs` (`CheckerEffects`, ticket allocation),
-`tests/conformance.rs` if occurrence counts are asserted, `tests/cases/`.
+`tests/cases/` (the existing marker format already asserts counts — no harness change needed).
 
 <!-- Origin: WU6 of the checker-scaling sprint, 2026-07-25 — found while memoizing the contextual
      re-walk; the memo could not reach base 1 because collapsing the walks deletes these duplicates.
