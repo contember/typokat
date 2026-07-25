@@ -235,3 +235,29 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   `rust-toolchain.toml`) and four files had drifted past it — two from `7ba2c01`, one from `904642f`,
   one from `cfe61fb`. Repaired in `0b41477`. Neither `cargo test` nor `cargo clippy` catches this, so
   it is worth running before handing back any batch.
+- **WU6 cannot reach its target and stopped there.** Base 1 is unreachable without changing output:
+  of the three walks per level, two *retain* effects and both emit, so one error nested `d` deep is
+  reported `2^d` times where `tsc` reports it once (leader-verified at HEAD, and against
+  `tsc 6.0.3 --strict`, at depths 1–5 on both shapes) → backlog `92`. Collapsing the walks would
+  delete those duplicates, which is the diagnostic change WU6 was told to stop on; and serving a
+  retaining walk from a memo needs effect replay, which `CheckerEffects` (not `Clone`) and
+  ticket uniqueness (invariants §1) both block. A base-2 prototype exists — 70–83× at depth 14,
+  byte-identical diagnostics over 465 fixtures × 2 formats and 8 bench corpora — held back because
+  its memo state is a production `thread_local!` that belongs on `Pass` (`checker/mod.rs`, owned by
+  WU2 until it lands).
+- The WU6 guard as first written would have gone **green** on that base-2 prototype (`510/30 = 17`
+  against a bound of 512). Agent caught it against its own work and reported rather than shipping.
+  Retuned in `12b44e6` to bound the *ratio of ratios*, which is 1 for every polynomial and unbounded
+  for every exponential; still red at HEAD, and red on the prototype.
+- **`generics` is no longer a loss.** Leader-measured at HEAD `543d635`, median-of-5:
+  `generics-100000` **2.064 s vs tsgo 2.108 s (0.98×)**, down from 36.45 s / 17.67× this morning —
+  a 17.7× improvement from the landed WU1–WU5 batch. `generics-10000` is 0.181 s vs 0.139 s (1.30×).
+  The 13.26 s figure recorded for WU3 above is superseded; WU4 and WU5 landed after it.
+  (WU6 reported 0.50× — it timed tsgo at 4.24 s, 2× every other measurement of the same binary; the
+  typokat side matched.)
+- The `tsgo` at `/tmp/typescript-go-compare/.../bin/tsgo` is a **node shim that exits immediately**
+  with `Executable not found`; timing it measures a crash. The committed reports are unaffected —
+  they invoke `tooling/bench/.tools/node_modules/@typescript/typescript-linux-x64/lib/tsc`, the
+  native TypeScript 7 binary, with exit code 0 recorded in every result.
+- WU6's "unrelated" panic on `b43_namespaces_declaration_merging/slot_shadowing.ts` is already
+  filed as backlog `84`, which names that fixture; not re-filed.
