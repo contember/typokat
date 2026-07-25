@@ -557,7 +557,11 @@ impl SemanticQueryState {
         self.record(SemanticQueryUndo::CompletedIdentity(key, previous));
     }
 
-    fn remember_relation(&mut self, key: CompletedRelationKey, completed: CompletedRelationOutcome) {
+    fn remember_relation(
+        &mut self,
+        key: CompletedRelationKey,
+        completed: CompletedRelationOutcome,
+    ) {
         let previous = self.completed_relations.insert(key, completed);
         self.record(SemanticQueryUndo::CompletedRelation(key, previous));
     }
@@ -1879,7 +1883,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         key: CompletedRelationKey,
         outcome: &RelationOutcome,
     ) {
-        if matches!(outcome, RelationOutcome::No(_)) && !self.state.take_relation_no_candidate(key) {
+        if matches!(outcome, RelationOutcome::No(_)) && !self.state.take_relation_no_candidate(key)
+        {
             self.state.insert_relation_no_candidate(key);
             return;
         }

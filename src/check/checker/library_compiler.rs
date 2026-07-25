@@ -6008,7 +6008,14 @@ mod tests {
         );
 
         let error = trace
-            .finish(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0)
+            .finish(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            )
             .expect_err("the probe authenticates at most one emitted pair");
         let ReplayIndexGenerationError::TypedReferenceCoverage { count, .. } = error else {
             panic!("terminal closure must report its unauthenticated pairs: {error:?}");

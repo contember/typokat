@@ -212,16 +212,8 @@ const accepted: string = holder.x;
 const rejected: number = holder.x;
 "#;
     let output = check_source(source);
-    assert!(
-        output.parse_errors.is_empty(),
-        "{:?}",
-        output.parse_errors
-    );
-    assert!(
-        output.incomplete.is_empty(),
-        "{:?}",
-        output.incomplete
-    );
+    assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+    assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
     assert_eq!(
         output
             .diagnostics

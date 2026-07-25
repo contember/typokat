@@ -3,7 +3,9 @@
 use super::{query_source_cold_measure, start_query_source_cold_measure, QuerySourceColdMeasure};
 use crate::check::checker::check_program;
 use crate::driver::CheckOutput;
-use crate::relate::cache::{finish_relation_cache_depth_measure, start_relation_cache_depth_measure};
+use crate::relate::cache::{
+    finish_relation_cache_depth_measure, start_relation_cache_depth_measure,
+};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -138,8 +140,14 @@ fn semantic_query_transactions_copy_only_their_own_working_set() {
     for run in [&small, &large] {
         let bound = WORKING_SET_MULTIPLE * run.working_set();
         for (name, copied) in [
-            ("fork-copied entries", run.work.semantic_state_fork_copied_entries),
-            ("discarded entries", run.work.semantic_state_discarded_entries),
+            (
+                "fork-copied entries",
+                run.work.semantic_state_fork_copied_entries,
+            ),
+            (
+                "discarded entries",
+                run.work.semantic_state_discarded_entries,
+            ),
         ] {
             if copied > bound {
                 violations.push(format!(
