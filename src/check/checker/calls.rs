@@ -34,6 +34,8 @@ use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
 #[cfg(test)]
+mod contextual_duplicate_diagnostics_spec;
+#[cfg(test)]
 mod contextual_rewalk_scaling_spec;
 
 fn flatten_static_class_value_path<'a>(

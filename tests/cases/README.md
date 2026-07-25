@@ -278,6 +278,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
+| `b92_contextual_duplicate_diagnostics/` | backlog `92` (disabled) | one error nested inside contextually typed arguments is reported once, not `2^depth` times |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
 | `b14_full_lib_loading/` | backlog `14` WU0A (disabled) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
 | `b14_full_lib_loading_project/` | backlog `14` WU0A (disabled, project-shaped) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
@@ -377,6 +378,30 @@ too-wide union solely to make incompatible arguments fit. Markers are mostly
 code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
+
+`b92_contextual_duplicate_diagnostics/` pins **occurrence counts**, not presence.
+Each fixture nests one unresolved name — `undeclaredThing` — inside contextually typed
+arguments at depths 1 through 8, one depth per line, and carries exactly one
+`error[TK2304]` marker on each of those lines. No new marker syntax is involved: the
+per-line rule at the top of this file is already a **multiset** equality, so a single
+marker on a line that produces `2^depth` byte-identical copies fails as an ordinary code
+mismatch. What hid the bug was that no fixture nested contextual arguments deeply enough
+for the doubling to appear, not the marker contract.
+
+The four fixtures are the measured discriminator matrix. `nested_arrows.ts` and
+`nested_object_literals.ts` use signatures whose parameter type *structurally contains*
+the type variable (`run<T>(step: (value: number) => T)`, `wrap<T>(value: { inner: T })`),
+so candidate inference re-walks as well and each level costs three walks. `bare_type_variable.ts`
+(`shapeOf<T>(shape: T)`, the shape of real `zod`) and `non_generic_callback.ts`
+(`describe(fn: () => void)`, the shape of real `describe`/`it`) cost only two walks per
+level — but both of those walks retain their effects, so all four shapes duplicate at the
+same `2^depth`. The two cheap-to-walk shapes are the ones that hang in the wild, so they
+are pinned independently rather than treated as covered by the generic ones.
+`tsc 6.0.3 --strict --noEmit` reports exactly one `TS2304` on every line of all four
+fixtures, at every depth. The full 1–12 depth sweep lives in
+`src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs`, which reports the
+observed count in its failure text; the fixtures stop at 8 to keep corpus runtime bounded
+while the corpus is red.
 
 `b43_namespaces_declaration_merging/` contains 74 flat fixtures plus six project
 fixtures with 12 source files (86 source files total) for the namespace/declaration-space

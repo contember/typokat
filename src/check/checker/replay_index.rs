@@ -2186,6 +2186,7 @@ mod tests {
     }
 
     const TEST_ONLY_REPLAY_SOURCE_PATHS: &[&str] = &[
+        "src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs",
         "src/check/checker/calls/contextual_rewalk_scaling_spec.rs",
         "src/check/checker/declaration_owner_scaling_spec.rs",
         "src/check/checker/declaration_surface_lazy_spec.rs",
