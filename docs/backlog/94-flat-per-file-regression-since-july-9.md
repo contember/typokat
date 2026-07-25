@@ -1,27 +1,28 @@
 ---
 id: 94
 title: A flat 3x per-file regression sits under the modules exponent
-blocked-by: [./93-namespace-attachment-fill-per-module-scan.md]
+blocked-by: []
 ---
 
 # 94 — A flat 3× per-file regression sits under the modules exponent
 
-**Summary.** Once [`93`](./93-namespace-attachment-fill-per-module-scan.md) removes the exponent,
-`modules-100000` lands at ~0.98 s against typokat's own committed 0.3068 s of 2026-07-09 on the
-identical corpus — **157 µs/file today against 49 µs/file then**, with peak RSS 372 MB against
-159.9 MB. No single phase dominates, so this needs a **bisect**, not a hunt. Effort M–L.
+**Summary.** With the attachment-fill exponent removed (`c8fc029`), `modules-100000` sits at
+**0.997 s** against typokat's own committed 0.3068 s of 2026-07-09 on the identical corpus —
+**160 µs/file today against 49 µs/file then**, with peak RSS 372 MB against 159.9 MB. No single phase
+dominates, so this needs a **bisect**, not a hunt. Effort M–L. **This is now the whole remaining gap
+on `modules`.**
 
 ## Problem
 
-`93` is measured to be the whole superlinear term: skipping the attachment fill takes
-`modules-100000` from 6.86 s to **0.977 s** and flattens the exponent to 1.03–1.12 out to 12,000
-files. That 0.98 s is the honest projection of where `93` lands us — and it is still **3.2× slower
-than typokat was on 2026-07-09**, which is not a projection but a committed measurement:
+`c8fc029` removed the last superlinear term: `modules-100000` went 6.729 s → **0.997 s** and the
+2,499 → 6,249 exponent went 2.54 → **1.07**, flat out to 12,000 files. What is left is a constant,
+and it is still **3.3× slower than typokat itself was on 2026-07-09** — not a projection but a
+committed measurement:
 
 | | median | peak RSS | vs tsgo |
 |---|---|---|---|
 | 2026-07-09 (`report/raw/20260709-174055`) | **0.3068 s** | **159.9 MB** | tsgo 0.3741 s — **typokat won** |
-| HEAD `0c2994c`, attachment fill skipped | 0.977 s | 372 MB | tsgo 0.307 s — 3.2× slower |
+| HEAD `c8fc029` | 0.997 s | 372 MB | tsgo 0.293 s — 3.4× slower |
 
 The memory figure is the useful independent signal: 2.3× more resident for the same corpus points at
 representation or retention, not at an algorithm, and it moved in the same window.

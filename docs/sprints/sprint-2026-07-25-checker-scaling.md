@@ -298,6 +298,24 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
 - **`93` is not a benchmark artifact — real code is hit harder.** At a realistic 30 declarations/file
   the fill is already 60 % of a 2,000-file project, and 70 % on a namespace-using corpus. The bench
   corpus has zero namespaces, so it pays only the scan and never the `M`-fold target re-derivation.
+- **`93` landed (`c8fc029`): `modules-100000` 6.729 s → 0.997 s, 6.75×**, exponent 2.54 → **1.07**;
+  `attachment_merge_rows` 4,608/36,864 → 576/576. Against tsgo the family goes **22× → 3.4×**.
+  Leader-measured interleaved median-of-5; diagnostics leader-diffed over 465 fixtures single-file,
+  122 case directories as projects in both file orders, four cross-file merge corpora in both
+  orders, and `errors-10000.ts` — zero differing.
+- The agent improved on the briefed design and I adopted it: build the target list **whole**, then
+  partition its *application* by module, rather than narrowing the merge scan per module. Since
+  `202f0bc` froze the merge vector for the fill loop, one global sort/dedup is byte-identical to
+  what every fill built, so the winner cannot move — hazard 2 becomes structurally impossible
+  instead of something to reason about.
+- **An order-sensitive write the plan alone would have broken.** `symbol.value` is shared by
+  same-named members in different files, and the two paths already disagreed at HEAD: the project
+  path took the globally last declaration by span, the library path the last module's. A plain
+  partition silently switches the project path to file order. Preserved by replaying the plan once
+  after the loop, gated on the same flag that decided whether the old fill filtered. Found by
+  measuring the existing behaviour before changing it, not by reading the code — and it is **not
+  reachable through the checker today** (two files declaring the same namespace value member report
+  an incomplete surface), so the byte-diff could never have caught it. The unit guard is the net.
 - **Underneath the exponent is a flat ~3× regression → backlog `94`.** Post-`93` projection is
   0.98 s against typokat's own committed **0.3068 s of 2026-07-09** on the identical corpus (157 vs
   49 µs/file), with peak RSS **372 MB against 159.9 MB** — leader-verified against the committed
