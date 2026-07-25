@@ -31,3 +31,4 @@ a commit message suffices.
 - [`0013`](0013-replay-private-library-collision-closures.md) — seed private collision universes from the canonical snapshot and replay only affected semantic owners — accepted (2026-07-23)
 - [`0014`](0014-authenticate-private-replay-prefixes-at-separate-boundaries.md) — authenticate semantic decode and the continuable library binder at separate private-replay boundaries — accepted (2026-07-23)
 - [`0015`](0015-make-private-collisions-snapshot-native.md) — make private collisions snapshot-native publication epochs with sparse binder-prefix replacement — accepted (2026-07-23)
+- [`0016`](0016-reason-free-relation-probes.md) — suppress the reason chain on relation probes whose caller discards it — proposed (2026-07-25)

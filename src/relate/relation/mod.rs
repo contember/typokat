@@ -39,6 +39,10 @@ pub(super) struct RelationMeasure {
 pub(crate) struct RelationSourceColdMeasure {
     pub(crate) durable_true_cache_hits: u64,
     pub(crate) durable_false_reason_rebuilds: u64,
+    /// The same fall-through, but on a `false` this query itself just wrote. The
+    /// durable counter is blind to it (a planned query writes to `pending_cache`),
+    /// which is exactly where a failing OR probe re-derives its subtree.
+    pub(crate) pending_false_reason_rebuilds: u64,
     pub(crate) uncached_relation_frames: u64,
 }
 
@@ -682,7 +686,7 @@ impl<'a> Relater<'a> {
         // missing-vs-mismatch reason (the cache stores only the bool verdict —
         // architecture §6.1 — not the reason).
         #[cfg(test)]
-        let (cached, durable_cached) = {
+        let (cached, durable_cached, pending_cached) = {
             let pending_cached = cacheable.then(|| self.pending_cache.get(key)).flatten();
             let durable_cached = cacheable
                 .then(|| {
@@ -692,7 +696,11 @@ impl<'a> Relater<'a> {
                         .flatten()
                 })
                 .flatten();
-            (pending_cached.or(durable_cached), durable_cached)
+            (
+                pending_cached.or(durable_cached),
+                durable_cached,
+                pending_cached,
+            )
         };
         #[cfg(not(test))]
         let cached = cacheable
@@ -710,6 +718,13 @@ impl<'a> Relater<'a> {
         if durable_cached == Some(false) {
             measure_relation_source_cold(|measure| {
                 measure.durable_false_reason_rebuilds += 1;
+            });
+        }
+
+        #[cfg(test)]
+        if pending_cached == Some(false) {
+            measure_relation_source_cold(|measure| {
+                measure.pending_false_reason_rebuilds += 1;
             });
         }
 
@@ -1433,5 +1448,7 @@ impl<'a> Relater<'a> {
     }
 }
 
+#[cfg(test)]
+mod failing_relation_scaling_spec;
 #[cfg(test)]
 mod tests;
