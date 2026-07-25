@@ -219,3 +219,19 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   entries survive rollback — on the grounds that `invariants.md` §1 forbids it, and flagged that
   `src/check/query/mod.rs:1478` assigns the cache back **unconditionally**, which does not obviously
   agree with that invariant. Routed to WU4 for a verdict; if it is a real hole it gets its own item.
+- Second RED pair committed: `9638cb8` (WU2), `5704075` (WU6), both reproduced by the leader first.
+  Two exact laws replaced the sprint's estimates. **WU2**: at constant program size, every
+  finalization counter is `rows x (M+1)/2` — one full-project replay per module, 7.22x growth for an
+  8x finer split. **WU6**: the contextual re-walk is `(3^d - 1)/2` per phase and two phases fire, so
+  `3^d - 1` total — base 3 exactly, not the "~2.97" the wall clock suggested; both the arrow and the
+  object-literal shape hit it independently.
+- WU2 found the attachment fill does **not** fall out of the hoist — it gets worse. Today module *m*
+  filters merges accumulated so far (`D x (M+1)/2`); hoisting makes all *M* second-pass fills see the
+  full `D` (`D x M`), ~2x more rows, on the project and library paths alike. Net still a large win
+  because classify's per-row cost dwarfs the filter, but the `Theta(modules x declarations)` term
+  survives and needs its own index. Deliberately left out of the asserted bound rather than pinned to
+  something the hoist cannot meet; to be filed as a backlog item once the post-fix numbers are in.
+- `cargo fmt --check` is a CI gate (`.github/workflows/ci.yml`, pinned rustfmt via
+  `rust-toolchain.toml`) and four files had drifted past it — two from `7ba2c01`, one from `904642f`,
+  one from `cfe61fb`. Repaired in `0b41477`. Neither `cargo test` nor `cargo clippy` catches this, so
+  it is worth running before handing back any batch.
