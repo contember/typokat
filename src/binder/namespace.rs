@@ -248,6 +248,104 @@ impl PlacementLookupWorkScopeForTest {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static FINALIZATION_CLASSIFICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FINALIZATION_MERGE_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FINALIZATION_MERGE_INDEX_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FINALIZATION_ATTACHMENT_MERGE_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FINALIZATION_ALIAS_MEMBER_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Project-wide rows re-processed by namespace finalization. Every field is derived from
+/// the accumulated project, so a per-module finalization pass makes each of them grow with
+/// the file split at constant program size.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NamespaceFinalizationWorkForTest {
+    /// Times `classify` rebuilt the canonical indexes over the whole accumulated project.
+    pub(crate) classifications: u64,
+    /// Placement participants cloned, sorted and classified into the merges vector.
+    pub(crate) merge_participant_rows: u64,
+    /// Merge records re-keyed into `merge_indices`, each cloning its name.
+    pub(crate) merge_index_rows: u64,
+    /// Merge records scanned to fill namespace value attachments.
+    pub(crate) attachment_merge_rows: u64,
+    /// Member rows scanned to resolve local ambient export alias targets.
+    pub(crate) alias_member_rows: u64,
+}
+
+#[cfg(test)]
+fn namespace_finalization_work_for_test() -> NamespaceFinalizationWorkForTest {
+    NamespaceFinalizationWorkForTest {
+        classifications: FINALIZATION_CLASSIFICATIONS.get(),
+        merge_participant_rows: FINALIZATION_MERGE_PARTICIPANT_ROWS.get(),
+        merge_index_rows: FINALIZATION_MERGE_INDEX_ROWS.get(),
+        attachment_merge_rows: FINALIZATION_ATTACHMENT_MERGE_ROWS.get(),
+        alias_member_rows: FINALIZATION_ALIAS_MEMBER_ROWS.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_finalization_classification() {
+    FINALIZATION_CLASSIFICATIONS.set(FINALIZATION_CLASSIFICATIONS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_finalization_merge_participant_rows(rows: usize) {
+    FINALIZATION_MERGE_PARTICIPANT_ROWS.set(
+        FINALIZATION_MERGE_PARTICIPANT_ROWS
+            .get()
+            .saturating_add(u64::try_from(rows).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+fn record_finalization_merge_index_row() {
+    FINALIZATION_MERGE_INDEX_ROWS.set(FINALIZATION_MERGE_INDEX_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_finalization_attachment_merge_row() {
+    FINALIZATION_ATTACHMENT_MERGE_ROWS.set(FINALIZATION_ATTACHMENT_MERGE_ROWS.get() + 1);
+}
+
+#[cfg(test)]
+fn record_finalization_alias_member_rows(rows: usize) {
+    FINALIZATION_ALIAS_MEMBER_ROWS.set(
+        FINALIZATION_ALIAS_MEMBER_ROWS
+            .get()
+            .saturating_add(u64::try_from(rows).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+pub(crate) struct NamespaceFinalizationWorkScopeForTest(NamespaceFinalizationWorkForTest);
+
+#[cfg(test)]
+impl NamespaceFinalizationWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(namespace_finalization_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> NamespaceFinalizationWorkForTest {
+        let end = namespace_finalization_work_for_test();
+        NamespaceFinalizationWorkForTest {
+            classifications: end.classifications.saturating_sub(self.0.classifications),
+            merge_participant_rows: end
+                .merge_participant_rows
+                .saturating_sub(self.0.merge_participant_rows),
+            merge_index_rows: end.merge_index_rows.saturating_sub(self.0.merge_index_rows),
+            attachment_merge_rows: end
+                .attachment_merge_rows
+                .saturating_sub(self.0.attachment_merge_rows),
+            alias_member_rows: end
+                .alias_member_rows
+                .saturating_sub(self.0.alias_member_rows),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct NamespaceId(pub u32);
 
@@ -2063,6 +2161,8 @@ impl NamespaceTable {
     }
 
     fn classify(&mut self) -> Result<(), &'static str> {
+        #[cfg(test)]
+        record_finalization_classification();
         self.rebuild_local_fragment_declaration_index()?;
         self.rebuild_local_statement_site_indexes()?;
         self.compute_namespace_instance_states();
@@ -2138,6 +2238,8 @@ impl NamespaceTable {
             .placements
             .local_iter()
             .map(|(key, participants)| {
+                #[cfg(test)]
+                record_finalization_merge_participant_rows(participants.len());
                 let mut declarations = participants.clone();
                 if library_order {
                     declarations.sort_by_key(|participant| {
@@ -2342,6 +2444,8 @@ impl NamespaceTable {
             })
             .collect::<Vec<_>>();
         for (key, index) in rows {
+            #[cfg(test)]
+            record_finalization_merge_index_row();
             self.merge_indices.insert_local(key, index)?;
         }
         Ok(())
@@ -4047,6 +4151,8 @@ struct NamespaceValueBindingTarget {
 fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Program<'_>) {
     let mut targets = Vec::new();
     for record in state.namespaces.local_merges() {
+        #[cfg(test)]
+        record_finalization_attachment_merge_row();
         let attached = matches!(
             namespace_value_attachment_disposition(record),
             Some(
@@ -4301,6 +4407,8 @@ fn bind_selected_namespace_module_body(
 
 fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
     let member_base = state.namespaces.members.base_len();
+    #[cfg(test)]
+    record_finalization_alias_member_rows(state.namespaces.members.local_len());
     let candidates = state
         .namespaces
         .members
@@ -6517,6 +6625,141 @@ mod tests {
             production.matches("placements.local_iter()").count(),
             0,
             "the by-declaration read resolves through the placement index"
+        );
+    }
+
+    /// One group is a top-level constant, a namespace, and a member of it — three placement
+    /// participants, one merge group each, and one namespace member row.
+    const FINALIZATION_PLACEMENTS_PER_GROUP: u64 = 3;
+
+    /// Total program size held constant while only the file split varies: the same groups are
+    /// dealt out evenly to `modules` files, so every difference between two calls is the split.
+    fn namespace_finalization_work(modules: usize) -> NamespaceFinalizationWorkForTest {
+        const GROUPS: usize = 192;
+        assert_eq!(
+            GROUPS % modules,
+            0,
+            "the split deals whole groups per module"
+        );
+        let per_module = GROUPS / modules;
+        let sources = (0..modules)
+            .map(|module| {
+                (0..per_module)
+                    .map(|offset| {
+                        let index = module * per_module + offset;
+                        format!(
+                            "declare const value{index}: number;\n\
+                             declare namespace Space{index} {{ const member{index}: number; }}\n"
+                        )
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocators = sources
+            .iter()
+            .map(|_| Allocator::default())
+            .collect::<Vec<_>>();
+        let parsed = sources
+            .iter()
+            .zip(&allocators)
+            .map(|(source, allocator)| {
+                let parsed = Parser::new(allocator, source, SourceType::ts()).parse();
+                assert!(!parsed.panicked, "parse failed for a split module");
+                parsed
+            })
+            .collect::<Vec<_>>();
+
+        let scope = NamespaceFinalizationWorkScopeForTest::start();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let mut last_module = None;
+        for (index, parsed) in parsed.iter().enumerate() {
+            let unit = CompilationUnit {
+                source: SourceUnitKey(u32::try_from(index + 1).expect("source key fits u32")),
+                origin: CompilationOrigin::User(OriginalModuleOrdinal::new(index)),
+                binding: ModuleBindingContext::for_program(
+                    &parsed.program,
+                    SourceFileKind::ImplementationTs,
+                ),
+            };
+            let (module, _) = builder.add_module(&parsed.program, &[], unit);
+            last_module = Some(module);
+        }
+        let binder = builder.finish(last_module.expect("one project module"));
+        let work = scope.finish();
+
+        assert_eq!(
+            u64::try_from(binder.namespaces.placements.local_len())
+                .expect("placement bucket count fits u64"),
+            FINALIZATION_PLACEMENTS_PER_GROUP
+                * u64::try_from(GROUPS).expect("group count fits u64"),
+            "the split changes only how the same program is filed, never its size"
+        );
+        work
+    }
+
+    /// `classify` rebuilds every canonical index over the whole accumulated project, so
+    /// running it once per module makes the same source text cost more the more files it is
+    /// split across. The program below is byte-for-byte the same work either way.
+    #[test]
+    fn namespace_finalization_reprocesses_the_project_once_per_project_not_once_per_module() {
+        const FEW: usize = 8;
+        const MANY: usize = 64;
+
+        let few = namespace_finalization_work(FEW);
+        let many = namespace_finalization_work(MANY);
+
+        assert!(
+            many.classifications <= few.classifications,
+            "the same program was classified {} times at {MANY} modules against {} times at \
+             {FEW} ({few:?} -> {many:?}) — finalization runs per module, not per project",
+            many.classifications,
+            few.classifications
+        );
+        assert!(
+            many.merge_participant_rows <= few.merge_participant_rows,
+            "the same program re-processed {} placement participants at {MANY} modules against \
+             {} at {FEW} ({few:?} -> {many:?}) — the merges rebuild replays the whole project \
+             once per module",
+            many.merge_participant_rows,
+            few.merge_participant_rows
+        );
+        assert!(
+            many.merge_index_rows <= few.merge_index_rows,
+            "the same program re-keyed {} merge rows at {MANY} modules against {} at {FEW} \
+             ({few:?} -> {many:?}) — the merge index is rebuilt once per module",
+            many.merge_index_rows,
+            few.merge_index_rows
+        );
+
+        // A counter is only as good as its recorder, so pin the shape too: this module walks
+        // one module at a time and must never invoke the whole-project finalizer, which
+        // belongs after the batch loop that `bind.rs` owns — once for the library batch and
+        // once for the project batch. `finalize_namespace_metadata` is `pub(super)`, so
+        // `src/binder/` is the only place a call site can live.
+        // The escaped needle never matches itself, so the split isolates production code.
+        let namespace_production = include_str!("namespace.rs")
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("production region precedes the test module");
+        assert_eq!(
+            namespace_production
+                .matches("finalize_namespace_metadata(")
+                .count(),
+            1,
+            "per-module namespace collection declares the batch finalizer but must not call it"
+        );
+        let bind_production = include_str!("bind.rs")
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("production region precedes the test module");
+        assert!(
+            bind_production
+                .matches("finalize_namespace_metadata(")
+                .count()
+                >= 2,
+            "the library batch and the project batch each finalize once, after their loop"
         );
     }
 
