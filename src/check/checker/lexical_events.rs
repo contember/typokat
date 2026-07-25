@@ -654,6 +654,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                 class: class_site,
                 callable,
             });
+            // Source starts collide, so the index keeps the first row the linear scan found.
             self.top_level_by_source
                 .entry((source.ordinal(), source.source_start))
                 .or_insert(index);
@@ -1266,6 +1267,8 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             reservation.declaration_span, declaration_span,
             "declaration node span must match source prewalk"
         );
+        // Keyed by declaration, and merged fragments each get their own `DeclId`, so every
+        // key is written exactly once — unlike the source-start indexes, which keep the first.
         self.declaration_reservations_by_decl
             .insert(declaration, index);
         Ok(())
@@ -2807,6 +2810,7 @@ interface Combined extends First, Second {
             &binder,
             binder.module,
             &parsed.program,
+            &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
         assert_eq!(
@@ -2954,6 +2958,7 @@ interface Combined extends First, Second {
             &binder,
             binder.module,
             &parsed.program,
+            &super::super::ModuleDeclarationSpans::index(&binder),
         );
         let group = binder
             .graph
@@ -2997,6 +3002,7 @@ interface Combined extends First, Second {
             &binder,
             binder.module,
             &parsed.program,
+            &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
         let symbol = binder
@@ -3079,6 +3085,7 @@ interface Combined extends First, Second {
             &binder,
             binder.module,
             &parsed.program,
+            &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
         let declarations: Vec<_> = binder
@@ -3134,6 +3141,7 @@ interface Combined extends First, Second {
             &binder,
             binder.module,
             &parsed.program,
+            &super::super::ModuleDeclarationSpans::index(&binder),
         );
         let declaration = binder
             .declarations

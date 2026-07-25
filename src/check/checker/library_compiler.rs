@@ -3600,6 +3600,7 @@ fn compile_owned_injected_frontend(
     let mut type_decls: super::context::TypeDeclTable<'_> = Vec::new().into();
     let mut type_resolved: super::context::TypeResolvedTable =
         vec![None; binder.type_groups.len()].into();
+    let declaration_spans = super::ModuleDeclarationSpans::index(&binder);
     for ((input, parsed), scope) in canonical
         .iter()
         .zip(&parsed)
@@ -3620,6 +3621,7 @@ fn compile_owned_injected_frontend(
             &binder,
             scope,
             &parsed.program,
+            &declaration_spans,
         );
         lexical_events.attach_library_class_bindings(
             input.file_ordinal,

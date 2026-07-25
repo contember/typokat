@@ -1,9 +1,14 @@
 //! RED contract for per-module declaration-owner attachment over a growing project.
 
-use super::{check_project_programs_with_binding_inspector, DeclarationOwnerScanScopeForTest};
-use crate::driver::{run_project_frontend, FileInput};
+use super::library_compiler::{compile_owned_injected_profile, InjectedLibrarySource};
+use super::{
+    check_project_programs_with_binding_inspector, check_project_programs_with_owned_library,
+    DeclarationOwnerScanScopeForTest,
+};
+use crate::driver::{check_project_with_owned_checker_for_test, run_project_frontend, FileInput};
+use crate::source::LibraryFileOrdinal;
 use crate::types::layered::LocalFullViewScanScopeForTest;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 const SMALL_MODULES: usize = 8;
 const LARGE_MODULES: usize = 16;
@@ -16,11 +21,16 @@ const OWNER_SCAN_PASSES: u64 = 2;
 const GROWTH_MULTIPLE: u64 = 2;
 const GROWTH_SLACK: u64 = 256;
 
+const LIBRARY_SOURCE: &str = "interface FrozenBase { frozen: string }\n";
+
 struct MeasuredRun {
+    route: &'static str,
     modules: usize,
-    /// Every declaration in the project — the collection a per-module pass may not re-scan.
+    /// Every declaration in the delta — the collection a per-module pass may not re-scan.
     declarations: u64,
-    /// Declaration rows exposed to `attach_type_decl_owners`.
+    /// Declarations owner attachment must cover: those in an attached module scope.
+    attachable: u64,
+    /// Declaration rows visited by `attach_type_decl_owners`.
     owner_scan_rows: u64,
     /// Every local-layer row exposed anywhere in the run, for context on the failure.
     project_scan_rows: u64,
@@ -31,9 +41,14 @@ struct MeasuredRun {
 impl MeasuredRun {
     fn record(&self) -> String {
         format!(
-            "{} modules / {} declarations: {} rows scanned for owner attachment \
-             ({} project-wide)",
-            self.modules, self.declarations, self.owner_scan_rows, self.project_scan_rows
+            "{} route, {} modules / {} declarations ({} attachable): {} rows visited for \
+             owner attachment ({} project-wide)",
+            self.route,
+            self.modules,
+            self.declarations,
+            self.attachable,
+            self.owner_scan_rows,
+            self.project_scan_rows
         )
     }
 }
@@ -66,22 +81,41 @@ fn project_inputs(modules: usize) -> Vec<FileInput> {
     inputs
 }
 
-fn check_measured(modules: usize) -> MeasuredRun {
-    let declarations = Cell::new(0_u64);
-    let owner_scan = DeclarationOwnerScanScopeForTest::start();
-    let project_scan = LocalFullViewScanScopeForTest::start();
-    let results = run_project_frontend(project_inputs(modules), |interner, units| {
-        check_project_programs_with_binding_inspector(interner, units, |binder, _, _| {
-            declarations.set(u64::try_from(binder.declarations.len()).expect("count fits u64"));
-        })
-    })
-    .into_product();
+/// The delta's declaration count, and how many of them sit in an attached module scope.
+fn count_declarations(
+    binder: &crate::binder::Binder,
+    module_scopes: &[crate::binder::scope::ScopeId],
+) -> (u64, u64) {
+    let scopes = module_scopes
+        .iter()
+        .map(|scope| scope.0)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut declarations = 0_u64;
+    let mut attachable = 0_u64;
+    for declaration in binder.declarations.local_declarations() {
+        declarations += 1;
+        if scopes.contains(&declaration.site.module.0) {
+            attachable += 1;
+        }
+    }
+    (declarations, attachable)
+}
 
+fn measured(
+    route: &'static str,
+    modules: usize,
+    counts: (u64, u64),
+    owner_scan_rows: u64,
+    project_scan_rows: u64,
+    results: &[crate::check::CheckResult],
+) -> MeasuredRun {
     MeasuredRun {
+        route,
         modules,
-        declarations: declarations.get(),
-        owner_scan_rows: owner_scan.finish(),
-        project_scan_rows: project_scan.finish(),
+        declarations: counts.0,
+        attachable: counts.1,
+        owner_scan_rows,
+        project_scan_rows,
         diagnostics: results
             .iter()
             .flat_map(|result| &result.diagnostics)
@@ -95,13 +129,96 @@ fn check_measured(modules: usize) -> MeasuredRun {
     }
 }
 
-/// `attach_type_decl_owners` filters the whole project's declarations once per module, so owner
-/// attachment alone costs Θ(modules × declarations) instead of Θ(declarations).
-#[test]
-fn per_module_declaration_owner_attachment_does_not_scan_the_whole_project() {
-    let small = check_measured(SMALL_MODULES);
-    let large = check_measured(LARGE_MODULES);
-    for run in [&small, &large] {
+/// The ordinary route: the trusted prelude plus every user module in one delta.
+fn check_measured_fresh(modules: usize) -> MeasuredRun {
+    let counts = Cell::new((0_u64, 0_u64));
+    let owner_scan = DeclarationOwnerScanScopeForTest::start();
+    let project_scan = LocalFullViewScanScopeForTest::start();
+    let results = run_project_frontend(project_inputs(modules), |interner, units| {
+        check_project_programs_with_binding_inspector(
+            interner,
+            units,
+            |binder, _, module_scopes| {
+                counts.set(count_declarations(binder, module_scopes));
+            },
+        )
+    })
+    .into_product();
+
+    measured(
+        "fresh",
+        modules,
+        counts.get(),
+        owner_scan.finish(),
+        project_scan.finish(),
+        &results,
+    )
+}
+
+/// The frozen-library route: only the user delta is attached, over a sealed library base.
+fn check_measured_continuation(modules: usize) -> MeasuredRun {
+    let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+        file_ordinal: LibraryFileOrdinal::new(0),
+        name: "scaling.d.ts",
+        source: LIBRARY_SOURCE,
+    }])
+    .expect("the scaling profile compiles into an owned library base");
+    let state = RefCell::new(Some(state));
+    let counts = Cell::new((0_u64, 0_u64));
+    let owner_scan = DeclarationOwnerScanScopeForTest::start();
+    let project_scan = LocalFullViewScanScopeForTest::start();
+    let results = check_project_with_owned_checker_for_test(project_inputs(modules), |units| {
+        let state = state
+            .borrow_mut()
+            .take()
+            .expect("the owned delta is consumed once");
+        check_project_programs_with_owned_library(
+            state,
+            units,
+            |binder, module_scopes| {
+                // Only the delta is attachable; the frozen library keeps its compile-time owners.
+                counts.set(count_declarations(binder, module_scopes));
+            },
+            |_, _| {},
+        )
+    });
+
+    let reports =
+        results
+            .iter()
+            .flat_map(|report| {
+                report.output.diagnostics.iter().map(|diagnostic| {
+                    format!("{} {}", diagnostic.code.as_str(), diagnostic.message)
+                })
+            })
+            .collect::<Vec<_>>();
+    let incomplete = results
+        .iter()
+        .flat_map(|report| {
+            report
+                .output
+                .incomplete
+                .iter()
+                .map(|incomplete| incomplete.id.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    MeasuredRun {
+        route: "frozen-library",
+        modules,
+        declarations: counts.get().0,
+        attachable: counts.get().1,
+        owner_scan_rows: owner_scan.finish(),
+        project_scan_rows: project_scan.finish(),
+        diagnostics: reports,
+        incomplete,
+    }
+}
+
+/// `attach_type_decl_owners` must walk its own module's declarations. Filtering the whole
+/// project once per module costs Θ(modules × declarations) instead of Θ(declarations).
+fn assert_owner_attachment_scales(small: &MeasuredRun, large: &MeasuredRun) {
+    for run in [small, large] {
         assert!(
             run.diagnostics.is_empty(),
             "{}: {:?}",
@@ -125,11 +242,19 @@ fn per_module_declaration_owner_attachment_does_not_scan_the_whole_project() {
     );
 
     let mut violations = Vec::new();
-    for run in [&small, &large] {
+    for run in [small, large] {
+        // Non-vacuity: every declaration in an attached module is visited, so the count
+        // cannot collapse to zero without dropping owners.
+        if run.owner_scan_rows < run.attachable {
+            violations.push(format!(
+                "{}: owner attachment visited fewer rows than the project has attachable declarations",
+                run.record()
+            ));
+        }
         let bound = OWNER_SCAN_PASSES * run.declarations;
         if run.owner_scan_rows > bound {
             violations.push(format!(
-                "{}: owner attachment scanned {} rows, past the {OWNER_SCAN_PASSES}-pass bound {bound}",
+                "{}: owner attachment visited {} rows, past the {OWNER_SCAN_PASSES}-pass bound {bound}",
                 run.record(),
                 run.owner_scan_rows
             ));
@@ -149,5 +274,21 @@ fn per_module_declaration_owner_attachment_does_not_scan_the_whole_project() {
         violations.join("\n"),
         small.record(),
         large.record()
+    );
+}
+
+#[test]
+fn per_module_declaration_owner_attachment_does_not_scan_the_whole_project() {
+    assert_owner_attachment_scales(
+        &check_measured_fresh(SMALL_MODULES),
+        &check_measured_fresh(LARGE_MODULES),
+    );
+}
+
+#[test]
+fn frozen_library_owner_attachment_does_not_scan_the_whole_user_delta() {
+    assert_owner_attachment_scales(
+        &check_measured_continuation(SMALL_MODULES),
+        &check_measured_continuation(LARGE_MODULES),
     );
 }

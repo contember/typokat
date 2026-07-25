@@ -7,7 +7,7 @@ use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilde
 use crate::binder::bind_module_with_prelude;
 #[cfg(test)]
 use crate::binder::declaration::source_global_binding_census;
-use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{DeclId, DeclarationKind, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::namespace::{
     CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
@@ -525,12 +525,14 @@ fn bootstrap_trusted_prelude(
     // Capture into an isolated store so cleanliness is checked without leaking records.
     let (mut reporting, reporting_adapter) =
         reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot);
+    let declaration_spans = ModuleDeclarationSpans::index(&binder);
     attach_type_decl_owners(
         &mut reporting.lexical_events,
         SourceOrdinal::User(prelude_ordinal),
         &binder,
         binder.prelude_module,
         &parsed.program,
+        &declaration_spans,
     );
     attach_class_bindings(
         &mut reporting.lexical_events,
@@ -829,6 +831,7 @@ where
         &binder,
         binder.module,
         program,
+        &ModuleDeclarationSpans::index(&binder),
     );
     attach_class_bindings(
         &mut lexical_events,
@@ -1279,6 +1282,7 @@ where
     let user_type_start = type_decls.len();
     type_resolved.resize(binder.type_groups.len(), None);
     let error = interner.well_known().error;
+    let declaration_spans = ModuleDeclarationSpans::index(&binder);
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
         reserve_type_decls(
             &mut interner,
@@ -1296,6 +1300,7 @@ where
             &binder,
             scope,
             unit.program,
+            &declaration_spans,
         );
         attach_class_bindings(
             &mut lexical_events,
@@ -1863,6 +1868,7 @@ where
     let user_type_start = type_decls.len();
     type_resolved.resize(binder.type_groups.len(), None);
     let error = interner.well_known().error;
+    let declaration_spans = ModuleDeclarationSpans::index(&binder);
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
         reserve_type_decls(
             interner,
@@ -1880,6 +1886,7 @@ where
             &binder,
             scope,
             unit.program,
+            &declaration_spans,
         );
         attach_class_bindings(
             &mut lexical_events,
@@ -2466,20 +2473,54 @@ impl DeclarationOwnerScanScopeForTest {
     }
 }
 
+/// Per-module `[start, end)` declaration spans over the user delta. Binding appends a module's
+/// declarations together, so owner attachment walks its own span instead of filtering the whole
+/// project once per module (backlog 89).
+pub(crate) struct ModuleDeclarationSpans {
+    spans: FxHashMap<ScopeId, std::ops::Range<u32>>,
+}
+
+impl ModuleDeclarationSpans {
+    /// One pass over the delta for the whole compilation, not one per module.
+    pub(crate) fn index(binder: &Binder) -> Self {
+        let mut spans: FxHashMap<ScopeId, std::ops::Range<u32>> = FxHashMap::default();
+        for declaration in binder.declarations.local_declarations() {
+            let id = declaration.id.0;
+            spans
+                .entry(declaration.site.module)
+                .and_modify(|span| {
+                    span.start = span.start.min(id);
+                    span.end = span.end.max(id.saturating_add(1));
+                })
+                .or_insert(id..id.saturating_add(1));
+        }
+        Self { spans }
+    }
+
+    fn module(&self, scope: ScopeId) -> std::ops::Range<u32> {
+        self.spans.get(&scope).cloned().unwrap_or(0..0)
+    }
+}
+
 fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
     reservations: &mut LexicalReservations<Ticket>,
     source_ordinal: SourceOrdinal,
     binder: &Binder,
     scope: ScopeId,
     program: &Program<'_>,
+    spans: &ModuleDeclarationSpans,
 ) {
+    let span = spans.module(scope);
     #[cfg(test)]
-    let scan = crate::types::layered::LocalFullViewScanScopeForTest::start();
-    for declaration in binder
-        .declarations
-        .local_declarations()
-        .filter(|declaration| declaration.site.module == scope)
-    {
+    record_declaration_owner_scan_for_test(u64::from(span.end.saturating_sub(span.start)));
+    for id in span {
+        let Some(declaration) = binder.declarations.get(DeclId(id)) else {
+            continue;
+        };
+        // Spans are dense per module today; the guard keeps attribution exact if that ever changes.
+        if declaration.site.module != scope {
+            continue;
+        }
         reservations
             .attach_declaration_owner(
                 declaration.id,
@@ -2490,8 +2531,6 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
             )
             .expect("source declaration must have its exact lexical event owner");
     }
-    #[cfg(test)]
-    record_declaration_owner_scan_for_test(scan.finish());
 
     let _ = program;
 }

@@ -359,6 +359,8 @@ impl<T> LayeredVec<T> {
     pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &T> + DoubleEndedIterator + Clone {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         LayeredIter {
             base: self.base.iter(),
             local: self.local.iter(),
@@ -441,6 +443,8 @@ impl<'a, T> IntoIterator for &'a LayeredVec<T> {
     fn into_iter(self) -> Self::IntoIter {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 }
@@ -535,18 +539,24 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 
     pub(crate) fn keys(&self) -> impl Iterator<Item = &K> {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.keys().chain(self.local.keys())
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.values().chain(self.local.values())
     }
 
@@ -615,6 +625,8 @@ impl<'a, K, V> IntoIterator for &'a LayeredMap<K, V> {
     fn into_iter(self) -> Self::IntoIter {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 }
@@ -671,6 +683,8 @@ impl<T: Eq + Hash> LayeredSet<T> {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 
@@ -729,6 +743,8 @@ impl<'a, T> IntoIterator for &'a LayeredSet<T> {
     fn into_iter(self) -> Self::IntoIter {
         #[cfg(test)]
         record_full_view_base_scan_for_test(self.base.len());
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 }
