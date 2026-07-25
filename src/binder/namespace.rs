@@ -346,6 +346,95 @@ impl NamespaceFinalizationWorkScopeForTest {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static MERGE_KEY_NAME_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static MERGE_KEY_NAME_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static NON_MERGING_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static NON_MERGING_MERGE_RECORDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Per-declaration substrate the merge lane pays for before anything merges. Every field is
+/// keyed to one declaration, so a project of declarations that never merge grows all of them
+/// even though its merge set never changes.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MergeSubstrateWorkForTest {
+    /// Owned `String`s allocated to name a merge key or merge record. Interned names cost one
+    /// allocation per *distinct* name; owned ones cost one per key, record and lookup.
+    pub(crate) merge_key_name_allocations: u64,
+    /// Bytes of those owned name strings, so a repeated name is visible as repeated bytes.
+    pub(crate) merge_key_name_bytes: u64,
+    /// `MergeParticipant` rows the substrate retains for a group holding one declaration —
+    /// a declaration that, by the time classification runs, merged with nothing.
+    pub(crate) non_merging_participant_rows: u64,
+    /// Merge records built for such a group: a classification of one declaration against
+    /// itself, plus its `merge_indices` key.
+    pub(crate) non_merging_merge_records: u64,
+}
+
+#[cfg(test)]
+fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
+    MergeSubstrateWorkForTest {
+        merge_key_name_allocations: MERGE_KEY_NAME_ALLOCATIONS.get(),
+        merge_key_name_bytes: MERGE_KEY_NAME_BYTES.get(),
+        non_merging_participant_rows: NON_MERGING_PARTICIPANT_ROWS.get(),
+        non_merging_merge_records: NON_MERGING_MERGE_RECORDS.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_merge_key_name_allocation(name: &str) {
+    MERGE_KEY_NAME_ALLOCATIONS.set(MERGE_KEY_NAME_ALLOCATIONS.get() + 1);
+    MERGE_KEY_NAME_BYTES.set(
+        MERGE_KEY_NAME_BYTES
+            .get()
+            .saturating_add(u64::try_from(name.len()).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+fn record_non_merging_participant_rows(rows: usize) {
+    NON_MERGING_PARTICIPANT_ROWS.set(
+        NON_MERGING_PARTICIPANT_ROWS
+            .get()
+            .saturating_add(u64::try_from(rows).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+fn record_non_merging_merge_record() {
+    NON_MERGING_MERGE_RECORDS.set(NON_MERGING_MERGE_RECORDS.get() + 1);
+}
+
+#[cfg(test)]
+pub(crate) struct MergeSubstrateWorkScopeForTest(MergeSubstrateWorkForTest);
+
+#[cfg(test)]
+impl MergeSubstrateWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(merge_substrate_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> MergeSubstrateWorkForTest {
+        let end = merge_substrate_work_for_test();
+        MergeSubstrateWorkForTest {
+            merge_key_name_allocations: end
+                .merge_key_name_allocations
+                .saturating_sub(self.0.merge_key_name_allocations),
+            merge_key_name_bytes: end
+                .merge_key_name_bytes
+                .saturating_sub(self.0.merge_key_name_bytes),
+            non_merging_participant_rows: end
+                .non_merging_participant_rows
+                .saturating_sub(self.0.non_merging_participant_rows),
+            non_merging_merge_records: end
+                .non_merging_merge_records
+                .saturating_sub(self.0.non_merging_merge_records),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct NamespaceId(pub u32);
 
@@ -1297,6 +1386,8 @@ impl NamespaceTable {
     }
 
     pub(crate) fn is_admitted_compilation_global_name(&self, name: &str) -> bool {
+        #[cfg(test)]
+        record_merge_key_name_allocation(name);
         let key = MergeKey {
             owner: DeclarationOwner::CompilationGlobal,
             name: name.to_owned(),
@@ -2240,7 +2331,20 @@ impl NamespaceTable {
             .map(|(key, participants)| {
                 #[cfg(test)]
                 record_finalization_merge_participant_rows(participants.len());
+                // A group holding one declaration merged with nothing, yet the substrate below
+                // still keeps its placement row, a second copy of it, and a merge record.
+                #[cfg(test)]
+                let non_merging = participants.len() == 1;
+                #[cfg(test)]
+                if non_merging {
+                    record_non_merging_participant_rows(participants.len());
+                }
                 let mut declarations = participants.clone();
+                #[cfg(test)]
+                if non_merging {
+                    record_non_merging_participant_rows(declarations.len());
+                    record_non_merging_merge_record();
+                }
                 if library_order {
                     declarations.sort_by_key(|participant| {
                         (
@@ -2260,6 +2364,8 @@ impl NamespaceTable {
                 }
                 let classification = classify_group(&declarations);
                 let placement_issues = placement_issues(&declarations);
+                #[cfg(test)]
+                record_merge_key_name_allocation(&key.name);
                 MergeRecord {
                     owner: key.owner,
                     name: key.name.clone(),
@@ -2434,6 +2540,8 @@ impl NamespaceTable {
             .local_iter()
             .enumerate()
             .map(|(offset, record)| {
+                #[cfg(test)]
+                record_merge_key_name_allocation(&record.name);
                 (
                     MergeKey {
                         owner: record.owner,
@@ -2816,6 +2924,8 @@ impl NamespaceTable {
             }
             NamespaceOwner::CompilationGlobal => DeclarationOwner::CompilationGlobal,
         };
+        #[cfg(test)]
+        record_merge_key_name_allocation(&namespace.name);
         let key = MergeKey {
             owner,
             name: namespace.name.clone(),
@@ -3163,6 +3273,8 @@ impl Binder {
         owner: DeclarationOwner,
         name: &str,
     ) -> Option<NamespaceValueAttachment<'_>> {
+        #[cfg(test)]
+        record_merge_key_name_allocation(name);
         let key = MergeKey {
             owner,
             name: name.to_owned(),
@@ -3510,6 +3622,8 @@ impl Binder {
     }
 
     fn root_merge_record(&self, scope: ScopeId, name: &str) -> Option<&MergeRecord> {
+        #[cfg(test)]
+        record_merge_key_name_allocation(name);
         let key = MergeKey {
             owner: DeclarationOwner::Lexical(scope),
             name: name.to_owned(),
@@ -4111,6 +4225,8 @@ fn publish_continuation_hoisted_variables(state: &mut BindState, unit: Compilati
         else {
             continue;
         };
+        #[cfg(test)]
+        record_merge_key_name_allocation(&name);
         let key = MergeKey {
             owner: DeclarationOwner::CompilationGlobal,
             name: name.clone(),
@@ -6188,6 +6304,8 @@ fn push_placement<'state>(
         namespace_fragment: None,
         namespace_instance: None,
     };
+    #[cfg(test)]
+    record_merge_key_name_allocation(name);
     let Ok(entries) = state.namespaces.placements.get_or_insert_local_with(
         MergeKey {
             owner,
@@ -6866,6 +6984,183 @@ mod tests {
                 .count()
                 >= 2,
             "the library batch and the project batch each finalize once, after their loop"
+        );
+    }
+
+    /// Bind one external module per source, so every file owns a distinct declaration owner
+    /// and the same identifier declared in two files is two groups, never one merge.
+    fn merge_substrate_work(sources: &[String]) -> MergeSubstrateWorkForTest {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocators = sources
+            .iter()
+            .map(|_| Allocator::default())
+            .collect::<Vec<_>>();
+        let parsed = sources
+            .iter()
+            .zip(&allocators)
+            .map(|(source, allocator)| {
+                let parsed = Parser::new(allocator, source, SourceType::ts()).parse();
+                assert!(
+                    !parsed.panicked,
+                    "parse failed for a merge-substrate module"
+                );
+                parsed
+            })
+            .collect::<Vec<_>>();
+
+        let scope = MergeSubstrateWorkScopeForTest::start();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let mut last_module = None;
+        for (index, parsed) in parsed.iter().enumerate() {
+            let unit = CompilationUnit {
+                source: SourceUnitKey(u32::try_from(index + 1).expect("source key fits u32")),
+                origin: CompilationOrigin::User(OriginalModuleOrdinal::new(index)),
+                binding: ModuleBindingContext::for_program(
+                    &parsed.program,
+                    SourceFileKind::ImplementationTs,
+                ),
+            };
+            let (module, _) = builder.add_module(&parsed.program, &[], unit);
+            last_module = Some(module);
+        }
+        let binder = builder.finish(last_module.expect("one project module"));
+        let work = scope.finish();
+        assert!(
+            binder.namespaces.merges.local_len() > 0,
+            "the project produced no merge groups, so the counters measure nothing"
+        );
+        work
+    }
+
+    /// Files in the sweep; every variant below deals the same declarations across the same
+    /// number of external modules, so only the axis named by the test differs.
+    const SUBSTRATE_MODULES: usize = 32;
+
+    /// Declarations per module — small enough to stay a fast unit test, large enough that a
+    /// per-declaration cost separates cleanly from the per-module scaffolding.
+    const SUBSTRATE_DECLARATIONS_PER_MODULE: usize = 16;
+
+    /// The same declaration count and the same group count either way; only the name text
+    /// repeats. `unique` gives every declaration in the project its own name.
+    fn non_merging_modules(unique: bool) -> Vec<String> {
+        (0..SUBSTRATE_MODULES)
+            .map(|module| {
+                let mut source = String::from("export {};\n");
+                for offset in 0..SUBSTRATE_DECLARATIONS_PER_MODULE {
+                    let index = if unique {
+                        module * SUBSTRATE_DECLARATIONS_PER_MODULE + offset
+                    } else {
+                        offset
+                    };
+                    source.push_str(&format!("const value_{index:06}: number = 0;\n"));
+                }
+                source
+            })
+            .collect()
+    }
+
+    /// A name the merge substrate has already stored must not be stored again — not for the
+    /// placement key, not for the merge record, not for the merge index, and not for a lookup.
+    /// The two projects below hold declaration count, group count and merge count constant and
+    /// vary only how many *distinct* names those declarations use, so every allocation beyond
+    /// the distinct-name count is a copy of a name the substrate already owns.
+    #[test]
+    fn merge_key_names_are_stored_once_per_distinct_name() {
+        let declarations = SUBSTRATE_MODULES * SUBSTRATE_DECLARATIONS_PER_MODULE;
+        let unique = merge_substrate_work(&non_merging_modules(true));
+        let repeated = merge_substrate_work(&non_merging_modules(false));
+
+        let repeated_budget =
+            u64::try_from(SUBSTRATE_DECLARATIONS_PER_MODULE).expect("distinct name count fits u64");
+        assert!(
+            repeated.merge_key_name_allocations <= repeated_budget,
+            "{declarations} declarations using only {SUBSTRATE_DECLARATIONS_PER_MODULE} distinct \
+             names allocated {} owned merge-key names ({repeated:?}) against {} for the same \
+             program with {declarations} distinct names ({unique:?}) — a name already stored \
+             must cost nothing, so the budget is {repeated_budget}",
+            repeated.merge_key_name_allocations,
+            unique.merge_key_name_allocations
+        );
+
+        let unique_budget = u64::try_from(declarations).expect("declaration count fits u64");
+        assert!(
+            unique.merge_key_name_allocations <= unique_budget,
+            "{declarations} declarations with {declarations} distinct names allocated {} owned \
+             merge-key names ({unique:?}) — over the budget of one allocation per distinct name \
+             ({unique_budget}); the substrate owns a `String` per key, per record and per lookup",
+            unique.merge_key_name_allocations
+        );
+
+        // Same program size, same groups, same merges: with the name text shared, the bytes the
+        // substrate owns must collapse to the distinct names, not stay proportional to the
+        // declaration count.
+        assert!(
+            repeated.merge_key_name_bytes * 8 <= unique.merge_key_name_bytes,
+            "shrinking the project's distinct names {}x moved owned merge-key name bytes only \
+             from {} to {} ({repeated:?}) — the substrate stores the text per declaration, not \
+             per name",
+            declarations / SUBSTRATE_DECLARATIONS_PER_MODULE,
+            unique.merge_key_name_bytes,
+            repeated.merge_key_name_bytes
+        );
+    }
+
+    /// Merge groups held constant across the sweep: each is two interfaces of one name, the
+    /// cheapest declaration pair that really merges.
+    const SUBSTRATE_MERGE_GROUPS: usize = 8;
+
+    /// One module of real merges, then `modules` modules of declarations that merge with
+    /// nothing. The merge set is identical at every point of the sweep; only the count of
+    /// non-merging declarations moves.
+    fn non_merging_sweep(modules: usize) -> Vec<String> {
+        let mut merging = String::from("export {};\n");
+        for group in 0..SUBSTRATE_MERGE_GROUPS {
+            merging.push_str(&format!(
+                "interface Merged_{group} {{ left: number; }}\n\
+                 interface Merged_{group} {{ right: number; }}\n"
+            ));
+        }
+        let mut sources = vec![merging];
+        sources.extend((0..modules).map(|module| {
+            let mut source = String::from("export {};\n");
+            for offset in 0..SUBSTRATE_DECLARATIONS_PER_MODULE {
+                let index = module * SUBSTRATE_DECLARATIONS_PER_MODULE + offset;
+                source.push_str(&format!("const value_{index:06}: number = 0;\n"));
+            }
+            source
+        }));
+        sources
+    }
+
+    /// A declaration that merges with nothing must not buy merge substrate. The two projects
+    /// below carry the identical merge set — the same eight two-interface groups — and differ
+    /// only in how many declarations sit beside it that no other declaration shares a name
+    /// with. Nothing about those declarations can change a merge, so nothing about them may
+    /// grow the merge substrate.
+    #[test]
+    fn declarations_that_merge_with_nothing_do_not_grow_the_merge_substrate() {
+        const FEW: usize = 4;
+        const MANY: usize = 32;
+
+        let few = merge_substrate_work(&non_merging_sweep(FEW));
+        let many = merge_substrate_work(&non_merging_sweep(MANY));
+
+        let added = (MANY - FEW) * SUBSTRATE_DECLARATIONS_PER_MODULE;
+        assert_eq!(
+            many.non_merging_participant_rows, few.non_merging_participant_rows,
+            "adding {added} declarations that merge with nothing grew the retained participant \
+             rows from {} to {} ({few:?} -> {many:?}) — the merge substrate is sized by the \
+             declaration count, not by the merge set",
+            few.non_merging_participant_rows, many.non_merging_participant_rows
+        );
+        assert_eq!(
+            many.non_merging_merge_records,
+            few.non_merging_merge_records,
+            "adding {added} declarations that merge with nothing built {} extra merge records \
+             ({few:?} -> {many:?}) — a group of one declaration is classified against itself \
+             and keyed into the merge index for nothing",
+            many.non_merging_merge_records - few.non_merging_merge_records
         );
     }
 
