@@ -206,6 +206,63 @@ impl NamespaceContinuationWorkScopeForTest {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static PLACEMENT_SYNTAX_WRITE_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_SYNTAX_READ_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Participant comparisons spent locating a placement row by `DeclId`.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PlacementSyntaxWorkForTest {
+    write_probes: u64,
+    read_probes: u64,
+}
+
+#[cfg(test)]
+impl PlacementSyntaxWorkForTest {
+    fn probes(self) -> u64 {
+        self.write_probes + self.read_probes
+    }
+}
+
+#[cfg(test)]
+fn placement_syntax_work_for_test() -> PlacementSyntaxWorkForTest {
+    PlacementSyntaxWorkForTest {
+        write_probes: PLACEMENT_SYNTAX_WRITE_PROBES.get(),
+        read_probes: PLACEMENT_SYNTAX_READ_PROBES.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_placement_syntax_write_probe() {
+    PLACEMENT_SYNTAX_WRITE_PROBES.set(PLACEMENT_SYNTAX_WRITE_PROBES.get() + 1);
+}
+
+#[cfg(test)]
+fn record_placement_syntax_read_probe() {
+    PLACEMENT_SYNTAX_READ_PROBES.set(PLACEMENT_SYNTAX_READ_PROBES.get() + 1);
+}
+
+#[cfg(test)]
+struct PlacementSyntaxWorkScopeForTest(PlacementSyntaxWorkForTest);
+
+#[cfg(test)]
+impl PlacementSyntaxWorkScopeForTest {
+    fn start() -> Self {
+        Self(placement_syntax_work_for_test())
+    }
+
+    fn finish(self) -> PlacementSyntaxWorkForTest {
+        let end = placement_syntax_work_for_test();
+        PlacementSyntaxWorkForTest {
+            write_probes: end.write_probes.saturating_sub(self.0.write_probes),
+            read_probes: end.read_probes.saturating_sub(self.0.read_probes),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct NamespaceId(pub u32);
 
@@ -5982,10 +6039,11 @@ fn set_placement_syntax(
     syntax: DeclarationSyntaxFacts,
 ) {
     for participants in state.namespaces.placements.local_values_mut() {
-        if let Some(participant) = participants
-            .iter_mut()
-            .find(|participant| participant.declaration == declaration)
-        {
+        if let Some(participant) = participants.iter_mut().find(|participant| {
+            #[cfg(test)]
+            record_placement_syntax_write_probe();
+            participant.declaration == declaration
+        }) {
             participant.syntax = syntax;
             return;
         }
@@ -5998,7 +6056,11 @@ fn placement_syntax(state: &BindState, declaration: DeclId) -> Option<Declaratio
         .placements
         .local_iter()
         .flat_map(|(_, participants)| participants)
-        .find(|participant| participant.declaration == declaration)
+        .find(|participant| {
+            #[cfg(test)]
+            record_placement_syntax_read_probe();
+            participant.declaration == declaration
+        })
         .map(|participant| participant.syntax)
 }
 
@@ -6374,6 +6436,70 @@ mod tests {
         };
         let (module, _) = builder.add_module(&parsed.program, &[], unit);
         builder.finish(module)
+    }
+
+    /// `DeclId` is dense, so locating the placement row of a single declaration must
+    /// cost a bounded number of participant probes — never a scan of the whole project.
+    const PLACEMENT_SYNTAX_PROBES_PER_DECLARATION: u64 = 4;
+
+    /// Half plain top-level declarations (which only write the syntax facts) and half
+    /// namespace members (whose member rows read them back), so both lookups are measured.
+    fn placement_syntax_probe_work(declarations: u64) -> PlacementSyntaxWorkForTest {
+        let half = declarations / 2;
+        let top_level = (0..half)
+            .map(|index| format!("declare const value{index}: number;\n"))
+            .collect::<String>();
+        let members = (0..half)
+            .map(|index| format!("const member{index}: number;\n"))
+            .collect::<String>();
+        let source = format!("{top_level}declare namespace Space {{\n{members}}}\n");
+        let scope = PlacementSyntaxWorkScopeForTest::start();
+        let binder = bind(&source, false);
+        let work = scope.finish();
+        assert_eq!(
+            u64::try_from(binder.namespaces.placements.local_len())
+                .expect("placement bucket count fits u64"),
+            declarations + 1,
+            "each declaration owns one placement bucket, plus the namespace itself"
+        );
+        let last_member = format!("member{}", half - 1);
+        assert_eq!(
+            binder
+                .namespaces
+                .members
+                .local_iter()
+                .find(|member| member.name.as_deref() == Some(last_member.as_str()))
+                .map(|member| member.syntax),
+            Some(DeclarationSyntaxFacts::Variable(VariableKind::Const)),
+            "the member row carries the syntax facts read back from its placement"
+        );
+        work
+    }
+
+    #[test]
+    fn placement_syntax_probes_scale_with_declarations_not_with_every_placement() {
+        const SMALL: u64 = 128;
+        const SCALED: u64 = 1_024;
+
+        let small = placement_syntax_probe_work(SMALL);
+        let scaled = placement_syntax_probe_work(SCALED);
+
+        let growth = scaled.probes() / small.probes().max(1);
+        assert!(
+            growth <= 2 * SCALED / SMALL,
+            "placement participant probes grew {growth}x while the declaration count grew {}x \
+             ({small:?} -> {scaled:?}) — the lookup scans every placement per declaration",
+            SCALED / SMALL
+        );
+        for (declarations, work) in [(SMALL, small), (SCALED, scaled)] {
+            let budget = PLACEMENT_SYNTAX_PROBES_PER_DECLARATION * declarations;
+            assert!(
+                work.probes() <= budget,
+                "{declarations} declarations spent {} placement participant probes, \
+                 over the budget of {budget} ({work:?})",
+                work.probes()
+            );
+        }
     }
 
     fn bind_snapshot_validation_library() -> Binder {
