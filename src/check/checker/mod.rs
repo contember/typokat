@@ -44,6 +44,8 @@ mod calls;
 mod classes;
 mod context;
 #[cfg(test)]
+mod declaration_owner_scaling_spec;
+#[cfg(test)]
 mod declaration_surface_lazy_spec;
 #[cfg(test)]
 pub(crate) mod declaration_surface_measure;
@@ -2438,6 +2440,32 @@ fn seed_prelude_intrinsics(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static DECLARATION_OWNER_SCAN_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_declaration_owner_scan_for_test(rows: u64) {
+    DECLARATION_OWNER_SCAN_ROWS.set(DECLARATION_OWNER_SCAN_ROWS.get().saturating_add(rows));
+}
+
+/// Attributes the declaration rows owner attachment exposes, per module
+/// (see `declaration_owner_scaling_spec`).
+#[cfg(test)]
+pub(crate) struct DeclarationOwnerScanScopeForTest(u64);
+
+#[cfg(test)]
+impl DeclarationOwnerScanScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(DECLARATION_OWNER_SCAN_ROWS.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        DECLARATION_OWNER_SCAN_ROWS.get().saturating_sub(self.0)
+    }
+}
+
 fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
     reservations: &mut LexicalReservations<Ticket>,
     source_ordinal: SourceOrdinal,
@@ -2445,6 +2473,8 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
     scope: ScopeId,
     program: &Program<'_>,
 ) {
+    #[cfg(test)]
+    let scan = crate::types::layered::LocalFullViewScanScopeForTest::start();
     for declaration in binder
         .declarations
         .local_declarations()
@@ -2460,6 +2490,8 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
             )
             .expect("source declaration must have its exact lexical event owner");
     }
+    #[cfg(test)]
+    record_declaration_owner_scan_for_test(scan.finish());
 
     let _ = program;
 }

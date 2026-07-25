@@ -140,6 +140,35 @@ fn record_full_view_base_scan_for_test(rows: usize) {
 }
 
 #[cfg(test)]
+thread_local! {
+    static LOCAL_FULL_VIEW_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The local layer is the one that grows, so a per-item scan of it is the quadratic
+/// the base probe above cannot see.
+#[cfg(test)]
+fn record_full_view_local_scan_for_test(rows: usize) {
+    if rows > 0 {
+        let rows = u64::try_from(rows).unwrap_or(u64::MAX);
+        LOCAL_FULL_VIEW_SCANS.set(LOCAL_FULL_VIEW_SCANS.get().saturating_add(rows));
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct LocalFullViewScanScopeForTest(u64);
+
+#[cfg(test)]
+impl LocalFullViewScanScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(LOCAL_FULL_VIEW_SCANS.get())
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        LOCAL_FULL_VIEW_SCANS.get().saturating_sub(self.0)
+    }
+}
+
+#[cfg(test)]
 pub(crate) struct BaseWorkScopeForTest;
 
 #[cfg(test)]
@@ -337,14 +366,20 @@ impl<T> LayeredVec<T> {
     }
 
     pub(crate) fn local_iter(&self) -> std::slice::Iter<'_, T> {
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.local.iter()
     }
 
     pub(crate) fn local_iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.local.iter_mut()
     }
 
     pub(crate) fn local_slice_mut(&mut self) -> &mut [T] {
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         &mut self.local
     }
 
@@ -516,10 +551,14 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
     }
 
     pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.local.iter()
     }
 
     pub(crate) fn local_values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.local.values_mut()
     }
 
@@ -636,6 +675,8 @@ impl<T: Eq + Hash> LayeredSet<T> {
     }
 
     pub(crate) fn local_iter(&self) -> impl Iterator<Item = &T> {
+        #[cfg(test)]
+        record_full_view_local_scan_for_test(self.local.len());
         self.local.iter()
     }
 
@@ -858,5 +899,36 @@ mod tests {
         let ledger = scope.finish();
 
         assert_eq!(ledger.sequential_scans["unattributed"], 0);
+    }
+
+    #[test]
+    fn local_full_view_accessors_report_every_exposed_local_row() {
+        let mut vector = LayeredVec::from(vec![1_u8]);
+        vector.freeze_as_base().expect("vector base seals");
+        let mut vector = vector.fork_delta().expect("vector delta forks");
+        vector.push_local(2);
+        vector.push_local(3);
+
+        let mut map = LayeredMap::default();
+        map.insert_local(1_u8, 1_u8).expect("map base inserts");
+        map.freeze_as_base().expect("map base seals");
+        let mut map = map.fork_delta().expect("map delta forks");
+        map.insert_local(2_u8, 2_u8).expect("map suffix inserts");
+
+        let mut set = LayeredSet::default();
+        set.insert_local(1_u8).expect("set base inserts");
+        set.freeze_as_base().expect("set base seals");
+        let mut set = set.fork_delta().expect("set delta forks");
+        set.insert_local(2_u8).expect("set suffix inserts");
+
+        let scope = LocalFullViewScanScopeForTest::start();
+        assert_eq!(vector.local_iter().count(), 2);
+        assert_eq!(vector.local_iter_mut().count(), 2);
+        assert_eq!(vector.local_slice_mut().len(), 2);
+        assert_eq!(map.local_iter().count(), 1);
+        assert_eq!(map.local_values_mut().count(), 1);
+        assert_eq!(set.local_iter().count(), 1);
+
+        assert_eq!(scope.finish(), 9);
     }
 }
