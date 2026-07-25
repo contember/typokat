@@ -83,19 +83,39 @@ bisect — identical diagnostic multiset, one column regression, which is [`90`]
 
 ## Approach / acceptance
 
-Both substrates must be fixed; the measured constants say neither alone covers the 165 MB gap.
-Ranked by MB per unit effort:
+All of the substrates must shrink; the measured constants say no single one covers the 165 MB gap.
 
-1. **Namespace substrate** (~94 MB at 6,249 files) — intern `MergeKey` names (S / low risk); skip
-   `MergeParticipant` for declarations that cannot merge (M / medium); share one declaration walk
-   between binder and checker (S–M / low–medium).
-2. **Lexical-event substrate** (~71 MB) — replace the `BTreeMap` with a dense arena indexed by
-   reservation ordinal (M / medium), and make `deferred`/`incomplete` tickets lazy (M / medium). A
-   full revert is **not available**: ADR-0008 requires the deterministic replay order. Existing
-   source-order tests are the gate.
-3. **Walk deduplication** — 9 walks per file down to 4–5.
-4. **Collapse the layered indirection when `base_len() == 0`** — time only.
-5. Re-measure. The diffuse ~7.7 KB/file tail from 07-16 onward needs its own pass if still short.
+> **Correction (2026-07-26).** An earlier revision ranked "namespace substrate (~94 MB)" first with
+> `MergeKey` interning as its lead bullet. The ~94 MB is `b6ecfa4` **plus** `fe61867` — the
+> `DeclarationTable` *and* the namespace metadata — whereas those bullets touch only part of the
+> latter. Direct sizing (`size_of`: `MergeParticipant` 64 B, `MergeRecord` 160 B, `MergeKey` 32 B,
+> `MergeClassification` 80 B; ~526 B retained per declaration across placement, record and index)
+> puts the **whole merge substrate at ~30 MB, 8 % of the 369 MB**, of which interning plus dropping
+> the duplicated participant vector reach ~9 MB and the risky singleton-record work another ~10 MB.
+> Cross-checked against a measured point per the discipline this item exists to enforce: the model
+> gives 5.9 MB at 1,249 files against the bisect's measured +11.1 MB for `fe61867`, so the merge
+> substrate is ~53 % of that step and the model does not exceed it. The ranking below is corrected.
+
+Ranked by measured MB, not by effort:
+
+1. **Lexical-event substrate** (~71 MB, the largest single item) — replace the `BTreeMap` with a
+   dense arena indexed by reservation ordinal (M / medium), and make `deferred`/`incomplete` tickets
+   lazy (M / medium). A full revert is **not available**: ADR-0008 requires the deterministic replay
+   order. Existing source-order tests are the gate.
+2. **`DeclarationTable`** (`b6ecfa4`) — the other half of the ~94 MB pair, and untouched so far. One
+   dense row plus one hash entry per source declaration, eagerly materialized by a full AST walk the
+   checker then repeats. Size it before scoping the fix.
+3. **Walk deduplication** — 9 walks per file down to 4–5. Overlaps with 2.
+4. **Namespace merge substrate** (~30 MB total, ~9 MB reachable at low risk) — intern `MergeKey`
+   names, and stop cloning `participants` into `MergeRecord.declarations` when the `placements` map
+   already holds that vector. Worth more on real code than on the bench corpus, which uses
+   all-distinct names and has **zero** merges, so every declaration pays the full singleton price.
+   Note singleton records cannot simply be dropped: five production loops iterate the record set
+   (`namespace_values.rs:2398`, `library_compiler.rs:3045`, three sites in `bind.rs`,
+   `snapshot.rs:808`), so synthesising them on demand is a behaviour change, not a representation
+   change, and is deliberately deferred.
+5. **Collapse the layered indirection when `base_len() == 0`** — time only.
+6. Re-measure. The diffuse ~7.7 KB/file tail from 07-16 onward needs its own pass if still short.
 
 Acceptance: `modules-100000` ≤0.35 s and ≤200 MB, which is what it takes to beat `tsgo` on this
 family again; diagnostics byte-identical over `tests/cases/` and `errors-10000.ts`; official-suite
