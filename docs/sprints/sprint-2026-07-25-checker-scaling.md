@@ -284,3 +284,23 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   error: WU6's tsgo figure (4.24 s vs 2.09 s true, since retracted by the agent on its own re-run)
   and WU2's `modules-100000` (7.06 s vs 6.74 s, within noise). Measuring while a sibling WU runs a
   6,249-file corpus is not measuring.
+- **The knee hunt closed the question: it is one term, and it is backlog `93`.** Skipping the
+  attachment fill takes `modules-100000` from 6.86 s to **0.977 s — 86 % of wall clock** — and
+  flattens the residual exponent to 1.03–1.12 out to 12,000 files, with every other phase scaling
+  4.9–6.6× for 6.25× more files. The counter reads `fills=6249 rows=390,531,255 targets=0`: 390
+  million rows producing nothing on this corpus. Leader-reproduced.
+- **`93` was filed 4× too small and is corrected.** The original ~1.5 s came from measuring
+  0.246 ms/module at `D = 37,500` and extrapolating linearly to 6,249 modules — across a cache
+  boundary. Per-row cost is itself a function of `D` (4.53 → 21.57 ns/row from `D = 24 k` to 192 k, as
+  the ~190 B/merge table leaves a 16 MiB L3), so the real per-module cost at `D = 62,474` is 0.903 ms
+  and the term is 5.88 s. The lesson generalises: never extend a per-unit cost linearly without
+  quoting it at the target size.
+- **`93` is not a benchmark artifact — real code is hit harder.** At a realistic 30 declarations/file
+  the fill is already 60 % of a 2,000-file project, and 70 % on a namespace-using corpus. The bench
+  corpus has zero namespaces, so it pays only the scan and never the `M`-fold target re-derivation.
+- **Underneath the exponent is a flat ~3× regression → backlog `94`.** Post-`93` projection is
+  0.98 s against typokat's own committed **0.3068 s of 2026-07-09** on the identical corpus (157 vs
+  49 µs/file), with peak RSS **372 MB against 159.9 MB** — leader-verified against the committed
+  report, which also shows typokat *beating* tsgo that day (0.3068 vs 0.3741). It is spread evenly
+  across eight linear phases with no dominator, so it needs a bisect, not a hunt. **`93` gets the
+  exponent, not the target.**
