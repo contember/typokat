@@ -16,11 +16,22 @@ const SMALL_DEPTH: usize = 2;
 const MID_DEPTH: usize = 4;
 const LARGE_DEPTH: usize = 8;
 
-/// Doubling the nesting depth may multiply the contextual walks by at most this. A
-/// polynomial of degree 4 fits inside it at every doubling; an exponential does not,
-/// because its factor is itself squared by each doubling.
-const DOUBLING_MULTIPLE: u64 = 16;
-const GROWTH_SLACK: u64 = 32;
+/// How much the growth *factor* may itself grow from one doubling to the next.
+///
+/// A fixed bound on the factor cannot separate exponentials from polynomials: any
+/// exponential looks polynomial once its base is small enough. Base 2 reaches
+/// `walks(8)/walks(4) = 17`, which slips under a factor bound of 16 chosen to admit a
+/// degree-4 polynomial — so such a bound goes green while the exponential remains.
+///
+/// Compare the *ratio of ratios* instead. For `walks ~ d^k` both doublings have the
+/// same factor `2^k`, so the ratio of ratios is 1 whatever the degree; for `walks ~ b^d`
+/// each doubling squares the factor, so it grows without bound. Today it is 4.1 and at
+/// base 2 it is 1.7, while every polynomial sits at 1.
+const FACTOR_GROWTH: u64 = 2;
+
+/// Absolute headroom, so shapes whose counts are small enough for an additive constant
+/// to dominate are not failed by rounding alone.
+const GROWTH_SLACK: u64 = 64;
 
 /// The control's depth. An argument that is neither a fresh literal nor an arrow makes
 /// `context_can_shape_fresh_literal` return false, so the re-walk never runs and the
@@ -124,21 +135,27 @@ fn nested_contextual_arguments_are_not_re_walked_exponentially() {
             );
         }
 
-        for pair in runs.windows(2) {
-            let [smaller, larger] = pair else { continue };
-            let bound = DOUBLING_MULTIPLE * smaller.contextual_walks() + GROWTH_SLACK;
-            if larger.contextual_walks() > bound {
-                violations.push(format!(
-                    "doubling depth {} to {} multiplied contextual walks {} to {}, \
-                     past the polynomial bound {bound} — {} then {}",
-                    smaller.depth,
-                    larger.depth,
-                    smaller.contextual_walks(),
-                    larger.contextual_walks(),
-                    smaller.record(),
-                    larger.record(),
-                ));
-            }
+        let [small, mid, large] = &runs;
+        // `large/mid <= FACTOR_GROWTH * (mid/small)`, cross-multiplied so the comparison
+        // is exact rather than truncated by integer division.
+        let observed = large.contextual_walks() * small.contextual_walks();
+        let bound = FACTOR_GROWTH * mid.contextual_walks() * mid.contextual_walks() + GROWTH_SLACK;
+        if observed > bound {
+            violations.push(format!(
+                "the growth factor is itself growing: depth {} to {} multiplied contextual \
+                 walks by {}, then depth {} to {} multiplied them by {} — a polynomial \
+                 repeats one factor, only an exponential squares it ({observed} > {bound}) \
+                 — {}, then {}, then {}",
+                small.depth,
+                mid.depth,
+                mid.contextual_walks() / small.contextual_walks().max(1),
+                mid.depth,
+                large.depth,
+                large.contextual_walks() / mid.contextual_walks().max(1),
+                small.record(),
+                mid.record(),
+                large.record(),
+            ));
         }
     }
 
