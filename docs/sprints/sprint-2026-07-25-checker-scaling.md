@@ -316,6 +316,20 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   measuring the existing behaviour before changing it, not by reading the code — and it is **not
   reachable through the checker today** (two files declaring the same namespace value member report
   an incomplete surface), so the byte-diff could never have caught it. The unit guard is the net.
+- **`94` bisected (2026-07-26).** Four steps, all eager per-declaration substrate built before
+  anything consumes it: `a7923b6` lexical-event preallocation (11.4 KB/file), `b6ecfa4` +`fe61867`
+  declaration/namespace metadata walks (15.1 KB/file combined), plus a diffuse 7.7 KB/file tail.
+  Endpoints leader-reproduced today: `f065e89` gives **0.30 s / 154 MB**, HEAD 0.997 s / 372 MB, same
+  corpus. Both substrates must be fixed — neither alone covers the 165 MB gap. Details in `94`.
+- Two methodological results worth keeping. **Peak RSS is the right bisect oracle on a busy box** —
+  near-deterministic where wall clock is not — **but it quantizes by ±5 MB**, so a step must be
+  confirmed at two or more corpus sizes; `6c82ead` looked like a +4.7 MB step at one size and is zero
+  at three others. And **RSS and wall clock disagreeing is information**: here it proved two
+  independent regressions had been sitting on top of each other, since `a7923b6` carried both the
+  memory constant and the attachment-fill exponent, making wall clock unattributable between 07-14
+  and 07-25 at any corpus size.
+- This also sharpens backlog `89`: the 07-13 sprint's ≤2 % regression gate never measured a
+  multi-file corpus, which is exactly how a 3× multi-file constant walked in unnoticed.
 - **Underneath the exponent is a flat ~3× regression → backlog `94`.** Post-`93` projection is
   0.98 s against typokat's own committed **0.3068 s of 2026-07-09** on the identical corpus (157 vs
   49 µs/file), with peak RSS **372 MB against 159.9 MB** — leader-verified against the committed

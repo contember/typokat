@@ -6,72 +6,107 @@ blocked-by: []
 
 # 94 — A flat 3× per-file regression sits under the modules exponent
 
-**Summary.** With the attachment-fill exponent removed (`c8fc029`), `modules-100000` sits at
-**0.997 s** against typokat's own committed 0.3068 s of 2026-07-09 on the identical corpus —
-**160 µs/file today against 49 µs/file then**, with peak RSS 372 MB against 159.9 MB. No single phase
-dominates, so this needs a **bisect**, not a hunt. Effort M–L. **This is now the whole remaining gap
-on `modules`.**
+**Summary.** `modules-100000` costs **0.997 s / 372 MB** at HEAD against **0.30 s / 154 MB** at
+`f065e89` (2026-07-09) on the identical corpus — both reproduced today. Bisected to **four steps**,
+all eager per-declaration substrate built before anything consumes it. Getting back under
+0.35 s / 200 MB needs the **namespace** and **lexical-event** substrates fixed; neither alone covers
+the 165 MB gap. Effort L.
 
 ## Problem
 
-`c8fc029` removed the last superlinear term: `modules-100000` went 6.729 s → **0.997 s** and the
-2,499 → 6,249 exponent went 2.54 → **1.07**, flat out to 12,000 files. What is left is a constant,
-and it is still **3.3× slower than typokat itself was on 2026-07-09** — not a projection but a
-committed measurement:
+`c8fc029` removed the last superlinear term (exponent 2.54 → 1.07). What remains is a flat constant,
+and it is large:
 
 | | median | peak RSS | vs tsgo |
 |---|---|---|---|
-| 2026-07-09 (`report/raw/20260709-174055`) | **0.3068 s** | **159.9 MB** | tsgo 0.3741 s — **typokat won** |
-| HEAD `c8fc029` | 0.997 s | 372 MB | tsgo 0.293 s — 3.4× slower |
+| `f065e89` (2026-07-09) | **0.30 s** | **154 MB** | tsgo 0.3741 s — **typokat won** |
+| HEAD | 0.997 s | 372 MB | tsgo ~0.30 s — 3.3× slower |
 
-The memory figure is the useful independent signal: 2.3× more resident for the same corpus points at
-representation or retention, not at an algorithm, and it moved in the same window.
+Both endpoints measured on the same box on 2026-07-26 with a corpus proven md5-identical
+(`696772268a1328475b0bd8895c364b73`) throughout; `tooling/bench/typobench.py` is byte-identical at
+both commits and its generator has no RNG.
 
-Phase breakdown of the 0.98 s residual — the point is that there is no dominator:
+### The steps
 
-| phase | time | scaling, 1,000 → 6,247 files (6.25×) |
-|---|---|---|
-| lexical_reserve | 0.146 s | 5.15× |
-| `add_module` (bind, less classify/fill) | 0.128 s | 4.9× |
-| check_statements + flow graph | 0.113 s | 5.82× |
-| finish_event_effects (replay) | 0.091 s | 6.20× |
-| parse | 0.090 s | 4.97× |
-| `finalize_namespace_metadata` | 0.068 s | 6.63× |
-| fill_type_decls_range | 0.057 s | 5.63× |
-| imports + dependency order | 0.054 s | 4.9× |
+Bisected on **peak RSS**, which is near-deterministic, using `modules-20000` (1,249 files) — it
+carries the full signature at 1/5 the cost.
 
-Every row is linear. A ~3× constant spread evenly across eight unrelated phases is the signature of a
-representation change or a per-declaration cost added everywhere, not of one bad loop — which is why
-searching for a hotspot will fail and a bisect will not.
+| # | commit | date | ΔRSS @1,249 files | per-file | verdict |
+|---|---|---|---|---|---|
+| 1 | `6c82ead` | 07-10 | none | +14 % time | deliberate soundness fix — keep |
+| 2 | `a7923b6` | 07-14 | +13.8 MB | 11.4 KB/file | deliberate intent, accidental representation |
+| 3 | `b6ecfa4` | 07-15 | +8.4 MB | } 15.1 KB/file | accidental |
+| 4 | `fe61867` | 07-15 | +11.1 MB | } combined | accidental |
+| 5 | diffuse 07-16 → HEAD | | +14.2 MB, no step >4.4 MB | ~7.7 KB/file | unattributed |
 
-Note the related-but-distinct precedent: an earlier bisect this sprint pinned the *modules* blow-up to
-`a7923b6` (2026-07-14, immutable class semantics cutover) and found it had also silently cost
-assignability column precision ([`90`](./90-assignability-span-precision.md)). The window here starts
-earlier — 2026-07-09 — so `a7923b6` is a candidate but must not be assumed.
+Per-file constants were confirmed at 312 / 1,249 / 2,499 files (10.9–11.9 KB/file for step 2;
+25.2–27.2 KB/file cumulative through step 4) and extrapolate to 213 MB at 6,249 files against a
+**measured** endpoint delta of 213.5 MB — so the model is validated, not assumed.
+
+**Step 1 is a false RSS positive** (arena-bucket quantization: +4.7 MB at one size, zero or negative
+at three others) but its ~14 % time cost is real and consistent at every size.
+
+**RSS and wall clock disagree about where the step is, and that is a finding, not noise.** `a7923b6`
+introduced *both* this per-file memory cost and the attachment-fill exponent (the item `c8fc029`
+fixed), so between 07-14 and 07-25 the exponent dominates at every corpus size and wall clock cannot
+be attributed commit-by-commit in that window. `c8fc029` separates them cleanly: at 1,249 files it
+takes wall 4.79 s → 0.192 s with RSS unchanged (81.4 → 81.6 MB). Two independent regressions.
+
+### Mechanisms
+
+- **`a7923b6`** — project-wide lexical event *preallocation* (`src/check/checker/lexical_events.rs`,
+  `events.rs`), mandated by [ADR-0008](../decisions/) for deterministic replay order. Every statement
+  site eagerly reserves **three** entries (`event`, `deferred`, `incomplete`) in one checker-wide
+  `BTreeMap<EventKey, Completion>` where `Completion` wraps a `Vec<CheckerRecord>` — ≥56 B plus
+  B-tree node overhead per slot, allocated whether or not anything is ever recorded, for every file.
+  The `ClassInstance` type itself is cheap; the preallocation is the cost.
+- **`b6ecfa4`** — `DeclarationTable`: one dense row plus one hash entry per source declaration,
+  eagerly materialized by `source_declaration_occurrences(program)` — a full AST walk the checker
+  then repeats.
+- **`fe61867`** — `collect_project_namespace_metadata` wired into `add_module`: a third full walk per
+  file producing an 11-field `MergeParticipant` per declaration, keyed by a `MergeKey` that **owns a
+  `String`** (`name.to_string()` for every declaration in the project). Its own commit message says
+  the metadata is recorded "without publishing it to production resolution" — built eagerly before
+  anything consumed it. HEAD now walks each file ~9 times before the checking walk.
+- **`53ad026`** (07-23) — every hot arena became `LayeredVec`/`LayeredMap`; `get` became a
+  compare + subtract + `Arc<[T]>` deref, map `get` became `base.get().or_else(local.get)`. Only
+  +1.5 MB, so it is a **time** multiplier applied uniformly across all eight phases. With no library
+  loaded the base is always empty, so it is collapsible.
+
+**Library loading is not implicated.** Startup floor at HEAD is 5.5 MB / ~0 ms; production still uses
+`src/prelude.ts` (ADR-0012), and the 21 MB `include_bytes!` snapshot is `.rodata`, never read.
+
+The largest step (+19.5 MB combined) is **behaviourally inert at its own boundary**: 356 fixtures plus
+`errors-10000.ts` produce byte-identical output across it, 4,661 diagnostic lines each. It is
+substrate for namespace work that landed later. `a7923b6`'s boundary was checked by the earlier
+bisect — identical diagnostic multiset, one column regression, which is [`90`](./90-assignability-span-precision.md).
 
 ## Approach / acceptance
 
-Bisect `modules-100000` wall clock **and** peak RSS between the 2026-07-09 commit behind
-`report/raw/20260709-174055` and HEAD. Two cautions learned the hard way in this sprint:
+Both substrates must be fixed; the measured constants say neither alone covers the 165 MB gap.
+Ranked by MB per unit effort:
 
-- **Prove build-input equivalence at each boundary** — the corpus must be md5-identical across the
-  two commits being compared, or the bisect measures corpus drift.
-- **Check diagnostics at the boundary too.** The `a7923b6` bisect found zero diagnostics gained or
-  lost but one silent quality regression; a pure-perf conclusion needs the diff to say so.
-- The `modules` corpus emits **no diagnostics and derives zero attachment targets**, so it can time a
-  regression but can never witness a behavioural one. Pair it with a namespace-bearing corpus.
+1. **Namespace substrate** (~94 MB at 6,249 files) — intern `MergeKey` names (S / low risk); skip
+   `MergeParticipant` for declarations that cannot merge (M / medium); share one declaration walk
+   between binder and checker (S–M / low–medium).
+2. **Lexical-event substrate** (~71 MB) — replace the `BTreeMap` with a dense arena indexed by
+   reservation ordinal (M / medium), and make `deferred`/`incomplete` tickets lazy (M / medium). A
+   full revert is **not available**: ADR-0008 requires the deterministic replay order. Existing
+   source-order tests are the gate.
+3. **Walk deduplication** — 9 walks per file down to 4–5.
+4. **Collapse the layered indirection when `base_len() == 0`** — time only.
+5. Re-measure. The diffuse ~7.7 KB/file tail from 07-16 onward needs its own pass if still short.
 
-Acceptance: the responsible commit (or commits) named with build-input equivalence proven at the
-boundary, the mechanism explained, and either a fix or a filed follow-up per cause. Target is the
-2026-07-09 profile: ≤0.35 s and ≤200 MB on `modules-100000`, which is also what it takes to beat
-`tsgo` on this family again.
+Acceptance: `modules-100000` ≤0.35 s and ≤200 MB, which is what it takes to beat `tsgo` on this
+family again; diagnostics byte-identical over `tests/cases/` and `errors-10000.ts`; official-suite
+ratchet at 0 regressions. Do not weaken ADR-0008's replay determinism to get there.
 
 ## Touch points
 
-Unknown by construction — that is the point of the bisect. Start from the phase table above;
-`src/binder/`, `src/check/checker/`, and whatever changed in type representation between 07-09 and
-HEAD are the likely surface.
+`src/check/checker/lexical_events.rs`, `src/check/checker/events.rs`, `src/binder/declaration.rs`
+(`DeclarationTable`), `src/binder/namespace.rs` (`MergeKey`, `MergeParticipant`,
+`collect_project_namespace_metadata`), `src/types/layered.rs`.
 
-<!-- Origin: complexity hunt of the modules knee, 2026-07-25. The hunt closed the exponent question
-     (one term, = 93) and exposed this underneath it. Timing and RSS independently reproduced by the
-     leader against the committed 07-09 report. -->
+<!-- Origin: complexity hunt of the modules knee, 2026-07-25, which closed the exponent question and
+     exposed this underneath. Bisected 2026-07-26 on peak RSS over f065e89..a0a5a6c with build-input
+     equivalence proven. Endpoints independently reproduced by the leader. -->
