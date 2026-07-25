@@ -2722,7 +2722,7 @@ fn exhausted_relation_never_promotes_completed_outcome() {
 }
 
 #[test]
-fn completed_outcomes_follow_query_state_fork_promotion_rules() {
+fn completed_outcomes_follow_query_state_savepoint_promotion_rules() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let number = interner.intern_object(ObjectType {
@@ -2734,21 +2734,21 @@ fn completed_outcomes_follow_query_state_fork_promotion_rules() {
         ..Default::default()
     });
     let published = PublishedClasses::empty();
-    let mut parent = SemanticQueryState::default();
+    let mut state = SemanticQueryState::default();
     let mut next_type_param = 0;
     let parent_reason = expect_no(
-        SemanticQueryCoordinator::new(&mut interner, &published, &mut parent, &mut next_type_param)
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
             .is_assignable(number, string),
     );
-    assert_eq!(parent.completed_relation_len(), 0);
-    assert_eq!(parent.completed_relation_no_candidate_len(), 1);
-    let mut child = parent.fork();
+    assert_eq!(state.completed_relation_len(), 0);
+    assert_eq!(state.completed_relation_no_candidate_len(), 1);
+    state.savepoint();
     let promoted = expect_no(
-        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
             .is_assignable(number, string),
     );
     let inherited_hit = expect_no(
-        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
             .is_assignable(number, string),
     );
     assert!(Arc::ptr_eq(&promoted, &inherited_hit));
@@ -2757,20 +2757,20 @@ fn completed_outcomes_follow_query_state_fork_promotion_rules() {
         crate::diagnostics::render_reason_chain(interner.store(), promoted.head())
     );
     expect_no(
-        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
             .is_assignable(string, number),
     );
     expect_no(
-        SemanticQueryCoordinator::new(&mut interner, &published, &mut child, &mut next_type_param)
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
             .is_assignable(string, number),
     );
-    assert_eq!(child.completed_relation_len(), 2);
-    assert_eq!(child.completed_relation_no_candidate_len(), 0);
-    assert_eq!(parent.completed_relation_len(), 0);
-    assert_eq!(parent.completed_relation_no_candidate_len(), 1);
-    drop(child);
-    assert_eq!(parent.completed_relation_len(), 0);
-    assert_eq!(parent.completed_relation_no_candidate_len(), 1);
+    assert_eq!(state.completed_relation_len(), 2);
+    assert_eq!(state.completed_relation_no_candidate_len(), 0);
+    // Rolling the layer back must restore the pre-savepoint counts exactly,
+    // including the single `No` candidate the promotion consumed.
+    state.rollback();
+    assert_eq!(state.completed_relation_len(), 0);
+    assert_eq!(state.completed_relation_no_candidate_len(), 1);
 }
 
 #[test]

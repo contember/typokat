@@ -149,12 +149,12 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         fresh_args,
         receiver,
     } = request;
-    let mut local_queries = queries.fork();
+    queries.savepoint();
     let collection = collect_call_site_candidates_query(
         interner,
         next_type_param,
         published,
-        &mut local_queries,
+        queries,
         CandidateCollectionRequest {
             params,
             args,
@@ -172,12 +172,13 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         interner,
         next_type_param,
         published,
-        &mut local_queries,
+        queries,
         candidates,
         &constraints,
     ) {
         DemandOutcome::Ready(fixed) => fixed,
         DemandOutcome::Exhausted(exhaustion) => {
+            queries.rollback();
             return DemandOutcome::Exhausted(exhaustion);
         }
     };
@@ -185,13 +186,15 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         interner,
         next_type_param,
         published,
-        &mut local_queries,
+        queries,
         type_params,
         fixed,
         &exempt,
     );
     if matches!(outcome, DemandOutcome::Ready(_)) && collection.exhaustion.is_none() {
-        *queries = local_queries;
+        queries.commit();
+    } else {
+        queries.rollback();
     }
     match outcome {
         DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {
@@ -218,12 +221,12 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         fresh_args,
         receiver,
     } = request;
-    let mut local_queries = queries.fork();
+    queries.savepoint();
     let collection = collect_call_site_candidates_query(
         interner,
         next_type_param,
         published,
-        &mut local_queries,
+        queries,
         CandidateCollectionRequest {
             params,
             args,
@@ -241,12 +244,13 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         interner,
         next_type_param,
         published,
-        &mut local_queries,
+        queries,
         candidates,
         &constraints,
     ) {
         DemandOutcome::Ready(fixed) => fixed,
         DemandOutcome::Exhausted(exhaustion) => {
+            queries.rollback();
             return DemandOutcome::Exhausted(exhaustion);
         }
     };
@@ -254,13 +258,15 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         interner,
         next_type_param,
         published,
-        &mut local_queries,
+        queries,
         type_params,
         fixed,
         &exempt,
     );
     if matches!(outcome, DemandOutcome::Ready(_)) && collection.exhaustion.is_none() {
-        *queries = local_queries;
+        queries.commit();
+    } else {
+        queries.rollback();
     }
     match outcome {
         DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {

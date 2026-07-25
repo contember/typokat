@@ -329,17 +329,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> (R, CheckerEffects<Ticket>) {
         #[cfg(test)]
         let parent_lengths = self.semantic_queries.durable_lengths();
-        let child_queries = self.semantic_queries.fork();
-        let parent_queries = std::mem::replace(&mut self.semantic_queries, child_queries);
+        self.semantic_queries.savepoint();
         let captured = self.capture_candidate_effects(produce);
         #[cfg(test)]
-        let child_queries = std::mem::replace(&mut self.semantic_queries, parent_queries);
+        let child_lengths = self.semantic_queries.durable_lengths();
+        self.semantic_queries.rollback();
         #[cfg(test)]
-        self.measure_discarded_candidate_queries(parent_lengths, &child_queries);
-        #[cfg(not(test))]
-        {
-            self.semantic_queries = parent_queries;
-        }
+        self.measure_discarded_candidate_queries(parent_lengths, child_lengths);
         captured
     }
 
@@ -348,27 +344,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn with_speculative_candidate_queries<R>(&mut self, produce: impl FnOnce(&mut Self) -> R) -> R {
         #[cfg(test)]
         let parent_lengths = self.semantic_queries.durable_lengths();
-        let child_queries = self.semantic_queries.fork();
-        let parent_queries = std::mem::replace(&mut self.semantic_queries, child_queries);
+        self.semantic_queries.savepoint();
         let result = produce(self);
         #[cfg(test)]
-        let child_queries = std::mem::replace(&mut self.semantic_queries, parent_queries);
+        let child_lengths = self.semantic_queries.durable_lengths();
+        self.semantic_queries.rollback();
         #[cfg(test)]
-        self.measure_discarded_candidate_queries(parent_lengths, &child_queries);
-        #[cfg(not(test))]
-        {
-            self.semantic_queries = parent_queries;
-        }
+        self.measure_discarded_candidate_queries(parent_lengths, child_lengths);
         result
     }
 
+    /// `child_lengths` is sampled before the rollback, so the discarded count keeps
+    /// its original meaning: durable growth this speculative layer threw away.
     #[cfg(test)]
     fn measure_discarded_candidate_queries(
         &self,
         parent_lengths: (usize, usize, usize, usize, usize),
-        child_queries: &crate::check::query::SemanticQueryState,
+        child_lengths: (usize, usize, usize, usize, usize),
     ) {
-        let child_lengths = child_queries.durable_lengths();
         let discarded = child_lengths.0.saturating_sub(parent_lengths.0)
             + child_lengths.1.saturating_sub(parent_lengths.1)
             + child_lengths.2.saturating_sub(parent_lengths.2)

@@ -159,12 +159,12 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
     op: &NarrowOp,
     positive: bool,
 ) -> DemandOutcome<TypeId> {
-    let mut local_state = state.fork();
+    state.savepoint();
     let outcome = match op {
         NarrowOp::Discriminant { property, literal } => narrow_by_discriminant_query(
             interner,
             published,
-            &mut local_state,
+            state,
             next_type_param,
             DiscriminantQueryRequest {
                 ty,
@@ -176,7 +176,7 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
         NarrowOp::In { property } => narrow_by_in_operator_query(
             interner,
             published,
-            &mut local_state,
+            state,
             next_type_param,
             ty,
             property,
@@ -185,7 +185,9 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
         _ => DemandOutcome::Ready(narrow(interner, ty, op, positive)),
     };
     if matches!(outcome, DemandOutcome::Ready(_)) {
-        *state = local_state;
+        state.commit();
+    } else {
+        state.rollback();
     }
     outcome
 }

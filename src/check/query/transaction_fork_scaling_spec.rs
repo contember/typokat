@@ -3,6 +3,7 @@
 use super::{query_source_cold_measure, start_query_source_cold_measure, QuerySourceColdMeasure};
 use crate::check::checker::check_program;
 use crate::driver::CheckOutput;
+use crate::relate::cache::{finish_relation_cache_depth_measure, start_relation_cache_depth_measure};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -174,5 +175,30 @@ fn semantic_query_transactions_copy_only_their_own_working_set() {
         violations.join("\n"),
         small.record(),
         large.record()
+    );
+}
+
+/// The layered relation cache trades a flat lookup for a walk down the open
+/// savepoints, so the walk has to stay shallow rather than merely "bounded".
+#[test]
+fn layered_relation_cache_lookups_stay_shallow() {
+    const MAX_DEPTH: u32 = 16;
+
+    let source = generic_call_site_source(LARGE_BLOCKS);
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, &source, SourceType::ts()).parse();
+    let mut interner = crate::types::Interner::with_intrinsics();
+    start_relation_cache_depth_measure();
+    let checked = check_program(&mut interner, &parsed.program);
+    let depth = finish_relation_cache_depth_measure();
+
+    assert!(checked.diagnostics.is_empty(), "{:#?}", checked.diagnostics);
+    assert!(depth.lookups > 0, "the corpus must exercise the cache");
+    assert!(
+        depth.max_depth <= MAX_DEPTH,
+        "relation-cache layer walk must stay shallow: max={}, median={}, lookups={}",
+        depth.max_depth,
+        depth.median_depth(),
+        depth.lookups
     );
 }

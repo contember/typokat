@@ -6,10 +6,78 @@
 use crate::relate::relation::RelationKind;
 use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 #[cfg(test)]
 thread_local! {
     static RELATION_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RELATION_CACHE_DEPTH: std::cell::RefCell<RelationCacheDepthMeasure> =
+        std::cell::RefCell::new(RelationCacheDepthMeasure::new());
+    static RELATION_CACHE_DEPTH_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Layer walk observed by `get`, so "depth stays bounded" is measured, not claimed.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct RelationCacheDepthMeasure {
+    pub(crate) lookups: u64,
+    pub(crate) max_depth: u32,
+    pub(crate) histogram: Vec<u64>,
+}
+
+#[cfg(test)]
+impl RelationCacheDepthMeasure {
+    const BUCKETS: usize = 33;
+
+    fn new() -> Self {
+        Self {
+            lookups: 0,
+            max_depth: 0,
+            histogram: vec![0; Self::BUCKETS],
+        }
+    }
+
+    /// Depth at or below which half the lookups resolved.
+    pub(crate) fn median_depth(&self) -> usize {
+        let mut seen = 0;
+        for (depth, count) in self.histogram.iter().enumerate() {
+            seen += count;
+            if seen * 2 >= self.lookups {
+                return depth;
+            }
+        }
+        0
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn record_relation_cache_depth(_depth: u32) {}
+
+#[cfg(test)]
+fn record_relation_cache_depth(depth: u32) {
+    if !RELATION_CACHE_DEPTH_ENABLED.with(std::cell::Cell::get) {
+        return;
+    }
+    RELATION_CACHE_DEPTH.with(|measure| {
+        let mut measure = measure.borrow_mut();
+        measure.lookups += 1;
+        measure.max_depth = measure.max_depth.max(depth);
+        let bucket = (depth as usize).min(RelationCacheDepthMeasure::BUCKETS - 1);
+        measure.histogram[bucket] += 1;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn start_relation_cache_depth_measure() {
+    RELATION_CACHE_DEPTH.with(|measure| *measure.borrow_mut() = RelationCacheDepthMeasure::new());
+    RELATION_CACHE_DEPTH_ENABLED.set(true);
+}
+
+#[cfg(test)]
+pub(crate) fn finish_relation_cache_depth_measure() -> RelationCacheDepthMeasure {
+    RELATION_CACHE_DEPTH_ENABLED.set(false);
+    RELATION_CACHE_DEPTH.with(|measure| measure.borrow().clone())
 }
 
 #[cfg(test)]
@@ -93,8 +161,14 @@ impl RelationKey {
 
 /// Maps a decided relation to its boolean verdict; failure reasons are rebuilt by
 /// the engine so the hot cache stays compact.
+///
+/// A speculative caller layers the cache instead of copying it: `savepoint` pushes
+/// the current entries down into a shared immutable base, so `rollback` drops only
+/// the speculative layer and `commit` folds it back down. Depth is bounded by open
+/// transaction nesting because commit collapses each layer as it closes.
 #[derive(Clone, Default)]
 pub struct RelationCache {
+    base: Option<Arc<RelationCache>>,
     entries: FxHashMap<RelationKey, bool>,
 }
 
@@ -105,7 +179,28 @@ impl RelationCache {
 
     #[inline]
     pub fn get(&self, key: RelationKey) -> Option<bool> {
-        self.entries.get(&key).copied()
+        let (verdict, depth) = self.lookup(key);
+        record_relation_cache_depth(depth);
+        verdict
+    }
+
+    /// The layer walk itself, uninstrumented so bookkeeping never counts as a
+    /// relation lookup. Returns how many layers below the local one it visited.
+    #[inline]
+    fn lookup(&self, key: RelationKey) -> (Option<bool>, u32) {
+        if let Some(verdict) = self.entries.get(&key) {
+            return (Some(*verdict), 0);
+        }
+        let mut layer = self.base.as_deref();
+        let mut depth = 0u32;
+        while let Some(current) = layer {
+            depth += 1;
+            if let Some(verdict) = current.entries.get(&key) {
+                return (Some(*verdict), depth);
+            }
+            layer = current.base.as_deref();
+        }
+        (None, depth)
     }
 
     #[inline]
@@ -120,19 +215,59 @@ impl RelationCache {
     pub(crate) fn promote(&mut self, pending: RelationCache) {
         #[cfg(test)]
         record_relation_cache_writes_for_test(pending.entries.len());
+        debug_assert!(
+            pending.base.is_none(),
+            "a pending query cache is always unlayered"
+        );
         self.entries.extend(pending.entries);
+    }
+
+    /// Open a speculative layer. O(1): the settled entries become a shared base.
+    pub(crate) fn savepoint(&mut self) {
+        let settled = std::mem::take(self);
+        self.base = Some(Arc::new(settled));
+    }
+
+    /// Fold the speculative layer into the layer below it. O(this layer).
+    pub(crate) fn commit(&mut self) {
+        let mut settled = self.take_savepoint_base();
+        settled.entries.extend(self.entries.drain());
+        *self = settled;
+    }
+
+    /// Drop the speculative layer, restoring the cache to its savepoint. O(1).
+    pub(crate) fn rollback(&mut self) {
+        *self = self.take_savepoint_base();
+    }
+
+    /// Reclaim the base a savepoint pushed down. The layer is never shared with
+    /// another owner, so unwrapping the `Arc` stays a move rather than a copy.
+    fn take_savepoint_base(&mut self) -> RelationCache {
+        let base = self
+            .base
+            .take()
+            .expect("a relation-cache layer closes exactly one savepoint");
+        Arc::try_unwrap(base).unwrap_or_else(|shared| (*shared).clone())
     }
 
     /// Number of cached relations (used by tests / future cache-pressure tuning).
     #[allow(dead_code)] // TODO(§6.2): cache-lifetime instrumentation.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        let Some(base) = self.base.as_deref() else {
+            return self.entries.len();
+        };
+        let shadowed = self
+            .entries
+            .keys()
+            .filter(|key| base.lookup(**key).0.is_some())
+            .count();
+        base.len() + self.entries.len() - shadowed
     }
 
     /// Whether the cache holds no decided relations.
     #[allow(dead_code)] // TODO(§6.2): cache-lifetime instrumentation.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.base.as_deref().is_none_or(RelationCache::is_empty)
     }
 }
 

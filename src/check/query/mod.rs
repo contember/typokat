@@ -276,19 +276,22 @@ fn measure_query_source_cold(update: impl FnOnce(&mut QuerySourceColdMeasure)) {
     });
 }
 
-/// One enclosing semantic-query transaction (fork, body, promote-or-discard).
+/// One enclosing semantic-query transaction (savepoint, body, promote-or-discard).
 #[cfg(test)]
 pub(crate) fn record_semantic_query_transaction() {
     measure_query_source_cold(|measure| measure.semantic_query_transactions += 1);
 }
 
-/// One semantic-query overlay freed when a transaction promotes or rolls back.
-#[cfg(test)]
-pub(crate) fn record_semantic_state_discard(discarded: &SemanticQueryState) {
-    measure_query_source_cold(|measure| {
-        measure.semantic_state_discards += 1;
-        measure.semantic_state_discarded_entries += discarded.durable_entries();
-    });
+/// Put back whatever the journaled write displaced, insertion or overwrite alike.
+fn restore_entry<K: std::hash::Hash + Eq, V>(
+    map: &mut FxHashMap<K, V>,
+    key: K,
+    previous: Option<V>,
+) {
+    match previous {
+        Some(previous) => map.insert(key, previous),
+        None => map.remove(&key),
+    };
 }
 
 #[cfg(test)]
@@ -380,9 +383,21 @@ impl PublishedClassLookup for PublishedClasses {
     }
 }
 
-/// Pass-local durable semantic-query state. A tainted query changes none of it.
-#[derive(Clone, Default)]
-pub(crate) struct SemanticQueryState {
+/// One reversible write against the durable state. A speculative transaction
+/// journals these instead of copying the state it might discard.
+enum SemanticQueryUndo {
+    ProjectionMemo(TypeId, Option<TypeId>),
+    EvaluationMemo(TypeId, Option<TypeId>),
+    CompletedIdentity(CompletedIdentityKey, Option<bool>),
+    CompletedRelation(CompletedRelationKey, Option<CompletedRelationOutcome>),
+    NoCandidateInserted(CompletedRelationKey),
+    NoCandidateRemoved(CompletedRelationKey),
+    PublicationClean(TypeId),
+    ContextReset(Box<ResetSemanticContext>),
+}
+
+/// The whole pre-reset context, moved aside rather than copied.
+struct ResetSemanticContext {
     projection_memo: FxHashMap<TypeId, TypeId>,
     evaluation_memo: FxHashMap<TypeId, TypeId>,
     completed_identities: FxHashMap<CompletedIdentityKey, bool>,
@@ -394,29 +409,221 @@ pub(crate) struct SemanticQueryState {
     publication_snapshot_identity: Option<Arc<()>>,
 }
 
+/// Pass-local durable semantic-query state. A tainted query changes none of it.
+#[derive(Default)]
+pub(crate) struct SemanticQueryState {
+    projection_memo: FxHashMap<TypeId, TypeId>,
+    evaluation_memo: FxHashMap<TypeId, TypeId>,
+    completed_identities: FxHashMap<CompletedIdentityKey, bool>,
+    relation_cache: RelationCache,
+    completed_relations: FxHashMap<CompletedRelationKey, CompletedRelationOutcome>,
+    completed_relation_no_candidates: FxHashSet<CompletedRelationKey>,
+    publication_clean: FxHashSet<TypeId>,
+    publication_store_identity: Option<Arc<()>>,
+    publication_snapshot_identity: Option<Arc<()>>,
+    journal: Vec<SemanticQueryUndo>,
+    savepoints: Vec<usize>,
+}
+
 impl SemanticQueryState {
-    /// Start an isolated semantic-query overlay seeded from the durable parent.
-    /// Callers promote it only after the enclosing operation is decisive.
-    pub(crate) fn fork(&self) -> Self {
+    /// Open a speculative layer. Nothing is copied: later writes are journaled and
+    /// the relation cache layers itself, so only this layer's own work is at stake.
+    pub(crate) fn savepoint(&mut self) {
         #[cfg(test)]
-        measure_query_source_cold(|measure| {
-            measure.semantic_state_forks += 1;
-            measure.semantic_state_fork_copied_entries += self.durable_entries();
-        });
-        self.clone()
+        measure_query_source_cold(|measure| measure.semantic_state_forks += 1);
+        self.savepoints.push(self.journal.len());
+        self.relation_cache.savepoint();
     }
 
-    /// Total memo/cache entries a fork copies and a discarded overlay frees.
+    /// Promote the speculative layer. Its writes stay; an enclosing transaction
+    /// inherits their undo records, and at the outermost layer they are dropped.
+    pub(crate) fn commit(&mut self) {
+        #[cfg(test)]
+        self.measure_layer_close();
+        self.savepoints
+            .pop()
+            .expect("a semantic-query commit closes exactly one savepoint");
+        self.relation_cache.commit();
+        if self.savepoints.is_empty() {
+            self.journal.clear();
+        }
+    }
+
+    /// Discard the speculative layer, leaving no trace of its writes in the parent.
+    pub(crate) fn rollback(&mut self) {
+        #[cfg(test)]
+        self.measure_layer_close();
+        let mark = self
+            .savepoints
+            .pop()
+            .expect("a semantic-query rollback closes exactly one savepoint");
+        while self.journal.len() > mark {
+            let undo = self.journal.pop().expect("journal outlives its savepoint");
+            self.undo(undo);
+        }
+        self.relation_cache.rollback();
+    }
+
+    /// Replayed newest-first, so a context reset restores the whole pre-reset state
+    /// and wins over every write layered on top of it.
+    fn undo(&mut self, undo: SemanticQueryUndo) {
+        match undo {
+            SemanticQueryUndo::ProjectionMemo(key, previous) => {
+                restore_entry(&mut self.projection_memo, key, previous);
+            }
+            SemanticQueryUndo::EvaluationMemo(key, previous) => {
+                restore_entry(&mut self.evaluation_memo, key, previous);
+            }
+            SemanticQueryUndo::CompletedIdentity(key, previous) => {
+                restore_entry(&mut self.completed_identities, key, previous);
+            }
+            SemanticQueryUndo::CompletedRelation(key, previous) => {
+                restore_entry(&mut self.completed_relations, key, previous);
+            }
+            SemanticQueryUndo::NoCandidateInserted(key) => {
+                self.completed_relation_no_candidates.remove(&key);
+            }
+            SemanticQueryUndo::NoCandidateRemoved(key) => {
+                self.completed_relation_no_candidates.insert(key);
+            }
+            SemanticQueryUndo::PublicationClean(ty) => {
+                self.publication_clean.remove(&ty);
+            }
+            SemanticQueryUndo::ContextReset(reset) => {
+                let ResetSemanticContext {
+                    projection_memo,
+                    evaluation_memo,
+                    completed_identities,
+                    relation_cache,
+                    completed_relations,
+                    completed_relation_no_candidates,
+                    publication_clean,
+                    publication_store_identity,
+                    publication_snapshot_identity,
+                } = *reset;
+                self.projection_memo = projection_memo;
+                self.evaluation_memo = evaluation_memo;
+                self.completed_identities = completed_identities;
+                self.relation_cache = relation_cache;
+                self.completed_relations = completed_relations;
+                self.completed_relation_no_candidates = completed_relation_no_candidates;
+                self.publication_clean = publication_clean;
+                // Restoring the stale identities keeps the next refresh reset-worthy,
+                // exactly as a discarded copy of the pre-reset state would have been.
+                self.publication_store_identity = publication_store_identity;
+                self.publication_snapshot_identity = publication_snapshot_identity;
+            }
+        }
+    }
+
+    /// Record an undo step only while a speculative layer can still discard it.
+    fn record(&mut self, undo: SemanticQueryUndo) {
+        if !self.savepoints.is_empty() {
+            self.journal.push(undo);
+        }
+    }
+
+    fn speculative(&self) -> bool {
+        !self.savepoints.is_empty()
+    }
+
+    fn commit_cache_entries(
+        &mut self,
+        pending_projection: FxHashMap<TypeId, TypeId>,
+        pending_evaluator: FxHashMap<TypeId, TypeId>,
+    ) {
+        if self.speculative() {
+            for &key in pending_projection.keys() {
+                let previous = self.projection_memo.get(&key).copied();
+                self.journal
+                    .push(SemanticQueryUndo::ProjectionMemo(key, previous));
+            }
+            for &key in pending_evaluator.keys() {
+                let previous = self.evaluation_memo.get(&key).copied();
+                self.journal
+                    .push(SemanticQueryUndo::EvaluationMemo(key, previous));
+            }
+        }
+        commit_query_cache_entries(
+            &mut self.projection_memo,
+            &mut self.evaluation_memo,
+            pending_projection,
+            pending_evaluator,
+        );
+    }
+
+    fn remember_identity(&mut self, key: CompletedIdentityKey, identical: bool) {
+        let previous = self.completed_identities.insert(key, identical);
+        self.record(SemanticQueryUndo::CompletedIdentity(key, previous));
+    }
+
+    fn remember_relation(&mut self, key: CompletedRelationKey, completed: CompletedRelationOutcome) {
+        let previous = self.completed_relations.insert(key, completed);
+        self.record(SemanticQueryUndo::CompletedRelation(key, previous));
+    }
+
+    fn take_relation_no_candidate(&mut self, key: CompletedRelationKey) -> bool {
+        let removed = self.completed_relation_no_candidates.remove(&key);
+        if removed {
+            self.record(SemanticQueryUndo::NoCandidateRemoved(key));
+        }
+        removed
+    }
+
+    fn insert_relation_no_candidate(&mut self, key: CompletedRelationKey) {
+        if self.completed_relation_no_candidates.insert(key) {
+            self.record(SemanticQueryUndo::NoCandidateInserted(key));
+        }
+    }
+
+    fn mark_publication_clean(&mut self, seen: FxHashSet<TypeId>) {
+        if !self.speculative() {
+            self.publication_clean.extend(seen);
+            return;
+        }
+        for ty in seen {
+            if self.publication_clean.insert(ty) {
+                self.journal.push(SemanticQueryUndo::PublicationClean(ty));
+            }
+        }
+    }
+
+    /// Drop every memo the changed store/publication identity invalidated. The
+    /// pre-reset context moves into the journal, so undoing costs no copy either.
+    fn reset_semantic_context(&mut self, store_identity: &Arc<()>, publication_identity: &Arc<()>) {
+        // A layered relation cache must keep one layer per open savepoint, so the
+        // replacement is rebuilt to the same depth rather than left flat.
+        let mut cleared_cache = RelationCache::default();
+        for _ in 0..self.savepoints.len() {
+            cleared_cache.savepoint();
+        }
+        let reset = ResetSemanticContext {
+            projection_memo: std::mem::take(&mut self.projection_memo),
+            evaluation_memo: std::mem::take(&mut self.evaluation_memo),
+            completed_identities: std::mem::take(&mut self.completed_identities),
+            relation_cache: std::mem::replace(&mut self.relation_cache, cleared_cache),
+            completed_relations: std::mem::take(&mut self.completed_relations),
+            completed_relation_no_candidates: std::mem::take(
+                &mut self.completed_relation_no_candidates,
+            ),
+            publication_clean: std::mem::take(&mut self.publication_clean),
+            publication_store_identity: self.publication_store_identity.take(),
+            publication_snapshot_identity: self.publication_snapshot_identity.take(),
+        };
+        self.record(SemanticQueryUndo::ContextReset(Box::new(reset)));
+        self.publication_store_identity = Some(Arc::clone(store_identity));
+        self.publication_snapshot_identity = Some(Arc::clone(publication_identity));
+    }
+
     #[cfg(test)]
-    fn durable_entries(&self) -> u64 {
-        let entries = self.projection_memo.len()
-            + self.evaluation_memo.len()
-            + self.completed_identities.len()
-            + self.relation_cache.len()
-            + self.completed_relations.len()
-            + self.completed_relation_no_candidates.len()
-            + self.publication_clean.len();
-        u64::try_from(entries).expect("semantic query entry count fits u64")
+    fn measure_layer_close(&self) {
+        let mark = self.savepoints.last().copied().unwrap_or_default();
+        let journaled = u64::try_from(self.journal.len().saturating_sub(mark))
+            .expect("journal length fits u64");
+        measure_query_source_cold(|measure| {
+            measure.semantic_state_discards += 1;
+            measure.semantic_state_discarded_entries += journaled;
+        });
     }
 
     #[cfg(test)]
@@ -616,9 +823,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                         measure.durable_identity_no_inserts += 1;
                     }
                 });
-                self.state
-                    .completed_identities
-                    .insert(completed_key, *identical);
+                self.state.remember_identity(completed_key, *identical);
             }
         }
         outcome
@@ -1662,9 +1867,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             measure.durable_evaluation_inserts +=
                 u64::try_from(transaction.pending_evaluator_writes.len()).unwrap();
         });
-        commit_query_cache_entries(
-            &mut self.state.projection_memo,
-            &mut self.state.evaluation_memo,
+        self.state.commit_cache_entries(
             transaction.pending_projection_writes,
             transaction.pending_evaluator_writes,
         );
@@ -1676,10 +1879,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         key: CompletedRelationKey,
         outcome: &RelationOutcome,
     ) {
-        if matches!(outcome, RelationOutcome::No(_))
-            && !self.state.completed_relation_no_candidates.remove(&key)
-        {
-            self.state.completed_relation_no_candidates.insert(key);
+        if matches!(outcome, RelationOutcome::No(_)) && !self.state.take_relation_no_candidate(key) {
+            self.state.insert_relation_no_candidate(key);
             return;
         }
         let Some(completed) = CompletedRelationOutcome::from_outcome(outcome) else {
@@ -1693,7 +1894,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             CompletedRelationOutcome::Yes => measure.completed_relation_yes_inserts += 1,
             CompletedRelationOutcome::No(_) => measure.completed_relation_no_inserts += 1,
         });
-        self.state.completed_relations.insert(key, completed);
+        self.state.remember_relation(key, completed);
     }
 }
 
@@ -2377,7 +2578,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         measure_publication_children(ty, &children);
         stack.extend(children);
     }
-    state.publication_clean.extend(seen);
+    state.mark_publication_clean(seen);
     None
 }
 
@@ -2397,15 +2598,7 @@ fn refresh_semantic_context<L: PublishedClassLookup + ?Sized>(
         .as_ref()
         .is_some_and(|identity| Arc::ptr_eq(identity, publication_identity));
     if !same_store || !same_publication {
-        state.projection_memo.clear();
-        state.evaluation_memo.clear();
-        state.completed_identities.clear();
-        state.relation_cache = RelationCache::default();
-        state.publication_clean.clear();
-        state.completed_relations.clear();
-        state.completed_relation_no_candidates.clear();
-        state.publication_store_identity = Some(Arc::clone(store_identity));
-        state.publication_snapshot_identity = Some(Arc::clone(publication_identity));
+        state.reset_semantic_context(store_identity, publication_identity);
     }
 }
 
