@@ -33,6 +33,9 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 
+#[cfg(test)]
+mod contextual_rewalk_scaling_spec;
+
 fn flatten_static_class_value_path<'a>(
     expression: &'a Expression<'_>,
     segments: &mut Vec<&'a str>,
@@ -88,6 +91,18 @@ pub(super) struct CallMeasure {
     pub selected_receiver_relation_queries: u64,
     pub speculative_query_forks: u64,
     pub speculative_query_writes_discarded: u64,
+}
+
+#[cfg(test)]
+impl CallMeasure {
+    /// Every contextual re-walk of an argument expression, whatever its phase or kind —
+    /// the quantity that branches per nesting level when the walk is not memoized.
+    pub(super) fn contextual_argument_walks(&self) -> u64 {
+        self.callback_rewalks
+            .iter()
+            .chain(&self.fresh_literal_rewalks)
+            .sum()
+    }
 }
 
 #[cfg(test)]
