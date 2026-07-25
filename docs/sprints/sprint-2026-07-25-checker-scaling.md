@@ -261,3 +261,26 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   native TypeScript 7 binary, with exit code 0 recorded in every result.
 - WU6's "unrelated" panic on `b43_namespaces_declaration_merging/slot_shadowing.ts` is already
   filed as backlog `84`, which names that fixture; not re-filed.
+- **WU2 landed (`202f0bc`): `modules-100000` 188.72 s → 6.74 s, 28×**, leader-measured median-of-3,
+  with `modules-40000` 32.7× and `modules-10000` 9.2×. Diagnostics unmoved — leader-diffed full
+  rendered output over all 465 fixtures (0 differing) and `errors-10000.ts`. Hazard the agent found
+  and fixed: `continuation_publication` was cleared at the end of `add_module`, but the deferred fill
+  reads it, so deferring naively would have published continuation declarations to the lexical scope
+  instead of the compilation global.
+- **The modules target is still not met: tsgo runs the same corpus in 0.307 s, so we are 22× off**,
+  and the 2026-07-09 baseline of 0.3068 s stands unbeaten. The after-curve exponent is ~1.0 to 600
+  files, 1.41 at 2,499 and 2.59 from 2,499→6,249, so a superlinear term survives. The measured
+  `Θ(modules × declarations)` attachment scan is ~1.5 s of the 6.74 s → backlog `93`; **the rest of
+  that knee is unattributed and needs its own hunt.**
+- **WU6's prototype is deliberately not landed.** Its own realistic-shape study killed the case: the
+  memo fires *zero* times on zod-style builders (`object<T>(shape: T)` — a bare type variable never
+  triggers the candidate re-walk, so those are base 2 already) and on `describe`/`it` (non-generic,
+  no inference phase). It only helps structurally-embedded generics (`map`/`then`/`pipe`), which nest
+  3–5 deep where the cost is 2.8–8 ms; the 70–83× lands at depth 12–14, where real code is not. The
+  one realistic file that does hang — 40 schemas at depth 12, 525 lines, 1.11 s — is 1.12 s after.
+  Adding memo machinery to a hot path for no measured gain, in code backlog `92` will restructure,
+  is not worth it. Patch and the full discriminator table preserved in backlog `92`.
+- Agent-reported numbers that did not survive leader re-measurement, both from contention rather than
+  error: WU6's tsgo figure (4.24 s vs 2.09 s true, since retracted by the agent on its own re-run)
+  and WU2's `modules-100000` (7.06 s vs 6.74 s, within noise). Measuring while a sibling WU runs a
+  6,249-file corpus is not measuring.

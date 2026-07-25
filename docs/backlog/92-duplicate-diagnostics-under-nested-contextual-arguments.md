@@ -66,6 +66,34 @@ treats the symptom — the duplicate work is still done, and it would hide the n
 the emission fix; if the cheap route is taken deliberately, record it in `divergences.md` with the
 reason.
 
+**The duplicate count and the residual time exponent are the same `2^d`.** One retaining walk per
+level fixes both at once, so this item closes the performance problem too and no separate perf item
+is needed after it.
+
+## Which shapes are affected (measured, 2026-07-25)
+
+The discriminator is whether the parameter type is a **bare type variable** or **structurally
+contains one**:
+
+| signature | shape | walks |
+|---|---|---|
+| `object<T>(shape: T)` — bare `T` | candidate inference never re-walks | already base 2 |
+| `wrap<T>(value: { inner: T })`, `run<T>(step: (v: number) => T)` | structured | base 3 |
+| `describe(fn: () => void)` — non-generic | no inference phase | already base 2 |
+
+This matters for scoping the fix: real `zod` is `object<T extends ZodRawShape>(shape: T)` and real
+`describe`/`it` are non-generic, so the shapes that actually hang in the wild are the **base-2**
+ones — and base 2 is exactly what this item removes. Structurally-embedded generics (`map`, `filter`,
+`then`, `pipe`, `reduce`) are the base-3 ones, and nested generic callbacks realistically reach depth
+3–5, ceiling ~6, where the cost is 2.8–8 ms and imperceptible. Schema builders routinely reach depth
+8–12: 40 zod-style schemas at depth 12 is 525 lines and **1.11 s**.
+
+A verified prototype memoizing the effect-discarding walk (base 3 → base 2, output-neutral, 70–83×
+at depth 14) was built and deliberately **not** landed: it fires zero times on every realistic shape
+above, because those are already base 2. It is preserved at
+`scratchpad/wu6/wu6-base2-memo.patch` (session `8c09d38b`) and may be useful once one walk per level
+retains — at that point memoizing the other two is what takes this from base 2 to base 1.
+
 ## Touch points
 
 `src/check/checker/calls.rs` (`check_call_arguments`, `retain_contextual_arrow_checks`),
