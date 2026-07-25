@@ -316,6 +316,22 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   measuring the existing behaviour before changing it, not by reading the code — and it is **not
   reachable through the checker today** (two files declaring the same namespace value member report
   an incomplete surface), so the byte-diff could never have caught it. The unit guard is the net.
+- **`92` landed (`243a878`): one diagnostic per nested contextual error, down from `2^d`.** The
+  committed walk now reports and the raw walk is held, discarded only when superseded. Leader-verified
+  classification over 469 fixtures: 4,758 → 2,750 diagnostics, 2,008 removed, **the set of distinct
+  diagnostics unchanged — 0 lost, 0 added** — and only the four new `b92` fixtures shrink, so the other
+  465 are byte-identical. Seven bench corpora identical, official suite 0 regressions.
+- Two things made that safe rather than lucky. The agent kept the raw walk **provisional** instead of
+  deleting it, having found it is the only walk in nine distinct shapes, and pinned every one of them
+  in `retained_raw_walks.ts` — the obvious fix (drop the raw walk) deletes all of it. And it needed no
+  event/ticket change after all: a held batch merges *at most once*, so no ticket is completed twice.
+  The blocker recorded in `92` was for *replaying* a batch, which holding does not do.
+  `invariants.md` §1 now says this explicitly — the line is *when* a batch reaches an owner, not
+  *whether* — because "held and maybe discarded" reads close to the post-hoc suppression it forbids.
+- What remains of `92` is the walk count, split out as `95`, and it is now unblocked for the first
+  time: with only one walk retaining, the other two discard, so a memo over them returns only
+  `(TypeId, Span)` and replay equivalence holds by construction. The WU6 prototype becomes applicable
+  to *both* of them rather than one.
 - **`94` bisected (2026-07-26).** Four steps, all eager per-declaration substrate built before
   anything consumes it: `a7923b6` lexical-event preallocation (11.4 KB/file), `b6ecfa4` +`fe61867`
   declaration/namespace metadata walks (15.1 KB/file combined), plus a diffuse 7.7 KB/file tail.
