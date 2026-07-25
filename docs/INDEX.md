@@ -23,6 +23,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
+  active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
+  and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
 - [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) —
   active backlog `14` delivery sprint: production full-library cutover with a hard, fail-closed
   fresh-process target of at least 2× native TypeScript 7 on the approved semantic matrix.

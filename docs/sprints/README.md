@@ -20,6 +20,10 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-07-25-checker-scaling.md`](sprint-2026-07-25-checker-scaling.md) —
+  active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
+  none in the type model; the batch removes them and adds the local-layer scan guard that would have
+  caught them. Runs alongside the full-lib sprint — different files.
 - [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprint-2026-07-21-full-lib-performance-cutover.md) —
   active backlog `14` delivery sprint: exact TypeScript 6.0.3 full-host base, production cutover,
   and a fail-closed fresh-process target of at least 2× native TypeScript 7 on every approved row.
