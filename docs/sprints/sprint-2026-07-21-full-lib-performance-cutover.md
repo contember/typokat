@@ -820,12 +820,66 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
 - The ascending pass is a trade, not a universal win: full memoization is quadratic on an
   accumulating chain (33,406 visits at depth 256, 526,846 at 1,024) where root-only memoization was
   linear. Per-class owner closure is transitive-closure-hard, so only the set representation can
-  bound both shapes. The real profile builds **44** owner expressions, so neither bound is live;
-  filed as backlog `85`. The review also surfaced a pre-existing reachable panic — a function-local
-  `interface` aborts the check worker — filed as backlog `84`.
+  bound both shapes; filed as backlog `85`. The review also surfaced a pre-existing reachable
+  panic — a function-local `interface` aborts the check worker — filed as backlog `84`.
+  **Correction (2026-07-25):** this entry first recorded "the real profile builds 44 owner
+  expressions, so neither bound is live". That was wrong. Every test compiling the 82-file profile
+  is `#[ignore]`d, so the suite that figure came from never ran the real profile; it builds **7,073**
+  expressions and materializes **2.24 M** owner entries to answer **3** queries. Backlog `85` is a
+  live 22% hotspot, not scale-ladder work — see the profile entry below.
 - Final leader gate on the clean tree at `9d47612`: **1,226 passed / 4 failed / 19 ignored**, clippy
   `--all-targets -D warnings` clean, and every integration target green (conformance 14, divergences,
   manifest, surface, incomplete-outcome, class-id-exhaustion). The four remaining failures are the
   packaged `canonical.snapshot`, last regenerated at `90ff28d` and therefore stale since before this
   batch. **Regeneration and the pin family in `src/library/artifact.rs` remain open**, and must run
   from a clean committed tree via `tooling/library-package/verify.py`.
+
+### 2026-07-25 — cold source-compile attribution and the checker/generator split
+
+Two independent measurement passes at `c844680` (span instrumentation in one scratch worktree,
+`pprof` at 499 Hz over 40 cold release processes in another; 23,655 samples, 0% stack truncation,
+profiler overhead measured at zero by interleaved A/B). Neither host window was a clean room —
+load 2.1–9.6, a `node` at ~51% and two Chrome processes at ~25% throughout — so treat absolute
+totals as ±20% and the *shares* as the result. The two passes agree on every share.
+
+- **Cold source compilation is 1.85 s, and 83.5% of it is not type checking.** The
+  `library_release_probe_once` phase line accounts for only 757 ms of it; the missing **1,092 ms
+  (59%)** is one uninstrumented function, `build_collision_replay_index`. Within it,
+  `require_terminal_class_dependency_closure` is 456 ms and `canonical_record_bytes` 412 ms.
+  Separately, `statement_check_us=556381` is **96% not statement checking** — the span swallows
+  `canonical_library_evidence` (411 ms) and `finish_semantic_effects` (96 ms); real
+  `check_statements` is **19.8 ms**.
+- **The comparator line, measured in the same window.** Splitting the run into the checking
+  pipeline (parse + bind + reserve/fill + publication + statement-check-proper) versus artifact
+  generation gives **277 ms** of checking against **1,152 ms** of evidence/replay-index generation,
+  which has no comparator analogue. Pinned native TypeScript 7.0.2 on this host — the
+  `contract.toml` binary, digest-verified, 82 profile libs plus the sentinel, `--listFilesOnly`
+  printing exactly 83 files — measured **289 ms** (median of 15, 281–306 ms). So typokat's cold
+  parse+bind+check of the pinned library is **~0.96× tsgo, i.e. at parity**; the 5.1× gap on the
+  probe's total is entirely artifact generation. Probe scaffolding a production run would not do
+  (assertions, `check_source(TINY_SOURCE)`, test-only probes) is 9,133 µs — **0.62%** — so the run
+  is 99.4% real work.
+- **Two accidental quadratics, both in generation.** `LineIndex::new` is 44.46% / 822,430 µs of the
+  run: `canonical_record_bytes` renders one diagnostic per call via `std::slice::from_ref`, and
+  `render_compact_to_writer` rebuilds the line index per call — **1.21 GB scanned for a 2.94 MB
+  library, 413×**, over 530 renders, and the identical bytes are computed **twice** (once in
+  `canonical_library_evidence`, once in the replay index). The ordinary CLI diagnostic path passes
+  all diagnostics in one call and is unaffected. Second, `terminal_expression_owners` materializes
+  2.24 M owner entries and 6.50 M element copies to answer **3** class queries (backlog `85`).
+- **Measured ablations**, 7 interleaved rounds each, not projections: memoizing the `LineIndex` per
+  file **−900 ms** (semantics-preserving, identical `outcome-v1` line); skipping the owner closure
+  **−439 ms**; both **−1,337 ms → 525 ms, 3.54×**. The residual 525 ms is
+  `ReplayDependencyTrace::finish` 164 ms (of which `dependency_first_sccs` 100 ms),
+  `finish_semantic_effects` 83 ms, `construct_pending_interface_sccs` 65 ms, `load_strict_profile`
+  26 ms, publication 22 ms, bind 19 ms, `check_statements` 16 ms, parse 14 ms.
+- **The run is single-threaded** — `cpu_us/wall_us = 0.994`, one core of 16. `rayon` is used in
+  exactly one place, `src/driver.rs:143` (`check_files`), which this path never reaches. The only
+  embarrassingly parallel phases here are parse (14 ms) and per-file bind (20 ms), so the parallel
+  ceiling on this workload is **≤30 ms of 1.85 s**. Parallelism is not the lever for the library
+  profile; it may still be for multi-file user projects.
+- **Instrumentation debt.** The 07-21 phase split had an 8 µs residual because none of this code
+  existed; `build_collision_replay_index` arrived in `8b588ca` and `canonical_library_evidence` in
+  `d533848`, both untimed. `replay_index_us`, `evidence_us`, and `terminal_closure_us` should become
+  first-class phases, `evidence` should leave the `statement_check` span, and the probe should
+  assert its own residual stays under a few percent so the next unmeasured phase fails the probe
+  instead of silently reopening a 59% hole.
