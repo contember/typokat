@@ -1329,6 +1329,13 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) replay_trace: Option<ReplayDependencyTrace>,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
+    /// Per in-flight call/`new`, the raw argument walk's held effects, indexed like
+    /// `arg_types`. A re-walkable argument is walked once before candidate selection
+    /// (for its type) and once after it (with the instantiated contextual target);
+    /// only one of the two may commit, so the earlier walk is held here until the
+    /// committed walk reports whether it superseded it — backlog `92`.
+    pub(in crate::check::checker) provisional_argument_effects:
+        Vec<Vec<Option<CheckerEffects<Ticket>>>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
     pub(in crate::check::checker) pending_effects: Vec<CheckerEffects<Ticket>>,
     /// O(1) owner-to-batch lookup over the reservation ledger's dense ticket keys.

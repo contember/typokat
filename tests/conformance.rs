@@ -112,12 +112,11 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // which is filed separately. See `docs/reference/divergences.md`.
     ("b91_missing_property_presence", false),
     // Backlog 92 — one error nested `d` levels deep inside contextually typed
-    // arguments must be reported once, not 2^d times. Committed `false` as a
-    // behavior-neutral spec; the commit that makes exactly one walk per level
-    // retain effects flips it on. The per-line multiset rule in
+    // arguments is reported once, not 2^d times: exactly one of the raw and the
+    // committed argument walk commits per level. The per-line multiset rule in
     // `compare_fixture_output` is what turns a single marker into an
     // exactly-once assertion — no marker-format change is involved.
-    ("b92_contextual_duplicate_diagnostics", false),
+    ("b92_contextual_duplicate_diagnostics", true),
     // Backlog 67 shipped; backlog 66 remains disabled behind its protected-lineage
     // architecture stop gate (backlog 63d).
     ("b67_utility_alias_constraint", true),

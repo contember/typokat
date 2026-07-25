@@ -8,7 +8,7 @@ use super::classes::surface_types::SurfaceTypeFactory;
 use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
-use super::expr::contextual_literal_target;
+use super::expr::{contextual_literal_target, ContextualRewalk};
 use super::function_groups::FunctionGroupDemand;
 use super::type_groups::{PublishedTypeGroupSurface, PublishedTypeGroupTerminal};
 use crate::binder::namespace::QualifiedTypePathResolution;
@@ -37,6 +37,26 @@ use rustc_hash::FxHashMap;
 mod contextual_duplicate_diagnostics_spec;
 #[cfg(test)]
 mod contextual_rewalk_scaling_spec;
+
+/// The argument shapes a committed contextual walk can re-walk: an arrow function,
+/// or a fresh object/array literal (also through parentheses, which
+/// `context_can_shape_fresh_literal` sees through). Every other shape is walked
+/// exactly once, so its raw walk reports in place and nothing about it changes.
+///
+/// Over-answering `true` is safe — the held effects simply commit unchanged when the
+/// re-walk declines — so this only has to stay a superset of what
+/// `infer_contextual_source_after_walked` re-walks.
+fn contextual_rewalk_candidate_shape(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::ArrowFunctionExpression(_)
+        | Expression::ObjectExpression(_)
+        | Expression::ArrayExpression(_) => true,
+        Expression::ParenthesizedExpression(paren) => {
+            contextual_rewalk_candidate_shape(&paren.expression)
+        }
+        _ => false,
+    }
+}
 
 fn flatten_static_class_value_path<'a>(
     expression: &'a Expression<'_>,
@@ -199,6 +219,25 @@ macro_rules! contextual_source_after_walked {
         #[cfg(not(test))]
         {
             $pass.infer_contextual_source_after_walked(
+                $scope, $expr, $context, $raw, $arrow, $retain,
+            )
+        }
+    }};
+}
+
+macro_rules! contextual_source_after_walked_reporting {
+    ($pass:expr, $scope:expr, $expr:expr, $context:expr, $raw:expr, $arrow:expr, $retain:expr, $phase:expr) => {{
+        #[cfg(test)]
+        {
+            with_contextual_measure_phase($phase, || {
+                $pass.infer_contextual_source_after_walked_reporting(
+                    $scope, $expr, $context, $raw, $arrow, $retain,
+                )
+            })
+        }
+        #[cfg(not(test))]
+        {
+            $pass.infer_contextual_source_after_walked_reporting(
                 $scope, $expr, $context, $raw, $arrow, $retain,
             )
         }
@@ -460,6 +499,38 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.check_constraint_arguments_outcome(&checks, map)
     }
 
+    /// Walk one call/`new` argument for the type candidate selection needs, holding
+    /// the walk's effects when a committed contextual walk may supersede them.
+    ///
+    /// The held batch is index-aligned with `arg_types` by
+    /// [`Pass::hold_provisional_argument_effects`]; an argument whose type inference
+    /// yields nothing is never paired with a parameter, so its effects commit here.
+    fn walk_raw_argument(
+        &mut self,
+        scope: ScopeId,
+        arg_expr: &Expression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        if !contextual_rewalk_candidate_shape(arg_expr) {
+            let inferred = self.infer_expr(scope, arg_expr);
+            if inferred.is_some() {
+                self.hold_provisional_argument_effects(None);
+            }
+            return inferred;
+        }
+        let (inferred, effects) =
+            self.capture_candidate_effects(|pass| pass.infer_expr(scope, arg_expr));
+        match inferred {
+            Some(inferred) => {
+                self.hold_provisional_argument_effects(Some(effects));
+                Some(inferred)
+            }
+            None => {
+                self.merge_candidate_effects(effects);
+                None
+            }
+        }
+    }
+
     fn contextual_inference_args(
         &mut self,
         scope: ScopeId,
@@ -517,6 +588,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// one call signature; non-callables still yield the error type silently until
     /// the dedicated diagnostic can account for dropped callability and overloads.
     pub(in crate::check::checker) fn infer_call(
+        &mut self,
+        scope: ScopeId,
+        call: &CallExpression<'_>,
+    ) -> Option<(TypeId, Span)> {
+        self.with_provisional_argument_effects(|pass| pass.infer_call_inner(scope, call))
+    }
+
+    fn infer_call_inner(
         &mut self,
         scope: ScopeId,
         call: &CallExpression<'_>,
@@ -619,7 +698,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(arg_expr) = arg.as_expression() {
                 #[cfg(test)]
                 measure_call(|measure| measure.raw_call_argument_walks += 1);
-                if let Some(inferred) = self.infer_expr(scope, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);
@@ -1297,6 +1376,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         call: &CallExpression<'_>,
         call_span: Span,
     ) -> Option<(TypeId, Span)> {
+        self.with_provisional_argument_effects(|pass| {
+            pass.infer_super_call_inner(scope, call, call_span)
+        })
+    }
+
+    fn infer_super_call_inner(
+        &mut self,
+        scope: ScopeId,
+        call: &CallExpression<'_>,
+        call_span: Span,
+    ) -> Option<(TypeId, Span)> {
         let wk = self.interner.well_known();
 
         // Infer every argument up front (skipping spreads — out of subset); this descends
@@ -1305,7 +1395,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
         for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
-                if let Some(inferred) = self.infer_expr(scope, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_exprs.push(arg_expr);
                 }
@@ -1388,13 +1478,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
         };
-        for (((arg_ty, arg_span), arg_expr), param_ty) in
-            arg_types.iter().zip(arg_exprs).zip(targets)
+        for (index, (((arg_ty, arg_span), arg_expr), param_ty)) in
+            arg_types.iter().zip(arg_exprs).zip(targets).enumerate()
         {
             let Some(param_ty) = param_ty else {
                 continue;
             };
-            let (src, src_span) = contextual_source_after_walked!(
+            let ((src, src_span), rewalk) = contextual_source_after_walked_reporting!(
                 self,
                 scope,
                 arg_expr,
@@ -1404,6 +1494,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 true,
                 ContextualMeasurePhase::CommittedCheck
             );
+            // This walk saw the argument with its instantiated contextual target, so
+            // it is the walk that reports; the raw walk's copy never commits.
+            if rewalk == ContextualRewalk::Rewalked {
+                self.supersede_provisional_argument_effects(index);
+            }
             match self.check_excess_properties_for_target(arg_expr, param_ty) {
                 DemandOutcome::Ready(diagnostics) => {
                     for diagnostic in diagnostics {
@@ -1924,6 +2019,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         new_expr: &NewExpression<'_>,
     ) -> Option<(TypeId, Span)> {
+        self.with_provisional_argument_effects(|pass| pass.infer_new_inner(scope, new_expr))
+    }
+
+    fn infer_new_inner(
+        &mut self,
+        scope: ScopeId,
+        new_expr: &NewExpression<'_>,
+    ) -> Option<(TypeId, Span)> {
         let wk = self.interner.well_known();
         let new_span = Span::from_oxc(new_expr.span);
         let direct_standalone = self.complete_standalone_namespace_value(scope, &new_expr.callee);
@@ -1955,7 +2058,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(arg_expr) = arg.as_expression() {
                 #[cfg(test)]
                 measure_call(|measure| measure.raw_construct_argument_walks += 1);
-                if let Some(inferred) = self.infer_expr(scope, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);

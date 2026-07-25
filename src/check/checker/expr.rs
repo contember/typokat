@@ -27,6 +27,18 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+/// Whether a contextual re-walk actually walked the expression again.
+///
+/// A call argument that a committed contextual walk re-walks is walked twice, and
+/// only one of the two walks may report. `Rewalked` is the only answer that lets a
+/// caller treat the earlier raw walk as superseded; `KeptRaw` means this walk never
+/// entered the expression, so the raw walk is still its only walk (backlog `92`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum ContextualRewalk {
+    Rewalked,
+    KeptRaw,
+}
+
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Infer the type of an expression in `scope`, returning `(TypeId, span)`. The
     /// span is the expression's own span — the primary span for any diagnostic on it.
@@ -827,11 +839,39 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         use_contextual_arrow: bool,
         retain_contextual_arrow_checks: bool,
     ) -> (TypeId, Span) {
+        self.infer_contextual_source_after_walked_reporting(
+            scope,
+            expr,
+            context,
+            raw,
+            use_contextual_arrow,
+            retain_contextual_arrow_checks,
+        )
+        .0
+    }
+
+    /// [`Self::infer_contextual_source_after_walked`], also reporting whether the
+    /// expression was actually re-walked.
+    ///
+    /// Only a [`ContextualRewalk::Rewalked`] answer means this walk saw the
+    /// expression, so only then may a caller treat the earlier raw walk as
+    /// superseded. The re-walk is declined for a target that cannot shape the
+    /// literal, and — for arrows — for a generic arrow or a context that is not one
+    /// call signature, both of which return before the body is entered.
+    pub(in crate::check::checker) fn infer_contextual_source_after_walked_reporting(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+        context: TypeId,
+        raw: (TypeId, Span),
+        use_contextual_arrow: bool,
+        retain_contextual_arrow_checks: bool,
+    ) -> ((TypeId, Span), ContextualRewalk) {
         let context = match self.demand_composite_apparent_type(context) {
             DemandOutcome::Ready(context) => context,
             DemandOutcome::Exhausted(exhaustion) => {
                 self.own_type_demand(DemandOutcome::Exhausted(exhaustion), raw.1);
-                return raw;
+                return (raw, ContextualRewalk::KeptRaw);
             }
         };
         if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
@@ -854,11 +894,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 contextual
             };
-            return contextual.map(|ty| (ty, raw.1)).unwrap_or(raw);
+            return match contextual {
+                Some(ty) => ((ty, raw.1), ContextualRewalk::Rewalked),
+                None => (raw, ContextualRewalk::KeptRaw),
+            };
         }
 
         if !self.context_can_shape_fresh_literal(expr, context) {
-            return raw;
+            return (raw, ContextualRewalk::KeptRaw);
         }
 
         #[cfg(test)]
@@ -876,7 +919,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             super::calls::measure_contextual_rollback(discarded_records);
             contextual
         };
-        contextual.unwrap_or(raw)
+        match contextual {
+            Some(source) => (source, ContextualRewalk::Rewalked),
+            None => (raw, ContextualRewalk::KeptRaw),
+        }
     }
 
     fn context_can_shape_fresh_literal(&self, expr: &Expression<'_>, context: TypeId) -> bool {

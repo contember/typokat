@@ -3427,6 +3427,68 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .merge(selected);
     }
 
+    /// Run one call/`new` with a frame that holds its raw argument walks' effects.
+    ///
+    /// A re-walkable argument is walked twice — once before candidate selection for
+    /// its type, once after it with the instantiated contextual target — and only one
+    /// of the two may commit. The first walk's effects are held in this frame; the
+    /// committed walk marks the ones it superseded, and whatever is left commits when
+    /// the frame closes. Every exit path of the call goes through here, so an argument
+    /// whose committed walk never runs (no candidate selected, no parameter target,
+    /// typed exhaustion) still reports (backlog `92`).
+    ///
+    /// Each held batch is merged **at most once**, so no `UserRecordTicket` completes
+    /// twice and the replay key stays unique (`docs/reference/invariants.md` §1). This is the
+    /// sanctioned "candidate effects remain local until exactly one selected set
+    /// commits", not deduplication or post-hoc suppression: nothing that has reached
+    /// an owner's batch is ever removed.
+    pub(in crate::check::checker) fn with_provisional_argument_effects<R>(
+        &mut self,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.provisional_argument_effects.push(Vec::new());
+        let result = produce(self);
+        let held = self
+            .provisional_argument_effects
+            .pop()
+            .expect("provisional argument frame");
+        for effects in held.into_iter().flatten() {
+            self.merge_candidate_effects(effects);
+        }
+        result
+    }
+
+    /// Hold one raw argument walk's effects, index-aligned with `arg_types`. `None`
+    /// records an argument shape no contextual re-walk can supersede, which has
+    /// already committed in place.
+    pub(in crate::check::checker) fn hold_provisional_argument_effects(
+        &mut self,
+        effects: Option<CheckerEffects<Ticket>>,
+    ) {
+        self.provisional_argument_effects
+            .last_mut()
+            .expect("a call argument walk runs inside a provisional argument frame")
+            .push(effects);
+    }
+
+    /// The committed contextual walk re-walked this argument, so the raw walk's
+    /// records are the superseded copy and never commit. Out-of-range indices are
+    /// argument positions that were never held, and are already committed.
+    pub(in crate::check::checker) fn supersede_provisional_argument_effects(
+        &mut self,
+        index: usize,
+    ) {
+        let Some(frame) = self.provisional_argument_effects.last_mut() else {
+            return;
+        };
+        let Some(slot) = frame.get_mut(index) else {
+            return;
+        };
+        if let Some(effects) = slot.take() {
+            effects.records.discard();
+        }
+    }
+
     pub(in crate::check::checker) fn emit_diagnostic(&mut self, diagnostic: Diagnostic) {
         let owner = self
             .effect_stack
@@ -3627,6 +3689,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         current_source: reporting.source,
         replay_trace: None,
         effect_stack: Vec::new(),
+        provisional_argument_effects: Vec::new(),
         pending_effects,
         pending_effect_slots,
         pending_effect_key: ticket_key,

@@ -49,6 +49,12 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   `(original_module_ordinal, source_start, event_ordinal, record_ordinal)`, independent of build,
   completion, query, and cache order. Candidate effects remain local until exactly one selected set
   commits; there is no diagnostic deduplication, span deletion, truncation, or post-hoc suppression.
+  An argument walked twice — once raw for candidate selection, once under the instantiated
+  contextual type — is that same rule, not an exception to it: the raw batch is *held* and released
+  only if the contextual re-walk supersedes it, and every batch not superseded commits when the
+  call's frame closes. The line is *when*, not *whether* — holding a batch before it reaches an
+  owner is candidate locality; removing records after they have reached one is the suppression this
+  forbids.
 - **Private iterative evaluator walkers** (`src/check/checker/eval/`): `InferRewrite` and
   `MappedRewrite` use explicit heap task/value stacks for
   every child they traverse, including function type-parameter constraints/defaults. Keep their

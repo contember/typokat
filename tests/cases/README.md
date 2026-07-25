@@ -278,7 +278,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
-| `b92_contextual_duplicate_diagnostics/` | backlog `92` (disabled) | one error nested inside contextually typed arguments is reported once, not `2^depth` times |
+| `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
 | `b14_full_lib_loading/` | backlog `14` WU0A (disabled) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
 | `b14_full_lib_loading_project/` | backlog `14` WU0A (disabled, project-shaped) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
@@ -400,8 +400,22 @@ are pinned independently rather than treated as covered by the generic ones.
 `tsc 6.0.3 --strict --noEmit` reports exactly one `TS2304` on every line of all four
 fixtures, at every depth. The full 1–12 depth sweep lives in
 `src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs`, which reports the
-observed count in its failure text; the fixtures stop at 8 to keep corpus runtime bounded
-while the corpus is red.
+observed count in its failure text; the fixtures stop at 8 to keep corpus runtime bounded.
+
+`retained_raw_walks.ts` is the other half of the contract and the reason the fix is not
+simply "stop reporting from the raw walk". Only the committed walk sees the instantiated
+contextual target, so it is the walk that reports — but it does not always run. This
+fixture pins every case where it declines and the raw walk is therefore the only walk:
+a generic arrow and a two-call-signature context (both return before entering the arrow
+body), a failed overload (the committed argument check never runs), a fresh object
+literal against a primitive parameter, a `never` parameter that breaks the committed
+loop before a later argument, two superseded arguments in one call, a skipped spread
+that shifts the callback's argument index, and the `new` / `super(...)` paths. Dropping
+the raw walk unconditionally deletes every diagnostic in it. Its `TK2554`/`TK2345`/
+`incomplete[call/call-arguments/spread-argument]` surface on the spread line is the
+spread-argument deferral (owner `71`), pinned only so the fixture is complete; tsc
+reports `TS2556` there instead. Every other diagnostic matches `tsc 6.0.3 --strict` at
+the same line and column, the sole gap being the unimplemented `TK7006`.
 
 `b43_namespaces_declaration_merging/` contains 74 flat fixtures plus six project
 fixtures with 12 source files (86 source files total) for the namespace/declaration-space
