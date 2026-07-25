@@ -100,6 +100,11 @@ pub(crate) struct QuerySourceColdMeasure {
     pub durable_identity_no_inserts: u64,
     pub identity_recursive_calls: u64,
     pub durable_memo_seed_copy_entries: u64,
+    pub semantic_query_transactions: u64,
+    pub semantic_state_forks: u64,
+    pub semantic_state_fork_copied_entries: u64,
+    pub semantic_state_discards: u64,
+    pub semantic_state_discarded_entries: u64,
     pub exhaustion_frontiers: u64,
 }
 
@@ -271,6 +276,21 @@ fn measure_query_source_cold(update: impl FnOnce(&mut QuerySourceColdMeasure)) {
     });
 }
 
+/// One enclosing semantic-query transaction (fork, body, promote-or-discard).
+#[cfg(test)]
+pub(crate) fn record_semantic_query_transaction() {
+    measure_query_source_cold(|measure| measure.semantic_query_transactions += 1);
+}
+
+/// One semantic-query overlay freed when a transaction promotes or rolls back.
+#[cfg(test)]
+pub(crate) fn record_semantic_state_discard(discarded: &SemanticQueryState) {
+    measure_query_source_cold(|measure| {
+        measure.semantic_state_discards += 1;
+        measure.semantic_state_discarded_entries += discarded.durable_entries();
+    });
+}
+
 #[cfg(test)]
 fn measure_publication_children(parent: TypeId, children: &[TypeId]) {
     if !QUERY_SOURCE_COLD_ENABLED.with(std::cell::Cell::get) {
@@ -378,7 +398,25 @@ impl SemanticQueryState {
     /// Start an isolated semantic-query overlay seeded from the durable parent.
     /// Callers promote it only after the enclosing operation is decisive.
     pub(crate) fn fork(&self) -> Self {
+        #[cfg(test)]
+        measure_query_source_cold(|measure| {
+            measure.semantic_state_forks += 1;
+            measure.semantic_state_fork_copied_entries += self.durable_entries();
+        });
         self.clone()
+    }
+
+    /// Total memo/cache entries a fork copies and a discarded overlay frees.
+    #[cfg(test)]
+    fn durable_entries(&self) -> u64 {
+        let entries = self.projection_memo.len()
+            + self.evaluation_memo.len()
+            + self.completed_identities.len()
+            + self.relation_cache.len()
+            + self.completed_relations.len()
+            + self.completed_relation_no_candidates.len()
+            + self.publication_clean.len();
+        u64::try_from(entries).expect("semantic query entry count fits u64")
     }
 
     #[cfg(test)]
@@ -2480,6 +2518,9 @@ mod instantiation_root_lazy_spec;
 
 #[cfg(test)]
 mod relation_root_lazy_spec;
+
+#[cfg(test)]
+mod transaction_fork_scaling_spec;
 
 #[cfg(test)]
 mod tests;

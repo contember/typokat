@@ -1327,12 +1327,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         produce: impl FnOnce(&mut Self) -> DemandOutcome<R>,
     ) -> DemandOutcome<R> {
+        #[cfg(test)]
+        crate::check::query::record_semantic_query_transaction();
         let child = self.semantic_queries.fork();
         let parent = std::mem::replace(&mut self.semantic_queries, child);
         let outcome = produce(self);
         let completed = std::mem::replace(&mut self.semantic_queries, parent);
         if matches!(outcome, DemandOutcome::Ready(_)) {
+            // Promotion frees the parent overlay; rollback frees the child one.
+            #[cfg(test)]
+            crate::check::query::record_semantic_state_discard(&self.semantic_queries);
             self.semantic_queries = completed;
+        } else {
+            #[cfg(test)]
+            crate::check::query::record_semantic_state_discard(&completed);
         }
         outcome
     }

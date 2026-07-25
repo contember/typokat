@@ -2203,6 +2203,7 @@ mod tests {
         "src/check/query/instantiation_root_lazy_spec.rs",
         "src/check/query/relation_root_lazy_spec.rs",
         "src/check/query/tests.rs",
+        "src/check/query/transaction_fork_scaling_spec.rs",
     ];
 
     const EXPECTED_PRODUCTION_REPLAY_SOURCE_PATHS: &[&str] = &[
