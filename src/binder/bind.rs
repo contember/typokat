@@ -14,7 +14,7 @@ use crate::binder::namespace::{
 };
 use crate::binder::namespace::{
     collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
-    NamespaceMetadataRoot,
+    plan_namespace_value_attachments, replay_namespace_value_attachments, NamespaceMetadataRoot,
 };
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
@@ -1303,20 +1303,23 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         (module, placeholders)
     }
 
-    /// Classify the accumulated project once, then fill the value attachments each module
-    /// contributes — the shape `try_add_library_modules` already uses. Draining here is what
-    /// makes a missed classification impossible: `Binder` is only reachable through a finish.
+    /// Classify the accumulated project once, plan its value attachments once, then fill the
+    /// ones each module declares — the shape `try_add_library_modules` already uses. Draining
+    /// here is what makes a missed classification impossible: `Binder` is only reachable
+    /// through a finish.
     fn finalize_pending_namespaces(&mut self) {
         if self.pending_namespace_modules.is_empty() {
             return;
         }
         finalize_namespace_metadata(&mut self.state);
+        let plan = plan_namespace_value_attachments(&self.state);
         for pending in std::mem::take(&mut self.pending_namespace_modules) {
             self.state.current_module = pending.module;
             self.state.continuation_publication = pending.publication;
-            fill_namespace_value_attachments(&mut self.state, pending.program);
+            fill_namespace_value_attachments(&mut self.state, pending.program, &plan);
             self.state.continuation_publication = None;
         }
+        replay_namespace_value_attachments(&mut self.state, &plan);
     }
 
     /// Bind declaration-library files into one shared global identity domain.
@@ -1394,10 +1397,12 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             bound_units.push((input_index, program, module));
         }
         finalize_namespace_metadata(&mut self.state);
+        let plan = plan_namespace_value_attachments(&self.state);
         for (_, program, module) in &bound_units {
             self.state.current_module = *module;
-            fill_namespace_value_attachments(&mut self.state, program);
+            fill_namespace_value_attachments(&mut self.state, program, &plan);
         }
+        replay_namespace_value_attachments(&mut self.state, &plan);
         bound_units.sort_by_key(|(input_index, _, _)| *input_index);
         Ok(bound_units
             .into_iter()

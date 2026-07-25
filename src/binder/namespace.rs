@@ -4075,8 +4075,12 @@ pub(super) fn finalize_namespace_metadata(state: &mut BindState) {
         .unwrap_or_else(|error| panic!("namespace classification failed: {error}"));
 }
 
-pub(super) fn fill_namespace_value_attachments(state: &mut BindState, program: &Program<'_>) {
-    bind_namespace_value_attachment_members(state, program);
+pub(super) fn fill_namespace_value_attachments(
+    state: &mut BindState,
+    program: &Program<'_>,
+    plan: &NamespaceValueAttachmentPlan,
+) {
+    bind_namespace_value_attachment_members(state, program, plan);
 }
 
 /// Everything one project module contributes on its own. Classification is a whole-project
@@ -4142,12 +4146,44 @@ struct NamespaceValueBindingTarget {
     member: NamespaceMemberId,
     declaration: DeclId,
     name: String,
+    /// The module that declares the member — the one fill that must bind it.
+    module: ScopeId,
     scope: ScopeId,
     kind: MergeDeclarationKind,
     public_symbol: Option<SymbolId>,
 }
 
-fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Program<'_>) {
+/// Every namespace value attachment the batch will bind, derived once and filed by the module
+/// that declares each member.
+pub(crate) struct NamespaceValueAttachmentPlan {
+    /// Sorted and deduplicated exactly once, so the surviving target of a declaration that two
+    /// merges reach is decided by one whole-project neighbourhood rather than by whatever
+    /// subset a module happened to see.
+    targets: Vec<NamespaceValueBindingTarget>,
+    /// Indexes into `targets`, ascending, so each module's fill keeps the project order.
+    by_module: FxHashMap<ScopeId, Vec<usize>>,
+    /// Whether the batch owes a whole-project replay after its fills; see
+    /// `replay_namespace_value_attachments`.
+    replays_every_target: bool,
+}
+
+impl NamespaceValueAttachmentPlan {
+    fn targets_for(&self, module: ScopeId) -> &[usize] {
+        self.by_module
+            .get(&module)
+            .map_or(&[][..], |indexes| indexes.as_slice())
+    }
+}
+
+/// Derive the batch's value attachments once, from the merge set classification just froze.
+///
+/// Classification runs once before the fill loop, so the merge set no longer changes while the
+/// batch fills. One collection therefore produces byte-for-byte the list every fill used to
+/// rebuild for itself, and one sort/dedup keeps the whole-project neighbourhood that decides
+/// which of two targets for the same declaration wins — narrowing the *scan* per module would
+/// have changed that neighbourhood, which is why the plan is built whole and only its
+/// application is split.
+pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceValueAttachmentPlan {
     let mut targets = Vec::new();
     for record in state.namespaces.local_merges() {
         #[cfg(test)]
@@ -4192,14 +4228,6 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
                 else {
                     continue;
                 };
-                if state.namespaces.uses_library_shared_globals()
-                    && state
-                        .declarations
-                        .get(declaration)
-                        .is_none_or(|row| row.site.module != state.current_module)
-                {
-                    continue;
-                }
                 let public_symbol = if matches!(member.publication, NamespacePublication::Private) {
                     None
                 } else {
@@ -4208,10 +4236,21 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
                     };
                     Some(symbol)
                 };
-                let Some(scope) = state
-                    .declarations
-                    .get(declaration)
-                    .and_then(|declaration| declaration.site.scope)
+                // A merge is not owned by one module: `namespace N` reopened in a second file
+                // leaves one record whose fragments live in two modules, and in a library batch
+                // a `function` in one file merges with a `namespace` in another (the project
+                // path never merges those two — a top-level function is owned by its module
+                // scope while the namespace is owned by the shared script root, so they land in
+                // different records). Keying on the *member's* declaring module is what makes
+                // every participating module fill its own members; keying on the record's owner
+                // would drop the other file's.
+                let Some((module, scope)) =
+                    state.declarations.get(declaration).and_then(|declaration| {
+                        declaration
+                            .site
+                            .scope
+                            .map(|scope| (declaration.site.module, scope))
+                    })
                 else {
                     continue;
                 };
@@ -4219,6 +4258,7 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
                     member: member.id,
                     declaration,
                     name: name.clone(),
+                    module,
                     scope,
                     kind: member.kind,
                     public_symbol,
@@ -4239,41 +4279,84 @@ fn bind_namespace_value_attachment_members(state: &mut BindState, program: &Prog
             .unwrap_or((u32::MAX, u32::MAX))
     });
     targets.dedup_by_key(|target| target.declaration);
-    let scopes = targets
+    let mut by_module: FxHashMap<ScopeId, Vec<usize>> = FxHashMap::default();
+    for (index, target) in targets.iter().enumerate() {
+        by_module.entry(target.module).or_default().push(index);
+    }
+    NamespaceValueAttachmentPlan {
+        targets,
+        by_module,
+        replays_every_target: !state.namespaces.uses_library_shared_globals(),
+    }
+}
+
+fn bind_namespace_value_attachment_members(
+    state: &mut BindState,
+    program: &Program<'_>,
+    plan: &NamespaceValueAttachmentPlan,
+) {
+    let indexes = plan.targets_for(state.current_module);
+    // Only this module's declarations can be selected: `source_decl_at` resolves span starts
+    // against `current_module`, so a foreign `DeclId` could never match this program anyway.
+    let scopes = indexes
         .iter()
+        .filter_map(|index| plan.targets.get(*index))
         .map(|target| (target.declaration, target.scope))
         .collect::<FxHashMap<_, _>>();
     bind_selected_namespace_value_statements(state, &program.body, &scopes);
 
-    for target in targets {
-        let storage = state
-            .declarations
-            .get(target.declaration)
-            .and_then(|declaration| declaration.value_storage);
-        let local_symbol = state
-            .graph
-            .get(target.scope)
-            .and_then(|scope| scope.lookup_local(&target.name));
-        if let Some(member) = state
-            .namespaces
-            .members
-            .get_mut_local(target.member.index())
+    for target in indexes.iter().filter_map(|index| plan.targets.get(*index)) {
+        apply_namespace_value_attachment(state, target);
+    }
+}
+
+/// A library-shared-globals batch always filled one module's members at a time, but without
+/// that flag every fill re-applied the *whole* project's target set — so the `symbol.value`
+/// that survived for a name declared in two files is the globally last declaration's, not the
+/// last file's. Replaying the whole plan once, in the same project order, reproduces exactly
+/// that final state; the flagged path must not replay, because it never re-applied anything.
+/// The replay is also what keeps a target whose module is outside this batch (a frozen library
+/// module reached through a local merge) written, precisely as the repeated fills wrote it.
+pub(super) fn replay_namespace_value_attachments(
+    state: &mut BindState,
+    plan: &NamespaceValueAttachmentPlan,
+) {
+    if !plan.replays_every_target {
+        return;
+    }
+    for target in &plan.targets {
+        apply_namespace_value_attachment(state, target);
+    }
+}
+
+fn apply_namespace_value_attachment(state: &mut BindState, target: &NamespaceValueBindingTarget) {
+    let storage = state
+        .declarations
+        .get(target.declaration)
+        .and_then(|declaration| declaration.value_storage);
+    let local_symbol = state
+        .graph
+        .get(target.scope)
+        .and_then(|scope| scope.lookup_local(&target.name));
+    if let Some(member) = state
+        .namespaces
+        .members
+        .get_mut_local(target.member.index())
+    {
+        member.local_symbol = local_symbol;
+    }
+    let Some(symbol) = target.public_symbol else {
+        return;
+    };
+    let Some(storage) = storage else {
+        return;
+    };
+    if let Some(symbol) = state.symbols.get_mut(symbol) {
+        symbol.value = Some(storage);
+        if target.kind == MergeDeclarationKind::Function
+            && !symbol.function_values.contains(&storage)
         {
-            member.local_symbol = local_symbol;
-        }
-        let Some(symbol) = target.public_symbol else {
-            continue;
-        };
-        let Some(storage) = storage else {
-            continue;
-        };
-        if let Some(symbol) = state.symbols.get_mut(symbol) {
-            symbol.value = Some(storage);
-            if target.kind == MergeDeclarationKind::Function
-                && !symbol.function_values.contains(&storage)
-            {
-                symbol.function_values.push(storage);
-            }
+            symbol.function_values.push(storage);
         }
     }
 }
@@ -6976,6 +7059,83 @@ mod tests {
         assert_member_attachment_filled(&binder, "second", modules[0]);
         assert_member_attachment_filled(&binder, "tag", modules[0]);
         assert_member_attachment_filled(&binder, "first", modules[1]);
+    }
+
+    /// The storage each `name` member carries and the shared exported symbol they publish to.
+    fn shared_member_storages(binder: &Binder, name: &str) -> (Vec<ValueStorageId>, Symbol) {
+        let members = binder
+            .namespaces
+            .members()
+            .filter(|member| member.name.as_deref() == Some(name))
+            .collect::<Vec<_>>();
+        assert_eq!(members.len(), 2, "one {name} member per file");
+        let symbols = members
+            .iter()
+            .map(|member| member.symbol.expect("exported member symbol"))
+            .collect::<Vec<_>>();
+        assert_eq!(symbols[0], symbols[1], "both files publish one symbol");
+        let storages = members
+            .iter()
+            .map(|member| {
+                member
+                    .declaration
+                    .and_then(|declaration| binder.declarations.get(declaration))
+                    .and_then(|declaration| declaration.value_storage)
+                    .expect("member storage")
+            })
+            .collect::<Vec<_>>();
+        let symbol = binder
+            .symbols
+            .get(symbols[0])
+            .expect("shared exported symbol")
+            .clone();
+        (storages, symbol)
+    }
+
+    /// Two files declaring the same namespace member write the *same* exported symbol, so the
+    /// order the fills apply them in is observable. The two batch paths already disagree and
+    /// must keep disagreeing: a library batch always filled one module at a time, so its last
+    /// module wins, while a project batch re-applied the whole plan in every fill, so the
+    /// globally last declaration by span wins even when it belongs to the earlier file. The
+    /// overload list is in fill order on both, because a member's storage only exists from its
+    /// own module's fill onwards.
+    #[test]
+    fn a_symbol_shared_by_two_files_keeps_the_same_winning_storage() {
+        // The padded file's member has the larger span start, so the project order (by span)
+        // and the file order disagree — which is the only way to tell the two rules apart.
+        const PADDED: &str = "declare namespace Over { /* pad pad pad pad */ \
+                              function shared(a: string): void; }";
+        const PLAIN: &str = "declare namespace Over { function shared(a: number): void; }";
+
+        let (binder, _) =
+            bind_cross_file_project(&[(PADDED, SourceUnitKey(10)), (PLAIN, SourceUnitKey(20))]);
+        let (storages, symbol) = shared_member_storages(&binder, "shared");
+        assert_eq!(symbol.function_values, storages, "overloads in file order");
+        assert_eq!(
+            symbol.value,
+            Some(storages[0]),
+            "the project batch keeps the globally last declaration by span, which is the \
+             padded file's — here the first one"
+        );
+
+        let (binder, _) =
+            bind_cross_file_project(&[(PLAIN, SourceUnitKey(10)), (PADDED, SourceUnitKey(20))]);
+        let (storages, symbol) = shared_member_storages(&binder, "shared");
+        assert_eq!(symbol.function_values, storages, "overloads in file order");
+        assert_eq!(
+            symbol.value,
+            Some(storages[1]),
+            "the same padded declaration still wins in the other file order"
+        );
+
+        let (binder, _) = bind_cross_file_library(&[PADDED, PLAIN]);
+        let (storages, symbol) = shared_member_storages(&binder, "shared");
+        assert_eq!(symbol.function_values, storages, "overloads in file order");
+        assert_eq!(
+            symbol.value,
+            Some(storages[1]),
+            "a library batch fills one module at a time, so its last file wins"
+        );
     }
 
     fn bind_snapshot_validation_library() -> Binder {
