@@ -6631,10 +6631,13 @@ mod tests {
     /// participants, one merge group each, and one namespace member row.
     const FINALIZATION_PLACEMENTS_PER_GROUP: u64 = 3;
 
+    /// Groups the split deals out; the program is the same size at every split.
+    const FINALIZATION_GROUPS: usize = 192;
+
     /// Total program size held constant while only the file split varies: the same groups are
     /// dealt out evenly to `modules` files, so every difference between two calls is the split.
     fn namespace_finalization_work(modules: usize) -> NamespaceFinalizationWorkForTest {
-        const GROUPS: usize = 192;
+        const GROUPS: usize = FINALIZATION_GROUPS;
         assert_eq!(
             GROUPS % modules,
             0,
@@ -6731,6 +6734,27 @@ mod tests {
             many.merge_index_rows,
             few.merge_index_rows
         );
+        assert!(
+            many.attachment_merge_rows <= few.attachment_merge_rows,
+            "the same program re-scanned {} merge records for value attachments at {MANY} \
+             modules against {} at {FEW} ({few:?} -> {many:?}) — the attachment fill walks the \
+             whole project's merge set once per module",
+            many.attachment_merge_rows,
+            few.attachment_merge_rows
+        );
+        // Every merge belongs to the module(s) that declared it, so the fill visits each merge
+        // for its own module and the total is the project's merge count at any split.
+        let project_merges = FINALIZATION_PLACEMENTS_PER_GROUP
+            * u64::try_from(FINALIZATION_GROUPS).expect("group count fits u64");
+        assert_eq!(
+            (few.attachment_merge_rows, many.attachment_merge_rows),
+            (project_merges, project_merges),
+            "the attachment fill scanned {} merge records at {FEW} modules and {} at {MANY} \
+             ({few:?} -> {many:?}) — it must visit the project's {project_merges} merges once \
+             in total, not re-derive the whole project's targets in every module's fill",
+            few.attachment_merge_rows,
+            many.attachment_merge_rows
+        );
 
         // A counter is only as good as its recorder, so pin the shape too: this module walks
         // one module at a time and must never invoke the whole-project finalizer, which
@@ -6760,6 +6784,198 @@ mod tests {
                 >= 2,
             "the library batch and the project batch each finalize once, after their loop"
         );
+    }
+
+    /// Bind script files as one project, returning each input file's module scope in input
+    /// order so a caller can name the file a declaration must belong to.
+    fn bind_cross_file_project(sources: &[(&str, SourceUnitKey)]) -> (Binder, Vec<ScopeId>) {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocators = sources
+            .iter()
+            .map(|_| Allocator::default())
+            .collect::<Vec<_>>();
+        let parsed = sources
+            .iter()
+            .zip(&allocators)
+            .map(|((source, _), allocator)| {
+                let parsed = Parser::new(allocator, source, SourceType::ts()).parse();
+                assert!(!parsed.panicked, "parse failed: {source}");
+                parsed
+            })
+            .collect::<Vec<_>>();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let mut modules = Vec::new();
+        for (ordinal, ((_, source), parsed)) in sources.iter().zip(&parsed).enumerate() {
+            let unit = CompilationUnit {
+                source: *source,
+                origin: CompilationOrigin::User(OriginalModuleOrdinal::new(ordinal)),
+                binding: ModuleBindingContext::for_program(
+                    &parsed.program,
+                    SourceFileKind::ImplementationTs,
+                ),
+            };
+            let (module, _) = builder.add_module(&parsed.program, &[], unit);
+            modules.push(module);
+        }
+        let binder = builder.finish(*modules.last().expect("one project module"));
+        (binder, modules)
+    }
+
+    /// Bind declaration files as one library batch, returning each input file's module scope
+    /// in input order. File ordinals follow the input, so swapping the inputs swaps the order
+    /// the batch binds and fills them in.
+    fn bind_cross_file_library(sources: &[&str]) -> (Binder, Vec<ScopeId>) {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+        let allocators = sources
+            .iter()
+            .map(|_| Allocator::default())
+            .collect::<Vec<_>>();
+        let parsed = sources
+            .iter()
+            .zip(&allocators)
+            .map(|(source, allocator)| {
+                let parsed = Parser::new(allocator, source, SourceType::d_ts()).parse();
+                assert!(!parsed.panicked, "parse failed: {source}");
+                parsed
+            })
+            .collect::<Vec<_>>();
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let units = parsed
+            .iter()
+            .enumerate()
+            .map(|(ordinal, parsed)| {
+                let key = u32::try_from(ordinal + 1).expect("source key fits u32");
+                (
+                    &parsed.program,
+                    CompilationUnit::library(
+                        SourceUnitKey(key),
+                        LibraryFileOrdinal::new(ordinal),
+                        &parsed.program,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let modules = builder.add_library_modules(&units);
+        let binder = builder.finish(*modules.last().expect("one library module"));
+        (binder, modules)
+    }
+
+    /// Everything the attachment fill writes for one namespace member: the lexical symbol it
+    /// binds in the member's own scope and the public symbol, both pointed at its storage.
+    /// A fill that never visits the member's module leaves both `None`, and nothing else in
+    /// the pipeline reports that — it is a silently dropped binding, not a diagnostic.
+    fn assert_member_attachment_filled(binder: &Binder, name: &str, module: ScopeId) {
+        let member = binder
+            .namespaces
+            .members()
+            .find(|member| member.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("namespace member {name} exists"));
+        let declaration = member
+            .declaration
+            .and_then(|declaration| binder.declarations.get(declaration))
+            .unwrap_or_else(|| panic!("{name} has a declaration row"));
+        assert_eq!(
+            declaration.site.module, module,
+            "{name} is declared by the file whose fill must bind it"
+        );
+        let storage = declaration
+            .value_storage
+            .unwrap_or_else(|| panic!("{name} has a value storage"));
+        let local = member
+            .local_symbol
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .unwrap_or_else(|| panic!("{name} lost its lexical local_symbol"));
+        assert_eq!(
+            local.value,
+            Some(storage),
+            "{name} lexical symbol points at its own storage"
+        );
+        let public = member
+            .symbol
+            .and_then(|symbol| binder.symbols.get(symbol))
+            .unwrap_or_else(|| panic!("{name} has a public symbol"));
+        assert_eq!(
+            public.value,
+            Some(storage),
+            "{name} lost the public symbol.value the fill publishes"
+        );
+        assert_ne!(
+            member.local_symbol, member.symbol,
+            "{name} keeps its lexical symbol distinct from its exported one"
+        );
+    }
+
+    /// A namespace continued in a second file leaves one merge record whose fragments live in
+    /// two different modules. The fill runs once per module, so an index that hands a fill
+    /// only "its own" merges has to be keyed on **every** participating module: today's
+    /// whole-project scan is only accidentally safe here, and the failure mode is a member
+    /// that silently keeps no `local_symbol` and no `symbol.value`.
+    #[test]
+    fn a_project_merge_spanning_two_files_is_filled_in_both_of_them() {
+        const FIRST: (&str, SourceUnitKey) = (
+            "namespace Shared { export const first = 1; }",
+            SourceUnitKey(10),
+        );
+        const SECOND: (&str, SourceUnitKey) = (
+            "namespace Shared { export const second = 2; }",
+            SourceUnitKey(20),
+        );
+
+        let (binder, modules) = bind_cross_file_project(&[FIRST, SECOND]);
+        assert_eq!(
+            binder
+                .namespaces
+                .merges
+                .iter()
+                .filter(|record| record.name == "Shared")
+                .count(),
+            1,
+            "the reopening shares one merge record across the two files"
+        );
+        assert_member_attachment_filled(&binder, "first", modules[0]);
+        assert_member_attachment_filled(&binder, "second", modules[1]);
+
+        // Merge order decides which participant leads the record, so the same program in the
+        // other file order must bind exactly as much.
+        let (binder, modules) = bind_cross_file_project(&[SECOND, FIRST]);
+        assert_member_attachment_filled(&binder, "second", modules[0]);
+        assert_member_attachment_filled(&binder, "first", modules[1]);
+    }
+
+    /// The library batch is where cross-file merges are the rule rather than the exception:
+    /// one shared-global name is continued in a second file, and a `function` in one file is
+    /// merged with a `namespace` in another. Both must fill the module that declares the
+    /// member, which is not the module that opened the merge.
+    #[test]
+    fn a_library_merge_spanning_two_files_is_filled_in_both_of_them() {
+        const FIRST: &str = "declare namespace Shared { const first: number; }\n\
+                             declare function paired(): void;";
+        const SECOND: &str = "declare namespace Shared { const second: number; }\n\
+                              declare namespace paired { const tag: number; }";
+
+        let (binder, modules) = bind_cross_file_library(&[FIRST, SECOND]);
+        for name in ["Shared", "paired"] {
+            assert_eq!(
+                binder
+                    .namespaces
+                    .merges
+                    .iter()
+                    .filter(|record| record.name == name)
+                    .count(),
+                1,
+                "{name} shares one merge record across the two library files"
+            );
+        }
+        assert_member_attachment_filled(&binder, "first", modules[0]);
+        assert_member_attachment_filled(&binder, "second", modules[1]);
+        assert_member_attachment_filled(&binder, "tag", modules[1]);
+
+        let (binder, modules) = bind_cross_file_library(&[SECOND, FIRST]);
+        assert_member_attachment_filled(&binder, "second", modules[0]);
+        assert_member_attachment_filled(&binder, "tag", modules[0]);
+        assert_member_attachment_filled(&binder, "first", modules[1]);
     }
 
     fn bind_snapshot_validation_library() -> Binder {
