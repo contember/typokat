@@ -1,20 +1,23 @@
-//! RED contract: a *failing* relation must be memoized, not re-derived per probe.
+//! A *failing* relation must be memoized, not re-derived per probe.
 //!
-//! [`Relater::relate`] short-circuits a cached `true` but deliberately lets a cached
-//! `false` fall through to a full `relate_uncached` recompute, solely to rebuild the
-//! [`ReasonChain`] the three-word cache does not store (see the commit block in
-//! `mod.rs`). Every OR rule that keeps probing after a failure therefore turns each
-//! failing probe into a branch point: cost is `arms^depth`, not `arms * depth`. The
-//! dominant one is [`Relater::relate_union_target`]; `relate_signature_sets`,
-//! `relate_object_to_function`, `relate_construct_signature_sets`, and the non-object
-//! branch of `relate_source_members_to` have the same shape.
+//! Until [ADR-0016](../../../docs/decisions/0016-reason-free-relation-probes.md),
+//! [`Relater::relate`] short-circuited a cached `true` but let a cached `false` fall
+//! through to a full `relate_uncached` recompute, solely to rebuild the [`ReasonChain`]
+//! the three-word cache does not store. Every rule that kept probing after a failure
+//! therefore turned each failing probe into a branch point: cost was `arms^depth`, not
+//! `arms * depth`. The dominant one was [`Relater::relate_union_target`];
+//! `relate_signature_sets`, `relate_object_to_function`,
+//! `relate_construct_signature_sets`, and the non-object branch of
+//! `relate_source_members_to` had the same shape. A probe that discards its child's
+//! reason now answers from the memo, and the guard below is what holds that.
 //!
 //! Measured on the release binary over exactly [`nested_discriminated_union_source`]
-//! (nesting depth 9, 22-line files, only the union-arm count varying):
+//! (nesting depth 9, 22-line files, only the union-arm count varying), before → after:
 //!
 //! | arms | 2 | 3 | 4 | 5 |
 //! |---|---|---|---|---|
-//! | wall clock | 0.0032 s | 0.0181 s | 0.1781 s | 1.2259 s |
+//! | before | 0.0032 s | 0.0181 s | 0.1781 s | 1.2259 s |
+//! | after | 0.0023 s | 0.0027 s | 0.0025 s | 0.0027 s |
 //!
 //! The fitted exponent is the nesting depth. The identical shape with a *matching*
 //! leaf ([`Leaf::Matching`]) is flat at the ~0.0025 s process floor for every arm
@@ -33,10 +36,12 @@
 //! | matching leaf, depth 4 | 9 | 0 |
 //! | matching leaf, depth 8 | 17 | 0 |
 //!
-//! 98% of the failing run's frames re-derive a verdict the cache already holds, and
-//! doubling the depth multiplies them by `ARMS^SMALL_DEPTH` instead of by ~2.
+//! 98% of the pre-fix failing run's frames re-derived a verdict the cache already held,
+//! and doubling the depth multiplied them by `ARMS^SMALL_DEPTH` instead of by ~2. The
+//! post-fix counts are 14 and 26 frames with zero rebuilds — the same shape as the
+//! always-flat matching-leaf control.
 //!
-//! The pins below fix the reporting behaviour any fix must preserve byte for byte.
+//! The pins below fix the reporting behaviour the change had to preserve byte for byte.
 
 use super::{
     relation_source_cold_measure, start_relation_source_cold_measure, RelationSourceColdMeasure,
@@ -103,7 +108,9 @@ fn nested_discriminated_union_source(arms: usize, depth: usize, leaf: Leaf) -> S
         Leaf::Matching => "string",
     };
     let mut source = String::from("type T0 = { payload: string; type: \"t0\" };\n");
-    source.push_str(&format!("type S0 = {{ payload: {leaf_ty}; type: \"t0\" }};\n"));
+    source.push_str(&format!(
+        "type S0 = {{ payload: {leaf_ty}; type: \"t0\" }};\n"
+    ));
     for level in 1..=depth {
         let arms_text = (0..arms)
             .map(|arm| format!("{{ payload: T{}; type: \"a{arm}\" }}", level - 1))

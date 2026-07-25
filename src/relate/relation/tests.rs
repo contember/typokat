@@ -516,6 +516,7 @@ fn contextual_yes_memo_rejects_demand_and_exhaustion_tainted_frames() {
                 demand_target,
                 RelationKind::Assignable,
                 &mut assumed,
+                true,
             )
             .is_yes());
         assert_eq!(
@@ -552,6 +553,7 @@ fn contextual_yes_memo_rejects_demand_and_exhaustion_tainted_frames() {
                 exhaustion_target,
                 RelationKind::Assignable,
                 &mut assumed,
+                true,
             )
             .is_yes());
         assert!(matches!(

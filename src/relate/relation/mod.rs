@@ -351,6 +351,11 @@ pub(crate) struct Relater<'a> {
     /// Monotonic guard against memoizing a frame that performed a contextual
     /// source specialization anywhere in its subtree.
     source_specialization_epoch: u64,
+    /// Whether the frame currently running wants a [`ReasonChain`] built for a
+    /// failure (ADR-0016). Helpers inherit it by passing `self.want_reason` down;
+    /// an OR probe that discards its children's reasons passes `false` instead,
+    /// which lets a cached `false` answer from the memo (see [`Relater::relate`]).
+    want_reason: bool,
 }
 
 /// The in-flight cycle identity. The durable cache intentionally remains the
@@ -492,6 +497,7 @@ impl<'a> Relater<'a> {
             binder_environments: FxHashMap::default(),
             active_binder_environment: Some(EMPTY_BINDER_ENVIRONMENT),
             source_specialization_epoch: 0,
+            want_reason: true,
         }
     }
 
@@ -519,6 +525,7 @@ impl<'a> Relater<'a> {
             binder_environments: FxHashMap::default(),
             active_binder_environment: Some(EMPTY_BINDER_ENVIRONMENT),
             source_specialization_epoch: 0,
+            want_reason: true,
         }
     }
 
@@ -527,7 +534,7 @@ impl<'a> Relater<'a> {
         self.allow_relation_demand = false;
         self.query_exhaustion = None;
         let mut assumed = FxHashSet::default();
-        let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed);
+        let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed, true);
         match self.query_exhaustion.take() {
             Some(reason) => RelationOutcome::Exhausted(reason),
             None => match relation {
@@ -545,7 +552,7 @@ impl<'a> Relater<'a> {
         self.query_demand = None;
         self.query_demand_observed = false;
         let mut assumed = FxHashSet::default();
-        let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed);
+        let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed, true);
         if let Some(reason) = self.query_exhaustion.take() {
             return RelationAttempt::Decided(RelationOutcome::Exhausted(reason));
         }
@@ -576,7 +583,7 @@ impl<'a> Relater<'a> {
         // survives here would be an assumption about a key with no enclosing
         // frame — impossible by construction, so it is simply dropped.
         let mut assumed = FxHashSet::default();
-        self.relate(src, tgt, RelationKind::Assignable, &mut assumed)
+        self.relate(src, tgt, RelationKind::Assignable, &mut assumed, true)
     }
 
     /// Core relation driver: cache + cycle stack around the structural rules.
@@ -591,12 +598,18 @@ impl<'a> Relater<'a> {
     /// fixpoint resolves at the cycle root, so a verdict that depended only on
     /// re-entry to its own key is genuine) and propagates any remaining ancestor
     /// assumptions to its caller.
+    ///
+    /// `want_reason` selects §6.4's reporting mode (ADR-0016). It never affects the
+    /// *verdict*, only whether a failure is explained: a caller that discards its
+    /// children's reasons passes `false` and lets a cached `false` answer straight
+    /// from the memo instead of re-deriving the whole failing subtree.
     fn relate(
         &mut self,
         src: TypeId,
         tgt: TypeId,
         kind: RelationKind,
         assumed: &mut AssumedSet,
+        want_reason: bool,
     ) -> Relation {
         // An empty active stack marks a fresh top-level relation operation. This
         // deliberately scopes the contextual memo more narrowly than some public
@@ -647,7 +660,11 @@ impl<'a> Relater<'a> {
             }
         }
 
-        if let Some(result) = self.relate_contextual_type_params(src, tgt, kind, assumed) {
+        // Runs before the cache, so it must already see THIS frame's reporting mode —
+        // reading the enclosing frame's would be an inheritance hole.
+        if let Some(result) = self.with_reason_mode(want_reason, |relater| {
+            relater.relate_contextual_type_params(src, tgt, kind, assumed)
+        }) {
             return result;
         }
 
@@ -684,7 +701,8 @@ impl<'a> Relater<'a> {
         // cached success returns directly; a cached *failure* falls through to a
         // stack-guarded recompute so the checker still sees the precise
         // missing-vs-mismatch reason (the cache stores only the bool verdict —
-        // architecture §6.1 — not the reason).
+        // architecture §6.1 — not the reason) — but only when someone will read
+        // that reason (`want_reason`; see the reason-free short-circuit below).
         #[cfg(test)]
         let (cached, durable_cached, pending_cached) = {
             let pending_cached = cacheable.then(|| self.pending_cache.get(key)).flatten();
@@ -714,13 +732,22 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
+        // The reason-free short-circuit (ADR-0016). A cached `false` is authoritative:
+        // the durable verdict is the one this key was decided on, and the recompute
+        // below is clamped to agree with it. Skipping the stack push only ever removes
+        // recursion, so §6.3 termination is preserved a fortiori.
+        if cached == Some(false) && !want_reason {
+            return Relation::No(ReasonChain::leaf(original_src, original_tgt));
+        }
+
+        // Both rebuild counters sit below the short-circuit so they keep meaning
+        // "a cached failure this frame actually re-derived".
         #[cfg(test)]
         if durable_cached == Some(false) {
             measure_relation_source_cold(|measure| {
                 measure.durable_false_reason_rebuilds += 1;
             });
         }
-
         #[cfg(test)]
         if pending_cached == Some(false) {
             measure_relation_source_cold(|measure| {
@@ -735,8 +762,26 @@ impl<'a> Relater<'a> {
         let frame_specialization_epoch = self.source_specialization_epoch;
         #[cfg(test)]
         measure_relation_source_cold(|measure| measure.uncached_relation_frames += 1);
-        let result = self.relate_uncached(src, tgt, kind, &mut frame_assumed);
+        // Publish this frame's reporting mode so the structural helpers can inherit it
+        // (they pass `self.want_reason` down).
+        let mut result = self.with_reason_mode(want_reason, |relater| {
+            relater.relate_uncached(src, tgt, kind, &mut frame_assumed)
+        });
         self.stack.remove(&stack_key);
+
+        // Clamp the recompute of an already-cached failure to its cached verdict.
+        // The recompute runs UNDER the stack push above, so a self-referential subtree
+        // can re-enter this key and be handed the assume-true `Yes` of §6.3 — which
+        // would make this frame contradict its own durable `false`. Before ADR-0016
+        // that contradiction was simply returned, so the answer depended on whether an
+        // earlier statement had already populated the cache; the reason-free
+        // short-circuit above would meanwhile answer `No`. Clamping makes both modes
+        // agree with the cache and removes the order dependence. It is the stricter
+        // direction (no rule is antitone, so it can never drop an error) and it does
+        // NOT restore tsc's choice of diagnostic — see `divergences.md`.
+        if cached == Some(false) && result.is_yes() {
+            result = Relation::No(ReasonChain::leaf(original_src, original_tgt));
+        }
 
         // Discharge the assumption about our OWN key: the fixpoint is resolved at
         // this root, so a dependency that was only on re-entry to `key` is genuine.
@@ -782,6 +827,24 @@ impl<'a> Relater<'a> {
             }
         }
         result
+    }
+
+    /// Run `body` under an explicit reporting mode, restoring the caller's on exit.
+    /// Every publish of [`Relater::want_reason`] goes through here so no early return
+    /// can leak a frame's mode into its caller (ADR-0016).
+    fn with_reason_mode<R>(&mut self, want_reason: bool, body: impl FnOnce(&mut Self) -> R) -> R {
+        let outer_want_reason = std::mem::replace(&mut self.want_reason, want_reason);
+        let result = body(self);
+        self.want_reason = outer_want_reason;
+        result
+    }
+
+    /// Run an OR probe whose failure reason the caller discards, for the probes that
+    /// reach [`Relater::relate`] through an intermediate helper rather than calling it
+    /// directly (ADR-0016). Callers that *do* call `relate` directly pass `false` at
+    /// the call site instead.
+    fn probe_without_reason<R>(&mut self, body: impl FnOnce(&mut Self) -> R) -> R {
+        self.with_reason_mode(false, body)
     }
 
     /// Run one relation operation under a local binder environment. Nested calls
@@ -1061,9 +1124,9 @@ impl<'a> Relater<'a> {
             .and_then(|context| context.source_instantiations.get(&param).copied());
         if let Some(existing) = existing {
             return Some(if source_on_left {
-                self.relate(existing, other, kind, assumed)
+                self.relate(existing, other, kind, assumed, self.want_reason)
             } else {
-                self.relate(other, existing, kind, assumed)
+                self.relate(other, existing, kind, assumed, self.want_reason)
             });
         }
 
@@ -1074,7 +1137,10 @@ impl<'a> Relater<'a> {
             .flatten();
         self.specialize_source_parameter(context_index, param, other);
         if let Some(constraint) = constraint {
-            if !self.relate(other, constraint, kind, assumed).is_yes() {
+            if !self
+                .relate(other, constraint, kind, assumed, false)
+                .is_yes()
+            {
                 return Some(Relation::No(ReasonChain::leaf(src, tgt)));
             }
         }
@@ -1139,7 +1205,7 @@ impl<'a> Relater<'a> {
                         .and_then(|param| self.store.type_param_constraint(param.id))
                 });
             if let Some(constraint) = constraint {
-                if self.relate(constraint, tgt, kind, assumed).is_yes() {
+                if self.relate(constraint, tgt, kind, assumed, false).is_yes() {
                     return Relation::Yes;
                 }
             }
@@ -1205,7 +1271,7 @@ impl<'a> Relater<'a> {
                 .instantiation_type(src)
                 .is_some_and(|inst| self.well_known.is_string_intrinsic_marker(inst.base));
             if marker_base {
-                if self.relate(wk.string, tgt, kind, assumed).is_yes() {
+                if self.relate(wk.string, tgt, kind, assumed, false).is_yes() {
                     return Relation::Yes;
                 }
                 return Relation::No(ReasonChain::leaf(src, tgt));
@@ -1362,7 +1428,7 @@ impl<'a> Relater<'a> {
             } else {
                 src
             };
-            return self.relate(src_operand, tgt_operand, kind, assumed);
+            return self.relate(src_operand, tgt_operand, kind, assumed, self.want_reason);
         }
         if self.store.tag(src) == TypeTag::Readonly {
             return Relation::No(ReasonChain::leaf(src, tgt));

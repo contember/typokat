@@ -78,16 +78,27 @@ shared leaf `Relation::No` immediately instead of re-deriving the subtree.
 
 `want_reason` is granted only to callers that actually consume a child's reason. The top-level
 query passes `true`. Every OR-probe call site that already discards its children's reasons passes
-`false`. `relate_source_members_to`'s `last_child` (`objects.rs`) keeps `true`, because it is the
-one probe loop that renders a failing candidate's own reason.
+`false`. Structural helpers **inherit** the enclosing frame's mode, so inheriting is the default and
+forgetting to opt out costs only time. `relate_source_members_to`'s `last_child` (`objects.rs`)
+inherits rather than pinning `true`: it renders a failing candidate's own reason, so it keeps the
+reason whenever anyone will read it, and goes reason-free only when the enclosing frame is itself a
+discarded probe.
 
-This changes **nothing** about which verdicts are cached or how they are derived. The `false` is
-already in the cache and is already documented as always genuine: the assume-true rule of §6.3 can
-only ever manufacture a spurious `true`, never a spurious `false`. The provisional-`Yes` discipline
-of §6.3 is untouched. Only the reason chain is suppressed, and only where the caller throws it away.
+**This does change verdicts, not only reasons.** The re-derivation it replaces ran *under a stack
+push*, so a self-referential subtree could re-enter the key and be handed the assume-true `Yes` of
+§6.3 — meaning the old code never returned a cached `false` directly, it returned whatever the
+current cycle stack produced, which inside a cycle is frequently `Yes`. A cached `false` is now
+authoritative in reason-free mode, where the re-derivation could previously have returned a
+provisional assume-true `Yes`; this makes reason-free probes **stricter** and can change which
+failure is reported. It cannot drop an error: no rule that consumes a relation result is antitone,
+so a `No` where the old engine produced `Yes` only ever adds or preserves diagnostics. The
+provisional-`Yes` discipline of §6.3 itself is untouched. To stop the engine contradicting its own
+cache, the reason-carrying recompute is **clamped**: when the cached verdict is `false` and the
+recompute returns `Yes`, the frame returns `No`, so both modes agree with the cache.
 
-Diagnostics must be byte-identical for every existing test and fixture. If any message changes, the
-implementation stops and reports rather than updating the expectation.
+Verdicts are strictly stricter, so diagnostics may move. Where a message changes, the change is
+recorded in [`divergences.md`](../reference/divergences.md) rather than absorbed by editing an
+expectation.
 
 ## Consequences
 
@@ -98,13 +109,17 @@ implementation stops and reports rather than updating the expectation.
   and defaulting it to `false` will silently flatten whatever it used to report.
 - **One known existing case must be audited, not assumed.** `relate_source_members_to`'s
   `last_child` (`objects.rs`) is the only probe loop found that keeps a failing candidate's reason;
-  it must keep `want_reason: true` or explicitly accept a leaf. Every other caller has to be checked
-  for the same pattern before the change lands — a missed one is a silently degraded diagnostic, not
-  a test failure, unless it is pinned.
-- **The cache becomes authoritative for `false` in a way it is not today.** Today a cached `false`
-  is always re-derived, so its explanation is always freshly built in the current context. After
-  this, a cached `false` in reason-free mode is answered from the cache alone. This is sound only
-  because a `false` never rests on an assumption; it is worth restating whenever §6.3 is touched.
+  it inherits, so it stays reason-carrying whenever its caller is. Every other caller has to be
+  checked for the same pattern before the change lands — a missed one is a silently degraded
+  diagnostic, not a test failure, unless it is pinned. The audit found 13 discarding probes, 8 of
+  them not on the original list.
+- **The cache becomes authoritative for `false` in a way it is not today, and that is observable.**
+  Today a cached `false` is always re-derived, so a key decided `false` from one entry point can
+  still answer `Yes` from another. After this, the cached verdict wins in both modes. The
+  consequence is that a relation decided while checking one statement can change **which** failure a
+  later, logically independent statement reports — the verdict never moves, but the reported cause
+  can. One such case is recorded in [`divergences.md`](../reference/divergences.md) and owned by
+  backlog `91`, whose presence pass removes the sensitivity at its source.
 - **The reporting spine is unchanged and still re-derives.** A frame with `want_reason: true` that
   hits a cached `false` still falls through. That path is bounded by the single chain the diagnostic
   renders, not by the OR fan-out, which is what makes it affordable.

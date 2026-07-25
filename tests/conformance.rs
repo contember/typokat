@@ -106,6 +106,11 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),
+    // ADR-0016 review finding — a cached failure must not change WHICH failure a
+    // later, independent statement reports. Committed `false`: the trio only goes
+    // green with the `getUnmatchedProperty`-style presence pass in `relate_objects`,
+    // which is filed separately. See `docs/reference/divergences.md`.
+    ("b91_missing_property_presence", false),
     // Backlog 67 shipped; backlog 66 remains disabled behind its protected-lineage
     // architecture stop gate (backlog 63d).
     ("b67_utility_alias_constraint", true),

@@ -330,6 +330,12 @@ With stable `TypeId`s, the cache key is three `u32`s — extremely cheap:
   normalization overlay and a pending-cache transaction. Production callers cannot construct a raw
   `Relater` or bypass coordinator-owned projection/evaluation; those direct entrypoints are
   test-only.
+- The value is the **verdict only** — not the reason for a failure. A cached `true` short-circuits;
+  a cached `false` answers the *reason-free* mode of §6.4 directly, while a caller that needs the
+  explanation re-derives the failing subtree under a stack push and clamps the result back to the
+  cached verdict. Making that re-derivation unconditional is what turned every OR probe into a
+  branch point and made failing relations cost `arms^depth`
+  ([ADR-0016](../decisions/0016-reason-free-relation-probes.md)).
 
 ### 6.2 Cache lifetime vs narrowing (the trap)
 
@@ -368,6 +374,36 @@ can't be a pure `bool` function — it must run in a "reporting mode" that build
 tree on the failing path. Design this in from the start; retrofitting it onto a boolean
 engine is a rewrite. (This is also the answer to the "VM error reporting is bad" worry —
 most user-facing errors are relation failures, not VM faults.)
+
+Reporting mode is a **real mode**, carried by `want_reason` on `Relater::relate`
+([ADR-0016](../decisions/0016-reason-free-relation-probes.md)):
+
+- **Reason mode** (`true`) is the top-level query and every rule that *wraps or returns* a child's
+  reason (`Property`, `ArrayElement`, `ReturnType`, `IndexSignature`, union-**source**,
+  intersection-**target**, the tuple/array element rules, the parameter-slot rules, …). Structural
+  helpers **inherit** it by passing `self.want_reason` down — including
+  `relate_source_members_to`'s `last_child`, the one probe loop that renders a failing candidate's
+  own reason. Inheriting is the default, so forgetting to opt out costs only time, never a message.
+- **Reason-free mode** (`false`) is granted *only* where the caller discards its child's reason by
+  construction: union-**target** (a flat `NoUnionMember`), the call and construct signature-set
+  loops, object→function, function→object, the contravariant receiver check, the optional-parameter
+  `undefined` escape probe, the type-parameter-constraint and string-intrinsic admission probes, and
+  the `bool`-returning overload-compatibility path. There a cached `false` returns a shared leaf
+  straight from the memo. Note that not all of these are OR probes — the function→object and
+  signature-set loops are ANDs that still throw the child reason away.
+
+`Relation` still never returns a bare `bool`, and every reason a user actually sees is built by the
+same engine on the same path — but a `No` produced in reason-free mode cannot explain itself, so a
+**new** probe that wants a nested reason must ask for one.
+
+The mode is **not** verdict-neutral, and that is the subtle part. The re-derivation it replaces ran
+under a stack push, so a self-referential subtree could re-enter the key and receive the assume-true
+`Yes` of §6.3 — the old engine therefore never returned a cached `false` directly. Trusting the
+cache makes reason-free probes strictly **stricter** (no rule consuming a relation result is
+antitone, so this can only add or preserve diagnostics, never drop one), and the reason-carrying
+recompute is **clamped** to its cached verdict so both modes agree. The observable cost is that a
+relation decided while checking one statement can change *which* failure a later, independent
+statement reports; see [`divergences.md`](divergences.md).
 
 ### 6.5 Variance
 

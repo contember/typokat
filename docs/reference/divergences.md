@@ -750,6 +750,35 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
   resolution is carried by explicit overload lists, not by synthesizing callable intersections.
   <!-- div: id=intersection/callable-intersection-oos dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m31_intersections -->
 
+## Object relation — which failure is reported
+
+- **A missing required property loses to a value mismatch that sorts earlier, and the winner can
+  depend on statement order.** `relate_objects` walks the target's properties in canonical name
+  order and relates each value as it goes, so the first failing property becomes the headline.
+  `tsc` runs `getUnmatchedProperty` over **all** required target properties before any value
+  relation, so a genuinely missing property always wins. Repro (`tsc 6.0.3 --strict` reports
+  `TS2741: Property 'p1' is missing in type 'N2' but required in type 'N0'`):
+
+  ```ts
+  interface N0 { p0?: N2 & N0; p1: N0; }
+  interface N1 { p0: N1; p1: N2 | N0; }
+  interface N2 { p0: N1; }
+  declare const a: N1;
+  declare const b: N2;
+  const x: N0 = a;
+  const y: N0 = b;   // tsc TS2741 · typokat TK2322 "Types of property 'p0' are incompatible."
+  ```
+
+  Deleting `const x`, or swapping the two declarations, restores `TK2741` — `const x` warms the
+  relation cache with the `false` that makes `p0` fail for `const y`. The verdict never moves
+  (`N2 <: N0` is false either way) and the span and line are correct; only the reported cause
+  moves, and it moves because of a logically independent statement. The ordering dependence was
+  always latent — before [ADR-0016](../decisions/0016-reason-free-relation-probes.md) made a
+  cached `false` authoritative, the cache-vs-cycle interaction happened to let `p0` succeed here,
+  so `TK2741` fell out by accident rather than from a presence rule. Backlog `91` adds the
+  presence pass and deletes this entry.
+  <!-- div: id=objects/missing-property-vs-value-order dir=cosmetic scope=s-assignability owner=../backlog/91-missing-property-presence-pass.md witness=../../tests/cases/b91_missing_property_presence -->
+
 ## Object / interface signatures (F1 corpora)
 
 Method signatures become function-typed properties; call/construct signatures make values

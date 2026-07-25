@@ -22,10 +22,11 @@ impl<'a> Relater<'a> {
         if self.contains_infer(true_branch) || self.contains_infer(false_branch) {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
-        if let Relation::No(child) = self.relate(true_branch, tgt, kind, assumed) {
+        if let Relation::No(child) = self.relate(true_branch, tgt, kind, assumed, self.want_reason)
+        {
             return Relation::No(child);
         }
-        self.relate(false_branch, tgt, kind, assumed)
+        self.relate(false_branch, tgt, kind, assumed, self.want_reason)
     }
 
     /// Whether `ty` contains an unbound `infer` binder ([`TypeTag::Infer`]) — used to

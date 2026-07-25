@@ -231,7 +231,7 @@ impl<'a> Relater<'a> {
                         return Relation::No(ReasonChain::leaf(src, tgt));
                     }
                     if let Relation::No(child) =
-                        self.relate(src_prop.ty, tgt_prop.ty, kind, assumed)
+                        self.relate(src_prop.ty, tgt_prop.ty, kind, assumed, self.want_reason)
                     {
                         return Relation::No(ReasonChain::of(Reason::Property {
                             name: tgt_prop.name.clone(),
@@ -304,7 +304,9 @@ impl<'a> Relater<'a> {
         // key) AND the source's own string index value must be assignable to it.
         if let Some(tgt_value) = tgt_string_index {
             for (_, src_value) in &src_props {
-                if let Relation::No(child) = self.relate(*src_value, tgt_value, kind, assumed) {
+                if let Relation::No(child) =
+                    self.relate(*src_value, tgt_value, kind, assumed, self.want_reason)
+                {
                     return Relation::No(ReasonChain::of(Reason::IndexSignature {
                         src,
                         tgt,
@@ -313,7 +315,9 @@ impl<'a> Relater<'a> {
                 }
             }
             if let Some(src_value) = src_string_index {
-                if let Relation::No(child) = self.relate(src_value, tgt_value, kind, assumed) {
+                if let Relation::No(child) =
+                    self.relate(src_value, tgt_value, kind, assumed, self.want_reason)
+                {
                     return Relation::No(ReasonChain::of(Reason::IndexSignature {
                         src,
                         tgt,
@@ -331,7 +335,9 @@ impl<'a> Relater<'a> {
                 if !is_numeric_property_name(name) {
                     continue;
                 }
-                if let Relation::No(child) = self.relate(*src_value, tgt_value, kind, assumed) {
+                if let Relation::No(child) =
+                    self.relate(*src_value, tgt_value, kind, assumed, self.want_reason)
+                {
                     return Relation::No(ReasonChain::of(Reason::IndexSignature {
                         src,
                         tgt,
@@ -340,7 +346,9 @@ impl<'a> Relater<'a> {
                 }
             }
             if let Some(src_value) = src_number_index {
-                if let Relation::No(child) = self.relate(src_value, tgt_value, kind, assumed) {
+                if let Relation::No(child) =
+                    self.relate(src_value, tgt_value, kind, assumed, self.want_reason)
+                {
                     return Relation::No(ReasonChain::of(Reason::IndexSignature {
                         src,
                         tgt,
@@ -417,7 +425,10 @@ impl<'a> Relater<'a> {
         }
         let src_signatures = src_obj.call_signatures.clone();
         for src_sig in src_signatures {
-            if matches!(self.relate(src_sig, tgt, kind, assumed), Relation::Yes) {
+            if matches!(
+                self.relate(src_sig, tgt, kind, assumed, false),
+                Relation::Yes
+            ) {
                 return Relation::Yes;
             }
         }
@@ -455,7 +466,7 @@ impl<'a> Relater<'a> {
         }
         let tgt_signatures = tgt_obj.call_signatures.clone();
         for tgt_sig in tgt_signatures {
-            if let Relation::No(_) = self.relate(src, tgt_sig, kind, assumed) {
+            if let Relation::No(_) = self.relate(src, tgt_sig, kind, assumed, false) {
                 return Relation::No(ReasonChain::leaf(src, tgt));
             }
         }
@@ -478,7 +489,7 @@ impl<'a> Relater<'a> {
             let mut matched = false;
             for src_sig in src_signatures {
                 if matches!(
-                    self.relate(*src_sig, *tgt_sig, kind, assumed),
+                    self.relate(*src_sig, *tgt_sig, kind, assumed, false),
                     Relation::Yes
                 ) {
                     matched = true;
@@ -504,30 +515,33 @@ impl<'a> Relater<'a> {
         if src_signatures.is_empty() || tgt_signatures.is_empty() {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
+        // Both probe loops discard their candidates' reasons for a bare leaf, but reach
+        // `relate` through a helper, so the reason-free mode is scoped rather than
+        // passed at a call site (ADR-0016).
         for tgt_sig in tgt_signatures {
-            let mut matched = false;
-            for src_sig in src_signatures {
-                if matches!(
-                    self.relate_construct_functions(*src_sig, *tgt_sig, kind, assumed),
-                    Relation::Yes
-                ) {
-                    matched = true;
-                    break;
-                }
-            }
-            if !matched && src_signatures.len() > 1 {
+            let matched = self.probe_without_reason(|relater| {
                 for src_sig in src_signatures {
                     if matches!(
-                        self.relate_overloaded_construct_to_generic_target(
-                            *src_sig, *tgt_sig, kind, assumed
-                        ),
+                        relater.relate_construct_functions(*src_sig, *tgt_sig, kind, assumed),
                         Relation::Yes
                     ) {
-                        matched = true;
-                        break;
+                        return true;
                     }
                 }
-            }
+                if src_signatures.len() > 1 {
+                    for src_sig in src_signatures {
+                        if matches!(
+                            relater.relate_overloaded_construct_to_generic_target(
+                                *src_sig, *tgt_sig, kind, assumed
+                            ),
+                            Relation::Yes
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            });
             if !matched {
                 return Relation::No(ReasonChain::leaf(src, tgt));
             }
@@ -866,7 +880,7 @@ impl<'a> Relater<'a> {
             let src_constraint = src_param.constraint.unwrap_or(self.well_known.unknown);
             let tgt_constraint = tgt_param.constraint.unwrap_or(self.well_known.unknown);
             if !self
-                .relate(tgt_constraint, src_constraint, kind, assumed)
+                .relate(tgt_constraint, src_constraint, kind, assumed, false)
                 .is_yes()
             {
                 return false;
@@ -995,8 +1009,14 @@ impl<'a> Relater<'a> {
 
     fn nested_assignable(&mut self, source: TypeId, target: TypeId) -> bool {
         let mut assumed = rustc_hash::FxHashSet::default();
-        self.relate(source, target, RelationKind::Assignable, &mut assumed)
-            .is_yes()
+        self.relate(
+            source,
+            target,
+            RelationKind::Assignable,
+            &mut assumed,
+            false,
+        )
+        .is_yes()
     }
 
     /// The context-free positional function rule, reused after a generic relation
@@ -1012,7 +1032,7 @@ impl<'a> Relater<'a> {
     ) -> Relation {
         if let (Some(src_receiver), Some(tgt_receiver)) = (src_fn.receiver, tgt_fn.receiver) {
             if matches!(
-                self.relate(tgt_receiver, src_receiver, kind, assumed),
+                self.relate(tgt_receiver, src_receiver, kind, assumed, false),
                 Relation::No(_)
             ) {
                 return Relation::No(ReasonChain::leaf(src, tgt));
@@ -1074,7 +1094,9 @@ impl<'a> Relater<'a> {
         // `() => void`). This is the standard TS rule for void-returning
         // function-typed values.
         if tgt_ret != self.well_known.void {
-            if let Relation::No(child) = self.relate(src_ret, tgt_ret, kind, assumed) {
+            if let Relation::No(child) =
+                self.relate(src_ret, tgt_ret, kind, assumed, self.want_reason)
+            {
                 return Relation::No(ReasonChain::of(Reason::ReturnType {
                     src,
                     tgt,
@@ -1210,10 +1232,12 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
-        if let Relation::No(child) = self.relate(src_slot.ty, tgt_slot.ty, kind, assumed) {
+        if let Relation::No(child) =
+            self.relate(src_slot.ty, tgt_slot.ty, kind, assumed, self.want_reason)
+        {
             if tgt_slot.accepts_undefined
                 && self
-                    .relate(src_slot.ty, self.well_known.undefined, kind, assumed)
+                    .relate(src_slot.ty, self.well_known.undefined, kind, assumed, false)
                     .is_yes()
             {
                 return Relation::Yes;
@@ -1221,7 +1245,13 @@ impl<'a> Relater<'a> {
             return Relation::No(child);
         }
         if src_slot.accepts_undefined && !tgt_slot.accepts_undefined {
-            return self.relate(self.well_known.undefined, tgt_slot.ty, kind, assumed);
+            return self.relate(
+                self.well_known.undefined,
+                tgt_slot.ty,
+                kind,
+                assumed,
+                self.want_reason,
+            );
         }
         Relation::Yes
     }
@@ -1404,7 +1434,7 @@ impl<'a> Relater<'a> {
         let mut last_child: Option<ReasonChain> = None;
         for &cand in cands {
             let mut cand_assumed: AssumedSet = FxHashSet::default();
-            match self.relate(cand, tgt, kind, &mut cand_assumed) {
+            match self.relate(cand, tgt, kind, &mut cand_assumed, self.want_reason) {
                 Relation::Yes => {
                     assumed.extend(cand_assumed);
                     return Relation::Yes;
@@ -1504,7 +1534,7 @@ impl<'a> Relater<'a> {
             // Part B — several contributors: a genuine merged value, recursed through the
             // in-flight-guarded merged engine. Both thread the shared `assumed` (an AND).
             let child = if let [only] = subcands.as_slice() {
-                self.relate(*only, tgt_ty, kind, assumed)
+                self.relate(*only, tgt_ty, kind, assumed, self.want_reason)
             } else {
                 self.relate_source_members_to(src, &subcands, tgt_ty, kind, assumed, in_flight)
             };

@@ -33,9 +33,9 @@ impl<'a> Relater<'a> {
                 target_members.get(target_index) == Some(&member)
             });
             let relation = if exact_target {
-                self.relate(member, member, kind, assumed)
+                self.relate(member, member, kind, assumed, self.want_reason)
             } else {
-                self.relate(member, tgt, kind, assumed)
+                self.relate(member, tgt, kind, assumed, self.want_reason)
             };
             if let Relation::No(child) = relation {
                 return Relation::No(ReasonChain::of(Reason::UnionSourceMember {
@@ -53,6 +53,10 @@ impl<'a> Relater<'a> {
     /// `tgt` iff it is assignable to **some** member. On failure no single member
     /// is "the cause", so a flat `NoUnionMember` reason over the whole union is
     /// returned (the per-member sub-failures are intentionally not retained).
+    ///
+    /// Because every arm's reason is discarded, each arm probes in reason-free mode
+    /// (ADR-0016) — this is the branch point that made a failing nested union cost
+    /// `arms^depth` when a cached `false` could not be a memo hit.
     pub(super) fn relate_union_target(
         &mut self,
         src: TypeId,
@@ -74,7 +78,10 @@ impl<'a> Relater<'a> {
         // assumptions are merged (a `No` is genuine — it never rests on one).
         for member in members {
             let mut member_assumed: AssumedSet = FxHashSet::default();
-            if self.relate(src, member, kind, &mut member_assumed).is_yes() {
+            if self
+                .relate(src, member, kind, &mut member_assumed, false)
+                .is_yes()
+            {
                 assumed.extend(member_assumed);
                 return Relation::Yes;
             }
@@ -116,7 +123,7 @@ impl<'a> Relater<'a> {
             .collect();
 
         for member in members {
-            if let Relation::No(child) = self.relate(src, member, kind, assumed) {
+            if let Relation::No(child) = self.relate(src, member, kind, assumed, self.want_reason) {
                 return Relation::No(child);
             }
         }

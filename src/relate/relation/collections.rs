@@ -74,7 +74,9 @@ impl<'a> Relater<'a> {
         let (src_elem, tgt_elem) = (src_arr.element, tgt_arr.element);
 
         // Covariant: source element must be assignable to target element.
-        if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+        if let Relation::No(child) =
+            self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+        {
             return Relation::No(ReasonChain::of(Reason::ArrayElement {
                 src,
                 tgt,
@@ -126,7 +128,9 @@ impl<'a> Relater<'a> {
             let Some(tgt_elem) = tgt_shape.element_at(index, src_len) else {
                 return Relation::No(ReasonChain::of(Reason::TupleLength { src, tgt }));
             };
-            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            if let Relation::No(child) =
+                self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+            {
                 return Relation::No(ReasonChain::of(Reason::TupleElement {
                     index,
                     src,
@@ -167,7 +171,9 @@ impl<'a> Relater<'a> {
             .chain(src_shape.suffix.iter())
             .copied()
         {
-            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            if let Relation::No(child) =
+                self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+            {
                 return Relation::No(ReasonChain::of(Reason::ArrayElement {
                     src,
                     tgt,
@@ -176,7 +182,9 @@ impl<'a> Relater<'a> {
             }
         }
         if let Some(src_elem) = src_shape.variadic {
-            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            if let Relation::No(child) =
+                self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+            {
                 return Relation::No(ReasonChain::of(Reason::ArrayElement {
                     src,
                     tgt,
@@ -207,7 +215,9 @@ impl<'a> Relater<'a> {
         for (index, (&src_elem, &tgt_elem)) in
             src_shape.prefix.iter().zip(&tgt_shape.prefix).enumerate()
         {
-            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            if let Relation::No(child) =
+                self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+            {
                 return Relation::No(ReasonChain::of(Reason::TupleElement {
                     index,
                     src,
@@ -220,7 +230,9 @@ impl<'a> Relater<'a> {
         for (offset, (&src_elem, &tgt_elem)) in
             src_shape.suffix.iter().zip(&tgt_shape.suffix).enumerate()
         {
-            if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+            if let Relation::No(child) =
+                self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+            {
                 return Relation::No(ReasonChain::of(Reason::TupleElement {
                     index: suffix_offset + offset,
                     src,
@@ -235,7 +247,9 @@ impl<'a> Relater<'a> {
         let Some(tgt_elem) = tgt_shape.variadic else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        if let Relation::No(child) = self.relate(src_elem, tgt_elem, kind, assumed) {
+        if let Relation::No(child) =
+            self.relate(src_elem, tgt_elem, kind, assumed, self.want_reason)
+        {
             return Relation::No(ReasonChain::of(Reason::TupleElement {
                 index: src_shape.prefix.len(),
                 src,

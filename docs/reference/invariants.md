@@ -16,8 +16,19 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   be demand-evaluated merely to precede identity. Publication/poison preflight runs before same-id
   success for assignability and overload compatibility.
   Relation returns `Yes | No(ReasonChain) | Exhausted`, never a bare `bool`; demand returns
-  `Ready | Exhausted`. A verdict that depended on an in-flight *ancestor* assumption is provisional
-  and must not be committed. Poison, an exhausted planner/evaluator budget or cycle, or any other
+  `Ready | Exhausted`. Whether a `No` carries its explanation is conditional on `want_reason`
+  (architecture §6.4, [ADR-0016](../decisions/0016-reason-free-relation-probes.md)): reason-free
+  mode is granted only where the caller already discards its child's reason, and there a cached
+  `false` answers from the memo with a shared leaf. This is **stricter, not neutral** — the
+  re-derivation it replaces ran under a stack push and could return the assume-true `Yes` of §6.3
+  against the key's own cached `false`, so a reason-free frame both answers `No` where the old
+  engine could answer `Yes` and creates none of the cache entries a recompute would. It is safe
+  because no rule consuming a relation result is antitone, so it can only add or preserve
+  diagnostics. A reason-carrying recompute of a cached `false` is **clamped** to that `false`, so
+  the two modes never disagree and the engine never contradicts its own cache. Helpers **inherit**
+  `self.want_reason`; opting out is per-call-site and must be justified by the caller discarding the
+  reason, never by convenience. A verdict that depended on an in-flight *ancestor* assumption is
+  provisional and must not be committed. Poison, an exhausted planner/evaluator budget or cycle, or any other
   taint promotes **none** of the pending evaluator, projection, or relation-cache writes. A
   regression here causes order-dependent dropped errors — the sharpest bug class in the project.
 - **Type store** (`src/types/`): every type is a hash-consed `TypeId`; structural equality is `==`.
