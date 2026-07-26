@@ -17,7 +17,6 @@ use super::library_reporting::LibraryReportingConsumer;
 use super::library_reporting::LibraryReportingFamily;
 #[cfg(test)]
 use super::library_reporting::LibraryReportingReceipt;
-use super::library_snapshot_codec::{collect_root_rows, RootNameRow};
 #[cfg(test)]
 use super::namespace_values::NamespaceValueRegistry;
 use super::namespace_values::{
@@ -62,6 +61,9 @@ use crate::binder::namespace::{
     ExportSyntaxDisposition, ModuleBindingContext, NamespaceId, SourceFileKind,
 };
 use crate::binder::scope::ScopeId;
+use crate::binder::snapshot::{
+    collect_root_rows, source_binder_checkpoint_digests, RootNameRow, SourceBinderCheckpointDigests,
+};
 #[cfg(test)]
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
@@ -3890,11 +3892,11 @@ pub(crate) fn compile_library_binder_checkpoint(
             module_scopes,
             ..
         } = frontend;
-        let super::library_snapshot_codec::SourceBinderCheckpointDigests {
+        let SourceBinderCheckpointDigests {
             binder: source_binder_encoding_sha256,
             roots: source_root_encoding_sha256,
             retained_scope_maps: retained_scope_maps_sha256,
-        } = super::library_snapshot_codec::source_binder_checkpoint_digests(&binder)
+        } = source_binder_checkpoint_digests(&binder)
             .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?;
         let library_units = canonical
             .iter()
@@ -4837,11 +4839,25 @@ impl ReleaseOutcomeLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::checker::library_snapshot_codec::profile::load_strict_profile;
     use crate::check::checker::type_groups::PublishedTypeGroup;
     use crate::driver::check_source;
+    use crate::library::profile::ExactLibraryProfile;
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
+
+    /// Borrows the packaged 82-file profile as injected sources, the shape the compiler consumes.
+    fn injected_packaged_sources(profile: &ExactLibraryProfile) -> Vec<InjectedLibrarySource<'_>> {
+        profile
+            .sources()
+            .iter()
+            .map(|source| InjectedLibrarySource {
+                file_ordinal: source.ordinal(),
+                name: source.name(),
+                source: std::str::from_utf8(source.bytes())
+                    .expect("packaged library sources are UTF-8"),
+            })
+            .collect()
+    }
 
     const TINY_SOURCE: &str = "export const typokatLibraryProbe: number = 1;\n";
     const SNAPSHOT_SEMANTIC_LIBRARY: &str = r#"
@@ -6454,8 +6470,8 @@ mod tests {
         ignore = "full-profile reservation closure is release-only"
     )]
     fn exact_profile_interner_has_no_pending_reservations() {
-        let profile = load_strict_profile().expect("strict full-library profile");
-        let (_, state) = compile_owned_injected_profile(&profile.injected_sources())
+        let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
+        let (_, state) = compile_owned_injected_profile(&injected_packaged_sources(&profile))
             .expect("source-compiled full-library profile");
         state
             .interner
@@ -6469,8 +6485,8 @@ mod tests {
         ignore = "full-profile replay-index generation is release-only"
     )]
     fn exact_profile_replay_index_is_complete_and_deterministic() {
-        let profile = load_strict_profile().expect("strict full-library profile");
-        let injected = profile.injected_sources();
+        let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
+        let injected = injected_packaged_sources(&profile);
         let started = Instant::now();
         let (_, first_state) =
             compile_owned_injected_profile(&injected).expect("first exact replay index generation");
@@ -6856,8 +6872,8 @@ mod tests {
         ignore = "full-profile semantic selection is release-only"
     )]
     fn exact_profile_selects_complete_native_bridge_identities() {
-        let profile = load_strict_profile().expect("strict full-library profile");
-        let run = run_injected_profile(&profile.injected_sources())
+        let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
+        let run = run_injected_profile(&injected_packaged_sources(&profile))
             .expect("source-compiled full-library profile");
         let identities = run.semantic_identities();
         assert!(identities.all_ready());
@@ -6949,9 +6965,10 @@ mod tests {
 
         let total_started = Instant::now();
         let registry_started = Instant::now();
-        let profile = load_strict_profile().expect("strict library registry validation");
+        let profile =
+            ExactLibraryProfile::load_packaged().expect("packaged library registry validation");
         let registry_validation = registry_started.elapsed();
-        let injected = profile.injected_sources();
+        let injected = injected_packaged_sources(&profile);
         let run = run_injected_profile(&injected).expect("exact library profile execution");
 
         assert_eq!(run.phase_counts.parse_units, 82);
@@ -7833,9 +7850,10 @@ const inheritedBad: number = local.elementMarker;
     )]
     fn exact_full_profile_owned_base_checks_caller_certified_collision_free_suffix_fast_clean_and_create_element(
     ) {
-        let profile = load_strict_profile().expect("exact pinned full profile");
-        let (compiled, state) = compile_owned_injected_profile(&profile.injected_sources())
-            .expect("exact source-compiled owned library");
+        let profile = ExactLibraryProfile::load_packaged().expect("exact pinned full profile");
+        let (compiled, state) =
+            compile_owned_injected_profile(&injected_packaged_sources(&profile))
+                .expect("exact source-compiled owned library");
         eprintln!(
             "owned-base compile timings: parse={:?} bind={:?} reserve_fill={:?} publication={:?} statements={:?} total={:?}",
             compiled.phase_timings.parse,
@@ -7856,7 +7874,7 @@ const inheritedBad: number = local.elementMarker;
             run.timings.parse, run.timings.bind, run.timings.check
         );
 
-        let (_, state) = compile_owned_injected_profile(&profile.injected_sources())
+        let (_, state) = compile_owned_injected_profile(&injected_packaged_sources(&profile))
             .expect("second exact source-compiled owned library");
         let focused = check_caller_certified_collision_free_source_with_owned_library(
             state,

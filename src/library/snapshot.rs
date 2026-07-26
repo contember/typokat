@@ -173,10 +173,10 @@ pub(super) fn map_snapshot_error(error: SnapshotError) -> LibraryInitError {
             SnapshotErrorStage::CollisionReplayIndexAdmission => {
                 LibraryInitStage::CollisionReplayIndexAdmission
             }
-            SnapshotErrorStage::Generation => LibraryInitStage::Decode,
             #[cfg(test)]
             SnapshotErrorStage::UnsupportedStrategy
             | SnapshotErrorStage::Io
+            | SnapshotErrorStage::Generation
             | SnapshotErrorStage::UserCheck => LibraryInitStage::Decode,
         },
     };

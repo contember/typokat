@@ -40,11 +40,13 @@ use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
 #[cfg(test)]
 use crate::binder::snapshot::decode_binder_snapshot;
-use crate::binder::snapshot::encode_binder_snapshot;
+use crate::binder::snapshot::{collect_root_rows, RootNameRow};
 use crate::binder::snapshot::{
     decode_binder_snapshot_with_evidence, snapshot_reference_records,
     RetainedScopeMapSnapshotEvidence,
 };
+#[cfg(test)]
+use crate::binder::snapshot::{encode_binder_snapshot, encode_root_index};
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::class_semantics::{
@@ -53,6 +55,7 @@ use crate::class_semantics::{
 #[cfg(test)]
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::library::artifact::AdmittedCanonicalSnapshot;
+#[cfg(test)]
 use crate::snapshot_codec::SnapshotWriter;
 use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::types::repr::{ClassId, TypeParamId, Visibility};
@@ -173,6 +176,7 @@ fn codec(stage: SnapshotErrorStage, error: SnapshotCodecError) -> SnapshotError 
     invalid(stage, error.to_string())
 }
 
+#[cfg(test)]
 fn digest32(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
@@ -228,6 +232,7 @@ pub(crate) enum SnapshotErrorStage {
     UnsupportedStrategy,
     #[cfg(test)]
     Io,
+    #[cfg(test)]
     Generation,
     #[cfg(test)]
     UserCheck,
@@ -479,15 +484,6 @@ impl CompiledSnapshotForTest {
     pub(in crate::check::checker) fn identity_witness(&self) -> &IdentityWitnessForTest {
         &self.identity
     }
-}
-
-#[derive(Clone)]
-pub(in crate::check::checker) struct RootNameRow {
-    pub(in crate::check::checker) name: String,
-    pub(in crate::check::checker) symbol: Option<SymbolId>,
-    pub(in crate::check::checker) value: Option<ValueStorageId>,
-    pub(in crate::check::checker) ty: Option<TypeGroupId>,
-    pub(in crate::check::checker) namespace: Option<NamespaceId>,
 }
 
 #[derive(Clone, Debug)]
@@ -747,10 +743,6 @@ fn read_optional_u32(reader: &mut SnapshotReader<'_>) -> Result<Option<u32>, Sna
             "invalid optional-u32 tag",
         )),
     }
-}
-
-fn write_root_optional_u32(writer: &mut SnapshotWriter, value: Option<u32>) {
-    writer.u32(value.unwrap_or(ABSENT_ID));
 }
 
 fn read_root_optional_u32(
@@ -3179,84 +3171,6 @@ fn verify_reference_manifest_streaming(
     Ok(())
 }
 
-pub(in crate::check::checker) fn collect_root_rows(
-    binder: &Binder,
-) -> Result<Vec<RootNameRow>, SnapshotError> {
-    let scope = binder.graph.get(binder.compilation_global).ok_or_else(|| {
-        invalid(
-            SnapshotErrorStage::ReferenceValidation,
-            "missing compilation-global scope",
-        )
-    })?;
-    let mut rows = scope
-        .symbols
-        .iter()
-        .map(|(name, symbol)| {
-            let record = binder.symbols.get(*symbol).ok_or_else(|| {
-                invalid(
-                    SnapshotErrorStage::ReferenceValidation,
-                    "global symbol id is missing",
-                )
-            })?;
-            Ok(RootNameRow {
-                name: name.clone(),
-                symbol: Some(*symbol),
-                value: record.value,
-                ty: record.ty,
-                namespace: record.ns,
-            })
-        })
-        .collect::<Result<Vec<_>, SnapshotError>>()?;
-    rows.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(rows)
-}
-
-fn encode_root_index(rows: &[RootNameRow]) -> Result<Vec<u8>, SnapshotError> {
-    let mut writer = SnapshotWriter::new();
-    writer.u32(1);
-    writer
-        .usize(rows.len())
-        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
-    for row in rows {
-        let name_len = u32::try_from(row.name.len())
-            .map_err(|_| invalid(SnapshotErrorStage::Generation, "root name exceeds u32"))?;
-        writer.u32(name_len);
-        writer.raw(row.name.as_bytes());
-        let mask = u8::from(row.symbol.is_some())
-            | (u8::from(row.value.is_some()) << 1)
-            | (u8::from(row.ty.is_some()) << 2)
-            | (u8::from(row.namespace.is_some()) << 3);
-        writer.u8(mask);
-        write_root_optional_u32(&mut writer, row.symbol.map(|id| id.0));
-        write_root_optional_u32(&mut writer, row.value.map(|id| id.0));
-        write_root_optional_u32(&mut writer, row.ty.map(|id| id.0));
-        write_root_optional_u32(&mut writer, row.namespace.map(|id| id.0));
-    }
-    Ok(writer.into_bytes())
-}
-
-pub(crate) struct SourceBinderCheckpointDigests {
-    pub(crate) binder: [u8; 32],
-    pub(crate) roots: [u8; 32],
-    pub(crate) retained_scope_maps: [u8; 32],
-}
-
-pub(crate) fn source_binder_checkpoint_digests(
-    binder: &Binder,
-) -> Result<SourceBinderCheckpointDigests, SnapshotError> {
-    let binder_bytes = encode_binder_snapshot(binder)
-        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
-    let roots = collect_root_rows(binder)?;
-    let root_bytes = encode_root_index(&roots)?;
-    let retained_scope_maps = crate::binder::snapshot::encode_retained_scope_maps(binder)
-        .map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
-    Ok(SourceBinderCheckpointDigests {
-        binder: digest32(&binder_bytes),
-        roots: digest32(&root_bytes),
-        retained_scope_maps: digest32(&retained_scope_maps),
-    })
-}
-
 fn decode_root_index(bytes: &[u8], next: &NextIds) -> Result<Vec<RootNameRow>, SnapshotError> {
     let mut reader = SnapshotReader::new(bytes);
     if reader
@@ -3845,7 +3759,11 @@ fn checker_projection_subtables(
             semantic_identities.as_ref().map_or(0, |_| 8),
             semantic_bytes,
         ),
-        (count64(roots.len()), encode_root_index(roots)?),
+        (
+            count64(roots.len()),
+            encode_root_index(roots)
+                .map_err(|error| codec(SnapshotErrorStage::Generation, error))?,
+        ),
         (1, encode_next_ids(next, source_file_count)),
     ])
 }
@@ -4153,7 +4071,8 @@ fn encode_snapshot_inputs(
         value_storages: usize::try_from(parts.binder.decl_count)
             .expect("storage prefix fits usize"),
     };
-    let roots = collect_root_rows(parts.binder)?;
+    let roots = collect_root_rows(parts.binder)
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let identity = identity_witness(&roots, parts.published_types);
     let (store_references, interner_references) = parts
         .interner
@@ -4194,7 +4113,8 @@ fn encode_snapshot_inputs(
     let published = encode_published(parts.published_types)?;
     let namespace_terminals = encode_namespace_terminals(&parts.runtime.namespace_terminals)?;
     let class_metadata = encode_class_metadata(parts.runtime)?;
-    let root_index = encode_root_index(&roots)?;
+    let root_index =
+        encode_root_index(&roots).map_err(|error| codec(SnapshotErrorStage::Generation, error))?;
     let next_ids = encode_next_ids(&next, parts.source_file_count);
     let subtables = projection_subtables(ProjectionSubtableInputs {
         interner: parts.interner,
@@ -4692,7 +4612,7 @@ pub(in crate::check::checker) fn decode_snapshot_for_test(
     }
     let roots = decode_root_index(section(&validated, 9)?, &next)?;
     let canonical_roots = collect_root_rows(&binder)
-        .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     if roots
         .iter()
         .map(|row| (&row.name, row.symbol, row.value, row.ty, row.namespace))
@@ -4942,7 +4862,7 @@ fn decode_canonical_snapshot_with_evidence(
     )?;
     let roots = decode_root_index(section(&validated, 9)?, &next)?;
     let canonical_roots = collect_root_rows(&binder)
-        .map_err(|error| invalid(SnapshotErrorStage::ReferenceValidation, error.message))?;
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     if roots
         .iter()
         .map(|row| (&row.name, row.symbol, row.value, row.ty, row.namespace))
@@ -5332,7 +5252,8 @@ pub(crate) fn validate_runtime_references(
         .borrowed_snapshot_parts()
         .map_err(|message| invalid(SnapshotErrorStage::Publication, message))?;
     let next = next_ids_from_borrowed_parts(&parts)?;
-    let roots = collect_root_rows(parts.binder)?;
+    let roots = collect_root_rows(parts.binder)
+        .map_err(|error| codec(SnapshotErrorStage::ReferenceValidation, error))?;
     let (store_references, interner_references) = parts
         .interner
         .snapshot_reference_records()
