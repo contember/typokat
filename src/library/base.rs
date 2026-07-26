@@ -10,7 +10,6 @@ use crate::check::checker::library_compiler::{
 };
 #[cfg(test)]
 use crate::check::checker::replay_index::AdmittedCollisionReplayIndex;
-use crate::check::checker::replay_index::COLLISION_REPLAY_MANIFEST_SHA256;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -77,7 +76,6 @@ pub(super) struct FrozenBaseWitnessForTest {
     pub(super) prefixes: FrozenLibraryPrefixes,
     pub(super) type_count: usize,
     pub(super) root_names: usize,
-    pub(super) replay_manifest_sha256: [u8; 32],
     pub(super) reference_records: [usize; 3],
 }
 
@@ -111,6 +109,24 @@ impl std::ops::Deref for LibraryBinderContinuationReceiptForTest {
     fn deref(&self) -> &Self::Target {
         &self.continuation
     }
+}
+
+/// The collision replay index a private run assembles for the packaged profile.
+///
+/// The shared base defers assembly (ADR-0017), so the suite stands in for the first collision:
+/// it compiles the profile once with assembly on and shares the result.
+#[cfg(test)]
+pub(super) fn deferred_packaged_replay_index_for_test() -> &'static AdmittedCollisionReplayIndex {
+    static INDEX: std::sync::LazyLock<AdmittedCollisionReplayIndex> =
+        std::sync::LazyLock::new(|| {
+            let profile = super::profile::ExactLibraryProfile::load_packaged()
+                .expect("packaged library profile");
+            let compiled = super::compiler::LibraryCompiler::new()
+                .compile(&profile)
+                .expect("source-compiled library with its collision replay index");
+            compiled.replay_index_for_test().clone()
+        });
+    &INDEX
 }
 
 #[cfg(test)]
@@ -529,10 +545,11 @@ impl FrozenLibraryBase {
         let compiler_scope = super::compiler::LibraryCompilerWorkScopeForTest::start();
         let profile = super::profile::ExactLibraryProfile::load_packaged()
             .map_err(|error| error.to_string())?;
-        let compiled = super::compiler::LibraryCompiler::new()
-            .compile(&profile)
+        // A private collision run seeds a fresh universe the same way the shared base is built,
+        // so calibrate against that route rather than the replay-assembling full product.
+        let runtime = super::compiler::compile_owned_library_runtime(&profile)
             .map_err(|error| error.to_string())?;
-        drop(compiled);
+        drop(runtime);
         let compiler_work = compiler_scope.finish();
         Ok(CollisionPreflightWorkForTest {
             delta_forks,
@@ -656,7 +673,9 @@ impl FrozenLibraryBase {
     /// Compile the pinned packaged profile from source.
     ///
     /// Source compilation is the only route to a default-library base; there is no
-    /// precomputed artifact to admit.
+    /// precomputed artifact to admit. The compiled runtime carries no collision replay index:
+    /// nothing outside a collision reads one, and a private collision run re-compiles the
+    /// profile from source anyway (ADR-0013, ADR-0017).
     pub(super) fn compile_packaged_profile() -> Result<CompiledLibraryBase, LibraryInitError> {
         let profile = super::profile::ExactLibraryProfile::load_packaged().map_err(|error| {
             LibraryInitError::new(
@@ -696,19 +715,6 @@ impl FrozenLibraryBase {
                 },
             )
         };
-        let manifest_sha256 = runtime
-            .replay_index()
-            .ok_or_else(|| incomplete("compiled library retains no collision replay index"))?
-            .canonical_manifest_sha256;
-        if manifest_sha256 != COLLISION_REPLAY_MANIFEST_SHA256 {
-            return Err(LibraryInitError::new(
-                LibraryInitStage::CollisionReplayIndexAdmission,
-                LibraryInitCause::ReplayIndexRejected {
-                    violation:
-                        super::provider::CollisionReplayIndexViolation::ManifestIdentityMismatch,
-                },
-            ));
-        }
         let root_names = runtime.library_root_names().map_err(incomplete)?;
         let prefixes = runtime.library_prefixes().map_err(incomplete)?;
         runtime.freeze_as_library_base().map_err(incomplete)?;
@@ -735,18 +741,6 @@ impl FrozenLibraryBase {
     #[cfg(test)]
     pub(super) const fn identity(&self) -> &FrozenLibraryIdentity {
         &self.identity
-    }
-
-    #[cfg(test)]
-    pub(super) fn replay_index_for_test(&self) -> &AdmittedCollisionReplayIndex {
-        self.runtime
-            .replay_index()
-            .expect("frozen base retains its collision replay index")
-    }
-
-    #[cfg(test)]
-    pub(super) const fn pinned_replay_manifest_sha256_for_test(&self) -> [u8; 32] {
-        COLLISION_REPLAY_MANIFEST_SHA256
     }
 
     #[cfg(test)]
@@ -778,7 +772,6 @@ impl FrozenLibraryBase {
             prefixes: self.prefixes.clone(),
             type_count: self.runtime.type_count(),
             root_names: self.root_names.len(),
-            replay_manifest_sha256: self.replay_index_for_test().canonical_manifest_sha256,
             reference_records: self.runtime.reference_record_counts_for_test(),
         }
     }

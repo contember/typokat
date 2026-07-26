@@ -10,29 +10,14 @@ use std::time::Instant;
 pub enum LibraryInitStage {
     ProfileLoad,
     Compile,
-    CollisionReplayIndexAdmission,
     Publication,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CollisionReplayIndexViolation {
-    ManifestIdentityMismatch,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LibraryInitCause {
-    ProfileRejected {
-        message: String,
-    },
-    CompilationFailed {
-        message: String,
-    },
-    IncompletePublication {
-        message: String,
-    },
-    ReplayIndexRejected {
-        violation: CollisionReplayIndexViolation,
-    },
+    ProfileRejected { message: String },
+    CompilationFailed { message: String },
+    IncompletePublication { message: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,8 +188,8 @@ impl LibraryBaseProvider {
         let checkpoint = super::compiler::LibraryCompiler::new()
             .compile_binder_checkpoint(&profile)
             .map_err(|error| compilation_failed(error.to_string()))?;
-        let initialized = self.initialized().map_err(|error| error.as_ref().clone())?;
-        let base = &initialized.base;
+        // The shared base must be published before the checkpoint continues through it.
+        self.initialized().map_err(|error| error.as_ref().clone())?;
         let inspection = checkpoint.inspection_for_test();
         let checkpoint_ends = inspection.ends;
         let array_symbol = inspection.array_symbol;
@@ -214,7 +199,10 @@ impl LibraryBaseProvider {
             .iter()
             .map(|unit| unit.module)
             .collect::<Vec<_>>();
-        inspect(&inspection, base.replay_index_for_test());
+        inspect(
+            &inspection,
+            super::base::deferred_packaged_replay_index_for_test(),
+        );
         let compiler_inputs = inputs
             .iter()
             .map(|input| crate::driver::FileInput {
@@ -234,8 +222,7 @@ impl LibraryBaseProvider {
             bound,
         )
         .map_err(compilation_failed)?;
-        let mapped_owner_sites = base
-            .replay_index_for_test()
+        let mapped_owner_sites = super::base::deferred_packaged_replay_index_for_test()
             .owner_sites
             .iter()
             .map(|site| super::base::MappedReplayOwnerSiteForTest {

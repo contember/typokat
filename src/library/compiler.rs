@@ -3,8 +3,9 @@
 use super::profile::{ExactLibraryProfile, ExactLibrarySource};
 use crate::binder::bind::LibraryBinderCheckpoint;
 use crate::check::checker::library_compiler::{
-    compile_owned_injected_profile, freeze_library_runtime_product, CompiledLibraryRuntimeProduct,
-    InjectedLibrarySource, OwnedLibraryRuntimeState,
+    compile_owned_injected_base_profile, compile_owned_injected_profile,
+    freeze_library_runtime_product, CompiledLibraryRuntimeProduct, InjectedLibrarySource,
+    OwnedLibraryRuntimeState,
 };
 use crate::source::LibraryFileOrdinal;
 use sha2::{Digest, Sha256};
@@ -73,101 +74,13 @@ pub struct LibraryCompilationReport {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EvidenceComponent {
-    record_count: usize,
-    byte_len: usize,
-    sha256: String,
-}
-
-impl EvidenceComponent {
-    pub const fn record_count(&self) -> usize {
-        self.record_count
-    }
-
-    pub const fn byte_len(&self) -> usize {
-        self.byte_len
-    }
-
-    pub fn sha256(&self) -> &str {
-        &self.sha256
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LibrarySourceIdentity {
-    ordinal: LibraryFileOrdinal,
-    name: String,
-    sha256: String,
-    library_owned: bool,
-}
-
-impl LibrarySourceIdentity {
-    pub const fn ordinal(&self) -> LibraryFileOrdinal {
-        self.ordinal
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn sha256(&self) -> &str {
-        &self.sha256
-    }
-
-    pub const fn is_library_owned(&self) -> bool {
-        self.library_owned
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LibraryEvidence {
-    profile_identity: String,
-    diagnostics: EvidenceComponent,
-    incompletes: EvidenceComponent,
-    library_ledger: EvidenceComponent,
-    source_identities: Vec<LibrarySourceIdentity>,
-    semantic_identity: String,
-}
-
-impl LibraryEvidence {
-    pub fn profile_identity(&self) -> &str {
-        &self.profile_identity
-    }
-
-    pub const fn diagnostics(&self) -> &EvidenceComponent {
-        &self.diagnostics
-    }
-
-    pub const fn incompletes(&self) -> &EvidenceComponent {
-        &self.incompletes
-    }
-
-    pub const fn library_ledger(&self) -> &EvidenceComponent {
-        &self.library_ledger
-    }
-
-    pub fn source_identities(&self) -> &[LibrarySourceIdentity] {
-        &self.source_identities
-    }
-
-    pub fn semantic_identity(&self) -> &str {
-        &self.semantic_identity
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibrarySemanticIdentity {
     runtime_projection: String,
-    evidence: String,
 }
 
 impl LibrarySemanticIdentity {
     pub fn runtime_projection(&self) -> &str {
         &self.runtime_projection
-    }
-
-    pub fn evidence(&self) -> &str {
-        &self.evidence
     }
 }
 
@@ -195,7 +108,6 @@ impl LibraryRuntimeProjection {
 pub struct CompiledLibrary {
     profile_identity: String,
     report: LibraryCompilationReport,
-    evidence: LibraryEvidence,
     runtime_projection: LibraryRuntimeProjection,
     semantic_identity: LibrarySemanticIdentity,
 }
@@ -207,10 +119,6 @@ impl CompiledLibrary {
 
     pub const fn report(&self) -> &LibraryCompilationReport {
         &self.report
-    }
-
-    pub const fn evidence(&self) -> &LibraryEvidence {
-        &self.evidence
     }
 
     pub const fn runtime_projection(&self) -> &LibraryRuntimeProjection {
@@ -330,35 +238,6 @@ impl LibraryCompiler {
             }
         })?;
 
-        let diagnostics = component_identity(
-            &run.evidence.diagnostics,
-            run.library_records
-                .iter()
-                .filter(|(_, record)| record.is_diagnostic())
-                .count(),
-        );
-        let incompletes = component_identity(
-            &run.evidence.incompletes,
-            run.library_records.len() - diagnostics.record_count,
-        );
-        let library_ledger = component_identity(&run.evidence.ledger, run.library_records.len());
-        let source_identities = owned_sources
-            .iter()
-            .map(|(ordinal, name, source)| LibrarySourceIdentity {
-                ordinal: *ordinal,
-                name: name.clone(),
-                sha256: digest(source),
-                library_owned: true,
-            })
-            .collect::<Vec<_>>();
-        let evidence_identity = aggregate_identity(
-            b"typokat-library-evidence-v1",
-            [
-                diagnostics.sha256.as_str(),
-                incompletes.sha256.as_str(),
-                library_ledger.sha256.as_str(),
-            ],
-        );
         let runtime_identity = aggregate_identity(
             b"typokat-library-runtime-v1",
             [profile_identity, COMPILER_SCHEMA_SHA256],
@@ -371,22 +250,12 @@ impl LibraryCompiler {
             filled_records: run.phase_counts.filled_records,
             publication_validations: run.phase_counts.publication_validations,
         };
-        let evidence = LibraryEvidence {
-            profile_identity: profile_identity.to_owned(),
-            diagnostics,
-            incompletes,
-            library_ledger,
-            source_identities,
-            semantic_identity: evidence_identity.clone(),
-        };
         let semantic_identity = LibrarySemanticIdentity {
             runtime_projection: runtime_identity.clone(),
-            evidence: evidence_identity,
         };
         Ok(CompiledLibrary {
             profile_identity: profile_identity.to_owned(),
             report,
-            evidence,
             runtime_projection: LibraryRuntimeProjection {
                 semantic_identity: runtime_identity,
                 _runtime: runtime,
@@ -399,7 +268,7 @@ impl LibraryCompiler {
 /// Compile a profile straight into the owned runtime state the frozen base is sealed from.
 ///
 /// This is the production route to a default-library base: no artifact is admitted, and the
-/// evidence projection `compile` builds is deliberately skipped.
+/// collision replay index `compile` assembles is deferred to the run that collides (ADR-0017).
 pub(crate) fn compile_owned_library_runtime(
     profile: &ExactLibraryProfile,
 ) -> Result<OwnedLibraryRuntimeState, LibraryCompilerError> {
@@ -413,7 +282,7 @@ pub(crate) fn compile_owned_library_runtime(
     }
     let owned_sources = owned_library_sources(profile.sources())?;
     let injected = injected_library_sources(&owned_sources);
-    let (run, runtime) = compile_owned_injected_profile(&injected).map_err(|error| {
+    let (run, runtime) = compile_owned_injected_base_profile(&injected).map_err(|error| {
         LibraryCompilerError::Compilation {
             message: format!("{error:?}"),
         }
@@ -474,18 +343,6 @@ fn record_phase_counts(counts: &crate::check::checker::library_compiler::Library
     );
 }
 
-fn component_identity(bytes: &[u8], record_count: usize) -> EvidenceComponent {
-    EvidenceComponent {
-        record_count,
-        byte_len: bytes.len(),
-        sha256: digest(bytes),
-    }
-}
-
-fn digest(bytes: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Sha256::digest(bytes.as_ref()))
-}
-
 fn aggregate_identity<'identity>(
     domain: &[u8],
     identities: impl IntoIterator<Item = &'identity str>,
@@ -506,14 +363,21 @@ fn aggregate_identity<'identity>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::checker::library_compiler::{
+        canonical_library_evidence_for_test, run_injected_profile,
+    };
 
     fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}
 
     const PROFILE_IDENTITY: &str =
         "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 
+    fn digest(bytes: impl AsRef<[u8]>) -> String {
+        format!("{:x}", Sha256::digest(bytes.as_ref()))
+    }
+
     #[test]
-    fn library_compiler_separates_runtime_product_from_evidence() {
+    fn library_compiler_produces_one_frozen_runtime_product() {
         let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
         let compiled = LibraryCompiler::new()
             .compile(&profile)
@@ -527,38 +391,49 @@ mod tests {
         assert_eq!(compiled.report().reserved_records, 42_496);
         assert_eq!(compiled.report().filled_records, 42_496);
         assert_eq!(compiled.report().publication_validations, 2_099);
-        assert_eq!(compiled.evidence().diagnostics().record_count(), 265);
-        assert_eq!(compiled.evidence().diagnostics().byte_len(), 125_251);
-        assert_eq!(
-            compiled.evidence().diagnostics().sha256(),
-            "79ef18a2496c296b380e3d37dd71e589ad036614ce2fe0f9b49073cc3bf5d427"
-        );
-        assert_eq!(compiled.evidence().incompletes().record_count(), 610);
-        assert_eq!(compiled.evidence().incompletes().byte_len(), 97_796);
-        assert_eq!(
-            compiled.evidence().incompletes().sha256(),
-            "8c268088f8afd8048690584008c40a49cd3337b91f345b2e879d625525ccf6d8"
-        );
-        assert_eq!(compiled.evidence().library_ledger().record_count(), 875);
-        assert_eq!(compiled.evidence().library_ledger().byte_len(), 223_016);
-        assert_eq!(
-            compiled.evidence().library_ledger().sha256(),
-            "33204da8512a79ba77cc647f1f5641c91726e4a6aaa7b7a394d0851e5f7bd31c"
-        );
-        assert_eq!(compiled.evidence().source_identities().len(), 82);
-        assert!(compiled
-            .evidence()
-            .source_identities()
-            .iter()
-            .all(|source| source.is_library_owned()));
         assert_eq!(
             compiled.semantic_identity().runtime_projection(),
             compiled.runtime_projection().semantic_identity()
         );
+    }
+
+    /// The canonical evidence projection is a suite assertion, not compile work (ADR-0017).
+    ///
+    /// It still pins the library's own records byte-for-byte: the blobs are rendered here from
+    /// the same records the base carries, so a drift in any diagnostic or incomplete outcome
+    /// moves a digest below.
+    #[test]
+    fn library_records_project_to_their_pinned_canonical_evidence() {
+        let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
+        let owned_sources = owned_library_sources(profile.sources()).expect("UTF-8 sources");
+        let injected = injected_library_sources(&owned_sources);
+        let run = run_injected_profile(&injected).expect("source-backed library compilation");
+        let evidence = canonical_library_evidence_for_test(&injected, &run.library_records)
+            .expect("canonical evidence projection");
+
+        let diagnostic_count = run
+            .library_records
+            .iter()
+            .filter(|(_, record)| record.is_diagnostic())
+            .count();
+        assert_eq!(diagnostic_count, 265);
+        assert_eq!(evidence.diagnostics.len(), 125_251);
         assert_eq!(
-            compiled.semantic_identity().evidence(),
-            compiled.evidence().semantic_identity()
+            digest(&evidence.diagnostics),
+            "79ef18a2496c296b380e3d37dd71e589ad036614ce2fe0f9b49073cc3bf5d427"
         );
-        assert_eq!(compiled.evidence().profile_identity(), PROFILE_IDENTITY);
+        assert_eq!(run.library_records.len() - diagnostic_count, 610);
+        assert_eq!(evidence.incompletes.len(), 97_796);
+        assert_eq!(
+            digest(&evidence.incompletes),
+            "8c268088f8afd8048690584008c40a49cd3337b91f345b2e879d625525ccf6d8"
+        );
+        assert_eq!(run.library_records.len(), 875);
+        assert_eq!(evidence.ledger.len(), 223_016);
+        assert_eq!(
+            digest(&evidence.ledger),
+            "33204da8512a79ba77cc647f1f5641c91726e4a6aaa7b7a394d0851e5f7bd31c"
+        );
+        assert_eq!(owned_sources.len(), 82);
     }
 }

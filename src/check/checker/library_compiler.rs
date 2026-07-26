@@ -930,6 +930,7 @@ impl OwnedLibraryRuntimeState {
         Ok(parts)
     }
 
+    #[cfg(test)]
     pub(crate) fn replay_index(&self) -> Option<&AdmittedCollisionReplayIndex> {
         self.replay_index.as_deref()
     }
@@ -1724,8 +1725,8 @@ pub(crate) struct InjectedProfileRun {
     pub(crate) reserved_file_ordinals: Vec<LibraryFileOrdinal>,
     #[cfg(test)]
     pub(crate) reporting_receipts: Vec<LibraryReportingReceipt>,
+    #[cfg(test)]
     pub(crate) library_records: Vec<(LibraryEventKey, CheckerRecord)>,
-    pub(crate) evidence: CanonicalLibraryEvidence,
     #[cfg(test)]
     pub(crate) pass_source_units: Vec<ExactUnit>,
     #[cfg(test)]
@@ -1740,6 +1741,12 @@ pub(crate) struct InjectedProfileRun {
     semantic_identities: LibrarySemanticIdentities,
 }
 
+/// The canonical byte projection of the library's own records.
+///
+/// This is artifact identity, not semantic output: the records themselves are what
+/// ADR-0011 requires be preserved exactly, and they reach the base untouched. Nothing in a
+/// compile reads these blobs, so the suite — not every process — projects them (ADR-0017).
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CanonicalLibraryEvidence {
     pub(crate) diagnostics: Vec<u8>,
@@ -2238,6 +2245,7 @@ fn canonical_input_for_record(
         })
 }
 
+#[cfg(test)]
 fn encode_library_key(
     bytes: &mut CanonicalBytes,
     key: LibraryEventKey,
@@ -2281,8 +2289,13 @@ fn canonical_record_bytes(
     Ok(bytes.finish())
 }
 
-fn canonical_library_evidence(
-    canonical: &[CanonicalInput<'_>],
+/// Project the library's records onto their canonical byte blobs.
+///
+/// Test-only by construction: the blobs pinned the retired artifact's sections and no compile
+/// reads them, so the projection is a suite assertion rather than startup work (ADR-0017).
+#[cfg(test)]
+pub(crate) fn canonical_library_evidence_for_test(
+    sources: &[InjectedLibrarySource<'_>],
     records: &[(LibraryEventKey, CheckerRecord)],
 ) -> Result<CanonicalLibraryEvidence, InjectedProfileError> {
     let mut diagnostics = CanonicalBytes::domain(b"typokat-wu0d-diagnostics-v1");
@@ -2296,8 +2309,16 @@ fn canonical_library_evidence(
     incompletes.usize(records.len() - diagnostic_count)?;
     ledger.usize(records.len())?;
     for (key, record) in records {
-        let input = canonical_input_for_record(canonical, key.file_ordinal)?;
-        let record_bytes = canonical_record_bytes(canonical[input].source, record)?;
+        let source = sources
+            .iter()
+            .find(|source| source.file_ordinal == key.file_ordinal)
+            .ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "library record has no canonical source".to_owned(),
+                )
+            })?
+            .source;
+        let record_bytes = canonical_record_bytes(source, record)?;
         encode_library_key(&mut ledger, *key)?;
         ledger.bytes(&record_bytes)?;
         let component = match record {
@@ -2728,11 +2749,24 @@ fn require_terminal_class_dependency_closure(
     }
 }
 
+/// Validate the terminal runtime state the base publishes, and — when a replay trace is present
+/// — collect the terminal dependency closure a collision replay index needs.
+///
+/// The validating half is not about the index. It checks the published class registry is
+/// terminal, that every class name and named-function symbol the frozen runtime carries has an
+/// owner, and that the library's semantic identities survive an exact recomputation — all of it
+/// state the base itself publishes. That half runs on every compile. Only the dependency-edge
+/// collection is conditional on assembling an index, so the two paths cannot drift apart.
 fn validate_terminal_class_dependencies(
-    trace: &ReplayDependencyTrace,
+    trace: Option<&ReplayDependencyTrace>,
     interner: &Interner,
     inputs: ReplayTerminalValidationInputs<'_>,
 ) -> Result<(), InjectedProfileError> {
+    let require_dependency = |consumer: ReplayOwner, dependency: ReplayOwner| {
+        if let Some(trace) = trace {
+            trace.require_dependency(consumer, dependency);
+        }
+    };
     let ReplayTerminalValidationInputs {
         binder,
         published,
@@ -2778,7 +2812,7 @@ fn validate_terminal_class_dependencies(
         match ready.surface {
             PublishedTypeGroupSurface::Template(ty) => direct.entry(owner).or_default().push(ty),
             PublishedTypeGroupSurface::Class(class) => {
-                trace.require_dependency(owner, ReplayOwner::Class(class));
+                require_dependency(owner, ReplayOwner::Class(class));
             }
         }
         direct
@@ -2816,7 +2850,7 @@ fn validate_terminal_class_dependencies(
             continue;
         };
         let owner = ReplayOwner::Namespace(row.namespace);
-        trace.require_dependency(owner, ReplayOwner::Value(storage));
+        require_dependency(owner, ReplayOwner::Value(storage));
         direct.entry(owner).or_default().push(ty);
     }
     let terminals = published.classes().canonical_terminals().ok_or_else(|| {
@@ -2844,25 +2878,25 @@ fn validate_terminal_class_dependencies(
         }
     }
     for (class, metadata) in &runtime.class_new_metadata {
-        trace.require_dependency(
+        require_dependency(
             ReplayOwner::Class(*class),
             ReplayOwner::Class(metadata.ctor_declaring_class),
         );
     }
     for (class, parent) in &runtime.class_parents {
-        trace.require_dependency(ReplayOwner::Class(*class), ReplayOwner::Class(*parent));
+        require_dependency(ReplayOwner::Class(*class), ReplayOwner::Class(*parent));
     }
     for (alias, target) in &runtime.class_value_aliases {
-        trace.require_dependency(ReplayOwner::Value(*alias), ReplayOwner::Value(*target));
+        require_dependency(ReplayOwner::Value(*alias), ReplayOwner::Value(*target));
     }
     for (storage, binding) in &runtime.class_value_bindings {
-        trace.require_dependency(
+        require_dependency(
             ReplayOwner::Value(*storage),
             ReplayOwner::Class(binding.class_id),
         );
     }
     for (alias, target) in &runtime.standalone_namespace_value_aliases {
-        trace.require_dependency(ReplayOwner::Value(*alias), ReplayOwner::Value(*target));
+        require_dependency(ReplayOwner::Value(*alias), ReplayOwner::Value(*target));
     }
     let class_ids = terminals
         .iter()
@@ -2889,7 +2923,7 @@ fn validate_terminal_class_dependencies(
             ));
         };
         for participant in &binding.function_values {
-            trace.require_dependency(
+            require_dependency(
                 ReplayOwner::Value(canonical),
                 ReplayOwner::Value(*participant),
             );
@@ -2915,14 +2949,16 @@ fn validate_terminal_class_dependencies(
         }
     }
 
-    require_terminal_class_dependency_closure(
-        trace,
-        &semantic_edges,
-        &class_edges,
-        direct,
-        #[cfg(test)]
-        None,
-    );
+    if let Some(trace) = trace {
+        require_terminal_class_dependency_closure(
+            trace,
+            &semantic_edges,
+            &class_edges,
+            direct,
+            #[cfg(test)]
+            None,
+        );
+    }
     Ok(())
 }
 
@@ -3321,7 +3357,7 @@ fn build_collision_replay_index(
         .collect::<Result<Vec<_>, _>>()?;
 
     validate_terminal_class_dependencies(
-        &trace,
+        Some(&trace),
         interner,
         ReplayTerminalValidationInputs {
             binder,
@@ -3509,14 +3545,44 @@ fn with_canonical_library_frontend<'source, Output>(
     })
 }
 
+/// Whether a compile assembles its collision replay index, or leaves it to the run that needs it.
+///
+/// Assembly is roughly four times the cost of the checking pipeline that produces the semantic
+/// state, and outside a collision nothing reads it. Per ADR-0013 (as narrowly superseded by
+/// ADR-0017) a private collision run seeds a fresh, exclusively owned universe by re-compiling the
+/// profile from source, so that run assembles its own index; the shared default-library base does
+/// not carry one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReplayIndexPlan {
+    /// Assemble the index as part of this compile.
+    Assemble,
+    /// Skip assembly; the run that collides re-compiles from source and assembles then.
+    Deferred,
+}
+
+/// Compile a profile into its complete runtime product, collision replay index included.
 pub(crate) fn compile_owned_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
-    with_canonical_library_frontend(sources, compile_owned_injected_frontend)
+    with_canonical_library_frontend(sources, |frontend| {
+        compile_owned_injected_frontend(frontend, ReplayIndexPlan::Assemble)
+    })
+}
+
+/// Compile a profile into the runtime state a shared default-library base is sealed from.
+///
+/// Replay-index assembly is deferred to the run that collides (ADR-0017).
+pub(crate) fn compile_owned_injected_base_profile(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    with_canonical_library_frontend(sources, |frontend| {
+        compile_owned_injected_frontend(frontend, ReplayIndexPlan::Deferred)
+    })
 }
 
 fn compile_owned_injected_frontend(
     frontend: CanonicalLibraryFrontend<'_, '_>,
+    replay_index_plan: ReplayIndexPlan,
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     let CanonicalLibraryFrontend {
         canonical,
@@ -3698,7 +3764,6 @@ fn compile_owned_injected_frontend(
         .into_values()
         .collect::<Vec<_>>();
     let library_records = ledger.finish().map_err(InjectedProfileError::Reporting)?;
-    let evidence = canonical_library_evidence(&canonical, &library_records)?;
     #[cfg(test)]
     let statement_check_elapsed = statement_check_started.elapsed();
 
@@ -3752,45 +3817,68 @@ fn compile_owned_injected_frontend(
     let selected_semantic_identities = semantic_identities
         .all_ready()
         .then_some(semantic_identities.clone());
-    let replay_index = build_collision_replay_index(
-        replay_trace,
-        &interner,
-        &binder,
-        &published_types,
-        &decl_types,
-        &namespace_terminal_rows,
-        &runtime_parts,
-        selected_semantic_identities.as_ref(),
-        &canonical,
-        &parsed,
-        &module_scopes,
-        &replay_class_declarations,
-        statement_keys,
-        &library_records,
-    )?;
-    let replay_roots = collect_root_rows(&binder)
-        .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?
-        .into_iter()
-        .map(|row| (row.name, row.value, row.ty, row.namespace))
-        .collect::<Vec<_>>();
-    let replay_index = admit_generated_collision_replay_index(
-        replay_index,
-        ReplayIndexAdmissionLimits {
-            type_groups: binder.type_groups.len(),
-            value_storages: decl_types.len(),
-            namespaces: binder.namespaces.len(),
-            classes: usize::try_from(next_class_id)
-                .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
-            source_files: canonical
-                .iter()
-                .map(|input| input.file_ordinal.index().saturating_add(1))
-                .max()
-                .unwrap_or(0),
-            roots: &replay_roots,
-        },
-        None,
-    )
-    .map_err(InjectedProfileError::ReplayIndexAdmission)?;
+    let replay_index = match replay_index_plan {
+        ReplayIndexPlan::Assemble => {
+            let replay_index = build_collision_replay_index(
+                replay_trace,
+                &interner,
+                &binder,
+                &published_types,
+                &decl_types,
+                &namespace_terminal_rows,
+                &runtime_parts,
+                selected_semantic_identities.as_ref(),
+                &canonical,
+                &parsed,
+                &module_scopes,
+                &replay_class_declarations,
+                statement_keys,
+                &library_records,
+            )?;
+            let replay_roots = collect_root_rows(&binder)
+                .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?
+                .into_iter()
+                .map(|row| (row.name, row.value, row.ty, row.namespace))
+                .collect::<Vec<_>>();
+            let replay_index = admit_generated_collision_replay_index(
+                replay_index,
+                ReplayIndexAdmissionLimits {
+                    type_groups: binder.type_groups.len(),
+                    value_storages: decl_types.len(),
+                    namespaces: binder.namespaces.len(),
+                    classes: usize::try_from(next_class_id)
+                        .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+                    source_files: canonical
+                        .iter()
+                        .map(|input| input.file_ordinal.index().saturating_add(1))
+                        .max()
+                        .unwrap_or(0),
+                    roots: &replay_roots,
+                },
+                None,
+            )
+            .map_err(InjectedProfileError::ReplayIndexAdmission)?;
+            Some(Box::new(replay_index))
+        }
+        // Deferred assembly still validates the terminal runtime state the base publishes;
+        // `build_collision_replay_index` performs the same call on the assembling path.
+        ReplayIndexPlan::Deferred => {
+            drop(replay_trace);
+            validate_terminal_class_dependencies(
+                None,
+                &interner,
+                ReplayTerminalValidationInputs {
+                    binder: &binder,
+                    published: &published_types,
+                    decl_types: &decl_types,
+                    namespace_terminals: &namespace_terminal_rows,
+                    runtime: &runtime_parts,
+                    semantic_identities: selected_semantic_identities.as_ref(),
+                },
+            )?;
+            None
+        }
+    };
     let runtime_state = OwnedLibraryRuntimeState {
         interner,
         binder,
@@ -3802,7 +3890,7 @@ fn compile_owned_injected_frontend(
         next_class_id,
         source_file_count: u32::try_from(canonical.len())
             .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
-        replay_index: Some(Box::new(replay_index)),
+        replay_index,
     };
 
     let run = InjectedProfileRun {
@@ -3826,8 +3914,8 @@ fn compile_owned_injected_frontend(
         reserved_file_ordinals: snapshot.reserved_file_ordinals,
         #[cfg(test)]
         reporting_receipts,
+        #[cfg(test)]
         library_records,
-        evidence,
         #[cfg(test)]
         pass_source_units,
         #[cfg(test)]
@@ -5418,7 +5506,7 @@ mod tests {
             .snapshot_parts()
             .expect("runtime snapshot parts");
         validate_terminal_class_dependencies(
-            &trace,
+            Some(&trace),
             &state.interner,
             ReplayTerminalValidationInputs {
                 binder: &state.binder,

@@ -16,13 +16,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// SHA-256 of the manifest the source compiler emits for the pinned 82-source profile.
-///
-/// Publication fails closed when the compiler's replay index drifts from it.
-pub(crate) const COLLISION_REPLAY_MANIFEST_SHA256: [u8; 32] = [
-    0x8b, 0x64, 0x15, 0xa5, 0xc0, 0xe0, 0xd0, 0xe2, 0x96, 0x79, 0x63, 0x63, 0x0c, 0xae, 0xed, 0x08,
-    0xdd, 0x89, 0x8f, 0xcc, 0x0f, 0xce, 0x67, 0x2d, 0x90, 0xdb, 0xe6, 0x62, 0xc1, 0xf5, 0x40, 0x5f,
-];
 const COLLISION_REPLAY_MANIFEST_DOMAIN: &[u8] = b"typokat-collision-replay-index-v1";
 
 /// Stable semantic publication domains. Tag order is part of the manifest wire contract.

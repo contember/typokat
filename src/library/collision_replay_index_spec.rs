@@ -1,6 +1,6 @@
 //! RED contracts for WU5 authenticated replay admission and binder continuation.
 
-use super::base::UserDeltaProjectInputForTest;
+use super::base::{deferred_packaged_replay_index_for_test, UserDeltaProjectInputForTest};
 use super::compiler::{LibraryCompiler, LibraryCompilerWorkScopeForTest, COMPILER_SCHEMA_SHA256};
 use super::profile::ExactLibraryProfile;
 use super::provider::{shared_library_base_provider_for_test, InitializationMeasurement};
@@ -189,19 +189,16 @@ fn singleton_scc_owner_rows_use_inline_storage_without_changing_the_wire_model()
 #[test]
 fn source_compiled_replay_index_matches_its_pinned_shape_and_identity() {
     let base = acquire();
-    let index = base.replay_index_for_test();
+    let index = deferred_packaged_replay_index_for_test();
 
     assert_eq!(index.schema, 1);
     assert_eq!(base.identity().profile_sha256(), PROFILE_IDENTITY);
     assert_eq!(base.identity().schema_sha256(), COMPILER_SCHEMA_SHA256);
     assert_eq!(index.canonical_manifest_len(), 10_995_749);
+    // The regression canary for unattributed library-diagnostic drift: the manifest digests
+    // every owner's rendered records, so a changed diagnostic moves it.
     assert_eq!(
         hex(&index.canonical_manifest_sha256),
-        REPLAY_MANIFEST_IDENTITY
-    );
-    // Publication rejects any base whose manifest drifts from this pin.
-    assert_eq!(
-        hex(&base.pinned_replay_manifest_sha256_for_test()),
         REPLAY_MANIFEST_IDENTITY
     );
     assert_eq!(index.owner_partition.len(), 45_925);
@@ -220,8 +217,7 @@ fn source_compiled_replay_index_matches_its_pinned_shape_and_identity() {
 
 #[test]
 fn canonical_replay_index_is_source_reproducible_and_complete() {
-    let base = acquire();
-    let index = base.replay_index_for_test();
+    let index = deferred_packaged_replay_index_for_test();
     let regenerated = FrozenLibraryBase::regenerate_replay_index_manifest_for_test()
         .expect("source compiler independently regenerates the replay index");
 

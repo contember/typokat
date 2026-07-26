@@ -9,6 +9,7 @@ pub(crate) enum CheckerRecord {
 }
 
 impl CheckerRecord {
+    #[cfg(test)]
     pub(crate) const fn is_diagnostic(&self) -> bool {
         matches!(self, Self::Diagnostic(_))
     }

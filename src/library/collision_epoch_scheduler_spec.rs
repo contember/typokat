@@ -1,5 +1,6 @@
 //! RED contract for sparse snapshot-native collision closure scheduling.
 
+use super::base::deferred_packaged_replay_index_for_test;
 use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
 use crate::check::checker::replay_index::{
@@ -315,10 +316,7 @@ fn derive_root_lookup_from_wire(
 
 #[test]
 fn admitted_root_lookup_exactly_projects_authenticated_roots_and_consumers() {
-    let base = super::provider::shared_library_base_provider_for_test()
-        .get()
-        .expect("source-compiled default library base");
-    let index = base.replay_index_for_test();
+    let index = deferred_packaged_replay_index_for_test();
     let expected = derive_root_lookup_from_wire(index);
 
     assert_eq!(index.root_slot_lookup.len(), expected.len());
@@ -362,10 +360,7 @@ fn admitted_root_lookup_exactly_projects_authenticated_roots_and_consumers() {
 
 #[test]
 fn root_lookup_ordinals_recover_placeholder_roots_and_global_flags() {
-    let base = super::provider::shared_library_base_provider_for_test()
-        .get()
-        .expect("source-compiled default library base");
-    let index = base.replay_index_for_test();
+    let index = deferred_packaged_replay_index_for_test();
     let expected = derive_root_lookup_from_wire(index);
     let mut placeholder_witnesses = BTreeSet::new();
     let mut global_contributor_witnesses = BTreeSet::new();
@@ -500,10 +495,7 @@ fn sparse_scheduler_touches_only_the_three_affected_sccs() {
 
 #[test]
 fn canonical_array_type_group_seed_matches_the_independent_full_scan_oracle() {
-    let base = super::provider::shared_library_base_provider_for_test()
-        .get()
-        .expect("source-compiled default library base");
-    let index = base.replay_index_for_test();
+    let index = deferred_packaged_replay_index_for_test();
     require_compact_runtime_indexes(index);
     // Root admission resolves the name once; the scheduler accepts only authenticated owners.
     let seed = canonical_array_type_group(index);
