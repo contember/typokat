@@ -1,19 +1,23 @@
 # Sprint — full default-library performance cutover (2026-07-21)
 
 **Goal.** Ship the exact pinned TypeScript 6.0.3 ES2025 full-host library as typokat's production
-default type universe, with sound user checking and a fresh-process end-to-end wall time at least
-**2× faster than pinned native TypeScript 7** on the approved reference workload.
+default type universe, with sound user checking and a fresh-process end-to-end wall time
+**demonstrably faster than pinned native TypeScript 7** on the approved reference workload,
+compiling that library from source in every process. (The goal read "at least 2×" until 2026-07-26,
+when [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md) retired the shipped
+snapshot that made 2× reachable — see the Binding performance claim below.)
 
 **Theme.** Backlog [`14`](../backlog/14-libdts-loading.md) is not complete merely because the 82
 declaration files can finish in a test-only pipeline. The production CLI must actually use the
 result, preserve every library-owned diagnostic/incomplete outcome, support the ADR-0011
 base/delta and collision semantics, and win a fail-closed apples-to-apples benchmark. The previous
 feasibility sprint removed two nonlinear barriers but left runtime library compilation at roughly
-10.8 seconds. Native TypeScript 7.0.2 checks the same pinned library bytes in roughly 0.3 seconds,
-so meeting the requested 2× target requires eliminating normal-startup compilation work rather
-than polishing it by a constant factor. The leading design is a deterministic, shipped semantic
-snapshot decoded into the same `FrozenLibraryBase`; it must earn a superseding ADR and an early
-performance GO before production work proceeds.
+10.8 seconds against native TypeScript 7.0.2's roughly 0.3 seconds on the same bytes, which is why
+the sprint opened by planning a shipped semantic snapshot. That plan shipped and was then retired:
+the 10.8 seconds fell to 1.85, and attribution showed 62 % of what remained was artifact generation
+with no comparator analogue, leaving the checking pipeline itself at parity. The library is now
+compiled from source in every process (ADR-0017), and the remaining work is the production cutover
+and the cross-tool gate.
 
 ## Refs re-verified at HEAD (2026-07-21)
 
