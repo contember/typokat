@@ -277,6 +277,10 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ("b14_full_lib_loading", "library_identity_shadowing.ts"),
     (
         "b14_full_lib_loading",
+        "native_array_annotation_identity.ts",
+    ),
+    (
+        "b14_full_lib_loading",
         "primitive_object_function_members.ts",
     ),
     ("b14_full_lib_loading", "promise_iterators_generators.ts"),
