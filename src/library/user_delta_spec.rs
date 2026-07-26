@@ -4,7 +4,7 @@
 //! preflight and routing; this contract deliberately supplies the certification itself.
 
 use super::base::FrozenLibraryBase;
-use super::provider::LibraryBaseProvider;
+use super::provider::shared_library_base_provider_for_test;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Barrier};
 
@@ -54,10 +54,12 @@ const BASE_ROW_FAMILIES: &str = concat!(
     "root-name-index.entries,next-ids",
 );
 
+/// The process-wide source-compiled base. Compiling all 82 packaged sources costs seconds, so
+/// every spec in this binary shares one.
 fn acquire() -> Arc<FrozenLibraryBase> {
-    LibraryBaseProvider::new()
+    shared_library_base_provider_for_test()
         .get()
-        .expect("canonical frozen library base")
+        .expect("source-compiled default library base")
 }
 
 fn check_source(
@@ -156,29 +158,9 @@ fn assert_same_observable_result(
     assert_eq!(actual.local_names, expected.local_names);
 }
 
-fn base_oracle(
-    base: &FrozenLibraryBase,
-) -> (
-    String,
-    super::base::FrozenLibraryPrefixes,
-    (u64, u64, u64, u64),
-) {
-    let projection = base
-        .recompute_canonical_projection_for_test()
-        .expect("frozen projection recomputes");
-    let references = base
-        .validate_frozen_reference_boundaries_for_test()
-        .expect("frozen reference boundaries remain valid");
-    (
-        projection.typed_validation_sha256(),
-        base.prefixes_for_test().clone(),
-        (
-            references.checked,
-            references.outside_frozen_prefix,
-            references.base_to_delta,
-            references.untyped_or_unowned,
-        ),
-    )
+/// Everything about the frozen base a user delta must leave exactly as it found it.
+fn base_oracle(base: &FrozenLibraryBase) -> super::base::FrozenBaseWitnessForTest {
+    base.frozen_witness_for_test()
 }
 
 fn assert_no_forbidden_work(receipt: &super::base::UserDeltaCheckReceiptForTest) {
@@ -187,8 +169,6 @@ fn assert_no_forbidden_work(receipt: &super::base::UserDeltaCheckReceiptForTest)
     assert_eq!(work.library_source_parses, 0);
     assert_eq!(work.library_source_binds, 0);
     assert_eq!(work.library_source_checks, 0);
-    assert_eq!(work.snapshot_decodes, 0);
-    assert_eq!(work.snapshot_validations, 0);
 
     let expected = BASE_ROW_FAMILIES.split(',').collect::<BTreeSet<_>>();
     let observed = work

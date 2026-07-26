@@ -1310,6 +1310,7 @@ pub struct NamespaceTable {
     library_shared_globals: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct NamespaceSnapshotPrimary {
     pub(crate) namespaces: Vec<Namespace>,
@@ -1328,6 +1329,7 @@ pub(crate) struct NamespaceSnapshotPrimary {
     pub(crate) library_shared_globals: bool,
 }
 
+#[cfg(test)]
 #[derive(Copy, Clone, Default)]
 pub(crate) struct NamespaceReferenceOffsets {
     pub(crate) placements: usize,
@@ -1342,6 +1344,7 @@ pub(crate) struct NamespaceReferenceOffsets {
     pub(crate) canonical_export_contexts: usize,
 }
 
+#[cfg(test)]
 pub(crate) struct NamespaceReferenceRows {
     pub(crate) primary: NamespaceSnapshotPrimary,
     pub(crate) offsets: NamespaceReferenceOffsets,
@@ -1957,6 +1960,7 @@ impl NamespaceTable {
         [self.namespaces.local_len(), indexes]
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_primary(&self) -> NamespaceSnapshotPrimary {
         NamespaceSnapshotPrimary {
             namespaces: self.namespaces.iter().cloned().collect(),
@@ -1986,6 +1990,7 @@ impl NamespaceTable {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_reference_rows(&self, local_only: bool) -> NamespaceReferenceRows {
         if !local_only {
             return NamespaceReferenceRows {
@@ -2111,6 +2116,7 @@ impl NamespaceTable {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_snapshot_primary(
         primary: NamespaceSnapshotPrimary,
     ) -> Result<Self, &'static str> {
@@ -2248,6 +2254,7 @@ impl NamespaceTable {
         Ok(table)
     }
 
+    #[cfg(test)]
     fn validate_snapshot_primary_for_classification(
         primary: &NamespaceSnapshotPrimary,
     ) -> Result<(), &'static str> {
@@ -2336,6 +2343,7 @@ impl NamespaceTable {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn validate_snapshot_canonical(&self) -> Result<(), &'static str> {
         let primary = self.snapshot_primary();
         let rebuilt = Self::from_snapshot_primary(primary.clone())?;
@@ -2766,6 +2774,7 @@ impl NamespaceTable {
         Ok(())
     }
 
+    #[cfg(test)]
     fn rebuild_local_standalone_storage_index(&mut self) -> Result<(), &'static str> {
         self.standalone_storage_namespaces.clear_local();
         let base_len = self.standalone_value_storages.base_len();

@@ -3,7 +3,7 @@
 use super::base::{
     BaseWorkCalibrationInjectionForTest, FrozenLibraryBase, UserDeltaProjectInputForTest,
 };
-use super::provider::LibraryBaseProvider;
+use super::provider::shared_library_base_provider_for_test;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -70,10 +70,12 @@ void good;
 void broken;
 "#;
 
+/// The process-wide source-compiled base. Compiling all 82 packaged sources costs seconds, so
+/// every spec in this binary shares one.
 fn acquire() -> Arc<FrozenLibraryBase> {
-    LibraryBaseProvider::new()
+    shared_library_base_provider_for_test()
         .get()
-        .expect("canonical frozen library base")
+        .expect("source-compiled default library base")
 }
 
 fn project_inputs() -> [UserDeltaProjectInputForTest<'static>; 2] {
@@ -93,10 +95,7 @@ fn project_inputs() -> [UserDeltaProjectInputForTest<'static>; 2] {
 fn one_project_delta_preserves_cross_file_symbols_and_is_deterministic() {
     let base = acquire();
     let base_identity = base.storage_identity_for_test();
-    let projection_before = base
-        .recompute_canonical_projection_for_test()
-        .expect("frozen projection before project check")
-        .typed_validation_sha256();
+    let witness_before = base.frozen_witness_for_test();
     let first = base
         .check_caller_certified_collision_free_user_project_for_test(&project_inputs())
         .expect("collision-free project checks against one private delta");
@@ -149,8 +148,6 @@ fn one_project_delta_preserves_cross_file_symbols_and_is_deterministic() {
     assert_eq!(first.work.library_source_parses, 0);
     assert_eq!(first.work.library_source_binds, 0);
     assert_eq!(first.work.library_source_checks, 0);
-    assert_eq!(first.work.snapshot_decodes, 0);
-    assert_eq!(first.work.snapshot_validations, 0);
     assert_eq!(first.work.user_source_parses, 2);
     assert_eq!(first.work.user_source_binds, 2);
     assert_eq!(first.work.user_source_checks, 2);
@@ -171,12 +168,7 @@ fn one_project_delta_preserves_cross_file_symbols_and_is_deterministic() {
     );
     assert!(isolation.incompletes.is_empty());
     assert_eq!(base.storage_identity_for_test(), base_identity);
-    assert_eq!(
-        base.recompute_canonical_projection_for_test()
-            .expect("frozen projection after project checks")
-            .typed_validation_sha256(),
-        projection_before
-    );
+    assert_eq!(base.frozen_witness_for_test(), witness_before);
 }
 
 #[test]

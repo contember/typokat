@@ -63,22 +63,12 @@ mod lexical_events_user;
 pub(crate) mod library_compiler;
 mod library_identities;
 pub(crate) mod library_reporting;
-pub(crate) mod library_snapshot_codec;
 mod namespace_values;
 mod narrowing;
 pub(crate) mod replay_index;
 pub(crate) mod reporting_record;
 mod statements;
 mod type_groups;
-
-#[cfg(test)]
-pub(crate) fn generate_library_snapshot_archive(
-    product: &library_compiler::CompiledLibraryRuntimeProduct,
-) -> Result<Vec<u8>, String> {
-    library_snapshot_codec::encode_library_runtime_product(product)
-        .map(|compiled| compiled.archive().as_bytes().to_vec())
-        .map_err(|error| error.to_string())
-}
 
 use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
@@ -390,6 +380,7 @@ impl FrozenCheckerRuntimeMetadata {
         })
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: FrozenCheckerRuntimeSnapshotParts,
     ) -> Result<Self, &'static str> {
@@ -1522,8 +1513,8 @@ where
     )
 }
 
-pub(crate) fn bind_authenticated_project_programs(
-    checkpoint: crate::binder::bind::AuthenticatedLibraryBinderCheckpoint,
+pub(crate) fn bind_library_checkpoint_project_programs(
+    checkpoint: crate::binder::bind::LibraryBinderCheckpoint,
     units: &[ProjectProgram<'_>],
 ) -> Result<BoundProjectBinder, String> {
     let checkpoint_ends = checkpoint.checkpoint_ends();

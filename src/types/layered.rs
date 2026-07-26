@@ -480,6 +480,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         self.base.len() + self.local.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn local_len(&self) -> usize {
         self.local.len()
     }
@@ -658,6 +659,7 @@ impl<T> Default for LayeredSet<T> {
 }
 
 impl<T: Eq + Hash> LayeredSet<T> {
+    #[cfg(test)]
     pub(crate) fn local_len(&self) -> usize {
         self.local.len()
     }

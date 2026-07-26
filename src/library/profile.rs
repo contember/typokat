@@ -633,67 +633,6 @@ impl ExactLibraryProfile {
         )?;
         Ok(())
     }
-
-    #[cfg(test)]
-    pub(crate) fn load_packaged_with_source_override_for_test(
-        name: &str,
-        bytes: &[u8],
-    ) -> Result<Self, LibraryProfileError> {
-        let mut profile = Self::embedded();
-        let source = profile
-            .sources
-            .iter_mut()
-            .find(|source| source.name == name)
-            .ok_or_else(|| LibraryProfileError::UnknownSource {
-                name: name.to_owned(),
-            })?;
-        source.bytes = Cow::Owned(bytes.to_vec());
-        profile.verify_packaged_assets()?;
-        Ok(profile)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test_input_with_appended_source(
-        &self,
-        name: &str,
-        bytes: &[u8],
-    ) -> Result<TestLibraryProfileInput, LibraryProfileError> {
-        validate_test_name(name)?;
-        if self.sources.iter().any(|source| source.name == name) {
-            return Err(LibraryProfileError::DuplicateSource {
-                name: name.to_owned(),
-            });
-        }
-        let mut sources = self.sources.clone();
-        sources.push(ExactLibrarySource {
-            ordinal: LibraryFileOrdinal::new(sources.len()),
-            name: name.to_owned(),
-            bytes: Cow::Owned(bytes.to_vec()),
-        });
-        let profile_identity = framed_identity(&sources)?;
-        Ok(TestLibraryProfileInput {
-            sources,
-            profile_identity,
-        })
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct TestLibraryProfileInput {
-    sources: Vec<ExactLibrarySource>,
-    profile_identity: String,
-}
-
-#[cfg(test)]
-impl TestLibraryProfileInput {
-    pub(crate) fn sources(&self) -> &[ExactLibrarySource] {
-        &self.sources
-    }
-
-    pub(crate) fn profile_identity(&self) -> &str {
-        &self.profile_identity
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -829,21 +768,6 @@ fn verify_asset(
     Ok(())
 }
 
-#[cfg(test)]
-fn validate_test_name(name: &str) -> Result<(), LibraryProfileError> {
-    if name.is_empty()
-        || !name.ends_with(".d.ts")
-        || name.contains('/')
-        || name.contains('\\')
-        || name == ".d.ts"
-    {
-        return Err(LibraryProfileError::InvalidSourceName {
-            name: name.to_owned(),
-        });
-    }
-    Ok(())
-}
-
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -851,6 +775,49 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn exact_profile_loads_all_packaged_sources_and_notices() {
+        let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
+        let sources = profile.sources();
+
+        assert_eq!(profile.typescript_version(), "6.0.3");
+        assert_eq!(profile.root_name(), "lib.es2025.full.d.ts");
+        assert_eq!(
+            profile.profile_identity(),
+            "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+        );
+        assert_eq!(sources.len(), 82);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.ordinal().index())
+                .collect::<Vec<_>>(),
+            (0..82).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.name())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            82
+        );
+        assert!(sources.iter().all(|source| !source.bytes().is_empty()));
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.bytes().len())
+                .sum::<usize>(),
+            2_936_611
+        );
+        assert!(!profile.license_bytes().is_empty());
+        assert!(!profile.third_party_notice_bytes().is_empty());
+        profile
+            .verify_packaged_assets()
+            .expect("manifest binds every source and notice");
+    }
 
     #[test]
     fn exact_validator_rejects_cardinality_duplicate_order_and_byte_drift() {

@@ -10,6 +10,7 @@ use oxc_ast::ast::{
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
+#[cfg(test)]
 use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -831,6 +832,7 @@ impl DeclarationTable {
         self.declarations.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn from_snapshot(
         declarations: Vec<LexicalDeclaration>,
     ) -> Result<Self, &'static str> {
@@ -971,6 +973,7 @@ impl TypeGroupTable {
         self.groups.local_len()
     }
 
+    #[cfg(test)]
     pub(crate) fn from_snapshot(groups: Vec<TypeGroup>) -> Result<Self, &'static str> {
         if groups
             .iter()

@@ -1,10 +1,6 @@
-//! Immutable semantic state decoded from the canonical default-library snapshot.
+//! Immutable semantic state compiled from the pinned default-library sources.
 
-#[cfg(test)]
-use super::provider::LibraryInitError;
-#[cfg(test)]
-use super::snapshot::map_snapshot_error;
-use super::snapshot::DecodedCanonicalLibrary;
+use super::provider::{LibraryInitCause, LibraryInitError, LibraryInitStage};
 use crate::check::checker::library_compiler::OwnedLibraryRuntimeState;
 #[cfg(test)]
 use crate::check::checker::library_compiler::{
@@ -13,13 +9,8 @@ use crate::check::checker::library_compiler::{
     OwnedBaseFinalIdentityEnds,
 };
 #[cfg(test)]
-use crate::check::checker::library_snapshot_codec::{
-    recompute_runtime_projection, validate_runtime_references, RuntimeProjectionForTest,
-};
-#[cfg(test)]
-use crate::check::checker::replay_index::{
-    AdmittedCollisionReplayIndex, CollisionReplayIndex, COLLISION_REPLAY_MANIFEST_SHA256,
-};
+use crate::check::checker::replay_index::AdmittedCollisionReplayIndex;
+use crate::check::checker::replay_index::COLLISION_REPLAY_MANIFEST_SHA256;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -30,36 +21,6 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::Arc;
-
-#[cfg(test)]
-const COMPONENT_NAMES: [&str; 11] = [
-    "store",
-    "interner",
-    "binder",
-    "declaration-types",
-    "published-types",
-    "namespace-terminals",
-    "class-metadata",
-    "semantic-identities",
-    "root-name-index",
-    "id-prefixes",
-    "collision-replay-index",
-];
-
-#[cfg(test)]
-const RUNTIME_FAMILIES: [&str; 11] = [
-    "store",
-    "interner",
-    "binder",
-    "decl-types",
-    "published-types",
-    "namespace-terminals",
-    "class-metadata",
-    "semantic-identities",
-    "root-name-index",
-    "next-ids",
-    "collision-replay-index",
-];
 
 #[cfg(test)]
 const PROJECTION_SUBTABLES: [&str; 32] = [
@@ -111,87 +72,19 @@ pub struct FrozenLibraryBase {
 }
 
 #[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReplayIndexMutationForTest {
-    MissingSection,
-    WrongSectionTag,
-    WrongSectionDigest,
-    TruncatedSection,
-    TrailingSectionBytes,
-    WrongManifestDomain,
-    UnknownSchema,
-    TruncatedInternalLength,
-    InternalLengthOverflow,
-    InvalidUtf8RootName,
-    InvalidOptionalTag,
-    InvalidBooleanTag,
-    SemanticTrailingBytes,
-    InvalidOwnerTag,
-    RootNameLengthOverflow,
-    MissingOwner,
-    MissingStaleButInRangeOwner,
-    DuplicateOwner,
-    ReorderedOwner,
-    UnknownOwner,
-    MissingGlobalObjectOwner,
-    DuplicateGlobalObjectOwner,
-    DuplicateRoot,
-    EmptyRootName,
-    RootIdOutsidePrefix,
-    PopulatedRootIndexMismatch,
-    MissingCanonicalPopulatedRoot,
-    UnusedPlaceholderRoot,
-    DuplicateReverseEdge,
-    SelfReverseEdge,
-    ReorderedReverseEdge,
-    UnknownReverseEdgeOwner,
-    DuplicateRootConsumer,
-    ReorderedRootConsumer,
-    InvalidRootConsumerSlot,
-    UnknownRootConsumerOwner,
-    UnknownRootConsumerName,
-    MissingOwnerSite,
-    DuplicateOwnerSite,
-    InvalidOwnerSiteSpan,
-    UnknownOwnerSiteOwner,
-    OwnerSiteFileOutsideProfile,
-    InvalidScc,
-    MissingSccOwner,
-    DuplicateSccOwner,
-    ReorderedScc,
-    WrongDependencyFirstScc,
-    WrongStatementOwner,
-    DuplicateStatementOwner,
-    MissingStatementOwner,
-    StatementFileOutsideProfile,
-    ReorderedStatementOwner,
-    NonStatementBaselineCountNonzero,
-    NonStatementBaselineDigestNoncanonical,
-    DuplicateBaseline,
-    MissingBaseline,
-    NonzeroUnownedDemands,
-    NonzeroInvalidOwnerSites,
-    NonzeroNoncanonicalEdges,
-    NonzeroTypedReferenceMisses,
-    SelfConsistentMissingReverseEdge,
-    SelfConsistentMissingRootConsumer,
-    SelfConsistentMissingOwnerSite,
-    SelfConsistentWrongBaseline,
-    SelfConsistentWrongBaselineCount,
-    SelfConsistentWrongRootProvenance,
-    SelfConsistentCrossArtifactSection,
-    SelfConsistentButUnpinned,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct FrozenBaseWitnessForTest {
+    pub(super) prefixes: FrozenLibraryPrefixes,
+    pub(super) type_count: usize,
+    pub(super) root_names: usize,
+    pub(super) replay_manifest_sha256: [u8; 32],
+    pub(super) reference_records: [usize; 3],
 }
 
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CheckpointAuthenticationMutationForTest {
-    BinderDigest,
-    RootDigest,
-    PrefixNextIds,
-    FunctionScopes,
-    FunctionDeclarationIds,
-    BlockScopes,
+/// A compiled default library that has not yet been sealed as the shared base.
+pub(super) struct CompiledLibraryBase {
+    runtime: OwnedLibraryRuntimeState,
+    identity: FrozenLibraryIdentity,
 }
 
 #[cfg(test)]
@@ -205,15 +98,15 @@ pub(super) struct MappedReplayOwnerSiteForTest {
 
 #[cfg(test)]
 #[derive(Debug)]
-pub(super) struct AuthenticatedBinderContinuationReceiptForTest {
+pub(super) struct LibraryBinderContinuationReceiptForTest {
     pub(super) continuation:
-        crate::check::checker::library_compiler::AuthenticatedBinderContinuationForTest,
+        crate::check::checker::library_compiler::LibraryBinderContinuationForTest,
     pub(super) mapped_owner_sites: Vec<MappedReplayOwnerSiteForTest>,
 }
 
 #[cfg(test)]
-impl std::ops::Deref for AuthenticatedBinderContinuationReceiptForTest {
-    type Target = crate::check::checker::library_compiler::AuthenticatedBinderContinuationForTest;
+impl std::ops::Deref for LibraryBinderContinuationReceiptForTest {
+    type Target = crate::check::checker::library_compiler::LibraryBinderContinuationForTest;
 
     fn deref(&self) -> &Self::Target {
         &self.continuation
@@ -222,14 +115,13 @@ impl std::ops::Deref for AuthenticatedBinderContinuationReceiptForTest {
 
 #[cfg(test)]
 pub(super) struct RegeneratedReplayIndexForTest {
-    index: CollisionReplayIndex,
+    index: AdmittedCollisionReplayIndex,
     pub(super) library_source_compiles: u64,
-    pub(super) snapshot_decodes: u64,
 }
 
 #[cfg(test)]
 impl std::ops::Deref for RegeneratedReplayIndexForTest {
-    type Target = CollisionReplayIndex;
+    type Target = AdmittedCollisionReplayIndex;
 
     fn deref(&self) -> &Self::Target {
         &self.index
@@ -314,8 +206,6 @@ pub(super) struct UserDeltaWorkForTest {
     pub(super) library_source_parses: u64,
     pub(super) library_source_binds: u64,
     pub(super) library_source_checks: u64,
-    pub(super) snapshot_decodes: u64,
-    pub(super) snapshot_validations: u64,
     pub(super) user_source_parses: u64,
     pub(super) user_source_binds: u64,
     pub(super) user_source_checks: u64,
@@ -744,7 +634,7 @@ impl FrozenLibraryBase {
             crate::check::checker::library_compiler::compile_synthetic_padding_base_for_test(
                 namespace_count,
             )?;
-        let ends = runtime.identity_ends_for_test();
+        let prefixes = runtime.library_prefixes()?;
         let structural_probe =
             runtime
                 .frozen_structural_object_probe_for_test()
@@ -757,32 +647,71 @@ impl FrozenLibraryBase {
         Ok(Self {
             runtime,
             root_names: BTreeSet::new(),
-            prefixes: FrozenLibraryPrefixes {
-                types: ends.store,
-                type_params: ends.type_params,
-                classes: ends.classes,
-                scopes: ends.scopes,
-                symbols: ends.symbols,
-                declarations: ends.declarations,
-                type_groups: ends.type_groups,
-                namespaces: ends.namespaces,
-                value_storages: ends.value_storages,
-            },
-            identity: FrozenLibraryIdentity::canonical(),
+            prefixes: FrozenLibraryPrefixes::from_array(prefixes),
+            identity: FrozenLibraryIdentity::new("synthetic-padding-base".to_owned()),
             structural_probe,
         })
     }
 
-    pub(super) fn from_decoded(decoded: DecodedCanonicalLibrary) -> Result<Self, &'static str> {
-        let DecodedCanonicalLibrary {
+    /// Compile the pinned packaged profile from source.
+    ///
+    /// Source compilation is the only route to a default-library base; there is no
+    /// precomputed artifact to admit.
+    pub(super) fn compile_packaged_profile() -> Result<CompiledLibraryBase, LibraryInitError> {
+        let profile = super::profile::ExactLibraryProfile::load_packaged().map_err(|error| {
+            LibraryInitError::new(
+                LibraryInitStage::ProfileLoad,
+                LibraryInitCause::ProfileRejected {
+                    message: error.to_string(),
+                },
+            )
+        })?;
+        let profile_identity = profile.profile_identity().to_owned();
+        let runtime =
+            super::compiler::compile_owned_library_runtime(&profile).map_err(|error| {
+                LibraryInitError::new(
+                    LibraryInitStage::Compile,
+                    LibraryInitCause::CompilationFailed {
+                        message: error.to_string(),
+                    },
+                )
+            })?;
+        Ok(CompiledLibraryBase {
+            runtime,
+            identity: FrozenLibraryIdentity::new(profile_identity),
+        })
+    }
+
+    /// Seal the compiled runtime as the immutable base every user delta forks from.
+    pub(super) fn publish(compiled: CompiledLibraryBase) -> Result<Self, LibraryInitError> {
+        let CompiledLibraryBase {
             mut runtime,
-            root_names,
-            prefixes,
-            #[cfg(test)]
-                typed_validation_sha256: _,
             identity,
-        } = decoded;
-        runtime.freeze_as_library_base()?;
+        } = compiled;
+        let incomplete = |message: &str| {
+            LibraryInitError::new(
+                LibraryInitStage::Publication,
+                LibraryInitCause::IncompletePublication {
+                    message: message.to_owned(),
+                },
+            )
+        };
+        let manifest_sha256 = runtime
+            .replay_index()
+            .ok_or_else(|| incomplete("compiled library retains no collision replay index"))?
+            .canonical_manifest_sha256;
+        if manifest_sha256 != COLLISION_REPLAY_MANIFEST_SHA256 {
+            return Err(LibraryInitError::new(
+                LibraryInitStage::CollisionReplayIndexAdmission,
+                LibraryInitCause::ReplayIndexRejected {
+                    violation:
+                        super::provider::CollisionReplayIndexViolation::ManifestIdentityMismatch,
+                },
+            ));
+        }
+        let root_names = runtime.library_root_names().map_err(incomplete)?;
+        let prefixes = runtime.library_prefixes().map_err(incomplete)?;
+        runtime.freeze_as_library_base().map_err(incomplete)?;
         #[cfg(test)]
         let structural_probe =
             runtime
@@ -811,21 +740,13 @@ impl FrozenLibraryBase {
     #[cfg(test)]
     pub(super) fn replay_index_for_test(&self) -> &AdmittedCollisionReplayIndex {
         self.runtime
-            .admitted_replay_index()
-            .expect("frozen base retains an admitted replay index")
+            .replay_index()
+            .expect("frozen base retains its collision replay index")
     }
 
     #[cfg(test)]
     pub(super) const fn pinned_replay_manifest_sha256_for_test(&self) -> [u8; 32] {
         COLLISION_REPLAY_MANIFEST_SHA256
-    }
-
-    #[cfg(test)]
-    pub(super) fn snapshot_section_inventory_for_test(&self) -> [&'static str; 11] {
-        self.recompute_canonical_projection_for_test()
-            .expect("frozen projection")
-            .projection
-            .family_names()
     }
 
     #[cfg(test)]
@@ -839,18 +760,7 @@ impl FrozenLibraryBase {
         Ok(RegeneratedReplayIndexForTest {
             index: compiled.replay_index_for_test().clone(),
             library_source_compiles: 1,
-            snapshot_decodes: 0,
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn inventory_for_test(&self) -> FrozenLibraryInventory<'_> {
-        FrozenLibraryInventory { base: self }
-    }
-
-    #[cfg(test)]
-    pub(super) fn root_names_for_test(&self) -> &BTreeSet<String> {
-        &self.root_names
     }
 
     #[cfg(test)]
@@ -858,9 +768,19 @@ impl FrozenLibraryBase {
         &self.prefixes
     }
 
+    /// Everything about the frozen base a user delta must leave untouched.
+    ///
+    /// Comparing this witness before and after a delta run replaces the wire-projection digest
+    /// the deleted snapshot codec used to supply.
     #[cfg(test)]
-    pub(super) fn type_count_for_test(&self) -> usize {
-        self.runtime.type_count()
+    pub(super) fn frozen_witness_for_test(&self) -> FrozenBaseWitnessForTest {
+        FrozenBaseWitnessForTest {
+            prefixes: self.prefixes.clone(),
+            type_count: self.runtime.type_count(),
+            root_names: self.root_names.len(),
+            replay_manifest_sha256: self.replay_index_for_test().canonical_manifest_sha256,
+            reference_records: self.runtime.reference_record_counts_for_test(),
+        }
     }
 
     #[cfg(test)]
@@ -902,7 +822,6 @@ impl FrozenLibraryBase {
         source: &str,
     ) -> Result<UserDeltaCheckReceiptForTest, String> {
         let library_work_scope = super::compiler::LibraryCompilerWorkScopeForTest::start();
-        let snapshot_work_scope = super::snapshot::SnapshotWorkScopeForTest::start();
         let user_work_scope =
             crate::check::checker::library_compiler::UserSourceWorkScopeForTest::start();
         let base_write_scope = crate::types::layered::BaseWriteAttemptScopeForTest::start();
@@ -924,7 +843,6 @@ impl FrozenLibraryBase {
         let base_rows_written = base_write_scope.finish();
         let base_work = base_work_scope.finish();
         let user_work = user_work_scope.finish();
-        let snapshot_work = snapshot_work_scope.finish();
         let library_work = library_work_scope.finish();
         let mut base_row_clones = run.final_identity.base_row_clone_counts;
         base_row_clones.insert(
@@ -979,8 +897,6 @@ impl FrozenLibraryBase {
                 library_source_parses: library_work.parses,
                 library_source_binds: library_work.binds,
                 library_source_checks: library_work.checks,
-                snapshot_decodes: snapshot_work.decodes,
-                snapshot_validations: snapshot_work.validations,
                 user_source_parses: user_work.parses,
                 user_source_binds: user_work.binds,
                 user_source_checks: user_work.checks,
@@ -1000,7 +916,6 @@ impl FrozenLibraryBase {
         inputs: &[UserDeltaProjectInputForTest<'_>],
     ) -> Result<UserDeltaProjectReceiptForTest, String> {
         let library_work_scope = super::compiler::LibraryCompilerWorkScopeForTest::start();
-        let snapshot_work_scope = super::snapshot::SnapshotWorkScopeForTest::start();
         let user_work_scope =
             crate::check::checker::library_compiler::UserSourceWorkScopeForTest::start();
         let base_write_scope = crate::types::layered::BaseWriteAttemptScopeForTest::start();
@@ -1029,7 +944,6 @@ impl FrozenLibraryBase {
         let base_rows_written = base_write_scope.finish();
         let base_work = base_work_scope.finish();
         let user_work = user_work_scope.finish();
-        let snapshot_work = snapshot_work_scope.finish();
         let library_work = library_work_scope.finish();
         let mut base_row_clones = run.final_identity.base_row_clone_counts;
         base_row_clones.insert(
@@ -1081,8 +995,6 @@ impl FrozenLibraryBase {
                 library_source_parses: library_work.parses,
                 library_source_binds: library_work.binds,
                 library_source_checks: library_work.checks,
-                snapshot_decodes: snapshot_work.decodes,
-                snapshot_validations: snapshot_work.validations,
                 user_source_parses: user_work.parses,
                 user_source_binds: user_work.binds,
                 user_source_checks: user_work.checks,
@@ -1105,44 +1017,6 @@ impl FrozenLibraryBase {
     #[cfg(test)]
     fn new_layered_user_delta_for_test(&self) -> Result<LayeredUserDelta, &'static str> {
         LayeredUserDelta::new(self)
-    }
-
-    #[cfg(test)]
-    pub(super) fn recompute_canonical_projection_for_test(
-        &self,
-    ) -> Result<CanonicalLibraryProjection, LibraryInitError> {
-        recompute_runtime_projection(&self.runtime)
-            .map(CanonicalLibraryProjection::new)
-            .map_err(map_snapshot_error)
-    }
-
-    #[cfg(test)]
-    pub(super) fn validate_frozen_reference_boundaries_for_test(
-        &self,
-    ) -> Result<FrozenReferenceBoundarySummary, LibraryInitError> {
-        validate_runtime_references(&self.runtime)
-            .map(|summary| FrozenReferenceBoundarySummary {
-                checked: summary.checked,
-                outside_frozen_prefix: summary.outside_frozen_prefix,
-                base_to_delta: summary.base_to_delta,
-                untyped_or_unowned: summary.untyped_or_unowned,
-            })
-            .map_err(map_snapshot_error)
-    }
-
-    #[cfg(test)]
-    pub(super) const fn retained_source_bytes_for_test(&self) -> usize {
-        0
-    }
-
-    #[cfg(test)]
-    pub(super) const fn retained_archive_bytes_for_test(&self) -> usize {
-        0
-    }
-
-    #[cfg(test)]
-    pub(super) const fn retained_projection_witnesses_for_test(&self) -> usize {
-        0
     }
 }
 
@@ -1200,40 +1074,26 @@ impl UserDeltaDomainRangeForTest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FrozenLibraryIdentity {
-    profile_sha256: &'static str,
+    profile_sha256: String,
     schema_sha256: &'static str,
-    artifact_sha256: &'static str,
-    artifact_bytes: usize,
 }
 
 impl FrozenLibraryIdentity {
-    pub(super) const fn canonical() -> Self {
+    fn new(profile_sha256: String) -> Self {
         Self {
-            profile_sha256: super::snapshot::PROFILE_SHA256,
-            schema_sha256: super::snapshot::SCHEMA_SHA256,
-            artifact_sha256: super::artifact::CANONICAL_SNAPSHOT_SHA256,
-            artifact_bytes: super::artifact::CANONICAL_SNAPSHOT_BYTES,
+            profile_sha256,
+            schema_sha256: super::compiler::COMPILER_SCHEMA_SHA256,
         }
     }
 
     #[cfg(test)]
-    pub(super) const fn profile_sha256(&self) -> &'static str {
-        self.profile_sha256
+    pub(super) fn profile_sha256(&self) -> &str {
+        &self.profile_sha256
     }
 
     #[cfg(test)]
     pub(super) const fn schema_sha256(&self) -> &'static str {
         self.schema_sha256
-    }
-
-    #[cfg(test)]
-    pub(super) const fn artifact_sha256(&self) -> &'static str {
-        self.artifact_sha256
-    }
-
-    #[cfg(test)]
-    pub(super) const fn artifact_bytes(&self) -> usize {
-        self.artifact_bytes
     }
 }
 
@@ -1281,91 +1141,4 @@ impl FrozenLibraryPrefixes {
             ("value-storages", self.value_storages),
         ])
     }
-}
-
-#[cfg(test)]
-pub(super) struct FrozenLibraryInventory<'base> {
-    base: &'base FrozenLibraryBase,
-}
-
-#[cfg(test)]
-impl FrozenLibraryInventory<'_> {
-    pub(super) fn source_file_count(&self) -> u32 {
-        self.base.runtime.source_file_count()
-    }
-
-    pub(super) fn reference_count(&self) -> u64 {
-        validate_runtime_references(&self.base.runtime)
-            .map(|summary| summary.checked)
-            .unwrap_or(0)
-    }
-
-    pub(super) const fn runtime_family_count(&self) -> usize {
-        RUNTIME_FAMILIES.len()
-    }
-
-    pub(super) const fn projection_subtable_count(&self) -> usize {
-        PROJECTION_SUBTABLES.len()
-    }
-
-    pub(super) const fn component_names(&self) -> [&'static str; 11] {
-        COMPONENT_NAMES
-    }
-
-    pub(super) fn root_name_count(&self) -> usize {
-        self.base.root_names.len()
-    }
-
-    pub(super) const fn prefixes(&self) -> &FrozenLibraryPrefixes {
-        &self.base.prefixes
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct CanonicalLibraryProjection {
-    projection: RuntimeProjectionForTest,
-    prefixes: FrozenLibraryPrefixes,
-}
-
-#[cfg(test)]
-impl CanonicalLibraryProjection {
-    pub(super) fn new(projection: RuntimeProjectionForTest) -> Self {
-        Self {
-            prefixes: FrozenLibraryPrefixes::from_array(projection.prefixes_for_library()),
-            projection,
-        }
-    }
-
-    pub(super) const fn runtime_families(&self) -> &[&'static str; 11] {
-        &RUNTIME_FAMILIES
-    }
-
-    pub(super) const fn subtables(&self) -> &[&'static str; 32] {
-        &PROJECTION_SUBTABLES
-    }
-
-    pub(super) fn reference_family_counts(&self) -> [u64; 9] {
-        self.projection.reference_family_counts_for_library()
-    }
-
-    pub(super) fn root_names(&self) -> &BTreeSet<String> {
-        self.projection.root_names_for_library()
-    }
-
-    pub(super) const fn prefixes(&self) -> &FrozenLibraryPrefixes {
-        &self.prefixes
-    }
-
-    pub(super) fn typed_validation_sha256(&self) -> String {
-        self.projection.typed_validation_sha256_for_library()
-    }
-}
-
-#[cfg(test)]
-pub(super) struct FrozenReferenceBoundarySummary {
-    pub(super) checked: u64,
-    pub(super) outside_frozen_prefix: u64,
-    pub(super) base_to_delta: u64,
-    pub(super) untyped_or_unowned: u64,
 }

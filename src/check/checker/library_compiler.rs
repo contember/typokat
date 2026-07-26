@@ -25,8 +25,10 @@ use super::namespace_values::{
 #[cfg(test)]
 use super::replay_index::ReplayReverseEdge;
 use super::replay_index::{
-    baseline_record, AdmittedCollisionReplayIndex, CollisionReplayIndex, ReplayDependencyTrace,
-    ReplayIndexGenerationError, ReplayOwner, ReplayOwnerSite, ReplayRootSlot,
+    admit_generated_collision_replay_index, baseline_record, AdmittedCollisionReplayIndex,
+    CollisionReplayIndex, ReplayDependencyTrace, ReplayIndexAdmissionError,
+    ReplayIndexAdmissionLimits, ReplayIndexGenerationError, ReplayOwner, ReplayOwnerSite,
+    ReplayRootSlot,
 };
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
@@ -42,10 +44,7 @@ use super::{
 use super::{check_bound_user_program_with_final_identity_inspector, BoundUserBase};
 #[cfg(test)]
 use crate::binder::bind::LibraryBinderCheckpointEnds;
-use crate::binder::bind::{
-    AuthenticatedLibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder,
-    UnauthenticatedLibraryBinderCheckpoint,
-};
+use crate::binder::bind::{LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder};
 #[cfg(test)]
 use crate::binder::declaration::DeclId;
 #[cfg(test)]
@@ -60,10 +59,8 @@ use crate::binder::namespace::{
     exact_key, source_file_kind, CompilationUnit, ExactKey, ExportContextKind,
     ExportSyntaxDisposition, ModuleBindingContext, NamespaceId, SourceFileKind,
 };
+use crate::binder::roots::{collect_root_rows, RootNameRow};
 use crate::binder::scope::ScopeId;
-use crate::binder::snapshot::{
-    collect_root_rows, source_binder_checkpoint_digests, RootNameRow, SourceBinderCheckpointDigests,
-};
 #[cfg(test)]
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
@@ -105,16 +102,7 @@ pub(crate) struct OwnedLibraryRuntimeState {
     next_type_param: u32,
     next_class_id: u32,
     source_file_count: u32,
-    replay_index: Option<Box<RuntimeCollisionReplayIndex>>,
-}
-
-#[allow(
-    dead_code,
-    reason = "the admitted index is retained for the next private replay slice"
-)]
-enum RuntimeCollisionReplayIndex {
-    Generated(CollisionReplayIndex),
-    Admitted(AdmittedCollisionReplayIndex),
+    replay_index: Option<Box<AdmittedCollisionReplayIndex>>,
 }
 
 pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
@@ -131,25 +119,9 @@ pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
     pub(in crate::check::checker) source_file_count: u32,
 }
 
-#[cfg(test)]
-pub(in crate::check::checker) struct BorrowedLibraryRuntimeSnapshotParts<'runtime> {
-    pub(in crate::check::checker) interner: &'runtime Interner,
-    pub(in crate::check::checker) binder: &'runtime Binder,
-    pub(in crate::check::checker) published_types:
-        super::type_groups::PublishedTypeEnvironmentSnapshotParts,
-    pub(in crate::check::checker) decl_types: Vec<Option<TypeId>>,
-    pub(in crate::check::checker) semantic_identities:
-        Option<super::library_identities::LibrarySemanticIdentitiesSnapshotParts>,
-    pub(in crate::check::checker) runtime: super::FrozenCheckerRuntimeSnapshotParts,
-    pub(in crate::check::checker) next_type_param: u32,
-    pub(in crate::check::checker) next_class_id: u32,
-    pub(in crate::check::checker) source_file_count: u32,
-    pub(in crate::check::checker) replay_index: &'runtime AdmittedCollisionReplayIndex,
-}
-
 pub(crate) struct CompiledLibraryRuntimeProduct {
     pub(in crate::check::checker) _parts: OwnedLibraryRuntimeSnapshotParts,
-    pub(crate) _replay_index: CollisionReplayIndex,
+    pub(crate) _replay_index: AdmittedCollisionReplayIndex,
 }
 
 pub(crate) fn freeze_library_runtime_product(
@@ -158,16 +130,12 @@ pub(crate) fn freeze_library_runtime_product(
     let replay_index = state
         .replay_index
         .take()
-        .and_then(|index| match *index {
-            RuntimeCollisionReplayIndex::Generated(index) => Some(index),
-            RuntimeCollisionReplayIndex::Admitted(_) => None,
-        })
         .ok_or("source library compiler did not produce a replay index")?;
     state
         .into_snapshot_parts()
         .map(|parts| CompiledLibraryRuntimeProduct {
             _parts: parts,
-            _replay_index: replay_index,
+            _replay_index: *replay_index,
         })
 }
 
@@ -681,6 +649,18 @@ impl OwnedLibraryRuntimeState {
             }
     }
 
+    /// Reference-row counts of the frozen base: store, interner identity, binder.
+    ///
+    /// A user delta that leaked a row into the base would move one of these.
+    #[cfg(test)]
+    pub(crate) fn reference_record_counts_for_test(&self) -> [usize; 3] {
+        let (store, interner) = self.interner.snapshot_reference_records_for_test();
+        let binder = crate::binder::snapshot::snapshot_reference_records(&self.binder)
+            .expect("frozen binder projects its reference rows")
+            .len();
+        [store.len(), interner.len(), binder]
+    }
+
     #[cfg(test)]
     pub(crate) fn storage_identity_for_test(&self) -> [usize; 8] {
         [
@@ -709,6 +689,23 @@ impl OwnedLibraryRuntimeState {
     ) {
         self.interner
             .install_user_delta_drop_witness_for_test(discarded);
+    }
+
+    /// Frozen id prefixes in `FrozenLibraryPrefixes` order: types, type params, classes,
+    /// scopes, symbols, declarations, type groups, namespaces, value storages.
+    pub(crate) fn library_prefixes(&self) -> Result<[usize; 9], &'static str> {
+        Ok([
+            self.interner.store().len(),
+            usize::try_from(self.next_type_param)
+                .map_err(|_| "type parameter end exceeds usize")?,
+            usize::try_from(self.next_class_id).map_err(|_| "class end exceeds usize")?,
+            self.binder.graph.snapshot_len(),
+            self.binder.symbols.len(),
+            self.binder.declarations.len(),
+            self.binder.type_groups.len(),
+            self.binder.namespaces.len(),
+            self.decl_types.len(),
+        ])
     }
 
     #[cfg(test)]
@@ -901,44 +898,6 @@ impl OwnedLibraryRuntimeState {
     }
 
     #[cfg(test)]
-    pub(in crate::check::checker) fn borrowed_snapshot_parts(
-        &self,
-    ) -> Result<BorrowedLibraryRuntimeSnapshotParts<'_>, &'static str> {
-        if self
-            .semantic_identities
-            .as_ref()
-            .is_some_and(|identities| !identities.all_ready())
-        {
-            return Err("snapshot installed semantic identities are not all ready");
-        }
-        Ok(BorrowedLibraryRuntimeSnapshotParts {
-            interner: &self.interner,
-            binder: &self.binder,
-            published_types: self.published_types.snapshot_parts()?,
-            decl_types: self.decl_types.snapshot_slots(),
-            semantic_identities: self
-                .semantic_identities
-                .as_ref()
-                .map(super::library_identities::LibrarySemanticIdentities::snapshot_parts),
-            runtime: self.runtime.snapshot_parts()?,
-            next_type_param: self.next_type_param,
-            next_class_id: self.next_class_id,
-            source_file_count: self.source_file_count,
-            replay_index: match self.replay_index.as_deref() {
-                Some(RuntimeCollisionReplayIndex::Admitted(index)) => index,
-                Some(RuntimeCollisionReplayIndex::Generated(_)) | None => {
-                    return Err("runtime does not retain an admitted replay index");
-                }
-            },
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn source_file_count(&self) -> u32 {
-        self.source_file_count
-    }
-
-    #[cfg(test)]
     pub(crate) fn type_count(&self) -> usize {
         self.interner.store().len()
     }
@@ -971,16 +930,14 @@ impl OwnedLibraryRuntimeState {
         Ok(parts)
     }
 
+    pub(crate) fn replay_index(&self) -> Option<&AdmittedCollisionReplayIndex> {
+        self.replay_index.as_deref()
+    }
+
+    /// Restore a runtime from its own snapshot parts; the base it yields carries no replay index.
     #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         parts: OwnedLibraryRuntimeSnapshotParts,
-    ) -> Result<Self, &'static str> {
-        Self::from_snapshot_parts_with_replay(parts, None)
-    }
-
-    pub(in crate::check::checker) fn from_snapshot_parts_with_replay(
-        parts: OwnedLibraryRuntimeSnapshotParts,
-        replay_index: Option<AdmittedCollisionReplayIndex>,
     ) -> Result<Self, &'static str> {
         validate_owned_library_snapshot_parts(&parts)?;
         let decl_types = DeclTypes::from_snapshot_slots(parts.decl_types, parts.binder.decl_count)?;
@@ -1004,26 +961,15 @@ impl OwnedLibraryRuntimeState {
             next_type_param: parts.next_type_param,
             next_class_id: parts.next_class_id,
             source_file_count: parts.source_file_count,
-            replay_index: replay_index
-                .map(RuntimeCollisionReplayIndex::Admitted)
-                .map(Box::new),
+            replay_index: None,
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn admitted_replay_index(&self) -> Option<&AdmittedCollisionReplayIndex> {
-        match self.replay_index.as_deref() {
-            Some(RuntimeCollisionReplayIndex::Admitted(index)) => Some(index),
-            Some(RuntimeCollisionReplayIndex::Generated(_)) | None => None,
-        }
-    }
-
-    #[cfg(test)]
-    fn generated_replay_index(&self) -> Option<&CollisionReplayIndex> {
-        match self.replay_index.as_deref() {
-            Some(RuntimeCollisionReplayIndex::Generated(index)) => Some(index),
-            Some(RuntimeCollisionReplayIndex::Admitted(_)) | None => None,
-        }
+    /// Root names published into the compilation-global scope of the compiled library.
+    pub(crate) fn library_root_names(&self) -> Result<BTreeSet<String>, &'static str> {
+        collect_root_rows(&self.binder)
+            .map(|rows| rows.into_iter().map(|row| row.name).collect())
+            .map_err(|_| "library binder does not expose a compilation-global root index")
     }
 }
 
@@ -1694,6 +1640,7 @@ pub(crate) enum InjectedProfileError {
     Reservation(String),
     Reporting(LibraryEventLedgerError),
     ReplayIndex(ReplayIndexGenerationError),
+    ReplayIndexAdmission(ReplayIndexAdmissionError),
     CanonicalProjection(String),
 }
 
@@ -3821,6 +3768,29 @@ fn compile_owned_injected_frontend(
         statement_keys,
         &library_records,
     )?;
+    let replay_roots = collect_root_rows(&binder)
+        .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?
+        .into_iter()
+        .map(|row| (row.name, row.value, row.ty, row.namespace))
+        .collect::<Vec<_>>();
+    let replay_index = admit_generated_collision_replay_index(
+        replay_index,
+        ReplayIndexAdmissionLimits {
+            type_groups: binder.type_groups.len(),
+            value_storages: decl_types.len(),
+            namespaces: binder.namespaces.len(),
+            classes: usize::try_from(next_class_id)
+                .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+            source_files: canonical
+                .iter()
+                .map(|input| input.file_ordinal.index().saturating_add(1))
+                .max()
+                .unwrap_or(0),
+            roots: &replay_roots,
+        },
+        None,
+    )
+    .map_err(InjectedProfileError::ReplayIndexAdmission)?;
     let runtime_state = OwnedLibraryRuntimeState {
         interner,
         binder,
@@ -3832,9 +3802,7 @@ fn compile_owned_injected_frontend(
         next_class_id,
         source_file_count: u32::try_from(canonical.len())
             .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
-        replay_index: Some(Box::new(RuntimeCollisionReplayIndex::Generated(
-            replay_index,
-        ))),
+        replay_index: Some(Box::new(replay_index)),
     };
 
     let run = InjectedProfileRun {
@@ -3878,7 +3846,7 @@ fn compile_owned_injected_frontend(
 
 pub(crate) fn compile_library_binder_checkpoint(
     sources: &[InjectedLibrarySource<'_>],
-) -> Result<UnauthenticatedLibraryBinderCheckpoint, InjectedProfileError> {
+) -> Result<LibraryBinderCheckpoint, InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
         #[cfg(test)]
         CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS.set(
@@ -3892,12 +3860,6 @@ pub(crate) fn compile_library_binder_checkpoint(
             module_scopes,
             ..
         } = frontend;
-        let SourceBinderCheckpointDigests {
-            binder: source_binder_encoding_sha256,
-            roots: source_root_encoding_sha256,
-            retained_scope_maps: retained_scope_maps_sha256,
-        } = source_binder_checkpoint_digests(&binder)
-            .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?;
         let library_units = canonical
             .iter()
             .zip(module_scopes)
@@ -3907,13 +3869,7 @@ pub(crate) fn compile_library_binder_checkpoint(
                 module,
             })
             .collect();
-        Ok(UnauthenticatedLibraryBinderCheckpoint::new(
-            binder,
-            library_units,
-            source_binder_encoding_sha256,
-            source_root_encoding_sha256,
-            retained_scope_maps_sha256,
-        ))
+        Ok(LibraryBinderCheckpoint::new(binder, library_units))
     })
 }
 
@@ -3926,7 +3882,7 @@ pub(crate) struct BinderContinuationModuleSourceForTest {
 
 #[cfg(test)]
 #[derive(Debug)]
-pub(crate) struct AuthenticatedBinderContinuationForTest {
+pub(crate) struct LibraryBinderContinuationForTest {
     pub(crate) bound: super::BoundProjectBinder,
     pub(crate) checkpoint_ends: LibraryBinderCheckpointEnds,
     pub(crate) ends: LibraryBinderCheckpointEnds,
@@ -3956,7 +3912,7 @@ pub(crate) struct ProjectBindingLookupForTest {
 }
 
 #[cfg(test)]
-impl AuthenticatedBinderContinuationForTest {
+impl LibraryBinderContinuationForTest {
     pub(crate) fn normalized_per_path_binding_shape_for_test(&self) -> Vec<String> {
         self.bound
             .normalized
@@ -4044,14 +4000,14 @@ impl AuthenticatedBinderContinuationForTest {
     }
 }
 
-pub(crate) fn continue_authenticated_library_project_binder(
-    checkpoint: AuthenticatedLibraryBinderCheckpoint,
+pub(crate) fn continue_library_project_binder(
+    checkpoint: LibraryBinderCheckpoint,
     inputs: Vec<crate::driver::FileInput>,
 ) -> Result<super::BoundProjectBinder, String> {
     crate::driver::run_project_frontend(inputs, |_, units| {
         #[cfg(test)]
         record_user_source_parses_for_test(units.len());
-        let bound = super::bind_authenticated_project_programs(checkpoint, units)?;
+        let bound = super::bind_library_checkpoint_project_programs(checkpoint, units)?;
         #[cfg(test)]
         {
             record_user_source_binds_for_test(units.len());
@@ -4068,7 +4024,7 @@ pub(crate) fn continuation_receipt_for_test(
     array_symbol_before_augmentation: SymbolId,
     array_type_group_before_augmentation: TypeGroupId,
     bound: super::BoundProjectBinder,
-) -> Result<AuthenticatedBinderContinuationForTest, String> {
+) -> Result<LibraryBinderContinuationForTest, String> {
     let binder = &bound.binder;
     let ends = binder.checkpoint_ends();
     let array_symbol_after_augmentation =
@@ -4115,7 +4071,7 @@ pub(crate) fn continuation_receipt_for_test(
             source: row.source,
         })
         .collect();
-    Ok(AuthenticatedBinderContinuationForTest {
+    Ok(LibraryBinderContinuationForTest {
         bound,
         checkpoint_ends,
         ends,
@@ -5356,7 +5312,7 @@ mod tests {
             "#,
         );
         let replay = state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
 
         assert_eq!(replay.unowned_demand_count, 0);
@@ -5376,7 +5332,7 @@ mod tests {
             "#,
         );
         let replay = state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
 
         assert_eq!(replay.unowned_demand_count, 0);
@@ -5447,7 +5403,7 @@ mod tests {
 
         let trace = ReplayDependencyTrace::new(BTreeMap::new());
         let replay = state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
         for edge in &replay.reverse_edges {
             if edge.consumer == ReplayOwner::TypeGroup(consumer_group) {
@@ -6210,7 +6166,7 @@ mod tests {
             }
         };
         let replay = state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
 
         for (parent, child) in [
@@ -6254,7 +6210,6 @@ mod tests {
         )]);
         let rows = [RootNameRow {
             name: "Merged".to_owned(),
-            symbol: None,
             value: Some(ValueStorageId(0)),
             ty: None,
             namespace: None,
@@ -6293,7 +6248,6 @@ mod tests {
         let candidates = BTreeMap::from([("RuntimeNamespace".to_owned(), candidate)]);
         let rows = [RootNameRow {
             name: "RuntimeNamespace".to_owned(),
-            symbol: Some(SymbolId(0)),
             value: None,
             ty: None,
             namespace: Some(NamespaceId(0)),
@@ -6318,7 +6272,7 @@ mod tests {
         "#;
         let state = compile_reservation_fixture("root-normalization.d.ts", source);
         let replay = state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
         let root = |name: &str| {
             replay
@@ -6496,14 +6450,14 @@ mod tests {
             .expect("second exact replay index generation");
         let second_elapsed = started.elapsed();
         let first = first_state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
         let second = second_state
-            .generated_replay_index()
+            .replay_index()
             .expect("source compiler retains its replay index");
         assert_eq!(
-            first.canonical_manifest_bytes,
-            second.canonical_manifest_bytes
+            first.canonical_manifest_len(),
+            second.canonical_manifest_len()
         );
         assert_eq!(
             first.canonical_manifest_sha256,
@@ -6528,7 +6482,7 @@ mod tests {
             first.scc_membership.len(),
             first.statement_owners.len(),
             first.baseline_records.len(),
-            first.canonical_manifest_bytes.len(),
+            first.canonical_manifest_len(),
             digest,
             first_elapsed,
             second_elapsed,

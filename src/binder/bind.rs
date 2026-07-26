@@ -155,56 +155,32 @@ pub(crate) struct LibraryBinderUnit {
     pub(crate) module: ScopeId,
 }
 
+/// One compiled default-library binder, opaque outside the crate.
+///
+/// Provenance is structural: only `LibraryCompiler::compile_binder_checkpoint` can build one,
+/// the fields are private, and it is neither `Clone` nor constructible by a caller.
 #[doc(hidden)]
-pub struct UnauthenticatedLibraryBinderCheckpoint {
+pub struct LibraryBinderCheckpoint {
     binder: Binder,
     library_units: Vec<LibraryBinderUnit>,
-    source_binder_encoding_sha256: [u8; 32],
-    source_root_encoding_sha256: [u8; 32],
-    retained_scope_maps_sha256: [u8; 32],
     ends: LibraryBinderCheckpointEnds,
-}
-
-#[doc(hidden)]
-pub struct AuthenticatedLibraryBinderCheckpoint {
-    checkpoint: UnauthenticatedLibraryBinderCheckpoint,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
-pub(crate) enum LibraryBinderCheckpointMismatch {
-    BinderDigest,
-    RootDigest,
-    Prefix,
-    RetainedScopeMaps,
 }
 
 #[cfg(test)]
 pub(crate) struct LibraryBinderCheckpointInspectionForTest<'checkpoint> {
     pub(crate) library_units: &'checkpoint [LibraryBinderUnit],
-    pub(crate) source_binder_encoding_sha256: [u8; 32],
-    pub(crate) source_root_encoding_sha256: [u8; 32],
     pub(crate) ends: LibraryBinderCheckpointEnds,
     pub(crate) array_symbol: SymbolId,
     pub(crate) array_type_group: TypeGroupId,
 }
 
 #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
-impl UnauthenticatedLibraryBinderCheckpoint {
-    pub(crate) fn new(
-        binder: Binder,
-        library_units: Vec<LibraryBinderUnit>,
-        source_binder_encoding_sha256: [u8; 32],
-        source_root_encoding_sha256: [u8; 32],
-        retained_scope_maps_sha256: [u8; 32],
-    ) -> Self {
+impl LibraryBinderCheckpoint {
+    pub(crate) fn new(binder: Binder, library_units: Vec<LibraryBinderUnit>) -> Self {
         let ends = binder.checkpoint_ends();
         Self {
             binder,
             library_units,
-            source_binder_encoding_sha256,
-            source_root_encoding_sha256,
-            retained_scope_maps_sha256,
             ends,
         }
     }
@@ -214,94 +190,9 @@ impl UnauthenticatedLibraryBinderCheckpoint {
         self.library_units.len()
     }
 
-    pub(crate) fn authenticate(
-        self,
-        binder_digest: [u8; 32],
-        root_digest: [u8; 32],
-        ends: LibraryBinderCheckpointEnds,
-        retained_scope_maps_digest: [u8; 32],
-        library_units: &[LibraryBinderUnit],
-    ) -> Result<AuthenticatedLibraryBinderCheckpoint, LibraryBinderCheckpointMismatch> {
-        if self.source_binder_encoding_sha256 != binder_digest
-            || self.library_units != library_units
-        {
-            return Err(LibraryBinderCheckpointMismatch::BinderDigest);
-        }
-        if self.source_root_encoding_sha256 != root_digest {
-            return Err(LibraryBinderCheckpointMismatch::RootDigest);
-        }
-        if self.ends != ends {
-            return Err(LibraryBinderCheckpointMismatch::Prefix);
-        }
-        let retained = super::snapshot::encode_retained_scope_maps(&self.binder)
-            .map_err(|_| LibraryBinderCheckpointMismatch::RetainedScopeMaps)?;
-        use sha2::Digest;
-        let actual: [u8; 32] = sha2::Sha256::digest(retained).into();
-        if self.retained_scope_maps_sha256 != actual
-            || retained_scope_maps_digest != self.retained_scope_maps_sha256
-        {
-            return Err(LibraryBinderCheckpointMismatch::RetainedScopeMaps);
-        }
-        Ok(AuthenticatedLibraryBinderCheckpoint { checkpoint: self })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_binder_digest_for_test(&mut self) {
-        self.source_binder_encoding_sha256[0] ^= 1;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_root_digest_for_test(&mut self) {
-        self.source_root_encoding_sha256[0] ^= 1;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_prefix_for_test(&mut self) {
-        self.ends.symbols = self.ends.symbols.saturating_add(1);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_function_scopes_for_test(&mut self) {
-        if let Some(key) = self.binder.fn_scopes.keys().next().copied() {
-            self.binder.fn_scopes.remove(&key);
-        } else {
-            self.binder.fn_scopes.insert(
-                (self.binder.prelude_module, u32::MAX),
-                self.binder.prelude_module,
-            );
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_function_declaration_ids_for_test(&mut self) {
-        if let Some(key) = self.binder.fn_decl_ids.keys().next().copied() {
-            self.binder.fn_decl_ids.remove(&key);
-        } else {
-            self.binder.fn_decl_ids.insert(
-                (self.binder.prelude_module, u32::MAX),
-                ValueStorageId(u32::MAX),
-            );
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_block_scopes_for_test(&mut self) {
-        if let Some(key) = self.binder.block_scopes.keys().next().copied() {
-            self.binder.block_scopes.remove(&key);
-        } else {
-            self.binder.block_scopes.insert(
-                (self.binder.prelude_module, u32::MAX),
-                self.binder.prelude_module,
-            );
-        }
-    }
-}
-
-#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
-impl AuthenticatedLibraryBinderCheckpoint {
     #[cfg(test)]
     pub(crate) fn inspection_for_test(&self) -> LibraryBinderCheckpointInspectionForTest<'_> {
-        let binder = &self.checkpoint.binder;
+        let binder = &self.binder;
         let array_symbol = binder
             .resolve_type(binder.compilation_global, "Array")
             .expect("canonical library checkpoint contains Array");
@@ -311,32 +202,25 @@ impl AuthenticatedLibraryBinderCheckpoint {
             .and_then(|symbol| symbol.ty)
             .expect("canonical Array owns one type group");
         LibraryBinderCheckpointInspectionForTest {
-            library_units: &self.checkpoint.library_units,
-            source_binder_encoding_sha256: self.checkpoint.source_binder_encoding_sha256,
-            source_root_encoding_sha256: self.checkpoint.source_root_encoding_sha256,
-            ends: self.checkpoint.ends,
+            library_units: &self.library_units,
+            ends: self.ends,
             array_symbol,
             array_type_group,
         }
     }
 
     pub(crate) fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
-        self.checkpoint.ends
-    }
-
-    #[doc(hidden)]
-    pub fn library_unit_count(&self) -> usize {
-        self.checkpoint.library_units.len()
+        self.ends
     }
 
     pub(crate) fn into_continuation<'ast>(
         self,
     ) -> (ProjectBinderBuilder<'ast>, Vec<LibraryBinderUnit>) {
-        let UnauthenticatedLibraryBinderCheckpoint {
+        let Self {
             binder,
             library_units,
             ..
-        } = self.checkpoint;
+        } = self;
         let Binder {
             graph,
             symbols,
@@ -539,6 +423,7 @@ impl Binder {
         &self.module_sources
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_snapshot_parts(
         graph: ScopeGraph,

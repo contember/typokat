@@ -1,12 +1,10 @@
 //! Authoritative source-backed compiler for the pinned default library.
 
-#[cfg(test)]
-use super::profile::TestLibraryProfileInput;
 use super::profile::{ExactLibraryProfile, ExactLibrarySource};
-use crate::binder::bind::UnauthenticatedLibraryBinderCheckpoint;
+use crate::binder::bind::LibraryBinderCheckpoint;
 use crate::check::checker::library_compiler::{
     compile_owned_injected_profile, freeze_library_runtime_product, CompiledLibraryRuntimeProduct,
-    InjectedLibrarySource,
+    InjectedLibrarySource, OwnedLibraryRuntimeState,
 };
 use crate::source::LibraryFileOrdinal;
 use sha2::{Digest, Sha256};
@@ -19,11 +17,6 @@ thread_local! {
     static COMPILER_PARSE_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static COMPILER_BIND_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static COMPILER_CHECK_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn compiler_measurement_for_test() -> (u64, u64) {
-    (COMPILER_INVOCATIONS.get(), COMPILER_SOURCE_BYTES.get())
 }
 
 #[cfg(test)]
@@ -169,13 +162,6 @@ pub struct LibrarySemanticIdentity {
 }
 
 impl LibrarySemanticIdentity {
-    pub(crate) fn from_parts(runtime_projection: String, evidence: String) -> Self {
-        Self {
-            runtime_projection,
-            evidence,
-        }
-    }
-
     pub fn runtime_projection(&self) -> &str {
         &self.runtime_projection
     }
@@ -234,7 +220,7 @@ impl CompiledLibrary {
     #[cfg(test)]
     pub(crate) const fn replay_index_for_test(
         &self,
-    ) -> &crate::check::checker::replay_index::CollisionReplayIndex {
+    ) -> &crate::check::checker::replay_index::AdmittedCollisionReplayIndex {
         &self.runtime_projection._runtime._replay_index
     }
 
@@ -290,7 +276,7 @@ impl LibraryCompiler {
     pub fn compile_binder_checkpoint(
         &self,
         profile: &ExactLibraryProfile,
-    ) -> Result<UnauthenticatedLibraryBinderCheckpoint, LibraryCompilerError> {
+    ) -> Result<LibraryBinderCheckpoint, LibraryCompilerError> {
         #[cfg(test)]
         {
             COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
@@ -300,27 +286,8 @@ impl LibraryCompiler {
                 }),
             ));
         }
-        let owned_sources = profile
-            .sources()
-            .iter()
-            .map(|source| {
-                let text = std::str::from_utf8(source.bytes()).map_err(|_| {
-                    LibraryCompilerError::SourceNotUtf8 {
-                        file_ordinal: source.ordinal().index(),
-                        name: source.name().to_owned(),
-                    }
-                })?;
-                Ok((source.ordinal(), source.name().to_owned(), text.to_owned()))
-            })
-            .collect::<Result<Vec<_>, LibraryCompilerError>>()?;
-        let injected = owned_sources
-            .iter()
-            .map(|(ordinal, name, source)| InjectedLibrarySource {
-                file_ordinal: *ordinal,
-                name,
-                source,
-            })
-            .collect::<Vec<_>>();
+        let owned_sources = owned_library_sources(profile.sources())?;
+        let injected = injected_library_sources(&owned_sources);
         let checkpoint =
             crate::check::checker::library_compiler::compile_library_binder_checkpoint(&injected)
                 .map_err(|error| LibraryCompilerError::Compilation {
@@ -333,14 +300,6 @@ impl LibraryCompiler {
             COMPILER_BIND_UNITS.set(COMPILER_BIND_UNITS.get().saturating_add(unit_count));
         }
         Ok(checkpoint)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn compile_test_input(
-        &self,
-        input: &TestLibraryProfileInput,
-    ) -> Result<CompiledLibrary, LibraryCompilerError> {
-        self.compile_sources(input.profile_identity(), input.sources())
     }
 
     fn compile_sources(
@@ -356,47 +315,15 @@ impl LibraryCompiler {
             });
             COMPILER_SOURCE_BYTES.set(COMPILER_SOURCE_BYTES.get().saturating_add(source_bytes));
         }
-        let owned_sources = sources
-            .iter()
-            .map(|source| {
-                let text = std::str::from_utf8(source.bytes()).map_err(|_| {
-                    LibraryCompilerError::SourceNotUtf8 {
-                        file_ordinal: source.ordinal().index(),
-                        name: source.name().to_owned(),
-                    }
-                })?;
-                Ok((source.ordinal(), source.name().to_owned(), text.to_owned()))
-            })
-            .collect::<Result<Vec<_>, LibraryCompilerError>>()?;
-        let injected = owned_sources
-            .iter()
-            .map(|(ordinal, name, source)| InjectedLibrarySource {
-                file_ordinal: *ordinal,
-                name,
-                source,
-            })
-            .collect::<Vec<_>>();
+        let owned_sources = owned_library_sources(sources)?;
+        let injected = injected_library_sources(&owned_sources);
         let (run, runtime) = compile_owned_injected_profile(&injected).map_err(|error| {
             LibraryCompilerError::Compilation {
                 message: format!("{error:?}"),
             }
         })?;
         #[cfg(test)]
-        {
-            COMPILER_PARSE_UNITS.set(
-                COMPILER_PARSE_UNITS.get().saturating_add(
-                    u64::try_from(run.phase_counts.parse_units).unwrap_or(u64::MAX),
-                ),
-            );
-            COMPILER_BIND_UNITS.set(
-                COMPILER_BIND_UNITS
-                    .get()
-                    .saturating_add(u64::try_from(run.phase_counts.bind_units).unwrap_or(u64::MAX)),
-            );
-            COMPILER_CHECK_UNITS.set(COMPILER_CHECK_UNITS.get().saturating_add(
-                u64::try_from(run.phase_counts.statement_check_units).unwrap_or(u64::MAX),
-            ));
-        }
+        record_phase_counts(&run.phase_counts);
         let runtime = freeze_library_runtime_product(runtime).map_err(|message| {
             LibraryCompilerError::RuntimeProduct {
                 message: message.to_owned(),
@@ -469,6 +396,84 @@ impl LibraryCompiler {
     }
 }
 
+/// Compile a profile straight into the owned runtime state the frozen base is sealed from.
+///
+/// This is the production route to a default-library base: no artifact is admitted, and the
+/// evidence projection `compile` builds is deliberately skipped.
+pub(crate) fn compile_owned_library_runtime(
+    profile: &ExactLibraryProfile,
+) -> Result<OwnedLibraryRuntimeState, LibraryCompilerError> {
+    #[cfg(test)]
+    {
+        COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
+        let source_bytes = profile.sources().iter().fold(0u64, |total, source| {
+            total.saturating_add(u64::try_from(source.bytes().len()).unwrap_or(u64::MAX))
+        });
+        COMPILER_SOURCE_BYTES.set(COMPILER_SOURCE_BYTES.get().saturating_add(source_bytes));
+    }
+    let owned_sources = owned_library_sources(profile.sources())?;
+    let injected = injected_library_sources(&owned_sources);
+    let (run, runtime) = compile_owned_injected_profile(&injected).map_err(|error| {
+        LibraryCompilerError::Compilation {
+            message: format!("{error:?}"),
+        }
+    })?;
+    #[cfg(test)]
+    record_phase_counts(&run.phase_counts);
+    #[cfg(not(test))]
+    let _ = run;
+    Ok(runtime)
+}
+
+type OwnedLibrarySource = (LibraryFileOrdinal, String, String);
+
+fn owned_library_sources(
+    sources: &[ExactLibrarySource],
+) -> Result<Vec<OwnedLibrarySource>, LibraryCompilerError> {
+    sources
+        .iter()
+        .map(|source| {
+            let text = std::str::from_utf8(source.bytes()).map_err(|_| {
+                LibraryCompilerError::SourceNotUtf8 {
+                    file_ordinal: source.ordinal().index(),
+                    name: source.name().to_owned(),
+                }
+            })?;
+            Ok((source.ordinal(), source.name().to_owned(), text.to_owned()))
+        })
+        .collect()
+}
+
+fn injected_library_sources(owned: &[OwnedLibrarySource]) -> Vec<InjectedLibrarySource<'_>> {
+    owned
+        .iter()
+        .map(|(ordinal, name, source)| InjectedLibrarySource {
+            file_ordinal: *ordinal,
+            name,
+            source,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn record_phase_counts(counts: &crate::check::checker::library_compiler::LibraryPhaseCounts) {
+    COMPILER_PARSE_UNITS.set(
+        COMPILER_PARSE_UNITS
+            .get()
+            .saturating_add(u64::try_from(counts.parse_units).unwrap_or(u64::MAX)),
+    );
+    COMPILER_BIND_UNITS.set(
+        COMPILER_BIND_UNITS
+            .get()
+            .saturating_add(u64::try_from(counts.bind_units).unwrap_or(u64::MAX)),
+    );
+    COMPILER_CHECK_UNITS.set(
+        COMPILER_CHECK_UNITS
+            .get()
+            .saturating_add(u64::try_from(counts.statement_check_units).unwrap_or(u64::MAX)),
+    );
+}
+
 fn component_identity(bytes: &[u8], record_count: usize) -> EvidenceComponent {
     EvidenceComponent {
         record_count,
@@ -496,4 +501,64 @@ fn aggregate_identity<'identity>(
         digest.update(identity.as_bytes());
     }
     format!("{:x}", digest.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_send_sync_static<T: Send + Sync + 'static>(_: &T) {}
+
+    const PROFILE_IDENTITY: &str =
+        "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+
+    #[test]
+    fn library_compiler_separates_runtime_product_from_evidence() {
+        let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");
+        let compiled = LibraryCompiler::new()
+            .compile(&profile)
+            .expect("complete source-backed library compilation");
+
+        assert_send_sync_static(compiled.runtime_projection());
+        assert_eq!(compiled.profile_identity(), PROFILE_IDENTITY);
+        assert_eq!(compiled.report().parse_units, 82);
+        assert_eq!(compiled.report().bind_units, 82);
+        assert_eq!(compiled.report().statement_check_units, 82);
+        assert_eq!(compiled.report().reserved_records, 42_496);
+        assert_eq!(compiled.report().filled_records, 42_496);
+        assert_eq!(compiled.report().publication_validations, 2_099);
+        assert_eq!(compiled.evidence().diagnostics().record_count(), 265);
+        assert_eq!(compiled.evidence().diagnostics().byte_len(), 125_251);
+        assert_eq!(
+            compiled.evidence().diagnostics().sha256(),
+            "79ef18a2496c296b380e3d37dd71e589ad036614ce2fe0f9b49073cc3bf5d427"
+        );
+        assert_eq!(compiled.evidence().incompletes().record_count(), 610);
+        assert_eq!(compiled.evidence().incompletes().byte_len(), 97_796);
+        assert_eq!(
+            compiled.evidence().incompletes().sha256(),
+            "8c268088f8afd8048690584008c40a49cd3337b91f345b2e879d625525ccf6d8"
+        );
+        assert_eq!(compiled.evidence().library_ledger().record_count(), 875);
+        assert_eq!(compiled.evidence().library_ledger().byte_len(), 223_016);
+        assert_eq!(
+            compiled.evidence().library_ledger().sha256(),
+            "33204da8512a79ba77cc647f1f5641c91726e4a6aaa7b7a394d0851e5f7bd31c"
+        );
+        assert_eq!(compiled.evidence().source_identities().len(), 82);
+        assert!(compiled
+            .evidence()
+            .source_identities()
+            .iter()
+            .all(|source| source.is_library_owned()));
+        assert_eq!(
+            compiled.semantic_identity().runtime_projection(),
+            compiled.runtime_projection().semantic_identity()
+        );
+        assert_eq!(
+            compiled.semantic_identity().evidence(),
+            compiled.evidence().semantic_identity()
+        );
+        assert_eq!(compiled.evidence().profile_identity(), PROFILE_IDENTITY);
+    }
 }

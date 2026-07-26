@@ -98,6 +98,7 @@ impl SymbolTable {
         self.symbols.get_mut_local(id.index())
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.symbols.iter()
     }

@@ -111,6 +111,7 @@ impl ScopeGraph {
         self.scopes.base_len()
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_scopes(&self) -> impl Iterator<Item = &Scope> {
         self.scopes.iter()
     }

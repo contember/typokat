@@ -608,6 +608,7 @@ impl FrozenNamespaceValueTerminals {
         Ok(rows)
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn from_snapshot_parts(
         rows: FrozenNamespaceValueTerminalsSnapshotParts,
     ) -> Result<Self, &'static str> {

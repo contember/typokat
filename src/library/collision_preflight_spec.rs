@@ -7,16 +7,19 @@ use super::base::{
     CollisionPreflightReceiptForTest, CollisionRouteForTest, ModuleClassificationForTest,
     PreflightSlotForTest, UserDeltaProjectInputForTest,
 };
-use super::{FrozenLibraryBase, LibraryBaseProvider};
+use super::provider::shared_library_base_provider_for_test;
+use super::FrozenLibraryBase;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+/// The process-wide source-compiled base. Compiling all 82 packaged sources costs seconds, so
+/// every spec in this binary shares one.
 fn acquire() -> Arc<FrozenLibraryBase> {
-    LibraryBaseProvider::new()
+    shared_library_base_provider_for_test()
         .get()
-        .expect("canonical frozen library base")
+        .expect("source-compiled default library base")
 }
 
 fn input<'source>(

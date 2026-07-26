@@ -1,19 +1,17 @@
-//! External package-extraction gate for the production default-library artifact.
+//! External package-extraction gate for the default-library sources.
 
 use std::process::Command;
 
 const EXPECTED_RECORD: &str = concat!(
-    "typokat-library-package-v1 clean_roots=2 generations=2 ",
-    "artifact_bytes=21003926 ",
-    "artifact_sha256=47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f ",
+    "typokat-library-package-v1 clean_roots=2 ",
     "profile_sha256=ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d ",
-    "dts_sources=82 licenses=2 cargo_checks=2 build_scripts=0 build_generations=0 ",
+    "dts_sources=82 licenses=2 cargo_checks=2 build_scripts=0 ",
     "source_mutations=0"
 );
 
 #[test]
-#[ignore = "package verifier runs two clean generations, extraction, and cargo check"]
-fn clean_generation_and_cargo_package_are_reproducible_and_complete() {
+#[ignore = "package verifier packages two clean roots, extracts them, and runs cargo check"]
+fn cargo_package_ships_every_library_source_and_checks_clean() {
     let tests = Command::new("python3")
         .args([
             "-m",

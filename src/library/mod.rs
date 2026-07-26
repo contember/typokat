@@ -1,10 +1,8 @@
-pub mod artifact;
 mod base;
 mod collision_preflight;
 pub mod compiler;
 pub mod profile;
 mod provider;
-mod snapshot;
 
 pub use crate::source::LibraryFileOrdinal;
 /// Immutable canonical library state shared by user checks.
@@ -16,17 +14,11 @@ pub use crate::source::LibraryFileOrdinal;
 /// ```
 pub use base::FrozenLibraryBase;
 pub use provider::{
-    CheckpointAuthenticationViolation, LibraryBaseProvider, LibraryInitCause, LibraryInitError,
-    LibraryInitStage, LibraryProjectBinderContinuation, LibrarySnapshotViolation,
+    LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage,
+    LibraryProjectBinderContinuation,
 };
 
 pub(crate) use collision_preflight::CollisionFreeUserDeltaCapability;
-
-#[cfg(test)]
-mod artifact_spec;
-
-#[cfg(test)]
-mod snapshot_base_spec;
 
 #[cfg(test)]
 mod user_delta_spec;

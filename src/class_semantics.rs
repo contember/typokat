@@ -226,6 +226,7 @@ impl PublishedClasses {
         self.states.local_len() + self.surfaces.local_len() + self.poison.local_len()
     }
 
+    #[cfg(test)]
     pub(crate) fn from_snapshot_terminals(
         terminals: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
     ) -> Result<Self, &'static str> {

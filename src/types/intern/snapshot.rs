@@ -1,15 +1,22 @@
 //! Strict snapshot boundary for the type universe, with test-only encoder support.
 
 use super::*;
+use crate::snapshot_codec::SnapshotCodecError;
+#[cfg(test)]
+use crate::snapshot_codec::SnapshotReader;
 #[cfg(test)]
 use crate::snapshot_codec::SnapshotWriter;
-use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
+#[cfg(test)]
 use crate::types::hash::StructuralKey;
+use crate::types::repr::DeclaredRecipeNode;
+#[cfg(test)]
 use crate::types::repr::{
-    ClassInstanceType, DeclaredRecipeNode, DeferredIndexedAccessType, FunctionType, TemplateType,
+    ClassInstanceType, DeferredIndexedAccessType, FunctionType, TemplateType,
 };
 
+#[cfg(test)]
 const VERSION: u32 = 1;
+#[cfg(test)]
 const WELL_KNOWN_COUNT: usize = 17;
 
 // Reference-manifest domains are shared with the archive assembler.
@@ -18,6 +25,7 @@ const TYPE_DOMAIN: u8 = 1;
 const TYPE_PARAM_DOMAIN: u8 = 2;
 const CLASS_DOMAIN: u8 = 3;
 const DECLARED_RECIPE_DOMAIN: u8 = 10;
+#[cfg(test)]
 const INTERNER_BUCKET_DOMAIN: u8 = 16;
 
 // Store TypeId owners reuse these relationship fields across payload kinds.
@@ -42,9 +50,12 @@ const CONSTRAINT_TARGET_FIELD: u8 = 7;
 const FROZEN_TYPE_PARAM_FIELD: u8 = 8;
 const TEMPLATE_NAME_TYPE_FIELD: u8 = 9;
 
+#[cfg(test)]
 // Interner identity container fields.
 const BUCKET_CANDIDATE_FIELD: u8 = 0;
+#[cfg(test)]
 const RESERVED_TYPE_FIELD: u8 = 1;
+#[cfg(test)]
 const WELL_KNOWN_TYPE_FIELD: u8 = 2;
 
 pub(crate) type SnapshotReferenceRecord = (u8, u8, u8, u32, u32);
@@ -105,6 +116,7 @@ impl Interner {
         self.store_snapshot_reference_records()
     }
 
+    #[cfg(test)]
     /// Canonical reference rows for the Store and Interner archive families.
     ///
     /// Tuple order is `(owner_domain, target_domain, field, owner, target)`.
@@ -122,6 +134,7 @@ impl Interner {
         self.reference_records_for_complete_state()
     }
 
+    #[cfg(test)]
     fn reference_records_for_complete_state(
         &self,
     ) -> Result<(Vec<SnapshotReferenceRecord>, Vec<SnapshotReferenceRecord>), SnapshotCodecError>
@@ -782,6 +795,7 @@ impl Interner {
         Ok(interner)
     }
 
+    #[cfg(test)]
     fn read_identity_snapshot(
         store: Store,
         reader: &mut SnapshotReader<'_>,
@@ -886,6 +900,7 @@ impl Interner {
         Ok(interner)
     }
 
+    #[cfg(test)]
     pub(crate) fn decode_split_snapshot_sections(
         store_bytes: &[u8],
         identity_bytes: &[u8],
@@ -914,6 +929,7 @@ impl Interner {
         Ok(interner)
     }
 
+    #[cfg(test)]
     fn validate_snapshot(&mut self) -> Result<(), SnapshotCodecError> {
         let len = self.store.len();
         if len < WELL_KNOWN_COUNT {
@@ -1042,6 +1058,7 @@ fn validation(message: &'static str) -> SnapshotCodecError {
     SnapshotCodecError::invalid(0, message)
 }
 
+#[cfg(test)]
 fn well_known_ids(well_known: WellKnown) -> [TypeId; WELL_KNOWN_COUNT] {
     [
         well_known.error,
@@ -1064,6 +1081,7 @@ fn well_known_ids(well_known: WellKnown) -> [TypeId; WELL_KNOWN_COUNT] {
     ]
 }
 
+#[cfg(test)]
 fn well_known_from_ids(ids: [TypeId; WELL_KNOWN_COUNT]) -> WellKnown {
     let [error, any, unknown, never, void, null, undefined, boolean, number, string, uppercase, lowercase, capitalize, uncapitalize, this_type, omit_this_parameter, object] =
         ids;
@@ -1097,6 +1115,7 @@ fn reserved_kind_discriminant(kind: ReservedTypeKind) -> u8 {
     }
 }
 
+#[cfg(test)]
 fn read_reserved_kind(value: u8, offset: usize) -> Result<ReservedTypeKind, SnapshotCodecError> {
     match value {
         0 => Ok(ReservedTypeKind::Object),
@@ -1109,6 +1128,7 @@ fn read_reserved_kind(value: u8, offset: usize) -> Result<ReservedTypeKind, Snap
     }
 }
 
+#[cfg(test)]
 fn structural_hash_for_id(store: &Store, id: TypeId) -> Result<u64, SnapshotCodecError> {
     let hash = match store.tag(id) {
         TypeTag::Intrinsic => structural_hash(&StructuralKey::Intrinsic(
@@ -1263,6 +1283,7 @@ fn structural_hash_for_id(store: &Store, id: TypeId) -> Result<u64, SnapshotCode
     Ok(hash)
 }
 
+#[cfg(test)]
 fn structurally_equal(
     store: &Store,
     left: TypeId,
@@ -1314,18 +1335,21 @@ fn structurally_equal(
     Ok(equal)
 }
 
+#[cfg(test)]
 fn object(store: &Store, id: TypeId) -> Result<&ObjectType, SnapshotCodecError> {
     store
         .object_type(id)
         .ok_or_else(|| validation("object payload is missing"))
 }
 
+#[cfg(test)]
 fn function(store: &Store, id: TypeId) -> Result<&FunctionType, SnapshotCodecError> {
     store
         .function_type(id)
         .ok_or_else(|| validation("function payload is missing"))
 }
 
+#[cfg(test)]
 fn function_equal(left: &FunctionType, right: &FunctionType) -> bool {
     left.type_params == right.type_params
         && left.receiver == right.receiver
@@ -1333,6 +1357,7 @@ fn function_equal(left: &FunctionType, right: &FunctionType) -> bool {
         && left.ret == right.ret
 }
 
+#[cfg(test)]
 fn conditional_equal(
     store: &Store,
     left: TypeId,
@@ -1353,6 +1378,7 @@ fn conditional_equal(
         && left.poisoned == right.poisoned)
 }
 
+#[cfg(test)]
 fn instantiation_equal(
     store: &Store,
     left: TypeId,
@@ -1367,6 +1393,7 @@ fn instantiation_equal(
     Ok(left.base == right.base && left.args == right.args)
 }
 
+#[cfg(test)]
 fn mapped_equal(store: &Store, left: TypeId, right: TypeId) -> Result<bool, SnapshotCodecError> {
     let left = store
         .mapped_type(left)
@@ -1382,24 +1409,28 @@ fn mapped_equal(store: &Store, left: TypeId, right: TypeId) -> Result<bool, Snap
         && left.readonly_modifier == right.readonly_modifier)
 }
 
+#[cfg(test)]
 fn template_equal(store: &Store, left: TypeId, right: TypeId) -> Result<bool, SnapshotCodecError> {
     let left = template(store, left)?;
     let right = template(store, right)?;
     Ok(left.texts == right.texts && left.holes == right.holes)
 }
 
+#[cfg(test)]
 fn template(store: &Store, id: TypeId) -> Result<&TemplateType, SnapshotCodecError> {
     store
         .template_type(id)
         .ok_or_else(|| validation("template payload is missing"))
 }
 
+#[cfg(test)]
 fn class_instance(store: &Store, id: TypeId) -> Result<&ClassInstanceType, SnapshotCodecError> {
     store
         .class_instance_type(id)
         .ok_or_else(|| validation("class instance payload is missing"))
 }
 
+#[cfg(test)]
 fn deferred_access(
     store: &Store,
     id: TypeId,

@@ -1,4 +1,4 @@
-"""Adversarial RED contract for the WU2 package coordinator."""
+"""Adversarial RED contract for the default-library package coordinator."""
 
 from __future__ import annotations
 
@@ -34,15 +34,11 @@ class PackageCoordinatorContractTests(unittest.TestCase):
         self.record = {
             "schema": 1,
             "clean_roots": ["/isolated/one", "/isolated/two"],
-            "generation_sha256": [self.contract["artifact_sha256"]] * 2,
-            "artifact_bytes": self.contract["artifact_bytes"],
-            "artifact_sha256": self.contract["artifact_sha256"],
             "profile_sha256": self.contract["profile_sha256"],
             "dts_sources": self.contract["dts_sources"],
             "licenses": list(self.contract["licenses"]),
             "cargo_checks": 2,
             "build_scripts": 0,
-            "build_generations": 0,
             "source_mutations": 0,
         }
         self.inventory = {
@@ -63,26 +59,26 @@ class PackageCoordinatorContractTests(unittest.TestCase):
         with self.assertRaises(verify.ContractError):
             verify.validate_contract(changed)
         changed = dict(self.contract)
-        del changed["artifact_sha256"]
+        del changed["profile_sha256"]
         with self.assertRaises(verify.ContractError):
             verify.validate_contract(changed)
 
-    def test_two_distinct_clean_generations_are_mandatory(self) -> None:
+    def test_two_distinct_clean_roots_are_mandatory(self) -> None:
         verify.validate_record(self.record, self.contract)
         self.assert_record_rejected(
             lambda row: row.__setitem__("clean_roots", ["same", "same"])
         )
         self.assert_record_rejected(
-            lambda row: row.__setitem__("generation_sha256", [row["artifact_sha256"]])
+            lambda row: row.__setitem__("clean_roots", ["/isolated/one"])
         )
         self.assert_record_rejected(
-            lambda row: row["generation_sha256"].__setitem__(1, "0" * 64)
+            lambda row: row.__setitem__("clean_roots", ["relative/one", "relative/two"])
         )
 
     def test_package_inventory_is_exact(self) -> None:
         verify.validate_package_inventory(self.inventory, self.contract)
         missing = set(self.inventory)
-        missing.remove("src/library/typescript-6.0.3/canonical.snapshot")
+        missing.remove("src/library/typescript-6.0.3/profile.toml")
         with self.assertRaises(verify.ContractError):
             verify.validate_package_inventory(missing, self.contract)
         extra = set(self.inventory)
@@ -96,13 +92,10 @@ class PackageCoordinatorContractTests(unittest.TestCase):
 
     def test_build_and_package_cannot_generate_or_mutate_sources(self) -> None:
         self.assert_record_rejected(lambda row: row.__setitem__("build_scripts", 1))
-        self.assert_record_rejected(lambda row: row.__setitem__("build_generations", 1))
         self.assert_record_rejected(lambda row: row.__setitem__("source_mutations", 1))
 
-    def test_exact_artifact_profile_assets_and_checks_are_bound(self) -> None:
+    def test_exact_profile_assets_and_checks_are_bound(self) -> None:
         for key, changed in (
-            ("artifact_bytes", 1),
-            ("artifact_sha256", "0" * 64),
             ("profile_sha256", "0" * 64),
             ("dts_sources", 81),
             ("licenses", ["LICENSE.txt"]),
@@ -176,7 +169,6 @@ class PackageCoordinatorContractTests(unittest.TestCase):
             observations = {
                 "cargo_checks": 0,
                 "build_scripts": 0,
-                "build_generations": 0,
                 "source_mutations": 0,
             }
             with self.assertRaises(verify.ContractError):

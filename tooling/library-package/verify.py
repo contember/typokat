@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed WU2 generation and packaged-crate coordinator."""
+"""Fail-closed packaged-crate coordinator for the default-library sources."""
 
 from __future__ import annotations
 
@@ -40,11 +40,6 @@ PROFILE_FILE_KEYS = {
     "lf", "cr", "final_lf", "source_kind", "references",
 }
 PROFILE_REFERENCE_KEYS = {"lib", "file"}
-
-# The integration-owned generation probe writes exactly one new archive to the
-# absolute path supplied here. It must not rewrite the checked-in artifact.
-GENERATION_FILTER = "library::artifact::generate_packaged_snapshot_for_tooling"
-GENERATION_OUTPUT_ENV = "TYPOKAT_LIBRARY_SNAPSHOT_OUTPUT"
 
 
 class ContractError(RuntimeError):
@@ -106,7 +101,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         {
             "schema",
             "clean_roots",
-            "generations",
             "typescript_version",
             "typescript_upstream_revision",
             "profile_sha256",
@@ -121,8 +115,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
             "profile_script_sources",
             "profile_external_module_sources",
             "profile_reference_edges",
-            "artifact_bytes",
-            "artifact_sha256",
             "dts_sources",
             "licenses",
             "license_bytes",
@@ -138,7 +130,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
             "required_package_assets",
             "cargo_checks",
             "build_scripts",
-            "build_generations",
             "source_mutations",
         },
         "package contract",
@@ -146,8 +137,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
     expected_integers = {
         "schema": 1,
         "clean_roots": 2,
-        "generations": 2,
-        "artifact_bytes": 21_003_926,
         "dts_sources": 82,
         "profile_manifest_bytes": 36_558,
         "profile_source_bytes": 2_936_611,
@@ -163,7 +152,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         "profile_notice_bytes": 1_036,
         "cargo_checks": 2,
         "build_scripts": 0,
-        "build_generations": 0,
         "source_mutations": 0,
     }
     for key, expected in expected_integers.items():
@@ -189,7 +177,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         "profile_raw_concat_sha256": (
             "0c68516cfe1dff30ce17425b2566813cf6d00c7f589dd24f31f4ba879b69a267"
         ),
-        "artifact_sha256": "47a8a6fd349f3b3fbb3aae1baccedbc67530edc35227707d79afac5395ca7d2f",
         "license_sha256": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47",
         "third_party_notice_sha256": (
             "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
@@ -212,7 +199,6 @@ def validate_contract(contract: Any) -> dict[str, Any]:
     if required != [
         PROFILE_PREFIX + ".gitattributes",
         PROFILE_PREFIX + "README.md",
-        PROFILE_PREFIX + "canonical.snapshot",
         PROFILE_PREFIX + "profile.toml",
         PROFILE_PREFIX + "LICENSE.txt",
         PROFILE_PREFIX + "ThirdPartyNoticeText.txt",
@@ -229,15 +215,11 @@ def validate_record(record: Any, contract: dict[str, Any]) -> dict[str, Any]:
         {
             "schema",
             "clean_roots",
-            "generation_sha256",
-            "artifact_bytes",
-            "artifact_sha256",
             "profile_sha256",
             "dts_sources",
             "licenses",
             "cargo_checks",
             "build_scripts",
-            "build_generations",
             "source_mutations",
         },
         "package record",
@@ -255,30 +237,18 @@ def validate_record(record: Any, contract: dict[str, Any]) -> dict[str, Any]:
         normalized_roots.append(os.path.normpath(root))
     if len(set(normalized_roots)) != len(normalized_roots):
         raise ContractError("record clean roots must be distinct")
-    generations = value["generation_sha256"]
-    if (
-        not isinstance(generations, list)
-        or len(generations) != contract["generations"]
-        or any(not isinstance(item, str) for item in generations)
-        or any(
-            _digest(item, "record generation digest") != contract["artifact_sha256"]
-            for item in generations
-        )
-    ):
-        raise ContractError("record generation identities differ")
     for key in (
-        "artifact_bytes",
         "dts_sources",
         "cargo_checks",
         "build_scripts",
-        "build_generations",
         "source_mutations",
     ):
         if _integer(value[key], f"record {key}") != contract[key]:
             raise ContractError(f"record {key} differs")
-    for key in ("artifact_sha256", "profile_sha256"):
-        if _digest(value[key], f"record {key}") != contract[key]:
-            raise ContractError(f"record {key} differs")
+    if _digest(value["profile_sha256"], "record profile_sha256") != contract[
+        "profile_sha256"
+    ]:
+        raise ContractError("record profile_sha256 differs")
     if _string_list(value["licenses"], "record licenses") != contract["licenses"]:
         raise ContractError("record license inventory differs")
     return value
@@ -641,12 +611,6 @@ def _profile_asset_inventory(profile_dir: Path, contract: dict[str, Any]) -> set
             expected_final_lf=line_facts[2],
             label=f"profile {name}",
         )
-    if _file_identity(profile_dir / "canonical.snapshot") != (
-        contract["artifact_bytes"],
-        contract["artifact_sha256"],
-    ):
-        raise ContractError("canonical profile snapshot identity differs")
-
     rows = value["file"]
     if not isinstance(rows, list) or len(rows) != contract["dts_sources"]:
         raise ContractError("profile source registry count differs")
@@ -1056,7 +1020,6 @@ def _cargo_metadata(
         raise ContractError(f"cargo metadata returned invalid JSON: {error}") from error
     custom_builds = _validate_cargo_metadata(metadata, root / "Cargo.toml")
     observations["build_scripts"] += custom_builds
-    observations["build_generations"] += custom_builds
     return custom_builds
 
 
@@ -1075,55 +1038,7 @@ def _clone_clean_root(destination: Path, revision: str) -> None:
         timeout=300,
     )
     _git(destination, ["checkout", "--quiet", "--detach", revision])
-    _require_git_clean_all(destination, "isolated generation root")
-
-
-def _generation_command() -> list[str]:
-    return [
-        "cargo",
-        "test",
-        "--release",
-        "--locked",
-        "--offline",
-        "--lib",
-        GENERATION_FILTER,
-        "--",
-        "--ignored",
-        "--exact",
-        "--nocapture",
-        "--test-threads=1",
-    ]
-
-
-def _generate(
-    root: Path,
-    output: Path,
-    target: Path,
-    cargo_home: Path,
-    contract: dict[str, Any],
-    observations: dict[str, int],
-) -> str:
-    if output.exists() or output.is_symlink():
-        raise ContractError("generation output path already exists")
-    environment = _clean_environment(target, cargo_home)
-    environment[GENERATION_OUTPUT_ENV] = str(output.resolve())
-    process = _run_observed(
-        _generation_command(),
-        cwd=root,
-        environment=environment,
-        source_root=root,
-        observations=observations,
-        require_git_clean=True,
-    )
-    if (
-        process.stdout.count("running 1 test") != 1
-        or "test result: ok. 1 passed" not in process.stdout
-    ):
-        raise ContractError("generation command did not run exactly one passing test")
-    identity = _file_identity(output)
-    if identity != (contract["artifact_bytes"], contract["artifact_sha256"]):
-        raise ContractError("generation differs from the canonical artifact")
-    return identity[1]
+    _require_git_clean_all(destination, "isolated package root")
 
 
 def _package_list(
@@ -1312,15 +1227,11 @@ def _format_record(record: dict[str, Any]) -> str:
     return (
         "typokat-library-package-v1 "
         f"clean_roots={len(record['clean_roots'])} "
-        f"generations={len(record['generation_sha256'])} "
-        f"artifact_bytes={record['artifact_bytes']} "
-        f"artifact_sha256={record['artifact_sha256']} "
         f"profile_sha256={record['profile_sha256']} "
         f"dts_sources={record['dts_sources']} "
         f"licenses={len(record['licenses'])} "
         f"cargo_checks={record['cargo_checks']} "
         f"build_scripts={record['build_scripts']} "
-        f"build_generations={record['build_generations']} "
         f"source_mutations={record['source_mutations']}"
     )
 
@@ -1332,7 +1243,6 @@ def coordinate(contract: dict[str, Any]) -> dict[str, Any]:
         observations = {
             "cargo_checks": 0,
             "build_scripts": 0,
-            "build_generations": 0,
             "source_mutations": 0,
         }
         roots = [run_root / "clean-1", run_root / "clean-2"]
@@ -1360,21 +1270,6 @@ def coordinate(contract: dict[str, Any]) -> dict[str, Any]:
                 observations,
                 require_git_clean=True,
             )
-        generations = [
-            _generate(
-                root,
-                run_root / f"generation-{ordinal}.snapshot",
-                run_root / f"generation-target-{ordinal}",
-                cargo_homes[ordinal - 1],
-                contract,
-                observations,
-            )
-            for ordinal, root in enumerate(roots, 1)
-        ]
-        first = run_root / "generation-1.snapshot"
-        second = run_root / "generation-2.snapshot"
-        if _read_regular_nofollow(first)[1] != _read_regular_nofollow(second)[1]:
-            raise ContractError("clean-root generations are not byte-identical")
         for ordinal, (root, cargo_home) in enumerate(
             zip(roots, cargo_homes, strict=True), 1
         ):
@@ -1390,15 +1285,11 @@ def coordinate(contract: dict[str, Any]) -> dict[str, Any]:
         record = {
             "schema": 1,
             "clean_roots": [str(root.resolve()) for root in roots],
-            "generation_sha256": generations,
-            "artifact_bytes": contract["artifact_bytes"],
-            "artifact_sha256": contract["artifact_sha256"],
             "profile_sha256": contract["profile_sha256"],
             "dts_sources": contract["dts_sources"],
             "licenses": list(contract["licenses"]),
             "cargo_checks": observations["cargo_checks"],
             "build_scripts": observations["build_scripts"],
-            "build_generations": observations["build_generations"],
             "source_mutations": observations["source_mutations"],
         }
         validate_record(record, contract)

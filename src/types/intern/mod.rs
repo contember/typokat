@@ -556,10 +556,12 @@ impl Interner {
             .copied()
     }
 
+    #[cfg(test)]
     fn contains_reserved_type(&self, id: TypeId) -> bool {
         self.reserved_types_base.contains_key(&id) || self.reserved_types.contains_key(&id)
     }
 
+    #[cfg(test)]
     fn dedup_buckets(&self) -> impl Iterator<Item = (&u64, &SmallVec<[TypeId; 2]>)> {
         self.dedup_base.iter().chain(self.dedup.iter())
     }
@@ -596,12 +598,14 @@ impl Interner {
         ]
     }
 
+    #[cfg(test)]
     fn reserved_types(&self) -> impl Iterator<Item = (&TypeId, &ReservedType)> {
         self.reserved_types_base
             .iter()
             .chain(self.reserved_types.iter())
     }
 
+    #[cfg(test)]
     fn has_nonempty_delta(&self) -> bool {
         self.store.has_nonempty_delta()
             || (self.store.is_sealed_base()

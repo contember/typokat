@@ -315,9 +315,9 @@ fn derive_root_lookup_from_wire(
 
 #[test]
 fn admitted_root_lookup_exactly_projects_authenticated_roots_and_consumers() {
-    let base = super::LibraryBaseProvider::new()
+    let base = super::provider::shared_library_base_provider_for_test()
         .get()
-        .expect("canonical frozen library base");
+        .expect("source-compiled default library base");
     let index = base.replay_index_for_test();
     let expected = derive_root_lookup_from_wire(index);
 
@@ -362,9 +362,9 @@ fn admitted_root_lookup_exactly_projects_authenticated_roots_and_consumers() {
 
 #[test]
 fn root_lookup_ordinals_recover_placeholder_roots_and_global_flags() {
-    let base = super::LibraryBaseProvider::new()
+    let base = super::provider::shared_library_base_provider_for_test()
         .get()
-        .expect("canonical frozen library base");
+        .expect("source-compiled default library base");
     let index = base.replay_index_for_test();
     let expected = derive_root_lookup_from_wire(index);
     let mut placeholder_witnesses = BTreeSet::new();
@@ -500,9 +500,9 @@ fn sparse_scheduler_touches_only_the_three_affected_sccs() {
 
 #[test]
 fn canonical_array_type_group_seed_matches_the_independent_full_scan_oracle() {
-    let base = super::LibraryBaseProvider::new()
+    let base = super::provider::shared_library_base_provider_for_test()
         .get()
-        .expect("canonical frozen library base");
+        .expect("source-compiled default library base");
     let index = base.replay_index_for_test();
     require_compact_runtime_indexes(index);
     // Root admission resolves the name once; the scheduler accepts only authenticated owners.

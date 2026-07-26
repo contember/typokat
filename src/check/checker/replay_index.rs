@@ -6,7 +6,6 @@ use crate::binder::declaration::{TypeGroupId, ValueStorageId};
 use crate::binder::namespace::NamespaceId;
 use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
-use crate::snapshot_codec::{SnapshotCodecError, SnapshotReader};
 use crate::source::LibraryFileOrdinal;
 use crate::span::Span;
 use crate::types::repr::ClassId;
@@ -17,12 +16,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// SHA-256 of the manifest the source compiler emits for the pinned 82-source profile.
+///
+/// Publication fails closed when the compiler's replay index drifts from it.
 pub(crate) const COLLISION_REPLAY_MANIFEST_SHA256: [u8; 32] = [
-    0xcc, 0x12, 0x5e, 0x22, 0xa5, 0x61, 0xb0, 0x69, 0xf6, 0x2f, 0x67, 0x07, 0xe5, 0xeb, 0x3f, 0x81,
-    0x87, 0xbe, 0x09, 0x59, 0xbb, 0x75, 0xd8, 0xcb, 0xfb, 0x66, 0x52, 0x66, 0xd2, 0x1c, 0x2c, 0x95,
+    0x8b, 0x64, 0x15, 0xa5, 0xc0, 0xe0, 0xd0, 0xe2, 0x96, 0x79, 0x63, 0x63, 0x0c, 0xae, 0xed, 0x08,
+    0xdd, 0x89, 0x8f, 0xcc, 0x0f, 0xce, 0x67, 0x2d, 0x90, 0xdb, 0xe6, 0x62, 0xc1, 0xf5, 0x40, 0x5f,
 ];
 const COLLISION_REPLAY_MANIFEST_DOMAIN: &[u8] = b"typokat-collision-replay-index-v1";
-const MAX_REPLAY_COLLECTION_ROWS: usize = 1_000_000;
 
 /// Stable semantic publication domains. Tag order is part of the manifest wire contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -340,28 +341,6 @@ impl AdmittedCollisionReplayIndex {
     #[cfg(test)]
     pub(crate) const fn canonical_manifest_len(&self) -> usize {
         self.canonical_manifest_len
-    }
-
-    #[cfg(test)]
-    pub(crate) fn encode_manifest_for_test(&self) -> Result<Vec<u8>, ReplayIndexGenerationError> {
-        CollisionReplayIndex {
-            schema: self.schema,
-            owner_partition: self.owner_partition.clone(),
-            root_slots: self.root_slots.clone(),
-            owner_sites: self.owner_sites.clone(),
-            reverse_edges: self.reverse_edges.clone(),
-            root_slot_consumers: self.root_slot_consumers.clone(),
-            scc_membership: self.scc_membership.clone(),
-            statement_owners: self.statement_owners.clone(),
-            baseline_records: self.baseline_records.clone(),
-            unowned_demand_count: self.unowned_demand_count,
-            invalid_owner_site_count: self.invalid_owner_site_count,
-            noncanonical_edge_count: self.noncanonical_edge_count,
-            typed_reference_coverage_misses: self.typed_reference_coverage_misses,
-            canonical_manifest_bytes: Vec::new(),
-            canonical_manifest_sha256: self.canonical_manifest_sha256,
-        }
-        .encode()
     }
 }
 
@@ -1051,50 +1030,6 @@ impl CollisionReplayIndex {
     }
 }
 
-fn invalid_encoding(_: SnapshotCodecError) -> ReplayIndexAdmissionError {
-    ReplayIndexAdmissionError::InvalidEncoding
-}
-
-fn bounded_collection_len(
-    reader: &mut SnapshotReader<'_>,
-    minimum_item_bytes: usize,
-) -> Result<usize, ReplayIndexAdmissionError> {
-    let count = reader
-        .collection_len(minimum_item_bytes)
-        .map_err(invalid_encoding)?;
-    if count > MAX_REPLAY_COLLECTION_ROWS {
-        return Err(ReplayIndexAdmissionError::InvalidEncoding);
-    }
-    Ok(count)
-}
-
-fn read_owner(reader: &mut SnapshotReader<'_>) -> Result<ReplayOwner, ReplayIndexAdmissionError> {
-    Ok(match reader.u8().map_err(invalid_encoding)? {
-        0 => ReplayOwner::TypeGroup(TypeGroupId(reader.u32().map_err(invalid_encoding)?)),
-        1 => ReplayOwner::Value(ValueStorageId(reader.u32().map_err(invalid_encoding)?)),
-        2 => ReplayOwner::Namespace(NamespaceId(reader.u32().map_err(invalid_encoding)?)),
-        3 => ReplayOwner::Class(ClassId(reader.u32().map_err(invalid_encoding)?)),
-        4 => ReplayOwner::GlobalObject,
-        5 => ReplayOwner::Statement(LibraryEventKey {
-            file_ordinal: LibraryFileOrdinal::new(reader.usize().map_err(invalid_encoding)?),
-            source_start: reader.u32().map_err(invalid_encoding)?,
-            event_ordinal: reader.usize().map_err(invalid_encoding)?,
-            record_ordinal: reader.usize().map_err(invalid_encoding)?,
-        }),
-        _ => return Err(ReplayIndexAdmissionError::InvalidEncoding),
-    })
-}
-
-fn read_optional_id(
-    reader: &mut SnapshotReader<'_>,
-) -> Result<Option<u32>, ReplayIndexAdmissionError> {
-    match reader.u8().map_err(invalid_encoding)? {
-        0 => Ok(None),
-        1 => reader.u32().map(Some).map_err(invalid_encoding),
-        _ => Err(ReplayIndexAdmissionError::InvalidEncoding),
-    }
-}
-
 fn owner_in_bounds(owner: ReplayOwner, limits: ReplayIndexAdmissionLimits<'_>) -> bool {
     match owner {
         ReplayOwner::TypeGroup(id) => usize::try_from(id.0).is_ok_and(|id| id < limits.type_groups),
@@ -1106,190 +1041,16 @@ fn owner_in_bounds(owner: ReplayOwner, limits: ReplayIndexAdmissionLimits<'_>) -
     }
 }
 
-pub(crate) struct DecodedCollisionReplayIndex {
-    index: CollisionReplayIndex,
-    canonical_manifest_len: usize,
-}
-
-fn decode_collision_replay_index_with_sha256(
-    bytes: &[u8],
-    canonical_manifest_sha256: [u8; 32],
-) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
-    let mut reader = SnapshotReader::new(bytes);
-    if reader
-        .raw(COLLISION_REPLAY_MANIFEST_DOMAIN.len())
-        .map_err(invalid_encoding)?
-        != COLLISION_REPLAY_MANIFEST_DOMAIN
-        || reader.u32().map_err(invalid_encoding)? != 1
-    {
-        return Err(ReplayIndexAdmissionError::InvalidEncoding);
-    }
-    let schema = 1;
-
-    let owner_count = bounded_collection_len(&mut reader, 1)?;
-    let mut owner_partition = Vec::with_capacity(owner_count);
-    for _ in 0..owner_count {
-        owner_partition.push(read_owner(&mut reader)?);
-    }
-
-    let root_count = bounded_collection_len(&mut reader, 13)?;
-    let mut root_slots = Vec::with_capacity(root_count);
-    for _ in 0..root_count {
-        root_slots.push(ReplayRootSlot {
-            name: reader.string().map_err(invalid_encoding)?.to_owned(),
-            value: read_optional_id(&mut reader)?.map(ValueStorageId),
-            ty: read_optional_id(&mut reader)?.map(TypeGroupId),
-            namespace: read_optional_id(&mut reader)?.map(NamespaceId),
-            global_object_contributor: reader.bool().map_err(invalid_encoding)?,
-            explicit_global_this: reader.bool().map_err(invalid_encoding)?,
-        });
-    }
-
-    let site_count = bounded_collection_len(&mut reader, 17)?;
-    let mut owner_sites = Vec::with_capacity(site_count);
-    for _ in 0..site_count {
-        owner_sites.push(ReplayOwnerSite {
-            owner: read_owner(&mut reader)?,
-            file_ordinal: LibraryFileOrdinal::new(reader.usize().map_err(invalid_encoding)?),
-            span: Span::new(
-                reader.u32().map_err(invalid_encoding)?,
-                reader.u32().map_err(invalid_encoding)?,
-            ),
-        });
-    }
-
-    let edge_count = bounded_collection_len(&mut reader, 2)?;
-    let mut reverse_edges = Vec::with_capacity(edge_count);
-    for _ in 0..edge_count {
-        reverse_edges.push(ReplayReverseEdge {
-            dependency: read_owner(&mut reader)?,
-            consumer: read_owner(&mut reader)?,
-        });
-    }
-
-    let root_consumer_count = bounded_collection_len(&mut reader, 10)?;
-    let mut root_slot_consumers = Vec::with_capacity(root_consumer_count);
-    for _ in 0..root_consumer_count {
-        let name = reader.string().map_err(invalid_encoding)?.to_owned();
-        let slot = match reader.u8().map_err(invalid_encoding)? {
-            0 => RootSlotKind::Value,
-            1 => RootSlotKind::Type,
-            2 => RootSlotKind::Namespace,
-            _ => return Err(ReplayIndexAdmissionError::InvalidDependencyGraph),
-        };
-        root_slot_consumers.push(ReplayRootConsumer {
-            name,
-            slot,
-            consumer: read_owner(&mut reader)?,
-        });
-    }
-
-    let scc_count = bounded_collection_len(&mut reader, 12)?;
-    let mut scc_membership = Vec::with_capacity(scc_count);
-    for _ in 0..scc_count {
-        let replay_ordinal = reader.u32().map_err(invalid_encoding)?;
-        let count = bounded_collection_len(&mut reader, 1)?;
-        let mut owners = SmallVec::<[ReplayOwner; 1]>::with_capacity(count);
-        for _ in 0..count {
-            owners.push(read_owner(&mut reader)?);
-        }
-        scc_membership.push(ReplayScc {
-            replay_ordinal,
-            owners,
-        });
-    }
-
-    let statement_count = bounded_collection_len(&mut reader, 2)?;
-    let mut statement_owners = Vec::with_capacity(statement_count);
-    for _ in 0..statement_count {
-        let key = match read_owner(&mut reader)? {
-            ReplayOwner::Statement(key) => key,
-            _ => return Err(ReplayIndexAdmissionError::InvalidEncoding),
-        };
-        statement_owners.push((key, read_owner(&mut reader)?));
-    }
-
-    let baseline_count = bounded_collection_len(&mut reader, 41)?;
-    let mut baseline_records = Vec::with_capacity(baseline_count);
-    for _ in 0..baseline_count {
-        let owner = read_owner(&mut reader)?;
-        let record_count = reader.u64().map_err(invalid_encoding)?;
-        let mut digest = [0; 32];
-        digest.copy_from_slice(reader.raw(32).map_err(invalid_encoding)?);
-        baseline_records.push(ReplayBaselineRecord {
-            owner,
-            record_count,
-            digest,
-        });
-    }
-    let unowned_demand_count = reader.u64().map_err(invalid_encoding)?;
-    let invalid_owner_site_count = reader.u64().map_err(invalid_encoding)?;
-    let noncanonical_edge_count = reader.u64().map_err(invalid_encoding)?;
-    let typed_reference_coverage_misses = reader.u64().map_err(invalid_encoding)?;
-    reader.finish().map_err(invalid_encoding)?;
-
-    let decoded = CollisionReplayIndex {
-        schema,
-        owner_partition,
-        root_slots,
-        owner_sites,
-        reverse_edges,
-        root_slot_consumers,
-        scc_membership,
-        statement_owners,
-        baseline_records,
-        unowned_demand_count,
-        invalid_owner_site_count,
-        noncanonical_edge_count,
-        typed_reference_coverage_misses,
-        canonical_manifest_bytes: Vec::new(),
-        canonical_manifest_sha256,
-    };
-    // A successful parse already proves the unique wire form: integers and lengths are
-    // fixed-width big-endian, every discriminant is exact, UTF-8 bytes are retained by
-    // `String`, collection order is retained, and `finish` rejects every suffix. Therefore
-    // decode-then-encode cannot reject anything that this reader accepted.
-    Ok(DecodedCollisionReplayIndex {
-        index: decoded,
-        canonical_manifest_len: bytes.len(),
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn decode_collision_replay_index(
-    bytes: &[u8],
-) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
-    let decoded = decode_collision_replay_index_with_sha256(bytes, [0; 32])?;
-    Ok(DecodedCollisionReplayIndex {
-        index: CollisionReplayIndex {
-            canonical_manifest_sha256: Sha256::digest(bytes).into(),
-            ..decoded.index
-        },
-        canonical_manifest_len: decoded.canonical_manifest_len,
-    })
-}
-
-pub(in crate::check::checker) fn decode_authenticated_collision_replay_index(
-    bytes: &[u8],
-    authenticated_sha256: [u8; 32],
-) -> Result<DecodedCollisionReplayIndex, ReplayIndexAdmissionError> {
-    decode_collision_replay_index_with_sha256(bytes, authenticated_sha256)
-}
-
-#[cfg(test)]
-pub(crate) fn decode_collision_replay_index_for_test(
-    bytes: &[u8],
-) -> Result<CollisionReplayIndex, ReplayIndexAdmissionError> {
-    decode_collision_replay_index(bytes).map(|decoded| decoded.index)
-}
-
-pub(crate) fn admit_decoded_collision_replay_index(
-    decoded: DecodedCollisionReplayIndex,
+/// Admit the index the source compiler just generated.
+///
+/// Admission is the single construction path: it re-checks the generator's structural
+/// guarantees and derives the compact runtime indexes the collision scheduler walks.
+pub(crate) fn admit_generated_collision_replay_index(
+    decoded: CollisionReplayIndex,
     limits: ReplayIndexAdmissionLimits<'_>,
     expected_manifest_sha256: Option<[u8; 32]>,
 ) -> Result<AdmittedCollisionReplayIndex, ReplayIndexAdmissionError> {
-    let canonical_manifest_len = decoded.canonical_manifest_len;
-    let decoded = decoded.index;
+    let canonical_manifest_len = decoded.canonical_manifest_bytes.len();
     let expected_nonstatement_count = limits
         .type_groups
         .checked_add(limits.value_storages)
@@ -1717,16 +1478,6 @@ pub(crate) fn admit_decoded_collision_replay_index(
         canonical_manifest_len,
         canonical_manifest_sha256: decoded.canonical_manifest_sha256,
     })
-}
-
-#[cfg(test)]
-pub(crate) fn admit_collision_replay_index(
-    bytes: &[u8],
-    limits: ReplayIndexAdmissionLimits<'_>,
-    expected_manifest_sha256: Option<[u8; 32]>,
-) -> Result<AdmittedCollisionReplayIndex, ReplayIndexAdmissionError> {
-    let decoded = decode_collision_replay_index(bytes)?;
-    admit_decoded_collision_replay_index(decoded, limits, expected_manifest_sha256)
 }
 
 fn empty_baseline_digest() -> [u8; 32] {
@@ -2196,7 +1947,6 @@ mod tests {
         "src/check/checker/decls/interface_scc_pending_spec.rs",
         "src/check/checker/eval/deferred_keyof_cache_spec.rs",
         "src/check/checker/eval/tests.rs",
-        "src/check/checker/library_snapshot_codec/spec.rs",
         "src/check/checker/lexical_events/completion_slot_spec.rs",
         "src/check/checker/lexical_events/owner_lookup_spec.rs",
         "src/check/query/deferred_indexed_lazy_spec.rs",
@@ -2257,9 +2007,6 @@ mod tests {
         "src/check/checker/library_compiler.rs",
         "src/check/checker/library_identities.rs",
         "src/check/checker/library_reporting.rs",
-        "src/check/checker/library_snapshot_codec/mod.rs",
-        "src/check/checker/library_snapshot_codec/profile.rs",
-        "src/check/checker/library_snapshot_codec/runtime.rs",
         "src/check/checker/mod.rs",
         "src/check/checker/namespace_values.rs",
         "src/check/checker/narrowing.rs",
@@ -2614,7 +2361,6 @@ mod tests {
         let root = crate::test_repository_root();
         let sources = discover_production_rust_sources(&root);
         let allowed = [
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "parts.class_parents.iter()", count: 1, reason: "snapshot ordering" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "self.class_parents.iter()", count: 1, reason: "snapshot projection" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "type_decl_id(binder, binder.prelude_module, name)", count: 1, reason: "prelude identity selection" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_value_binding(scope, name);", count: 1, reason: "no-trace value binding fast path" },
