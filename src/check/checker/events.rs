@@ -119,9 +119,14 @@ fn record_reserved_record_position() {
     RESERVED_RECORD_POSITIONS.set(RESERVED_RECORD_POSITIONS.get().saturating_add(1));
 }
 
-/// One completion slot the store keeps alive for a position that holds no record yet.
+/// Account for the storage one newly reserved position materialized. A representation that
+/// keeps no per-position storage reports zero bytes, and therefore no slot: nothing holds the
+/// position's place except a bit in an event row the store already pays for.
 #[cfg(test)]
 fn record_materialized_completion_slot(bytes: usize) {
+    if bytes == 0 {
+        return;
+    }
     MATERIALIZED_COMPLETION_SLOTS.set(MATERIALIZED_COMPLETION_SLOTS.get().saturating_add(1));
     MATERIALIZED_COMPLETION_BYTES.set(
         MATERIALIZED_COMPLETION_BYTES
@@ -203,26 +208,46 @@ pub(crate) struct ReservedEvent {
     pub(crate) primary: UserRecordTicket,
 }
 
+/// Record positions one event can reserve. The lexical walk names at most four per site —
+/// `immediate`, `deferred`, `incomplete`, and a callable `body` — so this ceiling is generous;
+/// it is the width of [`EventMeta::completed`], and passing it is reported, never truncated.
+const EVENT_RECORD_CAPACITY: usize = 32;
+
 #[derive(Debug)]
 struct EventMeta {
     module_ordinal: ModuleOrdinal,
     source_start: u32,
     event_ordinal: usize,
     next_record_ordinal: usize,
+    /// One bit per record position already completed. This carries both duties the old
+    /// per-position `Pending` slot carried, at one word per *event* instead of one slot per
+    /// position: a set bit rejects a second fill, and `completed == reserved_mask(..)` is
+    /// exactly "every reserved position was accounted for", which `finish` audits before it
+    /// replays anything. A position reserved and never completed means the checker planned to
+    /// check something and did not — that stays observable.
+    completed: u32,
 }
 
-#[derive(Debug)]
-enum Completion {
-    Pending,
-    Completed(Vec<CheckerRecord>),
+/// The completed-bit pattern an event reaches only when every position it reserved has been
+/// filled exactly once.
+const fn reserved_mask(positions: usize) -> u32 {
+    if positions >= EVENT_RECORD_CAPACITY {
+        u32::MAX
+    } else {
+        (1u32 << positions) - 1
+    }
 }
 
-/// Bytes one materialized completion slot retains in the representation in use. The `BTreeMap`
-/// stores the key beside the value, so this counts key + value and ignores node headers, edge
-/// pointers and fill factor — deliberately a lower bound on what the map actually costs.
+/// Bytes the completion representation materializes for one newly reserved record position.
+///
+/// **Zero, and that is the property `completion_slot_spec` exists to hold.** Records are stored;
+/// positions are not. Reserving one adds a bit to an event's `completed` mask, which
+/// [`EventMeta`] already carries whether or not the position is used. Any change that gives a
+/// position its own slot again — a map entry, an arena element, a `Vec` of per-position state —
+/// must report that slot's size here, or the guard measures nothing.
 #[cfg(test)]
-const fn completion_slot_bytes() -> usize {
-    std::mem::size_of::<EventKey>() + std::mem::size_of::<Completion>()
+const fn reserved_position_bytes() -> usize {
+    0
 }
 
 /// Reservation or completion misuse. These failures are checker bugs, not user errors.
@@ -231,6 +256,7 @@ pub(crate) enum EventStoreError {
     UnknownEvent(EventId),
     UnknownRecord(UserRecordTicket),
     DuplicateCompletion(UserRecordTicket),
+    RecordCapacity(EventId),
     Unfinished(Vec<EventKey>),
 }
 
@@ -239,7 +265,10 @@ pub(crate) enum EventStoreError {
 pub(crate) struct EventStore {
     events: Vec<EventMeta>,
     next_event_ordinal: BTreeMap<ModuleOrdinal, usize>,
-    completions: BTreeMap<EventKey, Completion>,
+    /// Records in completion order, each already carrying the replay key of the position that
+    /// produced it. Reservation writes nothing here: a position that never records leaves only
+    /// its bit in the owning event's mask.
+    records: Vec<(EventKey, CheckerRecord)>,
 }
 
 impl EventStore {
@@ -261,22 +290,17 @@ impl EventStore {
             event: id,
             record_ordinal: 0,
         };
-        let key = EventKey {
-            module_ordinal,
-            source_start,
-            event_ordinal: *event_ordinal,
-            record_ordinal: 0,
-        };
+        let assigned_ordinal = *event_ordinal;
         *event_ordinal += 1;
         self.events.push(EventMeta {
             module_ordinal,
             source_start,
-            event_ordinal: key.event_ordinal,
+            event_ordinal: assigned_ordinal,
             next_record_ordinal: 1,
+            completed: 0,
         });
-        self.completions.insert(key, Completion::Pending);
         #[cfg(test)]
-        record_materialized_completion_slot(completion_slot_bytes());
+        record_materialized_completion_slot(reserved_position_bytes());
         ReservedEvent { id, primary }
     }
 
@@ -288,6 +312,9 @@ impl EventStore {
         let Some(meta) = self.events.get_mut(event.index()) else {
             return Err(EventStoreError::UnknownEvent(event));
         };
+        if meta.next_record_ordinal >= EVENT_RECORD_CAPACITY {
+            return Err(EventStoreError::RecordCapacity(event));
+        }
         // Secondary record positions are semantic reservations too.
         #[cfg(test)]
         {
@@ -299,15 +326,8 @@ impl EventStore {
             record_ordinal: meta.next_record_ordinal,
         };
         meta.next_record_ordinal += 1;
-        let key = EventKey {
-            module_ordinal: meta.module_ordinal,
-            source_start: meta.source_start,
-            event_ordinal: meta.event_ordinal,
-            record_ordinal: ticket.record_ordinal,
-        };
-        self.completions.insert(key, Completion::Pending);
         #[cfg(test)]
-        record_materialized_completion_slot(completion_slot_bytes());
+        record_materialized_completion_slot(reserved_position_bytes());
         Ok(ticket)
     }
 
@@ -317,17 +337,28 @@ impl EventStore {
         ticket: UserRecordTicket,
         records: Vec<CheckerRecord>,
     ) -> Result<(), EventStoreError> {
-        let key = self.key(ticket)?;
-        let Some(completion) = self.completions.get_mut(&key) else {
-            return Err(EventStoreError::UnknownRecord(ticket));
+        let Some(meta) = self.events.get_mut(ticket.event.index()) else {
+            return Err(EventStoreError::UnknownEvent(ticket.event));
         };
-        match completion {
-            Completion::Pending => {
-                *completion = Completion::Completed(records);
-                Ok(())
-            }
-            Completion::Completed(_) => Err(EventStoreError::DuplicateCompletion(ticket)),
+        if ticket.record_ordinal >= meta.next_record_ordinal {
+            return Err(EventStoreError::UnknownRecord(ticket));
         }
+        // `record_ordinal` is below `next_record_ordinal`, which `reserve_record` keeps at or
+        // under `EVENT_RECORD_CAPACITY`, so the shift stays inside the mask.
+        let filled = 1u32 << ticket.record_ordinal;
+        if meta.completed & filled != 0 {
+            return Err(EventStoreError::DuplicateCompletion(ticket));
+        }
+        meta.completed |= filled;
+        let key = EventKey {
+            module_ordinal: meta.module_ordinal,
+            source_start: meta.source_start,
+            event_ordinal: meta.event_ordinal,
+            record_ordinal: ticket.record_ordinal,
+        };
+        self.records
+            .extend(records.into_iter().map(|record| (key, record)));
+        Ok(())
     }
 
     /// Emit a lexically immediate record under an already-reserved source event.
@@ -348,30 +379,55 @@ impl EventStore {
     }
 
     /// Replay completed records in their reserved total order.
-    pub(crate) fn finish(self) -> Result<Vec<(EventKey, CheckerRecord)>, EventStoreError> {
-        let unfinished: Vec<EventKey> = self
-            .completions
-            .iter()
-            .filter_map(|(key, completion)| {
-                matches!(completion, Completion::Pending).then_some(*key)
-            })
-            .collect();
+    pub(crate) fn finish(mut self) -> Result<Vec<(EventKey, CheckerRecord)>, EventStoreError> {
+        let unfinished = self.unfinished_positions();
         if !unfinished.is_empty() {
             return Err(EventStoreError::Unfinished(unfinished));
         }
-        let replayed: Vec<(EventKey, CheckerRecord)> = self
-            .completions
-            .into_iter()
-            .flat_map(|(key, completion)| {
-                let Completion::Completed(records) = completion else {
-                    unreachable!("pending completions were rejected before replay")
-                };
-                records.into_iter().map(move |record| (key, record))
-            })
-            .collect();
+        // Replay order is the four-key order and nothing else. Three facts make this stable
+        // sort identical to iterating a map keyed by that tuple, without appealing to any
+        // corpus:
+        //
+        // 1. A position's key is fixed when the lexical walk reserves it — `event_ordinal` by
+        //    the event's position within its module, `record_ordinal` by the position's index
+        //    within its event. Nothing after reservation can move a key, so completion order,
+        //    SCC order, dependency slot, query order and cache hits cannot reach it.
+        // 2. Each key is filled exactly once (`EventMeta::completed` rejects the second fill),
+        //    so all records sharing a key came from one `complete` call and sit contiguously
+        //    here, in that call's vector order.
+        // 3. `sort_by_key` is stable: distinct keys come out in four-key order, and equal keys
+        //    keep push order — which by (2) is the producer order within one position.
+        self.records.sort_by_key(|(key, _)| *key);
         #[cfg(test)]
-        record_replayed_records(replayed.len());
-        Ok(replayed)
+        record_replayed_records(self.records.len());
+        Ok(self.records)
+    }
+
+    /// Positions that were reserved and never filled, in replay-key order.
+    ///
+    /// A reserved position that no owner completed means the checker named something to check
+    /// and then did not — the silent-hole class this project over-reports to avoid — so the
+    /// audit survives the storage change: the mask reconstructs it exactly, because positions
+    /// are dense from `0` and every fill sets its bit.
+    fn unfinished_positions(&self) -> Vec<EventKey> {
+        let mut unfinished = Vec::new();
+        for meta in &self.events {
+            if meta.completed == reserved_mask(meta.next_record_ordinal) {
+                continue;
+            }
+            for record_ordinal in 0..meta.next_record_ordinal {
+                if meta.completed & (1u32 << record_ordinal) == 0 {
+                    unfinished.push(EventKey {
+                        module_ordinal: meta.module_ordinal,
+                        source_start: meta.source_start,
+                        event_ordinal: meta.event_ordinal,
+                        record_ordinal,
+                    });
+                }
+            }
+        }
+        unfinished.sort_unstable();
+        unfinished
     }
 
     #[cfg(test)]
@@ -379,24 +435,20 @@ impl EventStore {
         self.events.len()
     }
 
+    /// Heap slots the store has allocated for records. Reservation must never move this.
     #[cfg(test)]
-    pub(crate) fn record_count(&self) -> usize {
-        self.completions.len()
+    fn stored_record_capacity(&self) -> usize {
+        self.records.capacity()
     }
 
-    fn key(&self, ticket: UserRecordTicket) -> Result<EventKey, EventStoreError> {
-        let Some(meta) = self.events.get(ticket.event.index()) else {
-            return Err(EventStoreError::UnknownEvent(ticket.event));
-        };
-        if ticket.record_ordinal >= meta.next_record_ordinal {
-            return Err(EventStoreError::UnknownRecord(ticket));
-        }
-        Ok(EventKey {
-            module_ordinal: meta.module_ordinal,
-            source_start: meta.source_start,
-            event_ordinal: meta.event_ordinal,
-            record_ordinal: ticket.record_ordinal,
-        })
+    /// Record positions reserved across every event — what the store has promised to account
+    /// for, not what it has stored.
+    #[cfg(test)]
+    pub(crate) fn record_count(&self) -> usize {
+        self.events
+            .iter()
+            .map(|meta| meta.next_record_ordinal)
+            .sum()
     }
 }
 
@@ -640,6 +692,166 @@ mod tests {
             duplicate.complete(event.primary, Vec::new()),
             Err(EventStoreError::DuplicateCompletion(event.primary))
         );
+    }
+
+    /// Records now reach the store interleaved — several per position, positions completed in
+    /// any order — and only the four-key order may decide how they come back out. This pins the
+    /// two halves of that at once: across positions the key decides, and within one position the
+    /// producer's order survives untouched, with unrelated records landing in between.
+    #[test]
+    fn interleaved_multi_record_completions_replay_in_four_key_order() {
+        let mut store = EventStore::default();
+        let late = store.reserve_event(ModuleOrdinal::new(1), 5);
+        let early = store.reserve_event(ModuleOrdinal::new(0), 30);
+        let early_second = store.reserve_record(early.id).unwrap();
+        let earliest = store.reserve_event(ModuleOrdinal::new(0), 10);
+
+        // Completion order is deliberately the reverse of replay order, and each call carries
+        // more than one record so intra-position order is observable.
+        store
+            .complete(
+                early_second,
+                vec![
+                    diagnostic("early-second-a", 30),
+                    diagnostic("early-second-b", 30),
+                ],
+            )
+            .unwrap();
+        store
+            .complete(late.primary, vec![diagnostic("late-a", 5)])
+            .unwrap();
+        store
+            .complete(
+                early.primary,
+                vec![
+                    diagnostic("early-first-a", 30),
+                    diagnostic("early-first-b", 30),
+                ],
+            )
+            .unwrap();
+        store
+            .complete(
+                earliest.primary,
+                vec![diagnostic("earliest-a", 10), diagnostic("earliest-b", 10)],
+            )
+            .unwrap();
+
+        let names: Vec<String> = store
+            .finish()
+            .unwrap()
+            .into_iter()
+            .map(|(_, record)| diagnostic_name(record))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Cannot find name 'earliest-a'",
+                "Cannot find name 'earliest-b'",
+                "Cannot find name 'early-first-a'",
+                "Cannot find name 'early-first-b'",
+                "Cannot find name 'early-second-a'",
+                "Cannot find name 'early-second-b'",
+                "Cannot find name 'late-a'",
+            ],
+            "module ordinal, then source start, then record ordinal, then producer order"
+        );
+    }
+
+    /// The unfinished audit is the tripwire for a position the checker named and then never
+    /// checked. It has to name **every** such position, from any event, in replay-key order —
+    /// not merely notice that one exists.
+    #[test]
+    fn the_unfinished_audit_names_every_never_filled_position_in_replay_order() {
+        let mut store = EventStore::default();
+        // Reserved and never filled at all.
+        store.reserve_event(ModuleOrdinal::new(0), 40);
+        let earlier = store.reserve_event(ModuleOrdinal::new(0), 10);
+        // Reserved and never filled, with a filled position on either side of it.
+        store.reserve_record(earlier.id).unwrap();
+        let earlier_third = store.reserve_record(earlier.id).unwrap();
+
+        // Fill out of order, so nothing about the audit can depend on completion order.
+        store.complete(earlier_third, Vec::new()).unwrap();
+        store.complete(earlier.primary, Vec::new()).unwrap();
+
+        let key = |source_start, event_ordinal, record_ordinal| EventKey {
+            module_ordinal: ModuleOrdinal::new(0),
+            source_start,
+            event_ordinal,
+            record_ordinal,
+        };
+        let Err(EventStoreError::Unfinished(keys)) = store.finish() else {
+            panic!("a never-filled position must fail the audit");
+        };
+        assert_eq!(
+            keys,
+            vec![key(10, 1, 1), key(40, 0, 0)],
+            "an interior hole and a wholly unfilled event must both be reported, keyed"
+        );
+    }
+
+    /// The completion mask is finite, so the store declares its width instead of silently
+    /// dropping a position that would fall outside it. Production names at most four positions
+    /// per event, so this reports a checker bug, never a program.
+    #[test]
+    fn reserving_past_the_record_capacity_is_reported() {
+        let mut store = EventStore::default();
+        let event = store.reserve_event(ModuleOrdinal::new(0), 10);
+        for _ in 1..EVENT_RECORD_CAPACITY {
+            store
+                .reserve_record(event.id)
+                .expect("positions below the capacity reserve");
+        }
+        assert_eq!(store.record_count(), EVENT_RECORD_CAPACITY);
+        assert_eq!(
+            store.reserve_record(event.id),
+            Err(EventStoreError::RecordCapacity(event.id))
+        );
+
+        // The audit still holds at the boundary: a full event needs every one of its bits.
+        for record_ordinal in 0..EVENT_RECORD_CAPACITY {
+            store
+                .complete(
+                    UserRecordTicket {
+                        event: event.id,
+                        record_ordinal,
+                    },
+                    Vec::new(),
+                )
+                .expect("each reserved position completes once");
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    /// Reservation must buy storage for records, not for positions. The store's record vector
+    /// is the only thing that grows with what a program says; a silent program leaves it empty
+    /// however many positions its lexical walk named.
+    #[test]
+    fn reserving_positions_stores_nothing_until_a_record_arrives() {
+        let mut store = EventStore::default();
+        let mut tickets = Vec::new();
+        for index in 0..64 {
+            let event = store.reserve_event(ModuleOrdinal::new(0), index * 10);
+            tickets.push(event.primary);
+            tickets.push(store.reserve_record(event.id).unwrap());
+            tickets.push(store.reserve_record(event.id).unwrap());
+        }
+        assert_eq!(store.record_count(), 192);
+        assert_eq!(
+            store.stored_record_capacity(),
+            0,
+            "192 reserved positions must not allocate record storage before any record exists"
+        );
+
+        for ticket in tickets {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert_eq!(
+            store.stored_record_capacity(),
+            0,
+            "completing every position with nothing must still store nothing"
+        );
+        assert!(store.finish().unwrap().is_empty());
     }
 
     #[test]
