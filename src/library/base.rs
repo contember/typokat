@@ -58,10 +58,6 @@ const PROJECTION_SUBTABLES: [&str; 32] = [
 ];
 
 pub struct FrozenLibraryBase {
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "retained for decoded-base user checking")
-    )]
     runtime: OwnedLibraryRuntimeState,
     root_names: BTreeSet<String>,
     prefixes: FrozenLibraryPrefixes,
@@ -153,7 +149,7 @@ struct LayeredUserDelta {
 #[cfg(test)]
 impl LayeredUserDelta {
     fn new(base: &FrozenLibraryBase) -> Result<Self, &'static str> {
-        let capability = super::collision_preflight::issue_caller_certified_capability_for_test();
+        let capability = super::collision_preflight::issue_caller_certified_capability();
         let discarded = Arc::new(AtomicBool::new(false));
         let mut runtime = base.runtime.fork_collision_free_user_delta(capability)?;
         runtime.install_user_delta_drop_witness_for_test(Arc::clone(&discarded));
@@ -477,6 +473,19 @@ impl fmt::Debug for FrozenLibraryBase {
 }
 
 impl FrozenLibraryBase {
+    /// Fork a mutable user delta layered over this frozen base.
+    ///
+    /// The caller certifies collision-freedom (see `issue_caller_certified_capability`); the
+    /// source-driven routing that would reject a colliding suffix is WU5's. The base itself is
+    /// never mutated — the returned runtime owns every row a user check may write.
+    pub(crate) fn fork_user_delta(
+        &self,
+    ) -> Result<crate::check::checker::library_compiler::OwnedLibraryRuntimeState, &'static str>
+    {
+        let capability = super::collision_preflight::issue_caller_certified_capability();
+        self.runtime.fork_collision_free_user_delta(capability)
+    }
+
     #[cfg(test)]
     pub(super) fn preflight_user_project_for_test(
         &self,
@@ -529,7 +538,7 @@ impl FrozenLibraryBase {
     ) -> Result<CollisionPreflightWorkForTest, String> {
         let delta_fork_scope =
             crate::check::checker::library_compiler::UserDeltaForkScopeForTest::start();
-        let capability = super::collision_preflight::issue_caller_certified_capability_for_test();
+        let capability = super::collision_preflight::issue_caller_certified_capability();
         let delta = self
             .runtime
             .fork_collision_free_user_delta(capability)

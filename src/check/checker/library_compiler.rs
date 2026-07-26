@@ -564,7 +564,6 @@ fn validate_owned_library_snapshot_parts(
 }
 
 impl OwnedLibraryRuntimeState {
-    #[cfg(test)]
     pub(in crate::check::checker) fn into_user_project_base(
         self,
     ) -> (Interner, Binder, super::BoundUserBase) {
@@ -603,10 +602,6 @@ impl OwnedLibraryRuntimeState {
         self.runtime.freeze_as_base()
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "activated by the WU4 user-delta entry point")
-    )]
     pub(crate) fn fork_collision_free_user_delta(
         &self,
         _capability: crate::library::CollisionFreeUserDeltaCapability,

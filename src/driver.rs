@@ -16,6 +16,7 @@ use crate::check::{
     ProjectProgram,
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
+use crate::library::{FrozenLibraryBase, LibraryBaseProvider};
 use crate::source::{CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, UnitSlot};
 use crate::span::Span;
 use crate::types::Interner;
@@ -28,6 +29,7 @@ use oxc_span::SourceType;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, LazyLock};
 
 /// The outcome of checking one source file. Three independent channels: type
 /// diagnostics, parser errors, and the incomplete-surface channel (WU2) — an empty
@@ -188,6 +190,105 @@ pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
 
 fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
     check_project_inner_with_checker(inputs, check_project_programs)
+}
+
+// --- Default-library siblings (backlog 14 scaffolding) -----------------------
+//
+// [`check_source_with_library`] and [`check_project_with_library`] are a deliberate, temporary
+// SECOND ENTRY POINT — not a second loader. There is exactly one [`FrozenLibraryBase`] and one
+// `LibraryCompiler` in the process; the siblings only choose which base a check forks from, so
+// backlog 14's prohibition on forking a second *ambient-loading path* is not engaged. They exist
+// so the backlog-14 acceptance corpus can run before production moves off `src/prelude.ts`, and
+// the WU7 cutover deletes them once `check_source`/`check_project` fork from the library base
+// themselves.
+
+/// The process-wide default-library base. Publication happens once, on the first caller's thread,
+/// and never inside a rayon fan-out: [`check_files`] is the crate's only rayon site and does not
+/// reach here.
+fn library_base() -> Result<Arc<FrozenLibraryBase>, String> {
+    static PROVIDER: LazyLock<LibraryBaseProvider> = LazyLock::new(LibraryBaseProvider::new);
+    PROVIDER.get().map_err(|error| error.to_string())
+}
+
+/// Run `work` on a large-stack worker, for the reason given at [`CHECK_STACK_SIZE`]. A panic in
+/// the worker is re-raised on the caller's thread rather than converted to an error.
+fn on_check_worker<T, W>(work: W) -> Result<T, String>
+where
+    T: Send,
+    W: FnOnce() -> T + Send,
+{
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(CHECK_STACK_SIZE)
+            .spawn_scoped(scope, work)
+            .map_err(|error| format!("cannot spawn the check worker: {error}"))?;
+        match worker.join() {
+            Ok(product) => Ok(product),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
+/// [`check_source`] against the full default library instead of `src/prelude.ts`.
+///
+/// Temporary backlog-14 scaffolding — see the section comment above. `Err` means the library base
+/// itself could not be published or forked; ordinary type/parse problems ride in the
+/// [`CheckOutput`] exactly as on the prelude path.
+pub fn check_source_with_library(source: &str) -> Result<CheckOutput, String> {
+    let base = library_base()?;
+    on_check_worker(|| check_source_with_library_inner(&base, source))?
+}
+
+fn check_source_with_library_inner(
+    base: &FrozenLibraryBase,
+    source: &str,
+) -> Result<CheckOutput, String> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let parse_errors: Vec<String> = parsed.diagnostics.iter().map(|d| d.to_string()).collect();
+    if parsed.panicked {
+        return Ok(CheckOutput {
+            diagnostics: Vec::new(),
+            parse_errors,
+            incomplete: Vec::new(),
+        });
+    }
+
+    let state = base.fork_user_delta().map_err(str::to_owned)?;
+    let CheckResult {
+        diagnostics,
+        incomplete,
+        ..
+    } = crate::check::checker::check_program_with_owned_library(state, &parsed.program)
+        .map_err(str::to_owned)?;
+
+    Ok(CheckOutput {
+        diagnostics,
+        parse_errors,
+        incomplete,
+    })
+}
+
+/// [`check_project`] against the full default library instead of `src/prelude.ts`.
+///
+/// Temporary backlog-14 scaffolding — see the section comment above. The module graph, dependency
+/// order, and per-input report order are the production ones; only the base differs.
+pub fn check_project_with_library(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, String> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let base = library_base()?;
+    on_check_worker(|| check_project_with_library_inner(&base, inputs))?
+}
+
+fn check_project_with_library_inner(
+    base: &FrozenLibraryBase,
+    inputs: Vec<FileInput>,
+) -> Result<Vec<FileReport>, String> {
+    let state = base.fork_user_delta().map_err(str::to_owned)?;
+    Ok(check_project_inner_with_checker(inputs, |_, units| {
+        crate::check::checker::check_project_programs_with_library(state, units)
+    }))
 }
 
 #[cfg(test)]

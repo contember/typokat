@@ -230,6 +230,38 @@ ledger.)
 Flat `.d.ts`/`.d.mts`/`.d.cts` fixtures run through the same one-file project
 path so their filename-derived declaration context is preserved.
 
+## Which base a corpus runs against
+
+Every directory in `MILESTONE_DIRS` (`tests/conformance.rs`) carries a third field, a
+`FixtureBase`, naming the type universe its fixtures are checked in:
+
+| `FixtureBase` | Universe | Driver entry points |
+|---|---|---|
+| `Prelude` | `src/prelude.ts` — the production path | `check_source` / `check_project` |
+| `Library` | the full TypeScript 6.0.3 default library | `check_source_with_library` / `check_project_with_library` |
+
+The base is declared **once per directory** and applies to that directory's rows in
+`ENABLED_FIXTURES` and `ENABLED_PROJECT_FIXTURES` too, so a fixture's base is always readable
+from its corpus line. Every referenced directory must appear in `MILESTONE_DIRS` — a mixed
+corpus enabled only fixture by fixture (`b43_namespaces_declaration_merging`,
+`b14_full_lib_loading*`) is registered `false` there rather than omitted, and an unregistered
+directory fails the harness loudly instead of defaulting to `Prelude`.
+
+Only the backlog-14 corpora use `Library` today. The library entry points are deliberate,
+temporary siblings of the production ones — one library base, one compiler, a second *entry
+point* rather than a second ambient-loading path — and they go away when backlog 14 cuts
+production over. Everything else stays on the prelude path, byte for byte.
+
+The enabled backlog-14 slice follows the usual per-fixture convention: seven of the thirteen
+flat fixtures (`generic_application_cache_diagnostics.ts`, `global_values.ts`,
+`iterator_library_local_nonleak.ts`, `library_identity_shadowing.ts`,
+`primitive_object_function_members.ts`, `promise_iterators_generators.ts`, `regexp_literals.ts`)
+and one of the twelve projects (`duplicate_global_deferred`). The rest wait on the loader defect
+families. Five projects — `declare_global`, `declare_global_value_deferred`,
+`script_collision_forward`, `script_collision_reverse`, `unsupported_merge_no_prefix` — currently
+**panic**, which aborts the whole test binary rather than reporting a marker diff, so they must
+stay disabled until their owning fix lands.
+
 ## Bug-fix / backlog corpora
 
 Fixes to **already-shipped** milestones get their own dir rather than extending an
@@ -280,8 +312,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
-| `b14_full_lib_loading/` | backlog `14` WU0A (disabled) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
-| `b14_full_lib_loading_project/` | backlog `14` WU0A (disabled, project-shaped) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b14_full_lib_loading/` | backlog `14` WU0A (7 of 13 enabled, `Library` base) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | backlog `14` WU0A (1 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -646,7 +678,7 @@ The directory contains 74 flat fixtures. Six older fixtures, the WU6A unavailabl
 slice, so the whole directory stays disabled; the conformance harness gates the other 65 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
 `wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. Together with all other
-corpora, the harness currently covers 403 enabled source files. WU6 adds
+corpora, the harness currently covers 419 enabled source files. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,

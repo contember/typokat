@@ -1176,7 +1176,6 @@ pub fn check_project_programs<'ast>(
     )
 }
 
-#[cfg(test)]
 pub(in crate::check::checker) fn check_project_programs_with_owned_library<'ast, F, G>(
     state: library_compiler::OwnedLibraryRuntimeState,
     units: &[ProjectProgram<'ast>],
@@ -1266,6 +1265,7 @@ where
     let binder = builder
         .finish_frozen_library_continuation(binder_module)
         .expect("collision-free project continuation binds");
+    #[cfg(test)]
     library_compiler::record_user_source_binds_for_test(units.len());
     decl_types.resize(binder.decl_count);
 
@@ -1378,6 +1378,7 @@ where
         pass.check_statements(scope, &unit.program.body);
         emit_test_incomplete(&mut pass);
     }
+    #[cfg(test)]
     library_compiler::record_user_source_checks_for_test(units.len());
 
     let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
@@ -1395,6 +1396,43 @@ where
             }
         })
         .collect()
+}
+
+/// Check a dependency-ordered project in a universe forked from a published default-library base.
+///
+/// The inspector-free face of [`check_project_programs_with_owned_library`], whose closure bounds
+/// mention a checker-private type and so cannot cross the crate.
+pub(crate) fn check_project_programs_with_library<'ast>(
+    state: library_compiler::OwnedLibraryRuntimeState,
+    units: &[ProjectProgram<'ast>],
+) -> Vec<CheckResult> {
+    check_project_programs_with_owned_library(state, units, |_, _| {}, |_, _| {})
+}
+
+/// Check one user source in a universe forked from a published default-library base.
+///
+/// The single-source analogue of [`check_project_programs_with_owned_library`]: it resumes the
+/// frozen library binder for exactly one appended suffix, so a flat fixture keeps the
+/// single-file semantics [`check_program`] gives it on the prelude path. The existing
+/// `library_compiler` single-source route is welded to its witness/counter machinery, so this is
+/// the plain one.
+pub(crate) fn check_program_with_owned_library<'ast>(
+    state: library_compiler::OwnedLibraryRuntimeState,
+    program: &'ast Program<'ast>,
+) -> Result<CheckResult, &'static str> {
+    let (mut interner, binder, base) = state.into_user_project_base();
+    let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(binder);
+    let unit = CompilationUnit::implementation(source, program);
+    builder.reserve_script_namespace_roots([(program, unit)]);
+    let (module, _) = builder.add_module(program, &[], unit);
+    let binder = builder.finish_frozen_library_continuation(module)?;
+    Ok(check_bound_user_program(
+        &mut interner,
+        binder,
+        program,
+        base,
+        |_, _, _, _, _| {},
+    ))
 }
 
 #[cfg(test)]

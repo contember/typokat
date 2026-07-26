@@ -2364,7 +2364,7 @@ mod tests {
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: ".classes().published_class(class)", count: 1, reason: "instrumented class delegate" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.decl_types.get(storage);", count: 1, reason: "no-trace decl fast path" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "self.decl_types.get(storage)", count: 1, reason: "instrumented decl delegate" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "decl_types.set(decl_id, error)", count: 1, reason: "module placeholder bootstrap" },
+            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "decl_types.set(decl_id, error)", count: 2, reason: "module placeholder bootstrap, once per project-check path (prelude and default-library base)" },
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "|pass| pass.decl_types.set(storage, ty)", count: 1, reason: "owned copied publication" },
             RawAccessAllowance { path: "src/check/checker/assignment.rs", snippet: "binder.resolve_value(scope, name)", count: 1, reason: "current binding identity" },
             RawAccessAllowance { path: "src/check/checker/calls.rs", snippet: ".binder.resolve_value(scope, &name)", count: 5, reason: "current callable parameter identity" },

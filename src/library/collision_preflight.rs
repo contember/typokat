@@ -23,8 +23,11 @@ impl CollisionFreeUserDeltaCapability {
     }
 }
 
-#[cfg(test)]
-pub(super) fn issue_caller_certified_capability_for_test() -> CollisionFreeUserDeltaCapability {
+/// Certify a fork whose user sources the caller has already vouched for.
+///
+/// The preflight runs over an empty input set, so the returned capability asserts only that the
+/// caller takes responsibility for collision-freedom. Real source-driven routing is WU5's.
+pub(super) fn issue_caller_certified_capability() -> CollisionFreeUserDeltaCapability {
     preflight_project(&BTreeSet::new(), &[], false).take_capability()
 }
 
@@ -59,7 +62,6 @@ struct CollisionPreflightOutcome {
 }
 
 impl CollisionPreflightOutcome {
-    #[cfg(test)]
     fn take_capability(mut self) -> CollisionFreeUserDeltaCapability {
         self.capability
             .take()

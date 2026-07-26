@@ -266,7 +266,6 @@ impl LibraryBinderCheckpoint {
                 empty_prelude: true,
                 continuation_publication_plans: FxHashMap::default(),
                 pending_namespace_modules: Vec::new(),
-                #[cfg(test)]
                 frozen_global_augmentation_count: None,
             },
             library_units,
@@ -916,7 +915,6 @@ pub(crate) struct ProjectBinderBuilder<'ast> {
     /// Modules collected but not yet classified. Only `finish`/`finish_frozen_library_continuation`
     /// drain this, so a project cannot reach a `Binder` without exactly one classification pass.
     pending_namespace_modules: Vec<PendingNamespaceModule<'ast>>,
-    #[cfg(test)]
     frozen_global_augmentation_count: Option<usize>,
 }
 
@@ -939,7 +937,6 @@ enum BuilderUseMode {
     #[cfg(test)]
     Project,
     Library,
-    #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
     Continuation,
 }
 
@@ -990,7 +987,6 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             empty_prelude: prelude.body.is_empty(),
             continuation_publication_plans: FxHashMap::default(),
             pending_namespace_modules: Vec::new(),
-            #[cfg(test)]
             frozen_global_augmentation_count: None,
         }
     }
@@ -1331,7 +1327,6 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     }
 
     /// Resume one AST-free library binder for a single user suffix.
-    #[cfg(test)]
     pub(crate) fn resume_frozen_library(binder: Binder) -> (Self, SourceUnitKey) {
         let next_source = binder.next_source_key;
         let Binder {
@@ -1393,7 +1388,6 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     }
 
     /// Freeze only the appended user suffix; the library global prefix is already final.
-    #[cfg(test)]
     pub(crate) fn finish_frozen_library_continuation(
         mut self,
         module: ScopeId,

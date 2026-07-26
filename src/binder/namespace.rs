@@ -1358,7 +1358,6 @@ pub(crate) struct NamespaceReferenceRows {
 }
 
 impl NamespaceTable {
-    #[cfg(test)]
     pub(crate) fn global_augmentation_count(&self) -> usize {
         self.globals.len()
     }

@@ -432,7 +432,9 @@ fn validate_schema(text: &str, dir: &Path, expected_oxc: &str) -> Result<Manifes
                         .strip_prefix("../cases/")
                         .and_then(|rest| rest.split('/').next())
                     {
-                        let registration = format!("(\"{directory}\", true)");
+                        // `MILESTONE_DIRS` rows are `(dir, enabled, base)`; match through the
+                        // enablement flag so the trailing base field stays free to change.
+                        let registration = format!("(\"{directory}\", true,");
                         let conformance = dir.parent().map(|tests| tests.join("conformance.rs"));
                         match conformance.and_then(|path| std::fs::read_to_string(path).ok()) {
                             Some(text) if text.contains(&registration) => {}
