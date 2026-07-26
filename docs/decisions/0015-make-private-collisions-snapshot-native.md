@@ -1,7 +1,7 @@
 ---
 id: 0015
 title: Make private collisions snapshot-native publication epochs
-status: accepted
+status: superseded by 0017
 date: 2026-07-23
 ---
 

@@ -13,14 +13,17 @@ the minimal ambient/prelude slice (`38`) is allowed before this item when it buy
 feedback.
 
 **Active delivery contract.** The in-memory and collision semantics are accepted in
-[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the narrow startup
-supersession in [`ADR-0012`](../decisions/0012-ship-the-canonical-default-library-snapshot.md)
-accepts the exact canonical snapshot after WU0B's authoritative 110.409 ms p95 feasibility GO. The
-new
+[`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md). Its startup clause was
+narrowly superseded by [`ADR-0012`](../decisions/0012-ship-the-canonical-default-library-snapshot.md)
+in favour of a shipped snapshot, and then **restored** by
+[`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md), which retires that
+snapshot: the library is compiled from its 82 vendored sources in every process. The measurement
+that changed the decision is that typokat's cold parse+bind+check of the pinned library is 277 ms
+against native TypeScript 7's 289 ms on the reference host, and the 1.85 s the source path used to
+cost was 62 % artifact generation with no comparator analogue. The
 [`2026-07-21 performance-cutover sprint`](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md)
-owns the deterministic semantic-snapshot feasibility decision, production base/delta and collision
-paths, atomic driver cutover, and a fail-closed fresh-process target of at least 2× pinned native
-TypeScript 7 on every approved semantic row. The earlier
+owns the production base/delta and collision paths, the atomic driver cutover, and a fail-closed
+fresh-process target against pinned native TypeScript 7 on every approved semantic row. The earlier
 [`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
 first substitution and diagnostic-rendering barriers but ended at WU0 NO-GO: its authoritative
 5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8. No loader or

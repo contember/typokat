@@ -1,7 +1,7 @@
 ---
 id: 0012
 title: Ship the canonical default-library semantic snapshot
-status: accepted
+status: superseded by 0017
 date: 2026-07-22
 ---
 

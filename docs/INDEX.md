@@ -43,20 +43,22 @@ decisions → reference → archive.
   [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md) accepts an exact embedded
   TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,
   and a same-pipeline private universe for global collisions;
-  [`ADR-0013`](decisions/0013-replay-private-library-collision-closures.md) now seeds that universe
-  from the canonical snapshot and replays the authenticated affected-owner closure, while
+  [`ADR-0013`](decisions/0013-replay-private-library-collision-closures.md) seeds that universe in a
+  fresh private run and replays the affected-owner closure, and
   [`ADR-0014`](decisions/0014-authenticate-private-replay-prefixes-at-separate-boundaries.md)
-  separates semantic-prefix decode from the pre-user binder-prefix checkpoint.
-  [`ADR-0015`](decisions/0015-make-private-collisions-snapshot-native.md) supersedes the remaining
-  production fresh-decode/full-source-bind boundary with an authenticated snapshot-native
-  publication epoch, typed sparse binder-prefix replacements, and affected-site parsing; the
-  complete source checkpoint remains only the generator, oracle, and containment fallback. The
-  earlier [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
+  reaches a library-only continuable binder checkpoint before any user row exists.
+  [`ADR-0017`](decisions/0017-compile-the-default-library-from-source.md) **retires the shipped
+  snapshot**: the library is compiled from its 82 vendored sources in every process, which
+  supersedes `ADR-0012` and `ADR-0015` wholesale and narrowly supersedes 0013's decode-seeding and
+  0014's digest authentication. The measurement behind it: typokat's cold parse+bind+check of the
+  pinned library is 277 ms against native TypeScript 7's 289 ms — at parity — and the rest of the
+  old 1.85 s was work that existed only to fill the archive. The earlier
+  [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
   first substitution and rendering barriers. The
-  [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now owns a
-  deterministic semantic-snapshot feasibility gate, production Stage-1 cutover, collision/fanout
-  correctness, and an apples-to-apples ≥2× native TypeScript 7 gate. Stage 1 is not yet shipped and
-  `src/prelude.ts` remains production until the atomic cutover.
+  [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the production
+  Stage-1 cutover, collision/fanout correctness, and the cross-tool gate against native
+  TypeScript 7. Stage 1 is not yet shipped and `src/prelude.ts` remains production until the atomic
+  cutover.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable
@@ -144,8 +146,8 @@ decisions → reference → archive.
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
   (`72`). **Now:** `72` remains paused at its witness gate; full `lib.d.ts` work (`14`) is active
-  under its exact semantic-snapshot and ≥2× native TypeScript 7 gates, while the remaining
-  model-completeness items continue independently.
+  under ADR-0017's source-compiled library and its cross-tool gate against native TypeScript 7,
+  while the remaining model-completeness items continue independently.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

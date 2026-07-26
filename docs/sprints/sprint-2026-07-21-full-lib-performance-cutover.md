@@ -883,3 +883,59 @@ totals as ±20% and the *shares* as the result. The two passes agree on every sh
   first-class phases, `evidence` should leave the `statement_check` span, and the probe should
   assert its own residual stays under a few percent so the next unmeasured phase fails the probe
   instead of silently reopening a 59% hole.
+
+### 2026-07-26 — the shipped snapshot is retired; the library compiles from source
+
+The project owner directed that the snapshot be removed: it is an optimization hack, and the goal is
+to beat native TypeScript **without** a precomputed artifact, because precomputing one pinned profile
+does nothing for arbitrary user code. Recorded as
+[`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md), which supersedes
+`ADR-0012` and `ADR-0015` wholesale and narrowly supersedes `ADR-0013`'s decode-seeding clause and
+`ADR-0014`'s digest-authentication clauses.
+
+- **The fork decision above rested on a measurement that has since been corrected.** "Real fork"
+  rejected option 2 (keep optimizing runtime compilation) on the ground that "roughly 9.83 seconds
+  sits in statement-check/evidence versus a likely ≤0.15-second target". The 07-25 attribution
+  showed that span was 96% not statement checking; real `check_statements` is 19.8 ms, the checking
+  pipeline is 277 ms against the comparator's 289 ms, and the rest was generation. The decision was
+  correct on 07-21 evidence and is not correct on today's.
+- Two preparatory commits. `4483560` moved the five binder-level items `library_compiler.rs` reached
+  into the codec for — `RootNameRow`, `collect_root_rows`, `encode_root_index`, and the source
+  checkpoint digests — out of it, and retargeted the test-only `load_strict_profile` sites to
+  `ExactLibraryProfile`; that made the codec a leaf with no non-snapshot consumers, at
+  1255 passed / 5 failed / 19 ignored, unchanged.
+- `0497550` then deleted it: **60 files, −18,574 / +793**, including the 21,003,926-byte
+  `canonical.snapshot`, `library_snapshot_codec/` (8,617 lines), `artifact.rs`, `snapshot.rs`,
+  `tooling/full-lib-snapshot/`, `tooling/library-base/`, and the `library-package` CI job. All 82
+  `.d.ts` sources, `profile.toml` and the TypeScript notices are retained — they are the input.
+  Release binary **27 MB → 6.8 MB**; lib suite **242 s → 53 s**; **1269 passed / 1 failed /
+  14 ignored**, the one failure being the pre-existing RED guard for unimplemented backlog `95`.
+  Four permanently-failing stale-artifact tests went with the artifact.
+- **`FrozenLibraryBase` is unchanged as a type**; only its provenance moved, via a new fallible
+  `publish(CompiledLibraryBase)` fed by the compiler's frozen runtime product. `LibraryBaseProvider`
+  keeps its `OnceLock` failure-caching and loses the decode stages from its error taxonomy.
+- **The checkpoint authenticator is deleted, not made vacuous.** It compared a source-compiled
+  binder against digests taken from the decoded archive; with one producer left it would compare a
+  value against itself. `LibraryBinderCheckpoint` keeps private fields, no `Clone`, and a single
+  construction site, so provenance is guaranteed structurally. `RuntimeCollisionReplayIndex`
+  collapsed as well: admission is now the single construction path and re-checks the generator's
+  structural guarantees on every compile, packaged or focused — strictly more coverage than before.
+- **Two findings filed rather than absorbed.** Re-pinning the library evidence to source truth
+  exposed 273 → 265 diagnostics with bytes rising 91,453 → 125,251 and incompletes unchanged; the
+  pins were 102 commits stale and the delta predates the removal. `243a878` was ruled out by direct
+  measurement (its parent `ddfd649` already gives 265) → backlog
+  [`98`](../backlog/98-library-diagnostic-count-delta.md). Roughly 6,300 lines of orphaned
+  byte-level codec are gated `#[cfg(test)]` rather than deleted, because part of it is used as a
+  traversal backing live reference-integrity assertions → backlog
+  [`97`](../backlog/97-orphaned-wire-serialization.md).
+- **The binding performance claim above is now unreachable as written and must be restated.** The
+  snapshot's 112 ms median / 119 ms p95 cold start is what bought ≥2×. Source compilation is at
+  277 ms against 289 ms, i.e. ~1.04×. Restating the gate is a contract change and is pending an
+  explicit decision; it must not be silently missed. `tooling/full-lib-bench/` itself is not
+  materially snapshot-coupled — four lines of `provider_probe` schema (`snapshot_schema`,
+  `snapshot_product_sha256`) go when WU7 builds the `library-info` subcommand, which does not exist.
+- Remaining critical path is unchanged in shape: WU6 corpus, WU7 production provider + CLI cutover +
+  deletion of `src/prelude.ts`, WU8 the gate, WU9 review. The 1,152 ms of generation the 07-25 entry
+  attributed is still on the from-source path — deleting the codec did not delete it, because
+  `canonical_library_evidence` and `build_collision_replay_index` live in
+  `compile_owned_injected_frontend`, not in the codec. That cut is the next work unit.

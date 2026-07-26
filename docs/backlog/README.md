@@ -175,8 +175,11 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
 2. **Execute the active full-library performance-cutover sprint (`14`).** The pinned ES5 proof is
    GO after immutable standalone namespace values shipped under ADR-0010. The
-   [active sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the shipped
-   semantic-snapshot decision, production cutover, and fail-closed ≥2× native TypeScript 7 gate.
+   [active sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the production
+   cutover and the fail-closed cross-tool gate against native TypeScript 7. The shipped semantic
+   snapshot it once carried was retired by
+   [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md); `97` and `98` are its
+   fallout.
    Backlogs `50`/`75` remain independent 1.0 work; `63` is parity-only. The `13` profiling gate
    closed DEFER/no-VM under ADR-0001.
 3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the A/B/C
