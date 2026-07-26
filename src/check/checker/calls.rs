@@ -21,13 +21,12 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
-    ClassId, FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId,
-    TypeTag,
+    FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
 use oxc_ast::ast::{
-    Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
+    ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
     FormalParameterRest, FormalParameters, Function, FunctionBody, NewExpression,
     TSTypeParameterInstantiation,
 };
@@ -38,82 +37,6 @@ use rustc_hash::FxHashMap;
 mod contextual_duplicate_diagnostics_spec;
 #[cfg(test)]
 mod contextual_rewalk_scaling_spec;
-
-/// Which expression a memoized argument walk walked, and in what surroundings.
-///
-/// A node is `(module, scope, span)`; the rest is the ambient state a walk of that node
-/// reads and that the node itself does not fix. Narrowing is deliberately **not** here:
-/// it is not ambient state, because the flow-node CFG resolves a reference from its own
-/// `(module scope, span)` through a durable memo (`Pass::reference_flow`/`flow_memo`),
-/// so re-walking one node always sees the same narrowed types
-/// (`docs/reference/invariants.md` §1, narrowing). Everything else a walk reads is
-/// lexically fixed by the node — except `this` and the current class, which an enclosing
-/// contextual walk can rebind, so both are named here.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(in crate::check::checker) struct WalkSite {
-    module: ScopeId,
-    scope: ScopeId,
-    start: u32,
-    end: u32,
-    contextual_this: Option<TypeId>,
-    class: Option<ClassId>,
-}
-
-/// One effect-discarding contextual re-walk of an argument expression: a site, the
-/// already-resolved contextual type it is walked against, the raw walk it refines, and
-/// which of the two branches (`use_contextual_arrow`) it takes.
-///
-/// Only a walk whose records are discarded may be keyed here — see
-/// [`Pass::infer_contextual_source_after_walked_reporting`](crate::check::checker::context::Pass).
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(in crate::check::checker) struct ContextualWalkKey {
-    site: WalkSite,
-    raw: TypeId,
-    context: TypeId,
-    use_contextual_arrow: bool,
-}
-
-/// One raw (context-free) walk of a call/`new` argument whose shape a committed
-/// contextual walk can supersede. The raw walk takes no contextual type, so the site is
-/// the whole key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(in crate::check::checker) struct RawArgumentWalkKey {
-    site: WalkSite,
-}
-
-impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
-    fn walk_site(&self, scope: ScopeId, span: Span) -> WalkSite {
-        WalkSite {
-            module: self.current_module,
-            scope,
-            start: span.start,
-            end: span.end,
-            contextual_this: self.current_this,
-            class: self.current_class,
-        }
-    }
-
-    pub(in crate::check::checker) fn contextual_walk_key(
-        &self,
-        scope: ScopeId,
-        raw: (TypeId, Span),
-        context: TypeId,
-        use_contextual_arrow: bool,
-    ) -> ContextualWalkKey {
-        ContextualWalkKey {
-            site: self.walk_site(scope, raw.1),
-            raw: raw.0,
-            context,
-            use_contextual_arrow,
-        }
-    }
-
-    fn raw_argument_walk_key(&self, scope: ScopeId, span: Span) -> RawArgumentWalkKey {
-        RawArgumentWalkKey {
-            site: self.walk_site(scope, span),
-        }
-    }
-}
 
 /// The argument shapes a committed contextual walk can re-walk: an arrow function,
 /// or a fresh object/array literal (also through parentheses, which
@@ -190,12 +113,6 @@ pub(super) struct CallMeasure {
     pub selected_receiver_relation_queries: u64,
     pub speculative_query_forks: u64,
     pub speculative_query_writes_discarded: u64,
-    /// Discarding contextual re-walks served from the memo instead of re-walked.
-    pub contextual_memo_hits: u64,
-    /// Raw argument walks served from the memo instead of re-walked.
-    pub raw_argument_memo_hits: u64,
-    /// Memo-served raw argument walks re-run because nothing superseded them.
-    pub raw_argument_memo_recoveries: u64,
 }
 
 #[cfg(test)]
@@ -273,11 +190,6 @@ pub(super) fn with_contextual_measure_phase<R>(
 #[cfg(test)]
 pub(super) fn contextual_measure_phase() -> ContextualMeasurePhase {
     CONTEXTUAL_MEASURE_PHASE.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-pub(super) fn measure_contextual_memo_hit() {
-    CALL_MEASURE.with(|measure| measure.borrow_mut().contextual_memo_hits += 1);
 }
 
 #[cfg(test)]
@@ -593,94 +505,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// The held batch is index-aligned with `arg_types` by
     /// [`Pass::hold_provisional_argument_effects`]; an argument whose type inference
     /// yields nothing is never paired with a parameter, so its effects commit here.
-    ///
-    /// A shape a contextual walk can supersede is also memoized per call region
-    /// (backlog `95`): re-executing the enclosing call — which is what a contextual
-    /// re-walk of an enclosing argument does — otherwise re-walks this whole subtree,
-    /// and that is one of the two factors that made nesting exponential. A served key
-    /// parks [`ProvisionalArgumentWalk::Memoized`] instead of records, which
-    /// [`Pass::rewalk_memoized_raw_arguments`] turns back into a real walk if nothing
-    /// supersedes this argument.
     fn walk_raw_argument(
         &mut self,
         scope: ScopeId,
-        argument_index: usize,
         arg_expr: &Expression<'_>,
     ) -> Option<(TypeId, Span)> {
         if !contextual_rewalk_candidate_shape(arg_expr) {
             let inferred = self.infer_expr(scope, arg_expr);
             if inferred.is_some() {
-                self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Settled);
+                self.hold_provisional_argument_effects(None);
             }
             return inferred;
-        }
-        let memo_key = self.raw_argument_walk_key(scope, Span::from_oxc(arg_expr.span()));
-        if let Some(memoized) = self.raw_argument_walk_memo.get(&memo_key).copied() {
-            #[cfg(test)]
-            measure_call(|measure| measure.raw_argument_memo_hits += 1);
-            self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Memoized {
-                argument_index,
-            });
-            return Some(memoized);
         }
         let (inferred, effects) =
             self.capture_candidate_effects(|pass| pass.infer_expr(scope, arg_expr));
         match inferred {
             Some(inferred) => {
-                self.raw_argument_walk_memo.insert(memo_key, inferred);
-                self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Held(effects));
+                self.hold_provisional_argument_effects(Some(effects));
                 Some(inferred)
             }
             None => {
                 self.merge_candidate_effects(effects);
                 None
-            }
-        }
-    }
-
-    /// Re-run every raw argument walk this call served from the memo and that nothing
-    /// superseded, so its records exist and are parked where the un-memoized walk's
-    /// were (backlog `95`).
-    ///
-    /// Runs on **every** exit path of the call, immediately before the frame closes, so
-    /// the shapes `tests/cases/b92_contextual_duplicate_diagnostics/retained_raw_walks.ts`
-    /// pins — a generic arrow, a multi-signature contextual target, failed overload
-    /// resolution, a `never` parameter cutting the committed loop short — report exactly
-    /// as they do without the memo. The batch is parked rather than emitted so it still
-    /// merges at frame close, keeping record order identical too.
-    pub(in crate::check::checker) fn rewalk_memoized_raw_arguments(
-        &mut self,
-        scope: ScopeId,
-        arguments: &[Argument<'_>],
-    ) {
-        let Some(frame) = self.provisional_argument_effects.last() else {
-            return;
-        };
-        let pending: Vec<(usize, usize)> = frame
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, walk)| match walk {
-                ProvisionalArgumentWalk::Memoized { argument_index } => {
-                    Some((slot, *argument_index))
-                }
-                ProvisionalArgumentWalk::Settled | ProvisionalArgumentWalk::Held(_) => None,
-            })
-            .collect();
-        for (slot, argument_index) in pending {
-            let Some(arg_expr) = arguments
-                .get(argument_index)
-                .and_then(|argument| argument.as_expression())
-            else {
-                continue;
-            };
-            #[cfg(test)]
-            measure_call(|measure| measure.raw_argument_memo_recoveries += 1);
-            let (_, effects) =
-                self.capture_candidate_effects(|pass| pass.infer_expr(scope, arg_expr));
-            if let Some(frame) = self.provisional_argument_effects.last_mut() {
-                if let Some(entry) = frame.get_mut(slot) {
-                    *entry = ProvisionalArgumentWalk::Held(effects);
-                }
             }
         }
     }
@@ -746,10 +592,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         call: &CallExpression<'_>,
     ) -> Option<(TypeId, Span)> {
-        self.with_provisional_argument_effects(
-            |pass| pass.infer_call_inner(scope, call),
-            |pass| pass.rewalk_memoized_raw_arguments(scope, &call.arguments),
-        )
+        self.with_provisional_argument_effects(|pass| pass.infer_call_inner(scope, call))
     }
 
     fn infer_call_inner(
@@ -851,11 +694,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
-        for (argument_index, arg) in call.arguments.iter().enumerate() {
+        for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 #[cfg(test)]
                 measure_call(|measure| measure.raw_call_argument_walks += 1);
-                if let Some(inferred) = self.walk_raw_argument(scope, argument_index, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);
@@ -1533,10 +1376,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         call: &CallExpression<'_>,
         call_span: Span,
     ) -> Option<(TypeId, Span)> {
-        self.with_provisional_argument_effects(
-            |pass| pass.infer_super_call_inner(scope, call, call_span),
-            |pass| pass.rewalk_memoized_raw_arguments(scope, &call.arguments),
-        )
+        self.with_provisional_argument_effects(|pass| {
+            pass.infer_super_call_inner(scope, call, call_span)
+        })
     }
 
     fn infer_super_call_inner(
@@ -1551,9 +1393,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // into nested calls/`new`/functions inside the arguments.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
-        for (argument_index, arg) in call.arguments.iter().enumerate() {
+        for arg in &call.arguments {
             if let Some(arg_expr) = arg.as_expression() {
-                if let Some(inferred) = self.walk_raw_argument(scope, argument_index, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_exprs.push(arg_expr);
                 }
@@ -2177,10 +2019,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         new_expr: &NewExpression<'_>,
     ) -> Option<(TypeId, Span)> {
-        self.with_provisional_argument_effects(
-            |pass| pass.infer_new_inner(scope, new_expr),
-            |pass| pass.rewalk_memoized_raw_arguments(scope, &new_expr.arguments),
-        )
+        self.with_provisional_argument_effects(|pass| pass.infer_new_inner(scope, new_expr))
     }
 
     fn infer_new_inner(
@@ -2215,11 +2054,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(new_expr.arguments.len());
-        for (argument_index, arg) in new_expr.arguments.iter().enumerate() {
+        for arg in &new_expr.arguments {
             if let Some(arg_expr) = arg.as_expression() {
                 #[cfg(test)]
                 measure_call(|measure| measure.raw_construct_argument_walks += 1);
-                if let Some(inferred) = self.walk_raw_argument(scope, argument_index, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);

@@ -21,13 +21,11 @@ use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 
-use super::calls::{ContextualWalkKey, RawArgumentWalkKey};
 use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
 use super::classes::publication::StagedClassValidation;
 use super::classes::retained::RetainedClassCallable;
 use super::events::{CandidateEffects, UserRecordTicket};
-use super::expr::ContextualRewalk;
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
 use super::library_identities::LibrarySemanticIdentities;
@@ -220,27 +218,6 @@ impl<Ticket: Copy + PartialEq> CheckerRecordBatch<Ticket> {
         );
         self.records.extend(child.records);
     }
-}
-
-/// One call/`new` argument's raw walk, as the in-flight call frame sees it.
-///
-/// Exactly one walk of a re-walkable argument may report. The raw walk runs first, so
-/// its records are parked here until the committed contextual walk says whether it
-/// superseded them (backlog `92`); whatever is still parked when the frame closes
-/// commits.
-pub(in crate::check::checker) enum ProvisionalArgumentWalk<Ticket: Copy = UserRecordTicket> {
-    /// Nothing is parked: either the shape admits no contextual re-walk and the raw
-    /// walk already reported in place, or the committed walk superseded it.
-    Settled,
-    /// The raw walk's records, parked until the committed walk reports.
-    Held(CheckerEffects<Ticket>),
-    /// The raw walk was served from [`Pass::raw_argument_walk_memo`], so no records
-    /// exist for this argument yet (backlog `95`). If the committed contextual walk
-    /// supersedes the argument this is the whole saving; if it does **not**, the walk
-    /// is re-run before the frame closes and parks its records here, so the raw walk
-    /// still reports wherever it is the only walk. The `usize` is the argument's index
-    /// in the call's own argument list, which is what makes that re-walk possible.
-    Memoized { argument_index: usize },
 }
 
 pub(in crate::check::checker) struct CheckerEffects<Ticket: Copy = UserRecordTicket> {
@@ -1358,27 +1335,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// only one of the two may commit, so the earlier walk is held here until the
     /// committed walk reports whether it superseded it — backlog `92`.
     pub(in crate::check::checker) provisional_argument_effects:
-        Vec<Vec<ProvisionalArgumentWalk<Ticket>>>,
-    /// Memo for the *effect-discarding* contextual argument re-walks (backlog `95`).
-    ///
-    /// A nested argument is re-walked once per enclosing walk, so without this an
-    /// argument `d` levels deep is walked `3^d` times. Only a walk that discards its
-    /// records may be served from here: its whole observable output is the
-    /// `(TypeId, Span)` it returns plus whether it re-walked, so replaying that is
-    /// indistinguishable from re-walking. The walk that reports is never memoized.
-    pub(in crate::check::checker) contextual_walk_memo:
-        FxHashMap<ContextualWalkKey, ((TypeId, Span), ContextualRewalk)>,
-    /// Memo for the *raw* (context-free) argument walk of a re-walkable argument shape
-    /// (backlog `95`). That walk's records are held rather than emitted, so a served
-    /// key hands back only the type — and the frame records that it must be walked for
-    /// real before it closes if nothing superseded it (see
-    /// [`ProvisionalArgumentWalk::Memoized`]).
-    pub(in crate::check::checker) raw_argument_walk_memo:
-        FxHashMap<RawArgumentWalkKey, (TypeId, Span)>,
-    /// Nesting depth of in-flight call/`new` argument frames. Entries are only made
-    /// and read inside a frame, and the outermost frame clears both tables on the way
-    /// out — a memo may not outlive the ambient state its key does not name.
-    pub(in crate::check::checker) contextual_walk_depth: u32,
+        Vec<Vec<Option<CheckerEffects<Ticket>>>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
     pub(in crate::check::checker) pending_effects: Vec<CheckerEffects<Ticket>>,
     /// O(1) owner-to-batch lookup over the reservation ledger's dense ticket keys.

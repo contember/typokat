@@ -67,13 +67,7 @@ fn measure_call_pipeline_callback_formula() {
     assert_eq!(measure.candidate_mismatches, 1);
     assert_eq!(measure.generic_preliminary_inference_runs, 3);
     assert_eq!(measure.generic_full_inference_runs, 3);
-    // Backlog 95: the two overloads give the argument two distinct contextual targets,
-    // so candidate inference walks it twice and the committed build's third walk repeats
-    // the selected target and is memoized. Both candidate trials walk against those same
-    // two targets — a parameter that does not mention the signature's type variable is
-    // the same `TypeId` uninstantiated and instantiated — so both are memoized too. Only
-    // the committed check, which reports, is never memoized.
-    assert_eq!(measure.callback_rewalks, [2, 0, 1, 0, 0]);
+    assert_eq!(measure.callback_rewalks, [3, 2, 1, 0, 0]);
 }
 
 #[test]
@@ -93,13 +87,7 @@ fn measure_call_pipeline_fresh_literal_formula() {
     assert_eq!(measure.candidate_mismatches, 1);
     assert_eq!(measure.generic_preliminary_inference_runs, 0);
     assert_eq!(measure.generic_full_inference_runs, 3);
-    // Backlog 95: the two overloads give the argument two distinct contextual targets,
-    // so candidate inference walks it twice and the committed build's third walk repeats
-    // the selected target and is memoized. Both candidate trials walk against those same
-    // two targets — a parameter that does not mention the signature's type variable is
-    // the same `TypeId` uninstantiated and instantiated — so both are memoized too. Only
-    // the committed check, which reports, is never memoized.
-    assert_eq!(measure.fresh_literal_rewalks, [2, 0, 1, 0, 0]);
+    assert_eq!(measure.fresh_literal_rewalks, [3, 2, 1, 0, 0]);
 }
 
 #[test]
@@ -307,13 +295,7 @@ fn measure_construct_pipeline_callback_formula() {
     assert_eq!(measure.committed_candidate_builds, 1);
     assert_eq!(measure.candidate_trials, 2);
     assert_eq!(measure.generic_preliminary_inference_runs, 3);
-    // Backlog 95: the two overloads give the argument two distinct contextual targets,
-    // so candidate inference walks it twice and the committed build's third walk repeats
-    // the selected target and is memoized. Both candidate trials walk against those same
-    // two targets — a parameter that does not mention the signature's type variable is
-    // the same `TypeId` uninstantiated and instantiated — so both are memoized too. Only
-    // the committed check, which reports, is never memoized.
-    assert_eq!(measure.callback_rewalks, [2, 0, 1, 0, 0]);
+    assert_eq!(measure.callback_rewalks, [3, 2, 1, 0, 0]);
     assert_eq!(measure.trial_receiver_relation_queries, 0);
     assert_eq!(measure.selected_receiver_relation_queries, 0);
 }
@@ -383,9 +365,6 @@ fn measure_call_and_construct_constraint_failure_precedence() {
             selected_receiver_relation_queries: 0,
             speculative_query_forks: 8,
             speculative_query_writes_discarded: 8,
-            contextual_memo_hits: 0,
-            raw_argument_memo_hits: 0,
-            raw_argument_memo_recoveries: 0,
         }
     );
 }
