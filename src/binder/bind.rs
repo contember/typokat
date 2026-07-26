@@ -2664,7 +2664,8 @@ with (source) { var RegExp = 1; }
                 .namespaces
                 .merges()
                 .find(|record| {
-                    record.owner == DeclarationOwner::CompilationGlobal && record.name == name
+                    record.owner == DeclarationOwner::CompilationGlobal
+                        && record.name.as_ref() == name
                 })
                 .expect("collision has a compilation-global merge")
                 .declarations
@@ -3581,7 +3582,7 @@ with (source) { var RegExp = 1; }
             .merges()
             .find(|record| {
                 record.owner == crate::binder::namespace::DeclarationOwner::CompilationGlobal
-                    && record.name == name
+                    && record.name.as_ref() == name
             })
             .expect("global merge record");
         assert_eq!(merge.classification.disposition, MergeDisposition::Admitted);
@@ -4088,7 +4089,7 @@ with (source) { var RegExp = 1; }
         let rejected = binder
             .namespaces
             .merges()
-            .find(|record| record.name == "RejectedGlobal")
+            .find(|record| record.name.as_ref() == "RejectedGlobal")
             .expect("rejected global merge");
         assert_eq!(
             rejected.classification.disposition,
@@ -4097,7 +4098,7 @@ with (source) { var RegExp = 1; }
         let deferred = binder
             .namespaces
             .merges()
-            .find(|record| record.name == "DeferredGlobal")
+            .find(|record| record.name.as_ref() == "DeferredGlobal")
             .expect("deferred global merge");
         assert_eq!(
             deferred.classification.disposition,

@@ -3047,15 +3047,15 @@ fn normalize_source_root_candidates(
     }) {
         if record.classification.disposition != crate::binder::namespace::MergeDisposition::Admitted
         {
-            candidates.remove(&record.name);
+            candidates.remove(record.name.as_ref());
             continue;
         }
-        let Some(candidate) = candidates.get_mut(&record.name) else {
+        let Some(candidate) = candidates.get_mut(record.name.as_ref()) else {
             continue;
         };
         let mut slots = BTreeSet::new();
         let mut ordinary_contributor = false;
-        for declaration in &record.declarations {
+        for declaration in record.declarations.iter() {
             if declaration.spaces.value {
                 slots.insert(SourceBindingSlot::Value);
             }
@@ -3091,7 +3091,7 @@ fn normalize_source_root_candidates(
             namespace_instantiated,
         );
         if namespace_instantiated {
-            namespace_contributors.insert(record.name.clone());
+            namespace_contributors.insert(record.name.to_string());
         }
     }
     NormalizedSourceRootCandidates {

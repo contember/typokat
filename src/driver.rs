@@ -1474,7 +1474,8 @@ mod tests {
                 .namespaces
                 .merges()
                 .find(|record| {
-                    record.owner == DeclarationOwner::CompilationGlobal && record.name == "Shared"
+                    record.owner == DeclarationOwner::CompilationGlobal
+                        && record.name.as_ref() == "Shared"
                 })
                 .expect("cross-file dormant global group");
             assert_eq!(

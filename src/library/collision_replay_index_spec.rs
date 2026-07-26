@@ -1030,7 +1030,7 @@ declare namespace Intl {
             .namespaces
             .merges()
             .find(|record| {
-                record.owner == DeclarationOwner::CompilationGlobal && record.name == name
+                record.owner == DeclarationOwner::CompilationGlobal && record.name.as_ref() == name
             })
             .unwrap_or_else(|| panic!("compilation-global {name} merge"));
         assert!(
@@ -1075,7 +1075,9 @@ declare namespace Intl {
     let namespace_merge = binder
         .namespaces
         .merges()
-        .find(|record| record.owner == DeclarationOwner::CompilationGlobal && record.name == "Intl")
+        .find(|record| {
+            record.owner == DeclarationOwner::CompilationGlobal && record.name.as_ref() == "Intl"
+        })
         .expect("Intl compilation-global merge");
     let fragment = namespace_merge
         .declarations
@@ -1158,7 +1160,7 @@ if (condition) {
             .namespaces
             .merges()
             .find(|record| {
-                record.owner == DeclarationOwner::CompilationGlobal && record.name == name
+                record.owner == DeclarationOwner::CompilationGlobal && record.name.as_ref() == name
             })
             .unwrap_or_else(|| panic!("compilation-global placement for {name}"));
         assert!(
