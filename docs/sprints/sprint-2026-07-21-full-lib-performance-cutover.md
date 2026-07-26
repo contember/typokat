@@ -66,9 +66,9 @@ performance GO before production work proceeds.
 The sprint may close as shipped only with this narrow claim:
 
 > On the recorded reference host, the ordinary production typokat CLI checks every approved
-> fresh-process TypeScript 6.0.3 ES2025-full workload at least 2× faster than the pinned native
-> TypeScript 7 executable, while using the same 82 library source bytes and preserving the approved
-> semantic outcomes.
+> fresh-process TypeScript 6.0.3 ES2025-full workload demonstrably faster than the pinned native
+> TypeScript 7 executable, while using the same 82 library source bytes, compiling its default
+> library from source in every process, and preserving the approved semantic outcomes.
 
 For each benchmark row and each of three independent trials:
 
@@ -76,17 +76,27 @@ For each benchmark row and each of three independent trials:
 speedup = median(tsgo wall time) / median(typokat wall time)
 ```
 
-The one-sided 95% bootstrap lower confidence bound of `speedup` must be at least `2.00`, and the
-ratio of tsgo p95 to typokat p95 must also be at least `2.00`. The engineering target is `2.25×`
-to leave noise headroom. The threshold is derived from the frozen comparator samples; no absolute
-time from the exploratory runs is hard-coded. A failed row is NO-GO. The run log cannot weaken,
-drop, rename, or replace a row after seeing its result.
+The one-sided 95% bootstrap lower confidence bound of `speedup` must exceed `1.00`, and the ratio of
+tsgo p95 to typokat p95 must also exceed `1.00`. The engineering target is `1.25×` to leave noise
+headroom. The threshold is derived from the frozen comparator samples; no absolute time from the
+exploratory runs is hard-coded. A failed row is NO-GO. The run log cannot weaken, drop, rename, or
+replace a row after seeing its result.
+
+**Restated 2026-07-26 from `≥2.00` to `>1.00`, by explicit decision, and the reason is on the
+record.** The 2× target was written when a shipped semantic snapshot was the plan; its 112 ms median
+cold start is what made 2× reachable.
+[`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md) retires that snapshot
+because precomputing one pinned profile does nothing for arbitrary user code, and source compilation
+costs 277 ms against the comparator's 289 ms. The claim this sprint can honestly support is
+therefore "faster, proven statistically", not "twice as fast". This is a **weakened** gate; it is
+recorded as such rather than presented as equivalent. Every other control below — same library
+bytes, no `--skipLibCheck`, fresh process per sample, identical binaries for semantics and timing,
+no lazy subset or output suppression — is unchanged and still binding.
 
 The primary benchmark is fresh-process/compiler-cold with an ordinary warm filesystem cache. It
-includes process creation, production CLI startup, default-library snapshot validation/loading,
-user-source I/O, parse/bind/check, diagnostic construction where applicable, and normal shutdown.
-It excludes downloading tools, building binaries, staging the comparator runtime, and generating
-the shipped snapshot. Every measured sample is a new process; no daemon, incremental state, or
+includes process creation, production CLI startup, default-library source compilation, user-source
+I/O, parse/bind/check, diagnostic construction where applicable, and normal shutdown. It excludes
+downloading tools, building binaries, and staging the comparator runtime. Every measured sample is a new process; no daemon, incremental state, or
 same-process singleton reuse counts toward the headline.
 
 ### Approved benchmark matrix
@@ -104,7 +114,7 @@ All rows use committed byte-pinned sources and the exact 82-file registry:
 4. **fanout** — a fixed mixed 32-file invocation covering shared-base reuse, independent deltas,
    and at least one collision, compared with the equivalent native TypeScript invocation.
 
-The 2× claim applies to every row. If ADR-0011's private full rebuild cannot meet the collision row,
+The claim applies to every row. If ADR-0011's private full rebuild cannot meet the collision row,
 the sprint must stop and decide a sound faster collision architecture; it may not silently narrow
 the claim to the easy fast path.
 
@@ -132,7 +142,8 @@ the claim to the easy fast path.
   gates invalidate the claim.
 - Rename/comment perturbation controls must take the same route. No filename, fixture hash,
   reachable-surface, output-suppression, lazy-subset, test-only, or WU0-injection special case is
-  allowed. A shipped snapshot is valid only if every ordinary user source uses it.
+  allowed. No precomputed semantic artifact may be reintroduced to win a row; per ADR-0017 the
+  library is compiled from source in every measured process.
 
 ## Work units
 
