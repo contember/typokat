@@ -56,6 +56,42 @@ struct LibrarySemanticIdentityRows {
 
 pub(crate) type LibrarySemanticIdentitiesSnapshotParts = [LibraryIdentityTerminal; 8];
 
+/// Which native array syntax a library type group *is*. `Array<T>` and
+/// `ReadonlyArray<T>` name the intrinsic array types themselves; their interface
+/// bodies are only the member surface `project_library_member_surface` projects.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum NativeArrayAlias {
+    Array,
+    ReadonlyArray,
+}
+
+/// The two native-array declaration identities, carried by value so annotation
+/// lowering can test group identity without borrowing the identity table.
+///
+/// Keyed on the universe-local `TypeGroupId` selected from the library's
+/// compilation-global scope — never on the spelling — so a module-local
+/// `interface Array<T>` of the user's own acquires no native role.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::check::checker) struct NativeArrayGroups {
+    array: Option<TypeGroupId>,
+    readonly_array: Option<TypeGroupId>,
+}
+
+impl NativeArrayGroups {
+    pub(in crate::check::checker) fn alias_of(
+        self,
+        group: TypeGroupId,
+    ) -> Option<NativeArrayAlias> {
+        if self.array == Some(group) {
+            return Some(NativeArrayAlias::Array);
+        }
+        if self.readonly_array == Some(group) {
+            return Some(NativeArrayAlias::ReadonlyArray);
+        }
+        None
+    }
+}
+
 impl LibrarySemanticIdentities {
     #[cfg(test)]
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
@@ -129,6 +165,20 @@ impl LibrarySemanticIdentities {
         match &self.inner.array {
             LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
             LibraryIdentityTerminal::Unavailable(_) => None,
+        }
+    }
+
+    fn readonly_array_group(&self) -> Option<TypeGroupId> {
+        match &self.inner.readonly_array {
+            LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
+            LibraryIdentityTerminal::Unavailable(_) => None,
+        }
+    }
+
+    pub(in crate::check::checker) fn native_array_groups(&self) -> NativeArrayGroups {
+        NativeArrayGroups {
+            array: self.array_group(),
+            readonly_array: self.readonly_array_group(),
         }
     }
 

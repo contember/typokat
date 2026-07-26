@@ -25,6 +25,7 @@ use super::application::{
     ClassTypeParameterDefault, ExplicitClassArgument, SourceClassArguments,
 };
 use super::surface_types::SurfaceTypeFactory;
+use crate::check::checker::library_identities::NativeArrayAlias;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum SurfaceTypeFailure<Ticket> {
@@ -80,6 +81,12 @@ pub(in crate::check::checker) enum SurfaceNameResolution<Ticket> {
     Direct(TypeId),
     Alias {
         template: TypeId,
+        parameters: Vec<ClassTypeParameter<Ticket>>,
+    },
+    /// A library declaration that *is* a native array type (`Array<T>` /
+    /// `ReadonlyArray<T>`), keyed on declaration identity rather than spelling.
+    NativeArray {
+        alias: NativeArrayAlias,
         parameters: Vec<ClassTypeParameter<Ticket>>,
     },
     Class {
@@ -635,84 +642,41 @@ where
                 template,
                 parameters,
             } => {
-                let expected_max = parameters.len();
-                let expected_min = parameters
-                    .iter()
-                    .rposition(|parameter| {
-                        matches!(parameter.default, ClassTypeParameterDefault::Absent)
-                    })
-                    .map_or(0, |index| index + 1);
-                if explicit.len() < expected_min || explicit.len() > expected_max {
-                    let display =
-                        self.arity_display_name(name, &parameters, expected_min, expected_max);
-                    return Err(reference_exhaustion(
-                        &display,
-                        span,
-                        Exhaustion::ClassApplicationArguments(
-                            ClassApplicationArguments::WrongArity {
-                                expected_min,
-                                expected_max,
-                                actual: explicit.len(),
-                            },
-                        ),
-                    ));
-                }
-                if let Some(index) = explicit
-                    .iter()
-                    .position(|argument| matches!(argument, ExplicitClassArgument::Unavailable))
-                {
+                let substitutions = self.complete_alias_arguments(
+                    name,
+                    span,
+                    &parameters,
+                    &explicit,
+                    &explicit_spans,
+                )?;
+                Ok(self.factory.intern_instantiation(template, substitutions))
+            }
+            SurfaceNameResolution::NativeArray { alias, parameters } => {
+                let substitutions = self.complete_alias_arguments(
+                    name,
+                    span,
+                    &parameters,
+                    &explicit,
+                    &explicit_spans,
+                )?;
+                let [(_, element)] = substitutions[..] else {
                     return Err(reference_exhaustion(
                         name,
                         span,
                         Exhaustion::ClassApplicationArguments(
-                            ClassApplicationArguments::UnavailableExplicitArgument { index },
+                            ClassApplicationArguments::WrongArity {
+                                expected_min: 1,
+                                expected_max: 1,
+                                actual: substitutions.len(),
+                            },
                         ),
                     ));
-                }
-                let mut substitutions = Vec::with_capacity(parameters.len());
-                for (index, parameter) in parameters.iter().enumerate() {
-                    let argument = match explicit.get(index) {
-                        Some(ExplicitClassArgument::Ready(ty)) => *ty,
-                        Some(ExplicitClassArgument::Unavailable) => unreachable!(),
-                        None => match parameter.default {
-                            ClassTypeParameterDefault::Ready(default) => {
-                                if substitutions.is_empty() {
-                                    default
-                                } else {
-                                    self.factory
-                                        .intern_instantiation(default, substitutions.clone())
-                                }
-                            }
-                            ClassTypeParameterDefault::Unsupported(ticket) => {
-                                return Err(SurfaceTypeFailure::Unsupported(ticket));
-                            }
-                            ClassTypeParameterDefault::Absent => {
-                                return Err(reference_exhaustion(
-                                    name,
-                                    span,
-                                    Exhaustion::ClassApplicationArguments(
-                                        ClassApplicationArguments::InferenceIncomplete { index },
-                                    ),
-                                ));
-                            }
-                        },
-                    };
-                    substitutions.push((parameter.id, argument));
-                }
-                let parameter_ids = parameters
-                    .iter()
-                    .map(|parameter| parameter.id)
-                    .collect::<Vec<_>>();
-                let application_arguments = substitutions
-                    .iter()
-                    .map(|(_, argument)| *argument)
-                    .collect::<Vec<_>>();
-                self.resolver.record_type_argument_constraints(
-                    &parameter_ids,
-                    &application_arguments,
-                    &explicit_spans,
-                );
-                Ok(self.factory.intern_instantiation(template, substitutions))
+                };
+                let array = self.factory.intern_array(element);
+                Ok(match alias {
+                    NativeArrayAlias::Array => array,
+                    NativeArrayAlias::ReadonlyArray => self.factory.intern_readonly(array),
+                })
             }
             SurfaceNameResolution::Class { class, parameters } => {
                 let expected_max = parameters.len();
@@ -775,6 +739,92 @@ where
                 unreachable!("resolved endpoint remained a qualified-path outcome")
             }
         }
+    }
+
+    /// Validate the application arity, fill omitted defaults, and stage the
+    /// constraint checks for a template-shaped (non-class) reference. Shared by the
+    /// ordinary alias/interface endpoint and the native-array endpoints.
+    fn complete_alias_arguments(
+        &mut self,
+        name: &str,
+        span: Span,
+        parameters: &[ClassTypeParameter<Ticket>],
+        explicit: &[ExplicitClassArgument],
+        explicit_spans: &[CheckSpan],
+    ) -> Result<Vec<(TypeParamId, TypeId)>, SurfaceTypeFailure<Ticket>> {
+        let expected_max = parameters.len();
+        let expected_min = parameters
+            .iter()
+            .rposition(|parameter| matches!(parameter.default, ClassTypeParameterDefault::Absent))
+            .map_or(0, |index| index + 1);
+        if explicit.len() < expected_min || explicit.len() > expected_max {
+            let display = self.arity_display_name(name, parameters, expected_min, expected_max);
+            return Err(reference_exhaustion(
+                &display,
+                span,
+                Exhaustion::ClassApplicationArguments(ClassApplicationArguments::WrongArity {
+                    expected_min,
+                    expected_max,
+                    actual: explicit.len(),
+                }),
+            ));
+        }
+        if let Some(index) = explicit
+            .iter()
+            .position(|argument| matches!(argument, ExplicitClassArgument::Unavailable))
+        {
+            return Err(reference_exhaustion(
+                name,
+                span,
+                Exhaustion::ClassApplicationArguments(
+                    ClassApplicationArguments::UnavailableExplicitArgument { index },
+                ),
+            ));
+        }
+        let mut substitutions = Vec::with_capacity(parameters.len());
+        for (index, parameter) in parameters.iter().enumerate() {
+            let argument = match explicit.get(index) {
+                Some(ExplicitClassArgument::Ready(ty)) => *ty,
+                Some(ExplicitClassArgument::Unavailable) => unreachable!(),
+                None => match parameter.default {
+                    ClassTypeParameterDefault::Ready(default) => {
+                        if substitutions.is_empty() {
+                            default
+                        } else {
+                            self.factory
+                                .intern_instantiation(default, substitutions.clone())
+                        }
+                    }
+                    ClassTypeParameterDefault::Unsupported(ticket) => {
+                        return Err(SurfaceTypeFailure::Unsupported(ticket));
+                    }
+                    ClassTypeParameterDefault::Absent => {
+                        return Err(reference_exhaustion(
+                            name,
+                            span,
+                            Exhaustion::ClassApplicationArguments(
+                                ClassApplicationArguments::InferenceIncomplete { index },
+                            ),
+                        ));
+                    }
+                },
+            };
+            substitutions.push((parameter.id, argument));
+        }
+        let parameter_ids = parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>();
+        let application_arguments = substitutions
+            .iter()
+            .map(|(_, argument)| *argument)
+            .collect::<Vec<_>>();
+        self.resolver.record_type_argument_constraints(
+            &parameter_ids,
+            &application_arguments,
+            explicit_spans,
+        );
+        Ok(substitutions)
     }
 
     fn arity_display_name(

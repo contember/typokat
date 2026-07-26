@@ -8,6 +8,7 @@ use crate::check::checker::classes::application::{
     ExplicitClassArgument, SourceClassArguments,
 };
 use crate::check::checker::classes::surface_types::SurfaceTypeFactory;
+use crate::check::checker::library_identities::{NativeArrayAlias, NativeArrayGroups};
 use crate::check::checker::type_groups::{
     PublishedTypeGroupSurface, PublishedTypeGroupTerminal, PublishedTypeParameterDefault,
 };
@@ -1251,6 +1252,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.panic_before_cycle_tainted_application_cache_publish = true;
     }
 
+    /// The native-array declaration identities of the installed library, or an empty
+    /// set on the prelude path (where no library identities are installed).
+    pub(in crate::check::checker) fn native_array_groups(&self) -> NativeArrayGroups {
+        self.library_semantic_identities
+            .as_ref()
+            .map_or_else(NativeArrayGroups::default, |identities| {
+                identities.native_array_groups()
+            })
+    }
+
+    /// `Array<E>` / `ReadonlyArray<E>` lowered to the intrinsic array type they name.
+    /// `None` for every other group, and for a native group whose single element
+    /// argument is not available (the caller then keeps its ordinary path).
+    fn native_array_alias_application(
+        &mut self,
+        group: TypeGroupId,
+        params: &[TypeParamId],
+        map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> Option<TypeId> {
+        let alias = self.native_array_groups().alias_of(group)?;
+        let [parameter] = params else {
+            return None;
+        };
+        let element = map.get(parameter).copied()?;
+        let array = self.interner.intern_array(element);
+        Some(match alias {
+            NativeArrayAlias::Array => array,
+            NativeArrayAlias::ReadonlyArray => self.interner.intern_readonly(array),
+        })
+    }
+
     fn instantiate_type_group_arguments(
         &mut self,
         scope: ScopeId,
@@ -1317,6 +1349,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             map.insert(param, default);
             arg_infos.push((default, application_span));
+        }
+
+        // `Array<T>` / `ReadonlyArray<T>` ARE the native array types — the library's
+        // interface body is only the member surface `project_library_member_surface`
+        // projects, so lowering the annotation to that body would give an annotation a
+        // different identity from every array-typed expression.
+        if let Some(native) = self.native_array_alias_application(decl_id, &params, &map) {
+            return Some(native);
         }
 
         // Conditional, mapped, trusted intrinsic, and in-flight generic interface

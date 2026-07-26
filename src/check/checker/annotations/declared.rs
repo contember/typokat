@@ -1,5 +1,6 @@
 use super::*;
 use crate::check::checker::context::TypeDecl;
+use crate::check::checker::library_identities::NativeArrayAlias;
 use crate::check::checker::type_groups::{PublishedTypeGroupSurface, PublishedTypeGroupTerminal};
 use crate::types::repr::{DeclaredRecipeId, DeclaredRecipeNode, TypeParamId};
 use oxc_ast::ast::{TSTupleElement, TSTypeName};
@@ -303,6 +304,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let group = self.peek_type_decl_id_untraced(scope, name)?;
         if !self.type_group_construction_is_frozen(group) {
             return None;
+        }
+        // `Array<E>` / `ReadonlyArray<E>` name the native array types, not the library
+        // interface body that carries their member surface (see `library_identities`).
+        if let Some(alias) = self.native_array_groups().alias_of(group) {
+            let [argument] = arguments.map(|arguments| arguments.params.as_slice())? else {
+                return None;
+            };
+            let element = self.plan_declared_recipe(scope, argument, depth + 1, dependencies)?;
+            let array = PlannedRecipe::array(element);
+            dependencies.push(PlannedTypeDependency { scope, name });
+            return Some(match alias {
+                NativeArrayAlias::Array => array,
+                NativeArrayAlias::ReadonlyArray => PlannedRecipe::readonly(array),
+            });
         }
         let (template, parameters, published_template) = match self.type_decls.get(group.index()) {
             Some(TypeDecl::Interface {

@@ -37,6 +37,7 @@ use crate::check::checker::events::UserRecordTicket;
 use crate::check::checker::lexical_events::{
     source_ordinal, ClassReservation, LexicalReservations,
 };
+use crate::check::checker::library_identities::NativeArrayGroups;
 use crate::check::checker::replay_index::ReplayOwner;
 use crate::check::checker::reporting_record::CheckerRecord;
 use crate::class_semantics::{ClassApplicationArguments, DemandOutcome, Exhaustion};
@@ -279,6 +280,9 @@ struct Resolver<'a, 'ast, Ticket: Copy> {
     fallback: Ticket,
     error: TypeId,
     qualified_outer_type_parameters_visible: bool,
+    /// Declaration identities of the installed library's `Array` / `ReadonlyArray`;
+    /// empty on the prelude path. Keyed on identity, never spelling.
+    native_array_groups: NativeArrayGroups,
     application_checks: Vec<StagedClassApplicationCheck<Ticket>>,
     replay_trace: Option<super::super::replay_index::ReplayDependencyTrace>,
 }
@@ -419,6 +423,23 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
     }
 
     fn resolve_group(
+        &self,
+        id: crate::binder::declaration::TypeGroupId,
+    ) -> SurfaceNameResolution<Ticket> {
+        let resolution = self.resolve_group_endpoint(id);
+        // `Array<T>` / `ReadonlyArray<T>` name the native array types; the library's
+        // interface body is only the member surface `project_library_member_surface`
+        // projects, so an annotation must not lower to that body. Keyed on the
+        // universe-local declaration identity, never the spelling.
+        match (self.native_array_groups.alias_of(id), resolution) {
+            (Some(alias), SurfaceNameResolution::Alias { parameters, .. }) => {
+                SurfaceNameResolution::NativeArray { alias, parameters }
+            }
+            (_, resolution) => resolution,
+        }
+    }
+
+    fn resolve_group_endpoint(
         &self,
         id: crate::binder::declaration::TypeGroupId,
     ) -> SurfaceNameResolution<Ticket> {
@@ -569,6 +590,7 @@ impl<Ticket: Copy + PartialEq> SurfaceTypeResolver<Ticket> for Resolver<'_, '_, 
                 endpoint,
                 SurfaceNameResolution::Direct(_)
                     | SurfaceNameResolution::Alias { .. }
+                    | SurfaceNameResolution::NativeArray { .. }
                     | SurfaceNameResolution::Class { .. }
                     | SurfaceNameResolution::FoundUnavailable(_)
             ) {
@@ -684,6 +706,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Vec<SurfaceTypeFailure<Ticket>>,
     ) {
         let error = self.interner.well_known().error;
+        let native_array_groups = self.native_array_groups();
         let type_decls = self.type_decls.clone();
         let type_resolved = self.type_resolved.clone();
         let (result, child_failures, application_checks) = {
@@ -697,6 +720,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 fallback: owner,
                 error,
                 qualified_outer_type_parameters_visible: true,
+                native_array_groups,
                 application_checks: Vec::new(),
                 replay_trace: self.replay_trace.clone(),
             };
@@ -718,6 +742,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Vec<SurfaceTypeFailure<Ticket>>,
     ) {
         let error = self.interner.well_known().error;
+        let native_array_groups = self.native_array_groups();
         let type_decls = self.type_decls.clone();
         let type_resolved = self.type_resolved.clone();
         let (result, child_failures, application_checks) = {
@@ -731,6 +756,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 fallback: owner,
                 error,
                 qualified_outer_type_parameters_visible: true,
+                native_array_groups,
                 application_checks: Vec::new(),
                 replay_trace: self.replay_trace.clone(),
             };
@@ -836,6 +862,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         {
             let error = self.interner.well_known().error;
+            let native_array_groups = self.native_array_groups();
             let mut factory = SurfaceTypeFactory::new(self.interner);
             register_reserved_surface_roots(
                 &mut construction,
@@ -845,6 +872,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 &type_resolved,
                 &self.lexical_events,
                 error,
+                native_array_groups,
                 self.replay_trace.clone(),
             );
         }
@@ -946,6 +974,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
 
             let error = self.interner.well_known().error;
+            let native_array_groups = self.native_array_groups();
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
@@ -956,6 +985,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 fallback: reservation.tickets.incomplete,
                 error,
                 qualified_outer_type_parameters_visible: true,
+                native_array_groups,
                 application_checks: Vec::new(),
                 replay_trace: self.replay_trace.clone(),
             };
@@ -3135,6 +3165,7 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
     resolved: &TypeResolvedTable,
     reservations: &LexicalReservations<Ticket>,
     error: TypeId,
+    native_array_groups: NativeArrayGroups,
     replay_trace: Option<super::super::replay_index::ReplayDependencyTrace>,
 ) {
     for (local_index, declaration) in declarations.iter().enumerate() {
@@ -3188,6 +3219,7 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                     fallback,
                     error,
                     qualified_outer_type_parameters_visible: true,
+                    native_array_groups,
                     application_checks: Vec::new(),
                     replay_trace: replay_trace.clone(),
                 };
