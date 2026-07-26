@@ -84,7 +84,7 @@ use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
     ClassFillState, ConstructionDrafts, DeclTypes, DeferredRelationObligation,
     InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
-    Pass, TemplateFillTable, TypeDecl, TypeDeclTable, TypeResolvedTable,
+    Pass, ProvisionalArgumentWalk, TemplateFillTable, TypeDecl, TypeDeclTable, TypeResolvedTable,
 };
 use decls::{reserve_type_decls, type_decl_id, walk_type_decls, TopTypeDecl};
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
@@ -3442,33 +3442,54 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     /// sanctioned "candidate effects remain local until exactly one selected set
     /// commits", not deduplication or post-hoc suppression: nothing that has reached
     /// an owner's batch is ever removed.
+    ///
+    /// This frame is also the argument-walk memos' region (backlog `95`): a nested
+    /// argument's walk is only reused within the outermost call it is nested in, and
+    /// both tables are cleared as that call closes.
+    ///
+    /// `settle` runs after `produce` on every exit path and before anything is merged.
+    /// It is where a raw walk this call served from the memo is re-run if nothing
+    /// superseded it, so taking the memo can never be the reason a record does not
+    /// exist. Making it a parameter rather than a step inside `produce` is what keeps
+    /// that unskippable.
     pub(in crate::check::checker) fn with_provisional_argument_effects<R>(
         &mut self,
         produce: impl FnOnce(&mut Self) -> R,
+        settle: impl FnOnce(&mut Self),
     ) -> R {
         self.provisional_argument_effects.push(Vec::new());
+        self.contextual_walk_depth += 1;
         let result = produce(self);
+        settle(self);
+        self.contextual_walk_depth -= 1;
+        if self.contextual_walk_depth == 0 {
+            self.contextual_walk_memo.clear();
+            self.raw_argument_walk_memo.clear();
+        }
         let held = self
             .provisional_argument_effects
             .pop()
             .expect("provisional argument frame");
-        for effects in held.into_iter().flatten() {
-            self.merge_candidate_effects(effects);
+        for walk in held {
+            match walk {
+                ProvisionalArgumentWalk::Held(effects) => self.merge_candidate_effects(effects),
+                // `Memoized` is unreachable after `settle`; treating it as nothing to
+                // merge keeps the frame total rather than relying on that.
+                ProvisionalArgumentWalk::Settled | ProvisionalArgumentWalk::Memoized { .. } => {}
+            }
         }
         result
     }
 
-    /// Hold one raw argument walk's effects, index-aligned with `arg_types`. `None`
-    /// records an argument shape no contextual re-walk can supersede, which has
-    /// already committed in place.
+    /// Park one raw argument walk, index-aligned with `arg_types`.
     pub(in crate::check::checker) fn hold_provisional_argument_effects(
         &mut self,
-        effects: Option<CheckerEffects<Ticket>>,
+        walk: ProvisionalArgumentWalk<Ticket>,
     ) {
         self.provisional_argument_effects
             .last_mut()
             .expect("a call argument walk runs inside a provisional argument frame")
-            .push(effects);
+            .push(walk);
     }
 
     /// The committed contextual walk re-walked this argument, so the raw walk's
@@ -3484,7 +3505,9 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         let Some(slot) = frame.get_mut(index) else {
             return;
         };
-        if let Some(effects) = slot.take() {
+        if let ProvisionalArgumentWalk::Held(effects) =
+            std::mem::replace(slot, ProvisionalArgumentWalk::Settled)
+        {
             effects.records.discard();
         }
     }
@@ -3690,6 +3713,9 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         replay_trace: None,
         effect_stack: Vec::new(),
         provisional_argument_effects: Vec::new(),
+        contextual_walk_memo: FxHashMap::default(),
+        raw_argument_walk_memo: FxHashMap::default(),
+        contextual_walk_depth: 0,
         pending_effects,
         pending_effect_slots,
         pending_effect_key: ticket_key,

@@ -417,6 +417,16 @@ spread-argument deferral (owner `71`), pinned only so the fixture is complete; t
 reports `TS2556` there instead. Every other diagnostic matches `tsc 6.0.3 --strict` at
 the same line and column, the sole gap being the unimplemented `TK7006`.
 
+`nested_retained_raw_walks.ts` extends that net one level down, for backlog `95`. Since
+`95` the raw argument walk of a re-walkable shape is memoized per call region, so a call
+re-executed by a contextual re-walk of an *enclosing* argument has its raw walk served
+from the memo and produces no records. Every shape in `retained_raw_walks.ts` is where
+that would delete a diagnostic, so each is repeated here inside `run<T>(step: (value:
+number) => T)` (and once inside `wrap<T>(value: { inner: T })`), which is what makes the
+inner call run twice. A memo that is served and never recovered fails this fixture and
+passes `retained_raw_walks.ts`, because at the top level nothing is ever re-executed.
+Same `tsc 6.0.3 --strict` correspondence, same `TK7006` and spread-deferral gaps.
+
 `b43_namespaces_declaration_merging/` contains 74 flat fixtures plus six project
 fixtures with 12 source files (86 source files total) for the namespace/declaration-space
 sprint. It covers merged property/method/call/construct/index and

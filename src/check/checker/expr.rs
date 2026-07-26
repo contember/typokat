@@ -874,6 +874,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return (raw, ContextualRewalk::KeptRaw);
             }
         };
+        // Backlog 95: only the effect-discarding mode is memoized. There the walk's
+        // records are dropped and (for an arrow) `decl_types` restored, so the answer
+        // returned here is the whole of its observable output and replaying it is
+        // indistinguishable from re-walking it. The retaining mode is the one that
+        // reports (backlog 92) and must always run.
+        let memo_key = (!retain_contextual_arrow_checks && self.contextual_walk_depth > 0)
+            .then(|| self.contextual_walk_key(scope, raw, context, use_contextual_arrow));
+        if let Some(key) = &memo_key {
+            if let Some(memoized) = self.contextual_walk_memo.get(key).copied() {
+                #[cfg(test)]
+                super::calls::measure_contextual_memo_hit();
+                return memoized;
+            }
+        }
         if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
             #[cfg(test)]
             super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), true);
@@ -894,10 +908,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 contextual
             };
-            return match contextual {
+            let resolved = match contextual {
                 Some(ty) => ((ty, raw.1), ContextualRewalk::Rewalked),
                 None => (raw, ContextualRewalk::KeptRaw),
             };
+            if let Some(key) = memo_key {
+                self.contextual_walk_memo.insert(key, resolved);
+            }
+            return resolved;
         }
 
         if !self.context_can_shape_fresh_literal(expr, context) {
@@ -919,10 +937,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             super::calls::measure_contextual_rollback(discarded_records);
             contextual
         };
-        match contextual {
+        let resolved = match contextual {
             Some(source) => (source, ContextualRewalk::Rewalked),
             None => (raw, ContextualRewalk::KeptRaw),
+        };
+        if let Some(key) = memo_key {
+            self.contextual_walk_memo.insert(key, resolved);
         }
+        resolved
     }
 
     fn context_can_shape_fresh_literal(&self, expr: &Expression<'_>, context: TypeId) -> bool {
