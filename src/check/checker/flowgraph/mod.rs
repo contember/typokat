@@ -166,17 +166,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.flow_cursor = FlowNodeId::UNREACHABLE;
     }
 
-    /// Build the flow for an `if`/`else`: two condition nodes (the guard's positive /
-    /// complementary sense), each branch under its node, then a join of the branch
+    /// Build the flow for an `if`/`else`: the test's two condition edges (composed
+    /// conditions included), each branch under its edge, then a join of the branch
     /// ends (unreachable ones excluded — an all-returning `if` collapses to its
     /// complement).
     fn build_flow_if(&mut self, scope: ScopeId, if_stmt: &IfStatement<'_>) {
-        self.build_flow_expr(scope, &if_stmt.test);
-        let fact = self.analyze_guard(scope, &if_stmt.test);
-        let pre = self.flow_cursor;
-
-        let cond_true = self.flow_condition(pre, &fact, true);
-        let cond_false = self.flow_condition(pre, &fact, false);
+        let (cond_true, cond_false) = self.build_flow_condition(scope, &if_stmt.test);
 
         self.flow_cursor = cond_true;
         self.build_flow_stmt(scope, &if_stmt.consequent);
@@ -330,15 +325,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         self.flow_cursor = label;
 
-        // The test may create Assignment nodes (`while (x = next())`, backlog 53); the
-        // condition branches antecede the **post-test** cursor, not the bare label, so
-        // those assignments are not orphaned. Its antecedent chain still reaches the
-        // label, so the back-edge fixpoint (invariants §1) is preserved.
-        self.build_flow_expr(scope, &while_stmt.test);
-        let post_test = self.flow_cursor;
-        let fact = self.analyze_guard(scope, &while_stmt.test);
-        let cond_true = self.flow_condition(post_test, &fact, true);
-        let cond_false = self.flow_condition(post_test, &fact, false);
+        // The test may create Assignment nodes (`while (x = next())`, backlog 53); each
+        // condition edge antecedes the flow **after** its own operand, not the bare
+        // label, so those assignments are not orphaned. The antecedent chain still
+        // reaches the label, so the back-edge fixpoint (invariants §1) is preserved.
+        let (cond_true, cond_false) = self.build_flow_condition(scope, &while_stmt.test);
 
         self.flow_loops.push(FlowLoopFrame { label });
         self.break_targets.push(Vec::new());

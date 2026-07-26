@@ -64,7 +64,7 @@ way there — its syntax gates flip OOS→IN as features land — not a numeric 
 
 ## Roadmap at a glance
 
-The active backlog has **57 items**. The release classification comes from
+The active backlog has **56 items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -73,7 +73,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 12 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 34 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
+| **C — soundness/parity tail** | 33 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -130,7 +130,6 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
-- **M** · [`100`](100-and-composition-drops-the-branch-narrow.md) — a composed condition (`&&`, `||`) narrows nothing in the branch it guards. **Schedule first**: the idiom is too common for the checker to be usable on real code without it.
 - **L** · [`26`](26-cross-binder-nested-infer.md) — correct de Bruijn shifting/levels for nested `infer` binders.
 - **L** · [`27`](27-template-buried-conditional-evaluation.md) — demand-evaluate conditionals buried in named structural templates.
 - **L** · [`35`](35-keyof-union-and-key-source-edges.md) — `never`, template-pattern, and aliased-`keyof` mapped key sources.
@@ -157,7 +156,7 @@ Default-library base + method (fell out of the ADR-0017 snapshot removal):
 - **M** · [`99`](99-library-records-are-not-retained.md) — the frozen base computes the library's own 265 diagnostics and then discards them; **blocks the WU7 CLI cutover**.
 - **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits.
 - **S** · [`97`](97-orphaned-wire-serialization.md) — ~6,300 lines of wire serialization left with no consumer.
-- **L** · [`96`](96-randomized-differential-corpus.md) — randomized differential corpus against `tsc`. Three defect families in one day (`45`, `100`, `101`) reached a green hand-written corpus, an official-suite ratchet, and every other gate the project has; a hand-written corpus only covers the cases someone thought of.
+- **L** · [`96`](96-randomized-differential-corpus.md) — randomized differential corpus against `tsc`. Four defect families in two days (`45`, `101`, `102`, and the shipped composed-condition narrowing) reached a green hand-written corpus, an official-suite ratchet, and every other gate the project has; a hand-written corpus only covers the cases someone thought of.
 
 Checker scaling (from sprint-2026-07-25; `95` carries a committed RED guard):
 

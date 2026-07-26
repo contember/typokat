@@ -3,19 +3,22 @@
 // for `for` / `for-in` / `for-of` / `do…while`, so a reference inside a `for` body — or
 // after a `do…while` — never reaches `reference_flow` and reads its declared type. That
 // is a wider gap than backlog 100: it is not about composition (the single-guard cases
-// here fail identically), and it is owned by backlog 51, not by the `analyze_guard` /
-// `build_flow_logical` fix.
+// here fail identically), and it is owned by backlog `51`, not by the composed-condition
+// fix.
 //
-// !! This file cannot go green on the backlog-100 fix alone. It pins the tsc oracle so
-// !! the boundary is written down; drop or re-home it if backlog 51 is not in scope for
-// !! the same work unit.
+// The first three cases are therefore pinned as **over-reports**, not as the tsc verdict:
+// their markers record what typokat produces, and the `tsc` oracle below is the record of
+// what it should eventually be. Ledger entry: `narrowing/unmodeled-loop-condition-flow`
+// in docs/reference/divergences.md, owner backlog `51`.
 //
-// `tsc 6.0.3 --strict --noEmit` reports exactly the marked lines.
+// `tsc 6.0.3 --strict --noEmit` oracle for this file: CLEAN on `forComposedTest`,
+// `forSingleGuard`, and `doWhileExitEdge`; the four remaining lines below are reported by
+// both checkers.
 
 // The composed condition, i.e. the backlog-100 shape in a `for` test.
 function forComposedTest(nn: number | null, flag: boolean) {
   for (; nn !== null && flag; ) {
-    const a: number = nn;
+    const a: number = nn; // error[TK2322]: Type 'null' is not assignable to type 'number'
   }
 }
 
@@ -23,7 +26,7 @@ function forComposedTest(nn: number | null, flag: boolean) {
 // the composition defect.
 function forSingleGuard(nn: number | null) {
   for (; nn !== null; ) {
-    const a: number = nn;
+    const a: number = nn; // error[TK2322]: Type 'null' is not assignable to type 'number'
   }
 }
 
@@ -32,7 +35,7 @@ function forSingleGuard(nn: number | null) {
 function doWhileExitEdge(nn: number | null) {
   do {
   } while (nn !== null);
-  const a: null = nn;
+  const a: null = nn; // error[TK2322]: Type 'number' is not assignable to type 'null'
 }
 
 // Controls that already agree: an `||` test determines nothing in the body, and a

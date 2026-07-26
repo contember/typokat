@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 318  out-of-scope 556
-# clean-kept 79/107  error-exact 43/211  diag-recall 508/1949
+# clean-kept 79/107  error-exact 43/211  diag-recall 507/1949
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	8 0 1 8	15:2341,16:2341,17:2341,18:2341,20:2341,21:2341,22:2341,23:2341|21:2349	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	8 0 1 8	15:2445,16:2445,17:2445,18:2445,20:2445,21:2445,22:2445,23:2445|21:2349	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -356,14 +356,14 @@ OOS:syntax:enum	- - - -	-	conformance/expressions/typeGuards/typeGuardNarrowsPri
 OOS:syntax:type-predicate	- - - -	-	conformance/expressions/typeGuards/typeGuardNarrowsToLiteralType.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/expressions/typeGuards/typeGuardNarrowsToLiteralTypeUnion.ts
 IN	0 12 0 12	|	conformance/expressions/typeGuards/typeGuardNesting.ts
-OOS:unsupported	0 0 4 0	|19:2322,22:2322,34:2322,42:2322|class/property-definition/implicit-any	conformance/expressions/typeGuards/typeGuardOfFormExpr1AndExpr2.ts
-OOS:unsupported	0 0 4 0	|19:2322,22:2322,38:2322,45:2322|class/property-definition/implicit-any	conformance/expressions/typeGuards/typeGuardOfFormExpr1OrExpr2.ts
+OOS:unsupported	0 0 0 0	||class/property-definition/implicit-any	conformance/expressions/typeGuards/typeGuardOfFormExpr1AndExpr2.ts
+OOS:unsupported	0 0 0 0	||class/property-definition/implicit-any	conformance/expressions/typeGuards/typeGuardOfFormExpr1OrExpr2.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormFunctionEquality.ts
 OOS:syntax:instanceof	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormInstanceOf.ts
 OOS:syntax:instanceof	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormInstanceOfOnInterface.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormIsType.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormIsTypeOnInterfaces.ts
-IN	5 19 4 24	21:2322,31:2322,38:2322,42:2322,49:2322|24:2322,28:2322,35:2322,45:2322	conformance/expressions/typeGuards/typeGuardOfFormNotExpr.ts
+IN	0 24 0 24	|	conformance/expressions/typeGuards/typeGuardOfFormNotExpr.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormThisMember.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFormThisMemberErrors.ts
 IN	0 29 0 29	|	conformance/expressions/typeGuards/typeGuardOfFormTypeOfBoolean.ts
@@ -379,7 +379,7 @@ OOS:syntax:instanceof	- - - -	-	conformance/expressions/typeGuards/typeGuardOfFr
 IN	4 10 4 14	3:2339,5:2339,7:2339,9:2339|3:2339,5:2339,7:2339,9:2339	conformance/expressions/typeGuards/typeGuardRedundancy.ts
 IN	0 2 0 2	|	conformance/expressions/typeGuards/typeGuardTautologicalConsistiency.ts
 IN	0 0 0 0	|	conformance/expressions/typeGuards/typeGuardTypeOfUndefined.ts
-IN	0 4 3 4	|9:2339,17:2339,29:2339	conformance/expressions/typeGuards/typeGuardsDefeat.ts
+IN	4 0 3 4	21:2362,21:2363,32:2362,32:2363|9:2339,17:2339,29:2339	conformance/expressions/typeGuards/typeGuardsDefeat.ts
 IN	0 0 20 0	|12:2339,16:2339,23:2339,26:2339,30:2339,35:2339,39:2339,46:2339,49:2339,53:2339,58:2339,62:2339,69:2339,72:2339,76:2339,81:2339,85:2339,92:2339,95:2339,99:2339	conformance/expressions/typeGuards/typeGuardsInClassAccessors.ts
 IN	0 20 15 20	|10:2339,14:2339,17:2339,22:2339,26:2339,29:2339,34:2339,38:2339,41:2339,46:2339,50:2339,53:2339,58:2339,62:2339,65:2339	conformance/expressions/typeGuards/typeGuardsInClassMethods.ts
 IN	0 0 4 0	|10:2339,59:2339,69:2339,85:2339	conformance/expressions/typeGuards/typeGuardsInConditionalExpression.ts

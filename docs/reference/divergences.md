@@ -319,6 +319,12 @@ flow-node CFG (M23), the single narrowing model.
   function-boundary reset — over-report, safe direction). Member-path narrowing
   (`x.a`) remains symbol-keyed. Backlog `51` owns these flow forms.
   <!-- div: id=narrowing/deferred-forms dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/m23_unstructured_narrowing -->
+- **A `for` body and the flow after a `do…while` read the declared type (over-report).**
+  `build_flow_stmt` models no `for`/`for-in`/`for-of`/`do…while` edges, so a reference in
+  those positions never reaches `reference_flow` — the guard in the loop test narrows
+  nothing, composed or not. Same owner (`51`) as the deferred forms above; pinned
+  separately because the composed-condition corpus carries the fixture that fails on it.
+  <!-- div: id=narrowing/unmodeled-loop-condition-flow dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b100_logical_condition_narrowing/unmodeled_loop_flow_deferred.ts -->
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard;
   independently audited — matched never drops, fn never rises): walking `while` bodies / ternary
   arms / logical RHS surfaces lib-shaped `TK2339` (`.length`/`.toString`/… on correctly-narrowed

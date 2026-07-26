@@ -1,7 +1,7 @@
 // backlog 100 — a composed `while` test. `build_flow_while` asks `analyze_guard` for a
 // fact exactly the way `build_flow_if` does, so the body edge and the exit edge are
 // broken by the same missing `LogicalExpression` arm. `while` is the one loop form the
-// flow pre-pass models (see `for_condition_deferred.ts` for the rest).
+// flow pre-pass models (see `unmodeled_loop_flow_deferred.ts` for the rest).
 // `tsc 6.0.3 --strict --noEmit` reports exactly the marked lines.
 
 function bodyNarrowsThroughAnd(nn: number | null, flag: boolean) {

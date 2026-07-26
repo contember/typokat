@@ -10,7 +10,7 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentOperator, AssignmentTarget,
     AssignmentTargetMaybeDefault, AssignmentTargetProperty, Class, ClassElement,
     ConditionalExpression, Expression, Function, LogicalExpression, LogicalOperator,
-    ObjectPropertyKind,
+    ObjectPropertyKind, UnaryOperator,
 };
 
 use super::super::context::*;
@@ -99,29 +99,84 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Build `&&`/`||` flow: RHS runs under the appropriate left-guard branch, then
-    /// joins with the skipped branch so RHS assignments survive but guard narrowing
-    /// does not persist past the expression.
+    /// Build a **condition** and return its `(true_flow, false_flow)` continuations.
+    /// A composed condition does not reduce to one `GuardFact`, so the recursion
+    /// carries both branch edges instead of a single fact (backlog 100). The caller
+    /// picks the cursor afterwards — this leaves it wherever the last operand ended.
+    pub(super) fn build_flow_condition(
+        &mut self,
+        scope: ScopeId,
+        test: &Expression<'_>,
+    ) -> (FlowNodeId, FlowNodeId) {
+        match test {
+            // Parentheses are transparent to both edges.
+            Expression::ParenthesizedExpression(paren) => {
+                self.build_flow_condition(scope, &paren.expression)
+            }
+            // `!cond` swaps the edges. The operand is analyzed *without* the `!`, so
+            // `analyze_guard`'s own polarity flip cannot also apply.
+            Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::LogicalNot => {
+                let (true_flow, false_flow) = self.build_flow_condition(scope, &unary.argument);
+                (false_flow, true_flow)
+            }
+            Expression::LogicalExpression(logical) => {
+                self.build_flow_condition_logical(scope, logical)
+            }
+            // Leaf: the shipped single-guard pair.
+            _ => {
+                self.build_flow_expr(scope, test);
+                let fact = self.analyze_guard(scope, test);
+                let pre = self.flow_cursor;
+                (
+                    self.flow_condition(pre, &fact, true),
+                    self.flow_condition(pre, &fact, false),
+                )
+            }
+        }
+    }
+
+    /// The two edges of a composed condition: `&&` builds its right operand under the
+    /// left's **true** edge and joins the false edges (either conjunct may have failed);
+    /// `||` mirrors that.
+    fn build_flow_condition_logical(
+        &mut self,
+        scope: ScopeId,
+        logical: &LogicalExpression<'_>,
+    ) -> (FlowNodeId, FlowNodeId) {
+        match logical.operator {
+            LogicalOperator::And => {
+                let (left_true, left_false) = self.build_flow_condition(scope, &logical.left);
+                self.flow_cursor = left_true;
+                let (right_true, right_false) = self.build_flow_condition(scope, &logical.right);
+                let false_flow = self.flow_join(vec![left_false, right_false]);
+                (right_true, false_flow)
+            }
+            LogicalOperator::Or => {
+                let (left_true, left_false) = self.build_flow_condition(scope, &logical.left);
+                self.flow_cursor = left_false;
+                let (right_true, right_false) = self.build_flow_condition(scope, &logical.right);
+                let true_flow = self.flow_join(vec![left_true, right_true]);
+                (true_flow, right_false)
+            }
+            // `??` narrows on nullishness only — out of the recognized-guard subset, so
+            // both edges are the post-expression flow.
+            LogicalOperator::Coalesce => {
+                self.build_flow_expr(scope, &logical.left);
+                let skip_flow = self.flow_cursor;
+                self.build_flow_expr(scope, &logical.right);
+                let rhs_end = self.flow_cursor;
+                let post = self.flow_join(vec![skip_flow, rhs_end]);
+                (post, post)
+            }
+        }
+    }
+
+    /// Build `&&`/`||`/`??` in **expression** position: the same two condition edges,
+    /// joined back together, so an operand's assignment survives the expression
+    /// (backlog 53) while its guard narrowing does not persist past it.
     fn build_flow_logical(&mut self, scope: ScopeId, logical: &LogicalExpression<'_>) {
-        self.build_flow_expr(scope, &logical.left);
-        let fact = self.analyze_guard(scope, &logical.left);
-        let pre = self.flow_cursor;
-        let (rhs_flow, skip_flow) = match logical.operator {
-            LogicalOperator::And => (
-                self.flow_condition(pre, &fact, true),
-                self.flow_condition(pre, &fact, false),
-            ),
-            LogicalOperator::Or => (
-                self.flow_condition(pre, &fact, false),
-                self.flow_condition(pre, &fact, true),
-            ),
-            // `??` narrows on nullishness only — out of the recognized-guard subset.
-            LogicalOperator::Coalesce => (pre, pre),
-        };
-        self.flow_cursor = rhs_flow;
-        self.build_flow_expr(scope, &logical.right);
-        let rhs_end = self.flow_cursor;
-        self.flow_cursor = self.flow_join(vec![skip_flow, rhs_end]);
+        let (true_flow, false_flow) = self.build_flow_condition_logical(scope, logical);
+        self.flow_cursor = self.flow_join(vec![true_flow, false_flow]);
     }
 
     /// A ternary `test ? a : b` (M23): the consequent under the test's true branch,
@@ -129,11 +184,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// two arm ends, so an assignment in either arm survives (backlog 53); the arm
     /// narrowing does not persist (the join carries both senses of the test).
     fn build_flow_conditional(&mut self, scope: ScopeId, cond: &ConditionalExpression<'_>) {
-        self.build_flow_expr(scope, &cond.test);
-        let fact = self.analyze_guard(scope, &cond.test);
-        let pre = self.flow_cursor;
-        let then_flow = self.flow_condition(pre, &fact, true);
-        let else_flow = self.flow_condition(pre, &fact, false);
+        let (then_flow, else_flow) = self.build_flow_condition(scope, &cond.test);
 
         self.flow_cursor = then_flow;
         self.build_flow_expr(scope, &cond.consequent);
