@@ -346,6 +346,27 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   and 07-25 at any corpus size.
 - This also sharpens backlog `89`: the 07-13 sprint's ≤2 % regression gate never measured a
   multi-file corpus, which is exactly how a 3× multi-file constant walked in unnoticed.
+- **`94`'s ranking was wrong and the agent implementing it said so before building** (`753975c`).
+  The "~94 MB namespace substrate" was `b6ecfa4` **plus** `fe61867`, while the bullets under it
+  touched only part of the latter; direct `size_of` sizing puts the whole merge substrate at ~30 MB.
+  Re-ranked by measured MB: lexical events (~71 MB) first, `DeclarationTable` second, merge substrate
+  fourth. Two agents have now measured their own ceiling and reported the item could not reach its
+  stated value — that is the behaviour to keep asking for.
+- **Merge substrate landed (`727fcf4`): `modules-100000` RSS 364.8 → 353.2 MB (−11.6 MB), wall
+  1.022 → 1.001 s**, leader-measured, monotone at four corpus sizes. Diagnostics byte-identical over
+  470 fixtures, 123 project directories in both file orders, three corpora; official suite 0
+  regressions. Attribution: interning −3.9 MB, sharing the participant vector −7.3 MB.
+- The interner **eats 44 % of its own gross saving** (3.08 MB of 7.0 MB at 6,249 files), measured
+  rather than modelled because the brief demanded it as a line item. Worth remembering before the
+  next "just intern it" suggestion: the bench corpus is near interning's worst case (zero merges,
+  near-distinct names), so its 1.8 KB/file is a floor, not a forecast.
+- A committed RED guard was **rewritten** in that change, deliberately: it asserted the substrate be
+  *flat* in the declaration count, which requires zero placement rows per declaration — unreachable
+  once dropping singleton merge records was ruled out. The replacement asserts exact equality with
+  the declaration count (slope 2 → 1: no *copy*) and pins the deferred record cost so it cannot grow
+  unnoticed. What made it legitimate rather than a moved goalpost: the recorder fired twice because
+  there were two rows and now fires once because the clone is genuinely gone, so re-introducing a
+  clone still fails the assert. Verified before the commit, and stated in it.
 - **Underneath the exponent is a flat ~3× regression → backlog `94`.** Post-`93` projection is
   0.98 s against typokat's own committed **0.3068 s of 2026-07-09** on the identical corpus (157 vs
   49 µs/file), with peak RSS **372 MB against 159.9 MB** — leader-verified against the committed
