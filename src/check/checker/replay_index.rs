@@ -1942,6 +1942,7 @@ mod tests {
         "src/check/checker/eval/tests.rs",
         "src/check/checker/lexical_events/completion_slot_spec.rs",
         "src/check/checker/lexical_events/owner_lookup_spec.rs",
+        "src/check/checker/surface_lowering_copy_spec.rs",
         "src/check/query/deferred_indexed_lazy_spec.rs",
         "src/check/query/demand_identity_spec.rs",
         "src/check/query/dom_source_cold_spec.rs",

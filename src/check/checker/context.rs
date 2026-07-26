@@ -773,10 +773,50 @@ pub(in crate::check::checker) enum TypeDeclView<'table, 'ast> {
     Local(&'table TypeDecl<'ast>),
 }
 
-#[derive(Clone)]
 pub(in crate::check::checker) struct TypeDeclTable<'ast> {
     published: LayeredVec<PublishedTypeDecl>,
     local: Vec<TypeDecl<'ast>>,
+}
+
+/// Copying the declaration table is per-row deep work, so surface lowering must borrow it
+/// rather than clone it — `surface_lowering_copy_spec` pins that to zero copied rows.
+impl<'ast> Clone for TypeDeclTable<'ast> {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        record_copied_decl_rows_for_test(self.published.local_len() + self.local.len());
+        Self {
+            published: self.published.clone(),
+            local: self.local.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static COPIED_DECL_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The base layer is shared by `Arc`, so only the local rows are actually deep-copied.
+#[cfg(test)]
+fn record_copied_decl_rows_for_test(rows: usize) {
+    if rows > 0 {
+        let rows = u64::try_from(rows).unwrap_or(u64::MAX);
+        COPIED_DECL_ROWS.set(COPIED_DECL_ROWS.get().saturating_add(rows));
+    }
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) struct CopiedDeclRowScopeForTest(u64);
+
+#[cfg(test)]
+impl CopiedDeclRowScopeForTest {
+    pub(in crate::check::checker) fn start() -> Self {
+        Self(COPIED_DECL_ROWS.get())
+    }
+
+    pub(in crate::check::checker) fn finish(self) -> u64 {
+        COPIED_DECL_ROWS.get().saturating_sub(self.0)
+    }
 }
 
 impl<'ast> TypeDeclTable<'ast> {

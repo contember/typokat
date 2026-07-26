@@ -68,6 +68,8 @@ mod narrowing;
 pub(crate) mod replay_index;
 pub(crate) mod reporting_record;
 mod statements;
+#[cfg(test)]
+mod surface_lowering_copy_spec;
 mod type_groups;
 
 use context::{
