@@ -64,6 +64,12 @@ pub enum DiagnosticCode {
     TK2351,
     /// Object literal may only specify known properties (excess property).
     TK2353,
+    /// The left operand of an arithmetic/bitwise/shift operator is not numeric.
+    TK2362,
+    /// The right operand of an arithmetic/bitwise/shift operator is not numeric.
+    TK2363,
+    /// An operator cannot be applied to the two operand types (`+` general mismatch).
+    TK2365,
     /// Function implementation is missing or not immediately following the declaration.
     TK2391,
     /// Overload signatures disagree on public/private/protected accessibility.
@@ -175,6 +181,9 @@ impl DiagnosticCode {
             DiagnosticCode::TK2351 => "TK2351",
             DiagnosticCode::TK2456 => "TK2456",
             DiagnosticCode::TK2353 => "TK2353",
+            DiagnosticCode::TK2362 => "TK2362",
+            DiagnosticCode::TK2363 => "TK2363",
+            DiagnosticCode::TK2365 => "TK2365",
             DiagnosticCode::TK2385 => "TK2385",
             DiagnosticCode::TK2391 => "TK2391",
             DiagnosticCode::TK2394 => "TK2394",
@@ -893,6 +902,46 @@ impl Diagnostic {
             severity: Severity::Error,
             message: format!(
                 "Object literal may only specify known properties, and '{name}' does not exist in type '{tgt}'."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2362` error for the LEFT operand of an arithmetic, bitwise, or
+    /// shift operator. The primary span is the operand, not the whole expression.
+    pub fn arithmetic_left_operand(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2362,
+            severity: Severity::Error,
+            message: "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type."
+                .to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2363` error for the RIGHT operand of an arithmetic, bitwise, or
+    /// shift operator.
+    pub fn arithmetic_right_operand(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2363,
+            severity: Severity::Error,
+            message: "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type."
+                .to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2365` error for an operator whose operand pair satisfies none of
+    /// its rules. The primary span is the whole binary expression.
+    pub fn operator_not_applicable(span: Span, operator: &str, left: &str, right: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2365,
+            severity: Severity::Error,
+            message: format!(
+                "Operator '{operator}' cannot be applied to types '{left}' and '{right}'."
             ),
             span,
             elaboration: Vec::new(),

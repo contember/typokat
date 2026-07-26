@@ -276,6 +276,7 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
         "b14_full_lib_loading",
         "generic_application_cache_diagnostics.ts",
     ),
+    ("b14_full_lib_loading", "arrays_tuples_readonly.ts"),
     ("b14_full_lib_loading", "global_values.ts"),
     ("b14_full_lib_loading", "iterator_library_local_nonleak.ts"),
     ("b14_full_lib_loading", "library_identity_shadowing.ts"),

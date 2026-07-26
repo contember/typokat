@@ -11,13 +11,13 @@ use crate::binder::symbol::SymbolId;
 use crate::check::flow::FlowNodeId;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
+use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
     ClassId, IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
     Visibility,
 };
 use crate::types::store::{Store, TypeId};
-use crate::types::WellKnown;
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator, ChainElement,
     ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
@@ -672,7 +672,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     /// Infer a binary expression. Comparisons return `boolean`; numeric/string `+`
-    /// retains its primitive result so contextual callback inference can consume it.
+    /// retains its primitive result so contextual callback inference can consume it;
+    /// every arithmetic, bitwise, and shift operator returns `number` and checks its
+    /// operands (backlog `45`). `in`/`instanceof` remain out of subset.
     fn infer_binary(&mut self, scope: ScopeId, binary: &BinaryExpression<'_>) -> (TypeId, Span) {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(binary.span);
@@ -687,11 +689,177 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let ty = if is_comparison_operator(binary.operator) {
             wk.boolean
         } else if binary.operator == BinaryOperator::Addition {
-            addition_result(self.interner.store(), left, right, wk)
+            self.addition_result(binary, left, right)
+        } else if is_arithmetic_operator(binary.operator) {
+            self.arithmetic_result(binary, left, right)
         } else {
             wk.error
         };
         (ty, span)
+    }
+
+    /// Type an arithmetic / bitwise / shift operator. Both operands must be numeric
+    /// (`TK2362` / `TK2363` per side, one diagnostic each — mirroring tsc, which does
+    /// NOT collapse a two-sided violation into one `TK2365`). The result is `number`
+    /// regardless, so a downstream assignment still reports its own mismatch.
+    fn arithmetic_result(
+        &mut self,
+        binary: &BinaryExpression<'_>,
+        left: TypeId,
+        right: TypeId,
+    ) -> TypeId {
+        let wk = self.interner.well_known();
+        // The error type suppresses cascade diagnostics on the same expression (the
+        // corpus-wide rule) and is also what an unmodelled `bigint` operand produces,
+        // where `number` would be the wrong answer.
+        if left == wk.error || right == wk.error {
+            return wk.error;
+        }
+        if self.numeric_operand_verdict(left) == OperandVerdict::Rejected {
+            let span = Span::from_oxc(binary.left.span());
+            self.emit_diagnostic(Diagnostic::arithmetic_left_operand(span));
+        }
+        if self.numeric_operand_verdict(right) == OperandVerdict::Rejected {
+            let span = Span::from_oxc(binary.right.span());
+            self.emit_diagnostic(Diagnostic::arithmetic_right_operand(span));
+        }
+        wk.number
+    }
+
+    /// Type a `+`. The primitive string/number pairings keep their existing fast
+    /// classification; anything they do not cover resolves through the relation
+    /// engine in tsc's order (both number-like → `number`, either string-like →
+    /// `string`), and a pair matching neither reports `TK2365`.
+    fn addition_result(
+        &mut self,
+        binary: &BinaryExpression<'_>,
+        left: TypeId,
+        right: TypeId,
+    ) -> TypeId {
+        let wk = self.interner.well_known();
+        match (
+            addition_operand_kind(self.interner.store(), left),
+            addition_operand_kind(self.interner.store(), right),
+        ) {
+            (AdditionOperandKind::Error, _) | (_, AdditionOperandKind::Error) => wk.error,
+            (AdditionOperandKind::Any, _) | (_, AdditionOperandKind::Any) => wk.any,
+            (
+                AdditionOperandKind::String,
+                AdditionOperandKind::String | AdditionOperandKind::Number,
+            )
+            | (AdditionOperandKind::Number, AdditionOperandKind::String) => wk.string,
+            (AdditionOperandKind::Number, AdditionOperandKind::Number) => wk.number,
+            _ => self.addition_general_result(binary, left, right),
+        }
+    }
+
+    /// The `+` rules the primitive fast path does not cover. tsc tests number-like
+    /// first (so `never + 1` is `number`, not `string`), then string-like on either
+    /// side. An operand the model cannot decide keeps the previous conservative error
+    /// result and reports nothing.
+    fn addition_general_result(
+        &mut self,
+        binary: &BinaryExpression<'_>,
+        left: TypeId,
+        right: TypeId,
+    ) -> TypeId {
+        let wk = self.interner.well_known();
+        let left_numeric = self.numeric_operand_verdict(left);
+        let right_numeric = self.numeric_operand_verdict(right);
+        if left_numeric == OperandVerdict::Satisfied && right_numeric == OperandVerdict::Satisfied {
+            return wk.number;
+        }
+        let left_string = self.stringlike_operand_verdict(left);
+        let right_string = self.stringlike_operand_verdict(right);
+        if left_string == OperandVerdict::Satisfied || right_string == OperandVerdict::Satisfied {
+            return wk.string;
+        }
+        let undecided = [left_numeric, right_numeric, left_string, right_string]
+            .contains(&OperandVerdict::Deferred);
+        if undecided {
+            return wk.error;
+        }
+        let store = self.interner.store();
+        let left_display = render_type(store, left, /* widen */ false);
+        let right_display = render_type(store, right, /* widen */ false);
+        let span = Span::from_oxc(binary.span);
+        self.emit_diagnostic(Diagnostic::operator_not_applicable(
+            span,
+            binary.operator.as_str(),
+            &left_display,
+            &right_display,
+        ));
+        wk.any
+    }
+
+    /// Whether an operand satisfies the arithmetic operand rule. `null`/`undefined`
+    /// members are stripped first — the shape of tsc's `checkNonNullType`, whose own
+    /// diagnostic belongs to the (unimplemented) strict-null receiver family — and an
+    /// `unknown` operand is likewise left to the unknown-receiver family.
+    fn numeric_operand_verdict(&mut self, ty: TypeId) -> OperandVerdict {
+        let wk = self.interner.well_known();
+        if ty == wk.unknown {
+            return OperandVerdict::Deferred;
+        }
+        let stripped = self.strip_nullish(ty);
+        self.operand_verdict_against(stripped, wk.number)
+    }
+
+    /// Whether an operand is string-like for `+`. No nullish stripping: tsc tests the
+    /// original operand for string-likeness before it ever reaches `checkNonNullType`.
+    fn stringlike_operand_verdict(&mut self, ty: TypeId) -> OperandVerdict {
+        let wk = self.interner.well_known();
+        if ty == wk.unknown {
+            return OperandVerdict::Deferred;
+        }
+        self.operand_verdict_against(ty, wk.string)
+    }
+
+    /// Decide one operand against one primitive target. A type-level node the relation
+    /// engine can only relate identically (a deferred conditional / instantiation /
+    /// mapped / `keyof` / indexed access) and an exhausted query are `Deferred`: they
+    /// report nothing, because a `No` there means "not decided", not "not numeric".
+    fn operand_verdict_against(&mut self, ty: TypeId, target: TypeId) -> OperandVerdict {
+        let wk = self.interner.well_known();
+        if ty == target || ty == wk.any || ty == wk.never {
+            return OperandVerdict::Satisfied;
+        }
+        let apparent = self.apparent_type(ty);
+        if is_undecided_operand_shape(self.interner.store(), apparent, UNDECIDED_SHAPE_DEPTH) {
+            return OperandVerdict::Deferred;
+        }
+        match self.with_semantic_query(|query| query.is_assignable(ty, target)) {
+            RelationOutcome::Yes => OperandVerdict::Satisfied,
+            RelationOutcome::No(_) => OperandVerdict::Rejected,
+            RelationOutcome::Exhausted(_) => OperandVerdict::Deferred,
+        }
+    }
+
+    /// Drop `null`/`undefined` from a union operand (`null`/`undefined` alone become
+    /// `never`, which every primitive accepts — exactly tsc's `getNonNullableType`).
+    fn strip_nullish(&mut self, ty: TypeId) -> TypeId {
+        let wk = self.interner.well_known();
+        if ty == wk.null || ty == wk.undefined {
+            return wk.never;
+        }
+        let kept = {
+            let store = self.interner.store();
+            let is_nullish = |member: &TypeId| *member == wk.null || *member == wk.undefined;
+            match store.union_members(ty) {
+                Some(members) if members.iter().any(is_nullish) => Some(
+                    members
+                        .iter()
+                        .copied()
+                        .filter(|member| !is_nullish(member))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            }
+        };
+        match kept {
+            Some(members) => self.interner.union(members),
+            None => ty,
+        }
     }
 
     /// Infer a logical expression (`&&`/`||`/`??`, M7 condition support). Both operands
@@ -1884,21 +2052,73 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 }
 
-fn addition_result(store: &Store, left: TypeId, right: TypeId, wk: WellKnown) -> TypeId {
-    match (
-        addition_operand_kind(store, left),
-        addition_operand_kind(store, right),
-    ) {
-        (AdditionOperandKind::Error, _) | (_, AdditionOperandKind::Error) => wk.error,
-        (AdditionOperandKind::Any, _) | (_, AdditionOperandKind::Any) => wk.any,
-        (
-            AdditionOperandKind::String,
-            AdditionOperandKind::String | AdditionOperandKind::Number,
-        )
-        | (AdditionOperandKind::Number, AdditionOperandKind::String) => wk.string,
-        (AdditionOperandKind::Number, AdditionOperandKind::Number) => wk.number,
-        _ => wk.error,
+/// How one binary-operator operand answered the rule it was asked (backlog `45`) —
+/// numeric for the arithmetic family, string-like for `+`.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum OperandVerdict {
+    Satisfied,
+    /// Provably does not satisfy the rule that was asked.
+    Rejected,
+    /// Not decided here: an `unknown` operand (the unknown-receiver family owns it),
+    /// a deferred type-level node, or an exhausted relation query. Never reports.
+    Deferred,
+}
+
+/// Recursion budget for [`is_undecided_operand_shape`]. Unions/intersections are
+/// flattened by the interner, so a legitimate shape needs one or two levels; anything
+/// deeper is treated as undecided rather than risking unbounded traversal.
+const UNDECIDED_SHAPE_DEPTH: u32 = 8;
+
+/// Whether the relation engine can only relate this type identically, which makes a
+/// `No` answer uninformative about the operand rule (a deferred conditional such as
+/// `T extends string ? number : number` IS a valid numeric operand for tsc).
+fn is_undecided_operand_shape(store: &Store, ty: TypeId, depth: u32) -> bool {
+    if depth == 0 {
+        return true;
     }
+    match store.tag(ty) {
+        TypeTag::Conditional
+        | TypeTag::Instantiation
+        | TypeTag::Infer
+        | TypeTag::Mapped
+        | TypeTag::MappedValue
+        | TypeTag::Keyof
+        | TypeTag::DeferredIndexedAccess
+        | TypeTag::Declared => true,
+        TypeTag::Union => store
+            .union_members(ty)
+            .is_some_and(|members| members_undecided(store, members, depth)),
+        TypeTag::Intersection => store
+            .intersection_members(ty)
+            .is_some_and(|members| members_undecided(store, members, depth)),
+        _ => false,
+    }
+}
+
+fn members_undecided(store: &Store, members: &[TypeId], depth: u32) -> bool {
+    members
+        .iter()
+        .any(|member| is_undecided_operand_shape(store, *member, depth - 1))
+}
+
+/// Whether a binary operator is an arithmetic, bitwise, or shift operator — the family
+/// whose result is `number` and whose operands must be numeric. `+` has its own
+/// string/number rules and is handled separately; `in`/`instanceof` stay out of subset.
+fn is_arithmetic_operator(op: BinaryOperator) -> bool {
+    matches!(
+        op,
+        BinaryOperator::Subtraction
+            | BinaryOperator::Multiplication
+            | BinaryOperator::Division
+            | BinaryOperator::Remainder
+            | BinaryOperator::Exponential
+            | BinaryOperator::BitwiseAnd
+            | BinaryOperator::BitwiseOR
+            | BinaryOperator::BitwiseXOR
+            | BinaryOperator::ShiftLeft
+            | BinaryOperator::ShiftRight
+            | BinaryOperator::ShiftRightZeroFill
+    )
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
