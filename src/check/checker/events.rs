@@ -65,6 +65,107 @@ pub(crate) fn calibrate_user_event_reservations_for_test() -> UserEventReservati
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static RESERVED_EVENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RESERVED_RECORD_POSITIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static MATERIALIZED_COMPLETION_SLOTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static MATERIALIZED_COMPLETION_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static REPLAYED_RECORDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Completion storage the store commits to while the lexical walk is still running — before
+/// any semantic phase has produced a record. Reservation is unconditional and lexical, so
+/// every field below is driven by how many statement sites a program *has*, never by how many
+/// of them turn out to say anything.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EventCompletionWorkForTest {
+    /// Events reserved by the lexical walk. One per source site the replay key must name.
+    pub(crate) reserved_events: u64,
+    /// Record positions reserved under those events — `immediate`/`deferred`/`incomplete` per
+    /// site, plus a callable `body`. The replay contract has to *name* each of these; naming
+    /// one does not by itself require the store to keep anything for it.
+    pub(crate) reserved_record_positions: u64,
+    /// Positions for which the store physically materialized a completion slot during
+    /// reservation, holding nothing.
+    pub(crate) materialized_completion_slots: u64,
+    /// Bytes those slots retain. Each representation reports its own per-slot cost; the
+    /// `BTreeMap` reports key + value only, so its figure is a lower bound that ignores
+    /// B-tree node overhead and fill factor.
+    pub(crate) materialized_completion_bytes: u64,
+    /// Records the store actually replayed — the only thing a completion slot exists to carry.
+    pub(crate) replayed_records: u64,
+}
+
+#[cfg(test)]
+fn event_completion_work_for_test() -> EventCompletionWorkForTest {
+    EventCompletionWorkForTest {
+        reserved_events: RESERVED_EVENTS.get(),
+        reserved_record_positions: RESERVED_RECORD_POSITIONS.get(),
+        materialized_completion_slots: MATERIALIZED_COMPLETION_SLOTS.get(),
+        materialized_completion_bytes: MATERIALIZED_COMPLETION_BYTES.get(),
+        replayed_records: REPLAYED_RECORDS.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_reserved_event() {
+    RESERVED_EVENTS.set(RESERVED_EVENTS.get().saturating_add(1));
+}
+
+#[cfg(test)]
+fn record_reserved_record_position() {
+    RESERVED_RECORD_POSITIONS.set(RESERVED_RECORD_POSITIONS.get().saturating_add(1));
+}
+
+/// One completion slot the store keeps alive for a position that holds no record yet.
+#[cfg(test)]
+fn record_materialized_completion_slot(bytes: usize) {
+    MATERIALIZED_COMPLETION_SLOTS.set(MATERIALIZED_COMPLETION_SLOTS.get().saturating_add(1));
+    MATERIALIZED_COMPLETION_BYTES.set(
+        MATERIALIZED_COMPLETION_BYTES
+            .get()
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+fn record_replayed_records(records: usize) {
+    REPLAYED_RECORDS.set(
+        REPLAYED_RECORDS
+            .get()
+            .saturating_add(u64::try_from(records).unwrap_or(u64::MAX)),
+    );
+}
+
+#[cfg(test)]
+pub(crate) struct EventCompletionWorkScopeForTest(EventCompletionWorkForTest);
+
+#[cfg(test)]
+impl EventCompletionWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(event_completion_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> EventCompletionWorkForTest {
+        let end = event_completion_work_for_test();
+        EventCompletionWorkForTest {
+            reserved_events: end.reserved_events.saturating_sub(self.0.reserved_events),
+            reserved_record_positions: end
+                .reserved_record_positions
+                .saturating_sub(self.0.reserved_record_positions),
+            materialized_completion_slots: end
+                .materialized_completion_slots
+                .saturating_sub(self.0.materialized_completion_slots),
+            materialized_completion_bytes: end
+                .materialized_completion_bytes
+                .saturating_sub(self.0.materialized_completion_bytes),
+            replayed_records: end.replayed_records.saturating_sub(self.0.replayed_records),
+        }
+    }
+}
+
 /// Stable identity of one lexically reserved event.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct EventId(usize);
@@ -116,6 +217,14 @@ enum Completion {
     Completed(Vec<CheckerRecord>),
 }
 
+/// Bytes one materialized completion slot retains in the representation in use. The `BTreeMap`
+/// stores the key beside the value, so this counts key + value and ignores node headers, edge
+/// pointers and fill factor — deliberately a lower bound on what the map actually costs.
+#[cfg(test)]
+const fn completion_slot_bytes() -> usize {
+    std::mem::size_of::<EventKey>() + std::mem::size_of::<Completion>()
+}
+
 /// Reservation or completion misuse. These failures are checker bugs, not user errors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EventStoreError {
@@ -141,7 +250,11 @@ impl EventStore {
         source_start: u32,
     ) -> ReservedEvent {
         #[cfg(test)]
-        record_user_event_reservation_for_test();
+        {
+            record_user_event_reservation_for_test();
+            record_reserved_event();
+            record_reserved_record_position();
+        }
         let event_ordinal = self.next_event_ordinal.entry(module_ordinal).or_insert(0);
         let id = EventId(self.events.len());
         let primary = UserRecordTicket {
@@ -162,6 +275,8 @@ impl EventStore {
             next_record_ordinal: 1,
         });
         self.completions.insert(key, Completion::Pending);
+        #[cfg(test)]
+        record_materialized_completion_slot(completion_slot_bytes());
         ReservedEvent { id, primary }
     }
 
@@ -175,7 +290,10 @@ impl EventStore {
         };
         // Secondary record positions are semantic reservations too.
         #[cfg(test)]
-        record_user_event_reservation_for_test();
+        {
+            record_user_event_reservation_for_test();
+            record_reserved_record_position();
+        }
         let ticket = UserRecordTicket {
             event,
             record_ordinal: meta.next_record_ordinal,
@@ -188,6 +306,8 @@ impl EventStore {
             record_ordinal: ticket.record_ordinal,
         };
         self.completions.insert(key, Completion::Pending);
+        #[cfg(test)]
+        record_materialized_completion_slot(completion_slot_bytes());
         Ok(ticket)
     }
 
@@ -239,7 +359,7 @@ impl EventStore {
         if !unfinished.is_empty() {
             return Err(EventStoreError::Unfinished(unfinished));
         }
-        Ok(self
+        let replayed: Vec<(EventKey, CheckerRecord)> = self
             .completions
             .into_iter()
             .flat_map(|(key, completion)| {
@@ -248,7 +368,10 @@ impl EventStore {
                 };
                 records.into_iter().map(move |record| (key, record))
             })
-            .collect())
+            .collect();
+        #[cfg(test)]
+        record_replayed_records(replayed.len());
+        Ok(replayed)
     }
 
     #[cfg(test)]

@@ -2197,6 +2197,7 @@ mod tests {
         "src/check/checker/eval/deferred_keyof_cache_spec.rs",
         "src/check/checker/eval/tests.rs",
         "src/check/checker/library_snapshot_codec/spec.rs",
+        "src/check/checker/lexical_events/completion_slot_spec.rs",
         "src/check/checker/lexical_events/owner_lookup_spec.rs",
         "src/check/query/deferred_indexed_lazy_spec.rs",
         "src/check/query/demand_identity_spec.rs",
