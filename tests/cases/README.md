@@ -91,6 +91,9 @@ EOF spans.
 | `TK2654` | Non-abstract class is missing implementations for members (two or more missing, aggregated) |
 | `TK2540` | Cannot assign to a read-only property |
 | `TK2353` | Object literal may only specify known properties (excess property) |
+| `TK2362` | Left-hand side of an arithmetic operation must be `any`/`number`/`bigint`/enum |
+| `TK2363` | Right-hand side of an arithmetic operation must be `any`/`number`/`bigint`/enum |
+| `TK2365` | Operator cannot be applied to the two operand types (`+` general mismatch) |
 | `TK2374` | Duplicate index signature |
 | `TK2391` | Function implementation is missing or not immediately following overload declarations |
 | `TK2394` | Overload signature is not compatible with its implementation signature |
@@ -313,6 +316,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
+| `b45_operator_result_typing/` | backlog `45` | arithmetic/bitwise/shift operators produce `number` instead of the error type; arithmetic operand rule (`TK2362`/`TK2363`) and the `+` general mismatch (`TK2365`) |
 | `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
 | `b70_this_parameter_typing/` | shipped backlog `70` | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
 | `b77_returntype_call_signatures/` | shipped backlog `77` | ReturnType extracts single and last-overload returns from represented object call signatures |
@@ -422,6 +426,25 @@ too-wide union solely to make incompatible arguments fit. Markers are mostly
 code-only because the exact fixed target can be literal-, primitive-, or
 union-shaped depending on candidate priority and contextual use. The corpus keeps
 at most one mismatched argument per call, per the general call-marker rule above.
+
+`b45_operator_result_typing/` pins two halves of one defect. The **result** half:
+every arithmetic (`- * / % **`), bitwise (`& | ^`) and shift (`<< >> >>>`) operator
+produces `number`, so an ordinary annotation/argument/return mismatch downstream of
+an operator is reported instead of being absorbed by the error type — including
+through generic callback inference (`callback_inference.ts`, the prelude-base stand-in
+for `numbers.map((value) => value * 2)`). The **operand** half: `TK2362`/`TK2363` per
+side, one diagnostic per bad side rather than a combined one, and `TK2365` for a `+`
+whose operands satisfy none of its string/number/`any` rules. The result stays `number`
+even when an operand is rejected, which is why most rows carry both an operand marker
+and a `TK2322`. Three deliberate boundaries are pinned rather than fixed here: an
+operand's `null`/`undefined` members are stripped before the numeric test (tsc's
+`checkNonNullType`) and an `unknown` operand is exempt, so `arithmetic_operand_kinds.ts`
+carries no operand marker on those rows — tsc's `TS18046`/`TS18047` are the separate
+strict-null / unknown-receiver families typokat does not implement;
+`arithmetic_boolean_bitwise.ts` records the one over-report, where tsc replaces the two
+operand diagnostics with the single `TS2447` boolean-operator suggestion. Comparison
+operators, `in`/`instanceof`, unary and update forms stay out of this corpus and remain
+owned by backlog `45`.
 
 `b92_contextual_duplicate_diagnostics/` pins **occurrence counts**, not presence.
 Each fixture nests one unresolved name — `undeclaredThing` — inside contextually typed

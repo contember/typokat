@@ -127,6 +127,10 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     ("b54_labeled_statements", true, Prelude),
     ("b59_modules_hygiene", true, Prelude),
     ("b65_inference_candidate_policy", true, Prelude),
+    // Backlog 45 — binary operator result typing plus the arithmetic operand rule
+    // (TK2362/TK2363) and the `+` general mismatch (TK2365). Enabled by its spec
+    // commit, which is RED until the implementation lands.
+    ("b45_operator_result_typing", true, Prelude),
     // ADR-0016 review finding — a cached failure must not change WHICH failure a
     // later, independent statement reports. Committed `false`: the trio only goes
     // green with the `getUnmatchedProperty`-style presence pass in `relate_objects`,
