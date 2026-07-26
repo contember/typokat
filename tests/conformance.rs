@@ -131,6 +131,12 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // (TK2362/TK2363) and the `+` general mismatch (TK2365). Enabled by its spec
     // commit, which is RED until the implementation lands.
     ("b45_operator_result_typing", true, Prelude),
+    // Backlog 100 — a composed condition (`&&`, `||`, and `!` over them) must narrow
+    // the branch it guards. `analyze_guard` has no `LogicalExpression` arm and
+    // `build_flow_logical` joins both senses back together, so today the guarded branch
+    // reads the DECLARED union. Enabled by its spec commit, which is RED until the
+    // implementation lands. See tests/cases/README.md ("Bug-fix corpora").
+    ("b100_logical_condition_narrowing", true, Prelude),
     // ADR-0016 review finding — a cached failure must not change WHICH failure a
     // later, independent statement reports. Committed `false`: the trio only goes
     // green with the `getUnmatchedProperty`-style presence pass in `relate_objects`,
