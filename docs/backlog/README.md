@@ -64,17 +64,16 @@ way there — its syntax gates flip OOS→IN as features land — not a numeric 
 
 ## Roadmap at a glance
 
-The active backlog has **39 items**: **26 checker-1.0 release blockers** and **13 non-blocking**
-(10 safe-direction parity items plus 3 consumer-surface items). The release classification comes from
-[`completion-1.0.toml`](completion-1.0.toml); the grouping below is the human roadmap view.
-Consumer-surface items are deliberately absent from the manifest — they gate *consumers* of the
-checker, not the checker.
+The active backlog has **55 items**. The release classification comes from
+[`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
+checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
+absent from the manifest — they gate *consumers* of the checker, not the checker.
 
 | Track | Active items | Typical effort | Role |
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
-| **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 17 | S–XL | Seven release-blocking known gaps plus ten safe-direction parity improvements. |
+| **B — checker completeness** | 12 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
+| **C — soundness/parity tail** | 32 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -112,6 +111,7 @@ fillers.
 - **L** · [`49`](49-possibly-undefined-family.md) — nullable receivers, optional members/calls, optional chaining, and non-null assertions.
 - **L** · [`50`](50-type-predicates-assertions.md) — predicate/assertion signatures wired into flow narrowing.
 - **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, and closure narrowing.
+- **M** · [`101`](101-ternary-and-logical-values-are-the-error-type.md) — ternary and `&&`/`||`/`??` *values* are the error type, so everything downstream is unchecked.
 - **M** · [`52`](52-type-reference-tail.md) — value/type-space misuse, generic arity, and explicit call-site type args.
 - **XL** · [`75`](75-scope-surface-tail.md) — family-by-family disposition of the remaining Tier S/A/B semantic surface.
 
@@ -130,6 +130,7 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
+- **M** · [`100`](100-and-composition-drops-the-branch-narrow.md) — a composed condition (`&&`, `||`) narrows nothing in the branch it guards. **Schedule first**: the idiom is too common for the checker to be usable on real code without it.
 - **L** · [`26`](26-cross-binder-nested-infer.md) — correct de Bruijn shifting/levels for nested `infer` binders.
 - **L** · [`27`](27-template-buried-conditional-evaluation.md) — demand-evaluate conditionals buried in named structural templates.
 - **L** · [`35`](35-keyof-union-and-key-source-edges.md) — `never`, template-pattern, and aliased-`keyof` mapped key sources.
@@ -142,6 +143,29 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space
   publication for variables, functions, complete class type/constructor pairs, and cross-file
   class/function+namespace payloads; not required by `lib.es5.d.ts` loading.
+
+Reporting + robustness:
+
+- **S** · [`84`](84-function-local-interface-panic.md) — a function-local interface panics the checker.
+- **M** · [`90`](90-assignability-span-precision.md) — assignability diagnostics anchor on the declarator instead of the expression.
+- **M** · [`91`](91-missing-property-presence-pass.md) — missing required properties should be reported before value mismatches.
+
+Default-library base + method (fell out of the ADR-0017 snapshot removal):
+
+- **M** · [`99`](99-library-records-are-not-retained.md) — the frozen base computes the library's own 265 diagnostics and then discards them; **blocks the WU7 CLI cutover**.
+- **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits.
+- **S** · [`97`](97-orphaned-wire-serialization.md) — ~6,300 lines of wire serialization left with no consumer.
+- **L** · [`96`](96-randomized-differential-corpus.md) — randomized differential corpus against `tsc`. Three defect families in one day (`45`, `100`, `101`) reached a green hand-written corpus, an official-suite ratchet, and every other gate the project has; a hand-written corpus only covers the cases someone thought of.
+
+Checker scaling (from sprint-2026-07-25; `95` carries a committed RED guard):
+
+- **M** · [`95`](95-memoize-the-discarded-contextual-walks.md) — memoize the discarded contextual argument walks (exponential in nesting depth).
+- **M** · [`94`](94-flat-per-file-regression-since-july-9.md) — a flat 3x per-file regression sitting under the modules exponent.
+- **M** · [`85`](85-owner-closure-representation.md) — replay owner closure is quadratic on an accumulating chain.
+- **M** · [`86`](86-free-param-summary-base-reset.md) — the free-param summary cache discards its sealed base on any mutation.
+- **S** · [`87`](87-reason-chain-depth-cap.md) — reason chains have no depth cap and cost O(depth^2) to render.
+- **S** · [`88`](88-attach-symbol-declaration-resort.md) — symbol declaration lists are fully re-sorted on every attach.
+- **M** · [`89`](89-scaling-guards-for-project-state.md) — nothing guards against per-item scans of whole-project state.
 
 **D. Scale + IDE — the §12 phase ladder.**
 

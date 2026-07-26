@@ -1,17 +1,17 @@
 ---
 id: 100
-title: An `&&` condition inverts the narrow in the branch it guards
+title: A composed condition (`&&`, `||`) narrows nothing in the branch it guards
 blocked-by: []
 ---
 
-# 100 — An `&&` condition inverts the narrow in the branch it guards
+# 100 — A composed condition (`&&`, `||`) narrows nothing in the branch it guards
 
-**Summary.** `if (x !== null && anything) { … }` does not narrow `x` inside the branch — it narrows
-it to the **negation**. Five one-line probes that `tsc 6.0.3 --strict` accepts produce five
-`TK2322` false positives. The idiom is one of the most common in TypeScript. M23 shipped `&&`
-narrowing its *right-hand side* and its corpus covers only that; `&&` as an `if` condition was never
-tested. Effort M. **Until this is fixed the checker is unusable on ordinary code**, so it outranks
-the remaining library families.
+**Summary.** `if (x !== null && anything) { … }` does not narrow `x` inside the branch at all — the
+branch reads the **declared** type. Probes that `tsc 6.0.3 --strict` accepts produce `TK2322` false
+positives. The idiom is one of the most common in TypeScript. M23 shipped `&&` narrowing its
+*right-hand side* and its corpus covers only that; `&&` as an `if` condition was never tested.
+Effort M. **Until this is fixed the checker is unusable on ordinary code**, so it outranks the
+remaining library families.
 
 ## Problem
 
@@ -30,18 +30,22 @@ if (nn !== null && nn !== 0 && flag) { const f: number = nn; }  // TK2322
 `tsc 6.0.3 --strict --target es2025` reports **nothing**; typokat reports **five**. Reproduced on the
 release binary at `12a15b5` and unchanged by the operator work that found it.
 
-Two things make this worse than a missing narrow:
+The branch type is the **un-narrowed union**, not an inverted narrow. An earlier revision of this
+item claimed the type came out as `null`, the false-branch type; that was a misreading of the
+diagnostic, which names the offending union *constituent* rather than the whole source type.
+`if (nn !== null && flag) { const g: null = nn; }` reports `Type 'number' is not assignable to type
+'null'`, which settles it.
 
-- **The type is inverted, not merely un-narrowed.** The reported type inside the *then* branch is
-  `null` — the false-branch type. A guard that failed to narrow would report `number | null`.
-- **It fires in either operand position** (`a && x !== null` too) and for any right operand — a bare
-  boolean, an equality, a relational comparison. Nesting the same guards
-  (`if (nn !== null) { if (nn > 0) { … } }`) narrows correctly, so the defect is in how `&&`
-  composes into the branch, not in the individual guards.
+It fires in either operand position (`a && x !== null` too) and for any right operand — a bare
+boolean, an equality, a relational comparison. Nesting the same guards
+(`if (nn !== null) { if (nn > 0) { … } }`) narrows correctly, so the defect is in how `&&` composes
+into the branch, not in the individual guards.
 
-These are false positives, which is the safe direction under this project's soundness policy, but on
-an idiom this common the checker is unusable on real code until it is fixed. It also very likely has
-a dropped-error mirror image in the `else` branch and in `||`, which the probes above do not cover.
+The corpus (commit `429e3dc`) settles the shape of the defect: of 86 markers diffed against `tsc`,
+**65 lines are RED and every one is an over-report**. There is no dropped-error mirror in the `else`
+branch or in `||` — the composed condition narrows nothing anywhere, so the complementary branches
+are accidentally correct. That makes them the regression net for the fix rather than a second
+defect: a fix that pushes the then-branch fact into the wrong branch deletes 31 real diagnostics.
 
 ## Why the corpus did not catch it
 
@@ -55,23 +59,30 @@ corpus covers the cases someone thought of. A differential corpus would have fou
 
 ## Approach / acceptance
 
-Corpus first, and make it wide: both operand positions, `&&` and `||`, then/else branches, two and
-three conjuncts, mixed guard kinds (`!== null`, `typeof`, `instanceof`, truthiness, discriminant),
-and the `else` branch of each — the `else` cases are where a dropped error would hide, and dropped
-errors matter more than these false positives.
+The corpus is written and committed (`429e3dc`, `tests/cases/b100_logical_condition_narrowing/`); it
+is the acceptance spec and it is RED.
 
-The flow-node CFG (`src/check/checker/flowgraph.rs`, `flowgraph/exprs.rs::build_flow_logical`) is the
-single narrowing model per [`invariants.md`](../reference/invariants.md) §1; fix it there rather than
-special-casing `if` conditions. Cross-check every marker against `tsc 6.0.3 --strict`.
+The defect is structural, not a missing case. `build_flow_if` builds the test expression, then asks
+`analyze_guard` for **one** `GuardFact` — a single `(symbol, op, polarity)`. A composed condition
+does not reduce to one fact, so the recursion has to carry the two continuations instead:
+`build_flow_condition(test) -> (true_flow, false_flow)`, with `&&` chaining the right operand under
+the left's true edge and joining the false edges, `||` mirrored, `!` swapping, and the leaf case
+falling back to today's `analyze_guard` + `flow_condition` pair. Expression position stays as it is
+by joining the two returned edges — that is what `build_flow_logical` already computes, so it
+becomes a caller of the new builder rather than a separate path. The flow-node CFG is the single
+narrowing model per [`invariants.md`](../reference/invariants.md) §1; fix it there rather than
+special-casing `if` conditions.
 
-Acceptance: all six probes above are clean; the `else`-branch mirror reports what `tsc` reports;
-`m23_unstructured_narrowing` stays green; official-suite ratchet shows no regression and probably
-shows progress.
+Acceptance: 62 of the 65 RED lines go green; the 31 complementary-branch markers all survive;
+`m23_unstructured_narrowing` stays green; official-suite ratchet shows no regression. The remaining
+3 (`unmodeled_loop_flow_deferred.ts`) belong to [`51`](./51-narrowing-tail.md) and get re-homed as a
+documented over-report in [`divergences.md`](../reference/divergences.md) when the fix lands.
 
 ## Touch points
 
-`src/check/checker/flowgraph.rs`, `src/check/checker/flowgraph/exprs.rs`,
-`tests/cases/m23_unstructured_narrowing/`.
+`src/check/checker/flowgraph/exprs.rs`, `src/check/checker/flowgraph/mod.rs`,
+`src/check/checker/flowgraph/nodes.rs`, `src/check/checker/narrowing.rs`,
+`tests/cases/b100_logical_condition_narrowing/`.
 
 <!-- Origin: found while fixing backlog 45's operator result typing, 2026-07-26 — the implementing
      agent hit it in an unrelated probe and flagged it rather than working around it. Confirmed
