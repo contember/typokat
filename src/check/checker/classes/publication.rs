@@ -707,22 +707,25 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         let error = self.interner.well_known().error;
         let native_array_groups = self.native_array_groups();
-        let type_decls = self.type_decls.clone();
-        let type_resolved = self.type_resolved.clone();
+        let source = source_ordinal(self.current_source);
+        let replay_trace = self.replay_trace.clone();
         let (result, child_failures, application_checks) = {
+            // Reach the drafts by field, not through `Deref`: `Deref` borrows all of `self` and
+            // would force a per-member copy of the declaration tables just to free the interner.
+            let drafts = self.type_environment.drafts();
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
-                declarations: &type_decls,
-                resolved: &type_resolved,
+                declarations: &drafts.type_decls,
+                resolved: &drafts.type_resolved,
                 reservations: &self.lexical_events,
-                source: source_ordinal(self.current_source),
+                source,
                 fallback: owner,
                 error,
                 qualified_outer_type_parameters_visible: true,
                 native_array_groups,
                 application_checks: Vec::new(),
-                replay_trace: self.replay_trace.clone(),
+                replay_trace,
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
             let (result, child_failures) = lower_type(&mut factory, &mut resolver, annotation, &[]);
@@ -743,22 +746,25 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         let error = self.interner.well_known().error;
         let native_array_groups = self.native_array_groups();
-        let type_decls = self.type_decls.clone();
-        let type_resolved = self.type_resolved.clone();
+        let source = source_ordinal(self.current_source);
+        let replay_trace = self.replay_trace.clone();
         let (result, child_failures, application_checks) = {
+            // Reach the drafts by field, not through `Deref`: `Deref` borrows all of `self` and
+            // would force a per-member copy of the declaration tables just to free the interner.
+            let drafts = self.type_environment.drafts();
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
-                declarations: &type_decls,
-                resolved: &type_resolved,
+                declarations: &drafts.type_decls,
+                resolved: &drafts.type_resolved,
                 reservations: &self.lexical_events,
-                source: source_ordinal(self.current_source),
+                source,
                 fallback: owner,
                 error,
                 qualified_outer_type_parameters_visible: true,
                 native_array_groups,
                 application_checks: Vec::new(),
-                replay_trace: self.replay_trace.clone(),
+                replay_trace,
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
             let (result, child_failures) =
