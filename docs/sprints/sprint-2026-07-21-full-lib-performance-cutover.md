@@ -1016,3 +1016,66 @@ Phase attribution before → after (in-place probes, medians of 3, since removed
   a user check lands near parity, not comfortably above the 1.25× engineering target. Those two
   phases are where the margin has to come from; parse and bind together are 22 ms and cannot supply
   it.
+
+### 2026-07-26 — the loader gets an instrument; five defect families named
+
+A throwaway spike wired `check_source`/`check_project` to a published base in a scratch worktree and
+measured what a cutover actually costs. `2a85492` then landed the behaviour-neutral half of it.
+Production still runs `src/prelude.ts`.
+
+- **Nobody had ever run this code.** Seven `#[cfg(test)]` gates stood between non-test code and a
+  published `FrozenLibraryBase` — `resume_frozen_library`, `finish_frozen_library_continuation`,
+  `frozen_global_augmentation_count`, `NamespaceTable::global_augmentation_count`,
+  `check_project_programs_with_owned_library`, `into_user_project_base`, and the collision-preflight
+  capability. That is why the defects below survived the whole sprint: the instrument that finds
+  them did not exist. **This is the single most under-estimated item in WU7.**
+- **The blast radius is small and enumerable.** Of 410 fixtures, **381 are unchanged (93 %)**;
+  19 differ (38 diagnostics lost, 37 gained) and 8 crash. The predicted class — fixtures losing a
+  `TK2304` because a global now resolves — is **empty**; nine `TK2304` were *gained* instead, because
+  the base publishes no `globalThis`, no cross-file script globals and no UMD globals.
+- **b14 enabled: 7 of 13 flat green, 1 of 12 project green.** Those eight are now on. The rest reduce
+  to **five named defect families**, which is the work list for the loader:
+  1. **`declare global` continuation and collision merge *panic*** — `bind.rs:2179` (4 projects) and
+     `mod.rs:1267` (1). Everything else is a wrong answer; this is no answer. Highest priority.
+  2. **native↔library identity** — `Array<T>`, `ReadonlyArray<T>`, `String` as *annotations* lower to
+     the library interface's structural expansion instead of the intrinsic type. Member access is
+     bridged (`library_identities.rs:286`); annotation lowering is not. A 15-surface probe shows
+     `Promise`, `Math`, `JSON`, `Date`, `Map`, `Set`, `RegExp`, `keyof string` all work.
+  3. **`globalThis`, cross-file script globals, UMD globals** are not published from the base.
+  4. **function-shaped constraint satisfaction** — an object type with a call signature fails
+     `(...args: any) => any`. Same family as the census's 64 `TK2344`.
+  5. **`intrinsic` string types** — `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` stop
+     evaluating, so their assignment errors vanish. Six `intrinsic-keyword` incompletes, and
+     `m28_utility_types` loses six `TK2322`.
+- **Loading the library makes ordinary checks *faster*.** Warm per-fixture check **0.31 ms** against
+  the prelude's **0.47 ms**, because the prelude re-parses, binds and checks its 47 lines on every
+  single check while the library path forks an already-checked base. The 291 ms base is paid once per
+  process. Conformance 3.9 s → 7.1 s in debug, entirely the one-time publication.
+- **Two hazards not previously recorded.** The collision preflight parses and walks user source on
+  the **caller's 8 MB stack**, outside the `CHECK_STACK_SIZE` worker (`driver.rs:68`) that exists for
+  exactly that reason — it overflowed on a 471-file census. And a route census over the corpus gives
+  **shared 285 / private 185 / rejected 1**: script-mode `var`/`function` are global-object
+  contributors and route private, so **39 % of the corpus needs WU5's private-combined path**. That
+  puts WU5 on the critical path for the suite, not in the tail.
+- **WU7's "initialize the provider before rayon" is vacuous.** `check_files` (`driver.rs:141`) is the
+  crate's only rayon site and has **no production caller** — `main.rs:148` uses `check_project`, and
+  grep finds `check_files` only in its own two unit tests. The checker is single-threaded in
+  production today; architecture §8.2 Stage 1 is not wired to the CLI.
+- **The 265 library-owned diagnostics cannot reach user output**, before or after a cutover: each
+  user check builds a fresh `EventStore` reserving only user programs (`mod.rs:1195-1207`), confirmed
+  empirically by 381/410 byte-identical fixtures and a zero-incomplete probe. Backlog
+  [`99`](../backlog/99-library-records-are-not-retained.md)'s risk is therefore the **inverse** of
+  what WU7 states — not leakage, but that the set is invisible and unmeasurable, exactly as
+  [`98`](../backlog/98-library-diagnostic-count-delta.md) predicted.
+- **Sequencing decided, against the leader's first instinct.** The leader proposed closing the model
+  gaps before wiring anything, on the theory that a library missing types in ~600 places is worse
+  than the prelude. The evidence says otherwise: the incompletes never reach a user, and several
+  families the census flagged (`symbol`, `bigint`, type predicates) are *expected* by
+  `unsupported_surfaces.ts`, which exists to prove typokat stays non-permissive about them. But the
+  reverse order fails too — the panics and the 39 % private incidence are loader defects no model
+  work touches. **Wire early, cut over late**: every one of the five families was found in one
+  afternoon *because* the driver was wired, and closing them blind would be guesswork.
+- Harness trap, pre-existing, cost a debug cycle: `parse_markers_catch` / `parse_incomplete_catch`
+  (`tests/conformance.rs:1180`, `:1294`) install a **process-global** silent panic hook while the
+  rest of the binary runs concurrently, so a conformance failure printed `FAILED` with no report.
+  The durable fix is for the marker parsers to return `Result` instead of panicking.
