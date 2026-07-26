@@ -317,6 +317,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
 | `b45_operator_result_typing/` | backlog `45` | arithmetic/bitwise/shift operators produce `number` instead of the error type; arithmetic operand rule (`TK2362`/`TK2363`) and the `+` general mismatch (`TK2365`) |
+| `b100_logical_condition_narrowing/` | shipped backlog `100` | composed conditions (`&&`, `\|\|`, `!` over them) narrow the branch they guard, in `if` / `while` / ternary / expression positions — with the complementary branch of every shape pinned, since a fix that narrows the wrong branch deletes diagnostics |
 | `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
 | `b70_this_parameter_typing/` | shipped backlog `70` | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
 | `b77_returntype_call_signatures/` | shipped backlog `77` | ReturnType extracts single and last-overload returns from represented object call signatures |
