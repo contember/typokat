@@ -954,3 +954,65 @@ does nothing for arbitrary user code. Recorded as
   attributed is still on the from-source path — deleting the codec did not delete it, because
   `canonical_library_evidence` and `build_collision_replay_index` live in
   `compile_owned_injected_frontend`, not in the codec. That cut is the next work unit.
+
+### 2026-07-26 — artifact generation leaves the cold path
+
+`a0977ea`. Publishing the base was **1443 ms** at `4948095` and is **296.2 ms** (median of 7 cold
+release processes; 288.3–300.7). The record dump is byte-identical across the change — 875 records,
+265 diagnostics and 610 incompletes, md5 `476244c54621b73fe6655ed391caded7` — verified by diffing
+the dumped records, not by comparing a count or a digest, because a count and a digest are exactly
+what hid backlog `98`.
+
+Phase attribution before → after (in-place probes, medians of 3, since removed):
+
+| | before | after |
+|---|---|---|
+| parse / bind | 11.7 / 11.0 | 11.0 / 10.7 |
+| reserve_fill | 100 | 99.7 |
+| publication | 44 | 43.2 |
+| `check_statements` | 15 | 14.1 |
+| finish_effects + ledger | 86 | 84.3 |
+| `canonical_library_evidence` | 267 | — |
+| `build_collision_replay_index` | 900 | — |
+| … `canonical_record_bytes` | 266 | — |
+| … `validate_terminal_class_deps` | 477 | **16** (validation kept, closure deferred) |
+| … `trace.finish` | 132 | — |
+| `admit_replay_index` | 18 | — |
+
+- **Two premises in the brief were wrong, and both mattered.** `LibraryCompiler::compile` has no
+  production caller in-repo — all four are `#[cfg(test)]` — so `CompiledLibrary`, `LibraryEvidence`
+  and `LibrarySemanticIdentity::evidence` were already suite-facing, not just the evidence blobs.
+  And the manifest digest was not *a* production consumer of the replay index but the **only** one;
+  `schedule_sparse_collision_closure` is reserved for the ADR-0015 collision route, and ADR-0015 is
+  superseded wholesale. There is no production collision route yet.
+- **Lazy assembly from a retained trace is impossible**, not merely unattractive: assembly needs the
+  oxc ASTs (`source_global_binding_census_with_provenance`) and the source text
+  (`canonical_record_bytes`), both bound to the frontend arena, and ADR-0011 requires an AST-free
+  base. Deferral can therefore only mean "the colliding run re-compiles from source and assembles
+  then" — which is what ADR-0013 as narrowly superseded already prescribes. Stated as
+  `ReplayIndexPlan::{Assemble, Deferred}` at the entry point rather than hidden in a lazy field.
+- **Leader intervention on the first round.** It deferred `validate_terminal_class_dependencies`
+  wholesale. Its four checks read as replay validations but test **production** state — semantic
+  identities against exact recomputation, every terminal `Ready`, runtime class names having
+  published owners, named functions having value owners. "The suite still covers it" does not hold
+  once the base path and the assembling path are different code, and that is the reasoning that let
+  `98` sit for 102 commits. Split to `Option<&ReplayDependencyTrace>`, one implementation and two
+  callers: **16 ms** on the base path, the 463 ms closure deferred. The measured cost of restoring
+  it was 15.3 / 16.2 / 16.1 ms.
+- The dropped `FrozenBaseWitnessForTest.replay_manifest_sha256` was a **tautology**: stored at
+  compile time, never recomputed, therefore constant across any before/after comparison. The witness
+  detects a leaked delta row through `type_count` (16,926, exactly the fork frontier) and three live
+  reference traversals (104,038 store / 16,943 interner / 85,806 binder).
+- **Filed, not absorbed:** the frozen base retains **no** library records — `ledger.finish()`
+  materializes all 875 inside the frontend and production drops them on return; `OwnedLibraryRuntimeState`
+  has no record store. True before this change as well; the evidence blobs were a byte projection,
+  not retention. So ADR-0011's "preserve every library-owned diagnostic outcome exactly" holds today
+  only in the sense that they are computed exactly. WU7 needs somewhere to put them →
+  [`99`](../backlog/99-library-records-are-not-retained.md).
+- **Where the remaining 296 ms sits, and why it matters for the gate.** `reserve_fill` (99.7 ms) and
+  `finish_effects + ledger` (84.3 ms) are 184 of the 296. The ledger half materializes records
+  production then discards, so `99` and the gate are the same work. Exploratory native TypeScript
+  numbers on this host put the pinned 82-file graph at 0.32–0.33 s, so a cutover CLI at ~296 ms plus
+  a user check lands near parity, not comfortably above the 1.25× engineering target. Those two
+  phases are where the margin has to come from; parse and bind together are 22 ms and cannot supply
+  it.
