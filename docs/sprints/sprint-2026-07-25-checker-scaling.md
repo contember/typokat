@@ -373,3 +373,31 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   report, which also shows typokat *beating* tsgo that day (0.3068 vs 0.3741). It is spread evenly
   across eight linear phases with no dominator, so it needs a bisect, not a hunt. **`93` gets the
   exponent, not the target.**
+
+### 2026-07-27 — `95` lands route 2, and the guard is green for the first time
+
+- **The committed RED guard is green** (`466639d`): `3^d` → `d² + d`, i.e. 6 / 20 / 72 at depths
+  2 / 4 / 8 against 8 / 80 / 6,560. The bound and the non-vacuity assertion were **not edited** —
+  that was the standing instruction and it held.
+- **What made route 2 work is that it stopped trying to name the state.** The reverted attempt
+  (`412f321`) enumerated ambient state in a key and its stated premise was false. This tracks
+  instead: every walk records, through `DeclTypes`'s single accessor pair, the slots it read before
+  writing and the slots it wrote; an entry is served only while every recorded read still holds the
+  value the walk saw. `DeclTypes` having exactly one mutator and one accessor is what makes the log
+  structurally unable to fall behind — no call-site enumeration to keep in sync. Everything that
+  cannot be summarized is **refused** rather than keyed (replay traces, template building,
+  conditional/mapped/alias frames, loop flow depth and provisional flow per invariants §1, staged
+  class validation, an unpublished type environment).
+- **`describe` survived a sound key, against the item's own expectation.** The item recorded that
+  the reverted commit's 360 → 10.5 ms win "did not survive" a sound key (375 ms); here it is
+  221.4 → 9.1 ms. Read tracking is precise where the review's generation counter was blunt. zod
+  `shapeOf` is 597.5 → 19.6 ms. Measured on a loaded machine, so the ratios are the claim.
+- **The differential harness earned itself on its first real use.** 14,000 programs by the
+  implementer plus 1,800 on five independent leader-chosen seeds, zero divergence — and, crucially,
+  a **live negative control**: the reverted binary on the leader's own seed 707 immediately reports
+  dropped `TK2345`/`TK2769`, invented `TK2322`/`TK2345` and both exit flips. Without that control
+  "zero divergence" would have been the same unfalsifiable sentence five gates produced for
+  `412f321`.
+- Two self-reported residual surfaces graduated to `106` rather than staying in a commit message:
+  one-shot consumption argued from the mechanism, and a 64-bit type-param hash — the one
+  probabilistic element in an otherwise structural design.
