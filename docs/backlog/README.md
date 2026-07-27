@@ -64,7 +64,7 @@ way there — its syntax gates flip OOS→IN as features land — not a numeric 
 
 ## Roadmap at a glance
 
-The active backlog has **53 items**. The release classification comes from
+The active backlog has **52 items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -73,7 +73,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 31 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
+| **C — soundness/parity tail** | 30 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -161,8 +161,7 @@ Checker scaling (from sprint-2026-07-25; `95` carries a committed RED guard):
 - **M** · [`94`](94-flat-per-file-regression-since-july-9.md) — a flat 3x per-file regression sitting under the modules exponent.
 - **M** · [`85`](85-owner-closure-representation.md) — replay owner closure is quadratic on an accumulating chain.
 - **M** · [`86`](86-free-param-summary-base-reset.md) — the free-param summary cache discards its sealed base on any mutation.
-- **S** · [`87`](87-reason-chain-depth-cap.md) — reason chains have no depth cap and cost O(depth^2) to render.
-- **S** · [`88`](88-attach-symbol-declaration-resort.md) — symbol declaration lists are fully re-sorted on every attach.
+- **M** · [`105`](105-type-group-fragment-resort.md) — type-group fragments are re-sorted on every append, and a `cfg(not(test))` second sort makes test and production order library fragments by different keys.
 - **M** · [`89`](89-scaling-guards-for-project-state.md) — nothing guards against per-item scans of whole-project state.
 
 **D. Scale + IDE — the §12 phase ladder.**
