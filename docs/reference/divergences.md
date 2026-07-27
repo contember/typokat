@@ -87,6 +87,14 @@ and validated the same way.
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
+- **A contextually typed argument is blamed at the argument (cosmetic).** When an argument that
+  carries a contextual type — an arrow, or a fresh object/array literal — fails to match its
+  parameter, typokat reports `TK2345` on the whole argument and names the inner mismatch in the
+  reason chain; tsc 6.0.3 descends and reports `TS2322` on the offending sub-expression itself
+  (an arrow's returned expression, a literal's property). Both reject the call. This is the
+  dominant shape in the randomized differential corpus, where it is cancelled by an explicit
+  allowlist rule rather than counted as a diff.
+  <!-- div: id=calls/contextual-argument-blame-site dir=cosmetic scope=s-call-arguments owner=design-oos witness=../../tooling/differential/allowlist.txt -->
 - **Spread call arguments remain explicitly unavailable (over-report / OOS).** The checker records
   `call/call-arguments/spread-argument` rather than dropping traversal or inventing an argument
   vector. Official `partiallyNamedTuples3.ts` therefore remains unsupported after its tuple label

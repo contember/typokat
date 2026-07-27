@@ -1,0 +1,36 @@
+# Committed allowlist for `differential.py fuzz --ref tsc`.
+#
+# typokat is a deliberate subset of tsc and diverges from it in documented ways, so a
+# raw tsc diff drowns the signal. Each line here is a CANCELLATION RULE, not a label:
+#
+#     <rule>\t<owner>\t<reason>
+#     rule  := tk[<code>]~ts[<code>]     (either side may be empty)
+#     owner := div:<id from docs/reference/divergences.md>  |  backlog:<NN>
+#
+# Semantics: for every source line, the harness computes which codes only typokat
+# reported and which only tsc reported, then each rule cancels ONE such pair. What
+# survives cancellation is reported and fails `--check`. Three consequences worth
+# understanding before adding an entry:
+#
+#   * A rule suppresses one code pair, never a line and never a file. A line carrying
+#     an allowlisted divergence *and* a new one still reports the new one.
+#   * A near neighbour is not covered: `tk[2345]~ts[2322]` says nothing about
+#     `tk[2345]~ts[2769]`. New shapes surface as new residue.
+#   * The owner is validated on load. `div:` must name a real `div: id=` marker in the
+#     divergence ledger and `backlog:` a live item. An entry cannot exist without a
+#     documented reason someone owns — that is what keeps this file from becoming a
+#     junk drawer.
+#
+# This allowlist applies to `--ref tsc` ONLY. In reference-binary mode (`--ref
+# <path>`) every difference is a finding: two typokat builds have no licence to
+# disagree.
+tk[2345]~ts[2322]	div:calls/contextual-argument-blame-site	typokat blames the contextually typed argument with a reason chain; tsc descends to the offending sub-expression. Same rejection, different code.
+tk[]~ts[7006]	backlog:48	`noImplicitAny` parameter reporting (TS7006) is a deferred check.
+#
+# DELIBERATELY NOT ALLOWLISTED, so you know it was considered: `tk[]!=ts[2322]` is the
+# standing ~3-4 % residue of a truth-mode run. It is tsc elaborating a fresh array or
+# object literal PER ELEMENT where typokat reports the argument once — cosmetic
+# cardinality, pinned by `repros/04-array-literal-element-elaboration.ts`. Suppressing
+# it would need the one-sided rule `tk[]~ts[2322]`, which would also cancel every
+# genuinely dropped `TS2322` — the exact false negative this harness exists to catch.
+# A rule that broad is never worth a quieter dashboard.

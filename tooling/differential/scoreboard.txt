@@ -1,0 +1,11 @@
+# typokat differential — committed repro scoreboard.
+# Deterministic: no timestamps, no machine paths. A behaviour change on a
+# committed minimal repro shows up as a single changed line in `git diff`.
+# format: 1
+# tsc: 6.0.3 --strict --noEmit --pretty false --target es2020
+# repros: 4  match: 2  allowed: 1  diverge: 1
+# columns: status	typokat-ids	tsc-ids	signature	path   (ids are line:code)
+MATCH	9:2769	9:2769	-	repros/01-contextual-overload-object-literal.ts
+ALLOWED	7:2345	7:2322	-	repros/02-contextual-generic-arrow-return.ts
+MATCH	17:2345	17:2345	-	repros/03-contextual-sibling-call-interference.ts
+DIVERGE	11:2345	11:2322,11:2322	tk[]!=ts[2322]	repros/04-array-literal-element-elaboration.ts
