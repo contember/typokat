@@ -1079,3 +1079,48 @@ Production still runs `src/prelude.ts`.
   (`tests/conformance.rs:1180`, `:1294`) install a **process-global** silent panic hook while the
   rest of the binary runs concurrently, so a conformance failure printed `FAILED` with no report.
   The durable fix is for the marker parsers to return `Result` instead of panicking.
+
+### 2026-07-27 — first production-shaped measurement, and two planning facts it changes
+
+The CLI was pointed at the library base in a throwaway worktree (one line: `check_project` →
+`check_project_with_library`) and benchmarked against the pinned comparator. This is the first
+number for the shape WU8 will eventually gate on, rather than for an in-process harness.
+
+- **Starting point 0.97×, not "already under tsgo".** fast-clean read typokat 297.8 ms against tsgo
+  289.6 ms. Earlier in-process figures (277 ms vs 289 ms) were not end-to-end and should not be
+  cited. The whole cost is the library build: 280 ms of library plus ~19 ms of user file, against a
+  297.8 ms wall clock — the accounting closes with nothing hidden.
+- **After four commits it is 1.12–1.14×** (260 ms), across two independent trials. The movement is
+  `090ec7e` (publication clone, −38.5 ms of phase) and `0ba0a1b` (heritage composition, −6.6 ms);
+  `27ad034` and `3711b00` are their work-counter guards.
+- **typokat is single-threaded and tsgo is not — measured, not assumed.** typokat runs at 99–100 %
+  CPU and burns 0.25 s of CPU time; tsgo runs at 164–191 % and burns 0.50–0.56 s. So typokat does
+  the same job for **~2.2× less CPU** on one core, and wins wall-clock anyway. RSS 69.8 MB against
+  tsgo's 98.4 MB — ratio 0.71 against the contract's 1.25 ceiling.
+- **The 2.0× gate is therefore not reachable single-threaded.** The measured best case for the whole
+  single-threaded stack — every optimization identified, including ones not yet built — is ~181 ms,
+  i.e. ~1.6×. Closing to 2× requires parallelism, and parallelism is blocked on type identity, not on
+  effort: `TypeId(self.tag.len())` is insertion-ordered (`types/store.rs:690`) and unions canonicalize
+  by sorting raw `TypeId` (`types/intern/operators.rs`), so any reordering changes rendered
+  diagnostic text. `StableHash` (`types/hash.rs`) "reserves the future cross-run content hash slot
+  and deliberately returns a zero digest today". That is backlog `16`, blocked on `14` and `15`.
+  **WU8's row-by-row 2× target should be re-scoped or explicitly deferred behind that hash** rather
+  than treated as reachable in this sprint.
+- **Two of four benchmark rows still cannot run.** `collision` and `fanout` exit 101. Filed as
+  backlog [`103`](../backlog/103-library-merge-panics-and-routing.md), which now owns WU5's ground:
+  five panic sites, all one cause — an in-place merge into the frozen prefix.
+- **The quiet half of that boundary was the larger defect** — backlog
+  [`102`](../backlog/102-frozen-prefix-writes-vanish-silently.md), shipped in `74a6da3`/`6161527`.
+  Five sites wrote with `if let Some(row) = table.get_mut(id)` and dropped the user's declaration
+  when the row was in the frozen prefix. An ordinary cross-file `globals.d.ts` reported `TK2304`.
+  It fires on *fresh* names, so no collision classifier would ever have caught it.
+- **Profiler attributions were wrong twice, in both directions, and the implementers caught both.**
+  The defensive publication clone was under-attributed (25 ms claimed, 38.5 ms measured — a sampling
+  profiler under-attributes `free()`); the interface-member clones were over-attributed by ~10×
+  (20–35 ms claimed, 3.3 ms measured), with the real cost being 7.9M quadratic name comparisons in
+  the same function. Treat pprof output on this workload as a pointer to a *function*, not to a
+  *reason*.
+- **Two benchmark traps, recorded so nobody re-measures into them.** A warm in-process loop reads
+  ~250 ms where a cold process reads ~316 ms, so loop-based figures understate production by ~65 ms.
+  And ~9.5 ms of `#[cfg(test)]` probes sit inside the timed phase windows; production never runs
+  them, so removing them improves the number and not the product.
