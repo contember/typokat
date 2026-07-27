@@ -8,6 +8,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, for the differential harness's tsc truth mode only (see differential-tsc).
+  # Every other job is a no-op cost on this trigger and runs anyway, which is cheap.
+  schedule:
+    - cron: "0 4 * * 1"
 
 # Minimal token scope. The official-suite job authenticates `gh api` calls against
 # the public microsoft/TypeScript repo purely for API rate limits; read is enough.
@@ -109,3 +113,80 @@ jobs:
       - name: run --check (identity ratchet vs committed scoreboard)
         working-directory: tooling/official-suite
         run: python3 tsofficial.py run --check
+
+  # Randomized differential corpus (tooling/differential, backlog 96). A real gate, on
+  # a BOUNDED budget: nothing here is open-ended.
+  #   * harness unit tests            — no binary, no tsc, < 1 s
+  #   * repros --check                — the committed minimal repros, identity ratchet,
+  #                                     typokat only (tsc baselines are frozen), ~1 s
+  #   * self-consistency fuzz sweep   — 600 generated programs checked twice by the same
+  #                                     binary; any difference is nondeterminism, any
+  #                                     crash / parse error / inconsistent exit code is
+  #                                     a hard failure. ~10 s, hard-capped at 120 s by
+  #                                     --time-budget.
+  # Total after the (cached) release build: ~2.5 minutes worst case.
+  #
+  # Reference-binary mode — the one that reproduces 412f321 — is deliberately NOT here:
+  # building a second binary per PR is not a bounded cost, and a PR that intends to
+  # change diagnostics would fail it by design. It is a dev-method §1 gate instead.
+  differential:
+    name: differential (repro ratchet + bounded fuzz sweep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: python3 -m unittest test_differential
+        working-directory: tooling/differential
+        run: python3 -m unittest test_differential
+      - name: Build release binary
+        run: cargo build --release
+      - name: repros --check (identity ratchet vs committed scoreboard)
+        working-directory: tooling/differential
+        run: python3 differential.py repros --check
+      - name: fuzz --check (self-consistency, 600 programs, 120 s cap)
+        working-directory: tooling/differential
+        run: |
+          python3 differential.py fuzz \
+            --ref ../../target/release/typokat \
+            --seed 96 --count 600 --time-budget 120 --check
+
+  # Truth mode: typokat vs real tsc 6.0.3. Weekly only — it needs a node/tsc install and
+  # its output is a triage dashboard, not a pass/fail verdict (typokat is a deliberate
+  # subset of tsc; see tooling/differential/allowlist.txt). What IS gated here is that
+  # the frozen tsc baselines in scoreboard.txt still match real tsc: `--refresh-tsc`
+  # followed by `git diff --exit-code` catches baseline drift deterministically.
+  # Generation is hard-capped at 300 s.
+  differential-tsc:
+    name: differential (tsc truth mode, weekly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Pinned to the tsc release typokat is validated against (official-suite PINNED_SHA).
+      - run: npm install --global typescript@6.0.3
+      - name: Build release binary
+        run: cargo build --release
+      - name: Frozen tsc baselines still match tsc 6.0.3
+        working-directory: tooling/differential
+        run: |
+          python3 differential.py repros --save --refresh-tsc
+          git diff --exit-code scoreboard.txt
+      - name: fuzz --ref tsc (dashboard, 300 s cap)
+        working-directory: tooling/differential
+        run: |
+          python3 differential.py fuzz --ref tsc \
+            --seed ${{ github.run_number }} --count 400 --time-budget 300
