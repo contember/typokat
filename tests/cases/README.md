@@ -331,6 +331,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
 | `b14_full_lib_loading/` | backlog `14` WU0A (8 of 14 enabled, `Library` base) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
 | `b14_full_lib_loading_project/` | backlog `14` WU0A (1 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b102_frozen_prefix_writes/` | backlog `102` (enabled, `Library` base) | fresh script globals reach a writable delta scope; a write aimed at a library-owned row is recorded, never dropped |
+| `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped, `Library` base) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -348,6 +350,31 @@ assignment-message divergence (pinned at `m0_assign_primitives/intrinsics.ts:9`)
 to inference. Deliberately unpinned: a mixed-element literal against `[T, T]` (`h([1, "x"])`)
 — tsc reports a per-element contextual error whose code/position rides on subtle
 inference-priority choices.
+
+`b102_frozen_prefix_writes/` and `b102_frozen_prefix_writes_project/` are the backlog-`102`
+corpora, checked against the `Library` base because the frozen prefix only exists there. Two
+halves. The **publication** half is project-shaped: an ordinary `globals.d.ts`-shaped script file
+declaring an interface, `declare var`, `declare function`, `declare namespace`, `class`, and a
+`type` alias, consumed from a second file — once in declaration order and once with the consumer
+fed first, because the hoist reservations are per-form and a value slot filled only at its own
+module's execution would let the wrong-type witness vanish rather than error. Every consumption is
+a clean read plus a wrong-type witness, so an `any`/error-type recovery cannot pass the corpus. Its
+controls are the shapes that must NOT publish: an external module's `interface Array<T>` and
+module-local `Date`/`class` shadow inside their own file and stay invisible to a sibling script
+file, whose `Array`/`Date` surfaces must remain the library ones.
+
+The **fail-closed** half is flat. `declare var document: number`, `const JSON = 1`,
+`declare var isNaN: number`, and a user overload of `parseInt` each target a row inside the frozen
+library prefix, which ADR-0011 forbids mutating. The write cannot happen, so each fixture pins the
+`incomplete[bind/frozen-library-global/merge-refused]` record at its declaration plus the
+diagnostics the surviving library declaration produces. Each header records tsc's own verdict —
+`TS2403`, `TS2451` x4, `TS2300` x2, and (for `parseInt`) a clean file — and the resulting
+under/over-reports are ledgered in
+[`divergences.md`](../../docs/reference/divergences.md) under backlog `103`, which owns making the
+merge actually work. The typed refusal itself is additionally pinned by direct binder tests
+(`frozen_prefix_writes_are_recorded_instead_of_dropped`,
+`fresh_script_globals_publish_without_refusing_a_frozen_write`), because a marker fixture observes
+only the downstream surface.
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's

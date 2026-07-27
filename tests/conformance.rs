@@ -228,6 +228,11 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // would abort the whole test binary, so they must stay disabled.
     ("b14_full_lib_loading", false, Library),
     ("b14_full_lib_loading_project", false, Library),
+    // Backlog 102 — a binder write that lands inside the frozen library prefix must either reach
+    // a delta-side scope (fresh script globals) or be recorded (a library-owned row), never
+    // vanish. Checked against `Library`, because the prefix only exists on that base.
+    ("b102_frozen_prefix_writes", true, Library),
+    ("b102_frozen_prefix_writes_project", true, Library),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -244,6 +249,8 @@ const PROJECT_DIRS: &[&str] = &[
     "sr_semantic_duplication_project",
     // Backlog 14 collision/preflight routing matrix, checked against the `Library` base.
     "b14_full_lib_loading_project",
+    // Backlog 102 cross-file script globals, checked against the `Library` base.
+    "b102_frozen_prefix_writes_project",
 ];
 
 /// Selected project fixtures enabled before their mixed flat/project corpus closes. Each runs
