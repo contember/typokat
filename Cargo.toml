@@ -46,6 +46,12 @@ rayon = "1.12.0"
 # Canonical semantic/source identities and the shipped library snapshot boundary.
 sha2 = "0.10.9"
 
+# Allocator for the CLI (`src/main.rs` only — the library must not pick its
+# consumers' allocator). Building the default library from source is allocation-churn
+# heavy and glibc malloc costs ~20 ms per run on it; measured against mimalloc and
+# snmalloc, jemalloc was fastest at the smallest RSS cost (+2.8 MB).
+tikv-jemallocator = "0.7.0"
+
 [dev-dependencies]
 toml = "0.8.23"
 

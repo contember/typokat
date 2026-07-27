@@ -9,6 +9,12 @@ use std::process::ExitCode;
 use typokat::diagnostics::{self, DiagnosticFormat};
 use typokat::driver::{check_project, FileInput};
 
+// jemalloc: the run is allocation-churn heavy (building the default library from
+// source), and glibc malloc costs ~20 ms of it. Declared here, not in the library:
+// `#[global_allocator]` is a whole-program choice that belongs to the binary.
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 /// Exit code when the file has type/parse errors (complete run, errors found).
 const EXIT_ERRORS: u8 = 1;
 /// Exit code for a usage error (bad/missing arguments).
