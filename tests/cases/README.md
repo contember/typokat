@@ -335,6 +335,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b14_full_lib_loading_project/` | backlog `14` WU0A (1 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
 | `b102_frozen_prefix_writes/` | backlog `102` (enabled, `Library` base) | fresh script globals reach a writable delta scope; a write aimed at a library-owned row is recorded, never dropped |
 | `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped, `Library` base) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
+| `b103_library_merge_refusals/` | backlog `103` guard tier (enabled, `Library` base) | merging an interface/alias/class/namespace into a library-owned name is a recorded refusal, never a panic |
+| `b103_library_merge_refusals_project/` | backlog `103` guard tier (enabled, project-shaped, `Library` base) | split merges in both input orders, the two `full-lib-bench` workload shapes, and the publish/shadow controls |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -378,6 +380,7 @@ merge actually work. The typed refusal itself is additionally pinned by direct b
 `fresh_script_globals_publish_without_refusing_a_frozen_write`), because a marker fixture observes
 only the downstream surface.
 
+`b103_library_merge_refusals/` and `b103_library_merge_refusals_project/` are backlog-`103`'s
 **guard tier**, on the same `Library` base. Where `b102` covered the writes that were silently
 dropped, these cover the ones that **panicked**: an `interface` reopening a library type group
 (`Array`, `String`, `Window`), a `type` alias and a `class` colliding with a library name, an

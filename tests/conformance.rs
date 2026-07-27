@@ -243,6 +243,10 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // vanish. Checked against `Library`, because the prefix only exists on that base.
     ("b102_frozen_prefix_writes", true, Library),
     ("b102_frozen_prefix_writes_project", true, Library),
+    // Backlog 103 guard tier — merging a user declaration into a library-owned name must be a
+    // recorded refusal, never a panic. Checked against `Library`, where the frozen prefix exists.
+    ("b103_library_merge_refusals", true, Library),
+    ("b103_library_merge_refusals_project", true, Library),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -261,6 +265,8 @@ const PROJECT_DIRS: &[&str] = &[
     "b14_full_lib_loading_project",
     // Backlog 102 cross-file script globals, checked against the `Library` base.
     "b102_frozen_prefix_writes_project",
+    // Backlog 103 split/benchmark merge refusals, checked against the `Library` base.
+    "b103_library_merge_refusals_project",
 ];
 
 /// Selected project fixtures enabled before their mixed flat/project corpus closes. Each runs
