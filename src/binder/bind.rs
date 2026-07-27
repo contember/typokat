@@ -30,6 +30,50 @@ use oxc_ast::ast::{
 use rustc_hash::FxHashMap;
 use std::fmt;
 
+#[cfg(test)]
+thread_local! {
+    static SYMBOL_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Declaration rows [`BindState::attach_symbol_declaration`] reads to place one declaration —
+/// every row its duplicate guard compares and every row it orders. Ordering the whole list again
+/// per attach makes this grow with declarations x group size, and the list it produces is
+/// identical either way, so no output assertion can see the difference. Only a counter can.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SymbolDeclarationAttachWorkForTest {
+    pub(crate) row_probes: u64,
+}
+
+#[cfg(test)]
+fn symbol_declaration_attach_work_for_test() -> SymbolDeclarationAttachWorkForTest {
+    SymbolDeclarationAttachWorkForTest {
+        row_probes: SYMBOL_DECLARATION_ROW_PROBES.get(),
+    }
+}
+
+#[cfg(test)]
+fn record_symbol_declaration_row_probe() {
+    SYMBOL_DECLARATION_ROW_PROBES.set(SYMBOL_DECLARATION_ROW_PROBES.get() + 1);
+}
+
+#[cfg(test)]
+pub(crate) struct SymbolDeclarationAttachWorkScopeForTest(SymbolDeclarationAttachWorkForTest);
+
+#[cfg(test)]
+impl SymbolDeclarationAttachWorkScopeForTest {
+    pub(crate) fn start() -> Self {
+        Self(symbol_declaration_attach_work_for_test())
+    }
+
+    pub(crate) fn finish(self) -> SymbolDeclarationAttachWorkForTest {
+        let end = symbol_declaration_attach_work_for_test();
+        SymbolDeclarationAttachWorkForTest {
+            row_probes: end.row_probes.saturating_sub(self.0.row_probes),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LibraryBinderError {
     EmptyBatch,
@@ -914,6 +958,8 @@ impl BindState {
             return;
         }
         let source_key = |id: DeclId| {
+            #[cfg(test)]
+            record_symbol_declaration_row_probe();
             self.declarations
                 .get(id)
                 .map(|declaration| {
@@ -930,10 +976,16 @@ impl BindState {
                 .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX, u32::MAX, u32::MAX))
         };
         if let Some(row) = self.symbols.get_mut(symbol) {
-            if !row.declarations.contains(&declaration) {
+            if !row.declarations.iter().any(|id| {
+                #[cfg(test)]
+                record_symbol_declaration_row_probe();
+                *id == declaration
+            }) {
                 row.declarations.push(declaration);
                 if !self.library_module_ordinals.is_empty() {
                     row.declarations.sort_by_key(|id| {
+                        #[cfg(test)]
+                        record_symbol_declaration_row_probe();
                         let declaration = self
                             .declarations
                             .get(*id)

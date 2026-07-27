@@ -216,8 +216,8 @@ thread_local! {
 /// `push_placement` compares, plus every by-declaration syntax read it answers.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct PlacementLookupWorkForTest {
-    row_probes: u64,
+pub(crate) struct PlacementLookupWorkForTest {
+    pub(crate) row_probes: u64,
 }
 
 #[cfg(test)]
@@ -233,15 +233,15 @@ fn record_placement_row_probe() {
 }
 
 #[cfg(test)]
-struct PlacementLookupWorkScopeForTest(PlacementLookupWorkForTest);
+pub(crate) struct PlacementLookupWorkScopeForTest(PlacementLookupWorkForTest);
 
 #[cfg(test)]
 impl PlacementLookupWorkScopeForTest {
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         Self(placement_lookup_work_for_test())
     }
 
-    fn finish(self) -> PlacementLookupWorkForTest {
+    pub(crate) fn finish(self) -> PlacementLookupWorkForTest {
         let end = placement_lookup_work_for_test();
         PlacementLookupWorkForTest {
             row_probes: end.row_probes.saturating_sub(self.0.row_probes),
