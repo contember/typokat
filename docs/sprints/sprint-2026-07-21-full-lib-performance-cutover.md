@@ -1130,3 +1130,26 @@ number for the shape WU8 will eventually gate on, rather than for an in-process 
   ~250 ms where a cold process reads ~316 ms, so loop-based figures understate production by ~65 ms.
   And ~9.5 ms of `#[cfg(test)]` probes sit inside the timed phase windows; production never runs
   them, so removing them improves the number and not the product.
+
+### 2026-07-27 (later) — every benchmark row runs; the guard tier closes the panics
+
+- **`collision` and `fanout` execute for the first time**, exit 101 → exit 3. Backlog `103`'s guard
+  tier (`f1c7d7e`/`b223817`) converted all five frozen-prefix `.expect` sites into recorded
+  refusals, reusing the ledger backlog `102` built rather than adding a second mechanism.
+  `declare global` refuses the whole run with exit 2 and no partial output.
+- **The guard's honest cost, recorded because it is the kind of thing that gets forgotten.** A
+  refused type slot leaves the annotation as an error type, so `interface console` now passes every
+  member read unchecked — a refusal that manufactures the same silent channel backlogs `45` and
+  `101` turned out to be. And a `declare global` project produces no diagnostics at all. Both are
+  ledgered `dir=under` under `103`'s correctness tier and both disappear only when the merge works.
+- Three silent-diagnostic families closed the same day (`45` operators, `100` composed conditions,
+  `101` ternary/logical values), plus `102`'s vanishing writes and `104`'s excess-property descent.
+  Each was found by *using* the checker, not by reading it — which is `96`'s whole argument.
+- **Perf, cumulative**: 0.97× → ~1.2× on `fast-clean`, from `090ec7e` (publication clone),
+  `0ba0a1b` (heritage composition) and `2582684` (jemalloc). Measured compiled-in, jemalloc beat
+  mimalloc by 20 ms and 12 MB of RSS — the opposite of what the profiling pass predicted, because
+  the clone fix had already removed the allocations mimalloc was winning on.
+- **Sprint bookkeeping fixed.** The binding claim was restated `≥2.00` → `>1.00` on 2026-07-26, but
+  WU5's and WU8's own bullets still carried `≥2.00`; they now point at the claim. At ~1.2× the gate
+  is met and the `1.25×` engineering target is close. **What blocks closure is not performance —
+  it is `103`'s correctness tier**, without which WU7 cannot cut the CLI over.

@@ -1,60 +1,51 @@
 ---
 id: 103
-title: Merging a declaration into the frozen library panics; there is no collision route
+title: A merge into a library-owned name is refused, not performed; there is no collision route
 blocked-by: []
 ---
 
-# 103 — Merging a declaration into the frozen library panics; there is no collision route
+# 103 — A merge into a library-owned name is refused, not performed; there is no collision route
 
-**Summary.** Any user declaration that merges with a library-owned name **panics** the checker —
-`interface Window`, `declare global { … }`, `namespace Intl`, `class Date`, `type Partial<T>`, all of
-which `tsc 6.0.3 --strict` accepts. Five distinct panic sites, one underlying cause: an in-place
-merge into the frozen prefix. The classifier that is supposed to route these inputs away exists
-(`src/library/collision_preflight.rs`) but is **never called on real input** in production, and the
-private-rebuild route it would select is not implemented. This is sprint WU5's territory. Effort XL
-for correct semantics, M for the guard. **Blocks the WU7 CLI cutover outright.**
+**Summary.** A user declaration that merges with a library-owned name — `interface Window`,
+`namespace Intl`, `class Date`, `declare global` — does not merge. **The guard tier shipped**
+(`f1c7d7e`/`b223817`): those shapes used to panic and are now typed refusals, so `collision` and
+`fanout` run for the first time. What remains is the correctness tier: making the merge actually
+happen. The classifier exists (`src/library/collision_preflight.rs`) but is never called on real
+input, and the private-rebuild route ADR-0011 mandates is not implemented. Effort XL. **Blocks the
+WU7 CLI cutover**, because refusing every `declare global` is a product regression against
+`src/prelude.ts`.
 
 ## Problem
 
-Every row below is legal TypeScript that `tsc 6.0.3 --strict --target es2025` accepts, and every one
-panics the checker on the library base:
+Every row below is TypeScript that `tsc 6.0.3 --strict --target es2025` compiles (some with their
+own duplicate-identifier diagnostics, noted in the corpus headers). None of them merges in typokat:
 
-| Input | Panic site |
+| Input | Outcome today |
 |---|---|
-| `interface Array<T> { … }` at script top level | `src/binder/bind.rs:2179` `allocated type group exists` |
-| `interface Window { … }`, `interface String { … }` split over two files | `bind.rs:2179` |
-| `type Partial<T> = …`, `class Date { … }` | `bind.rs:2179` |
-| `interface console { probe: number }` | `bind.rs:2230` `resolved symbol exists` |
-| `namespace Intl { … }`, `declare namespace Intl { … }` | `src/binder/namespace.rs:5447` `namespace exists` |
-| `declare global { interface Window { … } }` | `bind.rs:2179` |
-| `declare global { interface Brand {} }` (fresh name), `declare global { var x: number }` | `src/check/checker/mod.rs:1267` |
+| `interface Array<T>`/`String`/`Window`, `type Partial<T>`, `class Date` | refused; the fragment is not appended, so reads of the augmented member report `TK2339` |
+| `interface console` | refused; the type slot stays the library's, so the annotation degrades to an error type and **every** member read through it goes unchecked |
+| `namespace Intl`, `declare namespace Intl` | refused; qualified reads report `TK2694` |
+| `declare global { … }` | the whole run is refused, exit 2, **no diagnostics at all for the project** |
 
-Two of the four `tooling/full-lib-bench` rows — `collision` and `fanout` — exit 101 for this reason,
-so the cross-tool benchmark cannot even run on half its matrix.
+The `interface console` and `declare global` rows are the ones to watch: a refusal that yields an
+error type manufactures exactly the silent channel backlogs `45` and `101` were, and a whole-run
+refusal is a blind spot over every file in the project. They are the price of the guard tier and
+they disappear only when the merge works.
 
 ## Root cause
 
-The same `LayeredVec` boundary as [`102`](./102-frozen-prefix-writes-vanish-silently.md), reached by
-callers that `.expect(...)` instead of dropping the write. `declare_type` (`bind.rs:2148`) reuses an
-existing symbol's type group and appends a fragment; when that group id belongs to the frozen prefix,
-`get_mut_local` returns `None`:
+Frozen binder tables are a `LayeredVec` — an immutable `Arc<[T]>` base plus a mutable local — and
+`get_mut_local` refuses any id below the prefix boundary, exactly as
+[ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md) requires. `declare_type` reuses
+an existing symbol's type group and appends a fragment, and on `lib.d.ts` that group id sits in the
+prefix (`TypeGroupId(48)` against a base length of 2099). The guard tier turned that refusal into a
+recorded `FrozenPrefixWrite`; it did not give the fragment anywhere to go.
 
-```
-array_type_group = TypeGroupId(48)   type_groups.base_len() = 2099
-48.checked_sub(2099) → None → panic
-```
-
-`mod.rs:1267` is different in kind: `finish_frozen_library_continuation` (`bind.rs:1396`) already
-detects the case and returns a typed `Err("frozen-library continuation does not yet admit declare
-global")` — and the caller `.expect()`s it. The single-source path
-(`check_program_with_owned_library`, `mod.rs:1428`) propagates it correctly with `?`; only the
-project path unwraps.
-
-**There is no classifier on this path.** `fork_user_delta` (`src/library/base.rs:481`) takes its
-capability from `issue_caller_certified_capability()` (`collision_preflight.rs:30`), which runs the
-preflight over an **empty** input set — no inputs, no candidates, so it always returns
-`CollisionRoute::SharedDelta`. The whole module is `allow(dead_code, reason = "activated by the WU5
-private-route cutover")`. The frozen `root_names` index is never consulted for real user source.
+**There is no classifier on this path.** `fork_user_delta` takes its capability from
+`issue_caller_certified_capability()`, which runs the preflight over an **empty** input set — no
+inputs, no candidates, so it always answers `CollisionRoute::SharedDelta`. The whole module is
+`allow(dead_code, reason = "activated by the WU5 private-route cutover")`, and the frozen
+`root_names` index is never consulted for real user source.
 
 ## What already exists
 
@@ -70,37 +61,27 @@ What is missing is everything downstream: type reservation/publication, checking
 
 ## Approach / acceptance
 
-**Guard first (effort M), correctness second (effort XL).** They are separable and the guard is
-urgent, because a panic on legal input is worse than a refusal.
+The guard is done. What is left is [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)'s
+private full rebuild, built on the checkpoint continuation that already works, plus the routing that
+selects it.
 
-*Guard.* Give the preflight a production entry point taking real `FileInput`s and the base's
-`root_names`, call it before `fork_user_delta`, and map anything other than `SharedDelta` to a typed
-error and a stable CLI exit with no partial output. Run it **inside** the large-stack worker — the
-sprint run log records the preflight overflowing the caller's 8 MB stack on a 471-file census. Then
-fail closed independently: convert the five `expect` sites to recorded typed failures and make
-`mod.rs:1267` propagate. The classifier must not be the only thing standing between a user and a
-panic.
+*Route it.* Give the preflight a production entry point taking real `FileInput`s and the base's
+`root_names`, and call it before `fork_user_delta`. Run it **inside** the large-stack worker — the
+run log records the preflight overflowing the caller's 8 MB stack on a 471-file census.
 
-*The guard is not the cutover.* Route incidence over the official-suite corpus is **shared 285 /
-private 185 / rejected 1** — 39% would be refused, because script-mode `var`/`function` are
-global-object contributors. Refusing `declare global` and 39% of inputs is a product regression
-against `src/prelude.ts`, so ship the guard while the prelude remains the CLI default.
-
-*Correctness.* [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)'s private full
-rebuild is the answer, built on the checkpoint continuation that already works. Cost: a colliding
-project repeats compile + publication in a fresh universe, so ~0.30 s → **~0.6 s**. That is fine for
-one project and ruinous for a batch — ~341 colliding official-suite cases × 0.29 s ≈ 100 s added to
-one process under ADR-0011's one-permit bound. This is exactly why WU5 says the current source
-compiler cannot satisfy the 2× collision row, and why the replay-index machinery
+*Cost.* A colliding project repeats compile and publication in a fresh universe, so ~0.25 s → ~0.5 s.
+Fine for one project, ruinous for a batch: route incidence over the official-suite corpus is
+**shared 285 / private 185 / rejected 1**, so ~341 cases × ~0.25 s ≈ 85 s added to one process under
+ADR-0011's one-permit bound. That is why the replay-index machinery
 (`AdmittedCollisionReplayIndex`, 47,253 owner sites) is specced as the optimization *over* the naive
-rebuild. Treat that optimization as a separate item; do not fold it into the correctness work.
+rebuild. Treat that as a separate item; do not fold it in.
 
-Corpus first per [`dev-method.md`](../reference/dev-method.md) §1. Beyond the panic shapes above it
-must pin: module-scope declarations that must keep **shadowing** rather than merging (`interface
-Array<T>` inside a module, a module-local `Date`), fresh names that must stay on the shared delta,
-a classifier false-negative mutation routing private rather than shared, opposite input order
-producing identical per-source semantics, and no identity of any kind crossing between a private
-universe and the shared base.
+*Corpus.* `tests/cases/b103_library_merge_refusals/` and its project sibling already pin every shape
+and both input orders — the acceptance is that their refusals become correct merges while the
+controls (fresh globals publish, module scope shadows) stay exactly as they are. Add the cases the
+guard could not reach: `globalThis`, UMD globals, value/type/namespace-slot collisions,
+destructuring, a classifier false-negative mutation that must route private rather than shared, and
+proof that no identity of any kind crosses between a private universe and the shared base.
 
 ## Touch points
 
