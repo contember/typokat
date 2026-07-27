@@ -55,7 +55,12 @@ decisions → reference → archive.
   pinned library is 277 ms against native TypeScript 7's 289 ms — at parity — and the rest of the
   old 1.85 s was work that existed only to fill the archive. The earlier
   [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
-  first substitution and rendering barriers. The
+  first substitution and rendering barriers.
+  [`ADR-0018`](decisions/0018-pin-library-owned-records-as-a-named-census.md) settles what happens
+  to the 875 records the library reports against itself: no process retains one, and the suite pins
+  the complete set as a named `(code, site)` multiset
+  (`tests/fixtures/library-owned-records.txt`), which narrows ADR-0011's "preserved exactly" to the
+  pinned suite rather than the published base. The
   [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the production
   Stage-1 cutover, collision/fanout correctness, and the cross-tool gate against native
   TypeScript 7. Stage 1 is not yet shipped and `src/prelude.ts` remains production until the atomic

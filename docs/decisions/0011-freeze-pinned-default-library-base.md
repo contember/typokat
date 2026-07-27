@@ -1,7 +1,7 @@
 ---
 id: 0011
 title: Freeze the pinned default library as one shared semantic base
-status: accepted
+status: accepted; "preserved exactly" narrowed by 0018
 date: 2026-07-16
 ---
 
