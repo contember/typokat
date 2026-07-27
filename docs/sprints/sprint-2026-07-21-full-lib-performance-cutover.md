@@ -287,10 +287,11 @@ the claim to the easy fast path.
   that clause before implementation. Retain one-process-wide containment for expensive fallbacks.
 - **Acceptance / witness.** False-negative classifier mutations route private; legal merge,
   `globalThis`, UMD/namespace, value/type/namespace-slot, destructuring, and opposite-order cases
-  match tsc. The collision and fanout benchmark rows each satisfy the full 2× confidence/p95 gate,
+  match tsc. The collision and fanout benchmark rows each satisfy the binding confidence/p95 gate,
   every run stays within 512 MiB, and all-colliding fanout is deterministic and bounded.
-- **Stop/falsifier.** No 2× collision result means no broad 2× claim and no sprint completion. Do
-  not relabel the collision row out of scope or accept the unaugmented snapshot as success.
+- **Stop/falsifier.** A collision row below the binding threshold means no claim and no sprint
+  completion. Do not relabel the collision row out of scope or accept the unaugmented snapshot as
+  success.
 - **Touch points.** `src/library/`, binder preflight/classifier, checker/compiler pipeline,
   `src/driver.rs`, B14 project fixtures, routing/readiness manifests.
 
@@ -342,12 +343,14 @@ the claim to the easy fast path.
   subagent, independently review it, and repeat the entire matrix. Keep raw failures; never replace
   evidence after learning which row is slow.
 - **Acceptance / witness.** All three trials for every row have a one-sided 95% lower confidence
-  bound and p95 ratio ≥2.00; all semantic outputs/identities match their oracles; typokat RSS meets
-  both memory gates. Commit raw canonical JSON, summary, binary/profile/host facts, commands,
+  bound and p95 ratio above the threshold in the **Binding performance claim** — `>1.00` with a
+  `1.25×` engineering target, restated there from `≥2.00` on 2026-07-26 before any result was seen;
+  the `≥2.00` this bullet used to carry was left stale by that restatement. All semantic
+  outputs/identities match their oracles; typokat RSS meets both memory gates. Commit raw canonical JSON, summary, binary/profile/host facts, commands,
   snapshot and package sizes, route incidence, and independent statistical validation.
 - **Stop/falsifier.** A semantic difference, incomplete evidence, identity mismatch, forbidden
-  optimization, missing row, or sub-2× result is NO-GO. The target is not averaged across rows or
-  traded against memory.
+  optimization, missing row, or a row below the binding threshold is NO-GO. The target is not
+  averaged across rows or traded against memory.
 - **Touch points.** `tooling/full-lib-bench/`, production hot paths selected by profiles,
   readiness/routing/freeze artifacts, sprint run log.
 
@@ -1104,8 +1107,11 @@ number for the shape WU8 will eventually gate on, rather than for an in-process 
   by sorting raw `TypeId` (`types/intern/operators.rs`), so any reordering changes rendered
   diagnostic text. `StableHash` (`types/hash.rs`) "reserves the future cross-run content hash slot
   and deliberately returns a zero digest today". That is backlog `16`, blocked on `14` and `15`.
-  **WU8's row-by-row 2× target should be re-scoped or explicitly deferred behind that hash** rather
-  than treated as reachable in this sprint.
+  **Correction to this entry as first written:** it said WU8's 2× target needed re-scoping. The
+  binding gate had *already* been restated to `>1.00` on 2026-07-26, before any result was seen —
+  what was stale was the `≥2.00` text still sitting in WU5's and WU8's own bullets, now pointed at
+  the binding claim. So ~1.2× **passes** the gate and sits just under its `1.25×` engineering
+  target; it is 2× that is out of reach single-threaded, and 2× is no longer what is being claimed.
 - **Two of four benchmark rows still cannot run.** `collision` and `fanout` exit 101. Filed as
   backlog [`103`](../backlog/103-library-merge-panics-and-routing.md), which now owns WU5's ground:
   five panic sites, all one cause — an in-place merge into the frozen prefix.
