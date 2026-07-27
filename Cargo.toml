@@ -43,7 +43,8 @@ codespan-reporting = "0.13.1"
 # (pinned to its parsing thread), so the per-file pipeline is the unit of work.
 rayon = "1.12.0"
 
-# Canonical semantic/source identities and the shipped library snapshot boundary.
+# Vendored library profile identity (`library/profile.rs`) and the collision replay
+# manifest digest (`check/checker/replay_index.rs`).
 sha2 = "0.10.9"
 
 # Allocator for the CLI (`src/main.rs` only — the library must not pick its
