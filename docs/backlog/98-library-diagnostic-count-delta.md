@@ -37,21 +37,36 @@ times") was the obvious suspect, since it removed 2,008 duplicate diagnostics fr
 zero distinct codes lost. It is not the cause: the count is already 265 at `ddfd649`, its immediate
 parent. The change is somewhere in the remaining ~100 commits between `90ff28d` and `ddfd649`.
 
+**The eight cannot be named from what was retained.** [ADR-0018](../decisions/0018-pin-library-owned-records-as-a-named-census.md)
+built the census this item asked for, and looking backwards with it settles that much: the `90ff28d`
+witness was three SHA-256 constants plus the 21 MB `canonical.snapshot` that ADR-0017 deleted, so no
+readable form of those records survives anywhere. Two facts the census did surface, which narrow the
+inference without proving it:
+
+- `INCOMPLETES_IDENTITY` at `90ff28d` is **byte-identical** to today's incompletes digest. So the
+  record encoding and rendering path is unchanged for incompletes; whatever grew the diagnostics blob
+  from 91,453 to 125,251 bytes is specific to *diagnostic* rendering, not a shared encoding change.
+- In today's census, **99 of the 265 diagnostics are exact duplicates** — 265 collapse to 149
+  distinct `(code, site)` pairs, while all 610 incompletes are distinct. A dedup-shaped change moving
+  the count by 8 with zero distinct pairs lost is entirely consistent with that.
+
 ## Approach / acceptance
 
-Do not bisect on the count. Bisect on the **distinct code multiset**, because the question is not
-"did the number change" but "did any diagnostic stop being reported".
+The forward half is **done**. ADR-0018 shipped `LibraryRecordCensus` and
+`tests/fixtures/library-owned-records.txt`: the pin is now a named `(code, site)` multiset, so the
+next drift says what drifted, and a `-` line without a matching `+` is a dropped diagnostic by
+construction. That closes step 1 and the pin clause of the original acceptance.
 
-1. Add a probe that dumps the library's own diagnostics as sorted `(code, file, line, message)`
-   rather than a count and a digest. A digest tells you something moved; it never tells you what.
-2. Diff that dump across `90ff28d..HEAD`. If every distinct `(code, site)` present at `90ff28d` is
-   still present, the delta is deduplication and rendering — record it and close.
-3. If any `(code, site)` disappeared, that is a dropped diagnostic. Find the commit, cross-check the
-   site against real `tsc 6.0.3 --strict`, and treat it as a soundness regression.
+What is left is backwards-looking and bounded by the evidence: **either** find a route to the
+`90ff28d` record text (rebuilding that commit and running an equivalent census there is the only
+candidate — the snapshot is gone, but the compiler is not), **or** accept that the eight are
+unattributable and record that in [`divergences.md`](../reference/divergences.md) with the two facts
+above as the reason. Do not bisect on the count; if the rebuild route works, bisect on the distinct
+code multiset, because the question was never "did the number change" but "did any diagnostic stop
+being reported".
 
-Acceptance: the eight are named and attributed to a commit, and either justified in
-[`divergences.md`](../reference/divergences.md) or fixed. The evidence pin becomes a code multiset,
-not only a count and a hash, so the next drift says what drifted.
+Acceptance: the eight are named and attributed to a commit — or the attempt is closed with the
+retention gap named as the reason it is impossible, so nobody re-opens it a third time.
 
 ## Touch points
 

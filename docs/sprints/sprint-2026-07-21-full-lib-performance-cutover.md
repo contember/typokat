@@ -328,7 +328,12 @@ the claim to the easy fast path.
   benchmark and conformance sources. Initial/middle-case failure, crash, timeout, malformed frames,
   case-id mismatch, worker failure, and restart tests fail closed without cross-case leakage.
   Single/parallel/project semantics agree and package/source searches find no production prelude
-  fallback.
+  fallback. **No library-owned record reaches CLI output on the cut-over binary.** This absorbs the
+  residual of the deleted backlog `99`: [ADR-0018](../decisions/0018-pin-library-owned-records-as-a-named-census.md)
+  proved containment through `check_project_with_library`, but
+  `the_cli_prints_no_record_for_a_clean_file` is a weak witness while the CLI still runs
+  `src/prelude.ts` — it must be re-read after the cutover, when it finally has 875 records to
+  suppress.
 - **Touch points.** `src/library/`, `src/driver.rs`, `src/check/checker/mod.rs`, `src/lib.rs`,
   `src/main.rs`, API call sites, official-suite protocol, deletion of `src/prelude.ts`.
 

@@ -52,7 +52,7 @@ randomized differential corpus is a required gate — a work unit may not report
 it.** The fixture corpus is demonstrably blind to this region: `412f321` altered output on ~15 % of
 randomly generated nested-contextual programs while showing zero diff across 471 fixtures in two
 formats, project mode in both file orders, eight bench corpora, the official-suite ratchet, and a
-2,193-binding inferred-type probe (backlog `96`).
+2,193-binding inferred-type probe.
 
 Build the **pre-change** binary in a scratch worktree (never in the main one) and diff against it:
 

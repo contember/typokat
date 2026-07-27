@@ -94,7 +94,10 @@ bug class.
 inferred-type probe **all showed zero diff** on a change that alters output on ~15 % of randomly
 generated nested-contextual programs. The trigger shape — an argument a contextual re-walk can
 supersede, nested inside a contextually typed callback, whose value depends on that callback's
-parameter — simply does not occur in the corpus. See [`96`](./96-randomized-differential-corpus.md).
+parameter — simply does not occur in the corpus. The randomized differential harness that closes
+this hole shipped as [`tooling/differential/`](../../tooling/differential/README.md); running it in
+reference-binary mode against the pre-change build is a **required** gate for this item, per
+[`dev-method.md`](../reference/dev-method.md) §1.
 
 ## Touch points
 

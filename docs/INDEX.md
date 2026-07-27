@@ -52,8 +52,10 @@ decisions → reference → archive.
   snapshot**: the library is compiled from its 82 vendored sources in every process, which
   supersedes `ADR-0012` and `ADR-0015` wholesale and narrowly supersedes 0013's decode-seeding and
   0014's digest authentication. The measurement behind it: typokat's cold parse+bind+check of the
-  pinned library is 277 ms against native TypeScript 7's 289 ms — at parity — and the rest of the
-  old 1.85 s was work that existed only to fill the archive. The earlier
+  pinned library was at parity with native TypeScript 7 and the rest of the old 1.85 s was work that
+  existed only to fill the archive. That in-process figure (277 ms against 289 ms) is **retracted as
+  a comparison** — it was not end-to-end. The production-shaped CLI reads **260 ms against the
+  comparator's 289.6 ms, 1.12–1.14×**; WU8 is the authoritative gate. The earlier
   [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
   first substitution and rendering barriers.
   [`ADR-0018`](decisions/0018-pin-library-owned-records-as-a-named-census.md) settles what happens

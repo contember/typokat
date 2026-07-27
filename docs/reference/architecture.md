@@ -558,10 +558,13 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   [performance-cutover sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now
   owns backlog [14](../backlog/14-libdts-loading.md). A shipped semantic snapshot was built and then
   retired by [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md): the library is
-  compiled from its 82 vendored sources in every process, because the checking pipeline is already
-  at parity with pinned native TypeScript 7 (277 ms against 289 ms) and precomputing one fixed
-  profile does nothing for arbitrary user code. The sprint still owns a production fresh-process
-  result faster than that comparator without weakening the base/delta or collision semantics.
+  compiled from its 82 vendored sources in every process, because the checking pipeline was already
+  at parity with pinned native TypeScript 7 and precomputing one fixed profile does nothing for
+  arbitrary user code. The 277 ms-against-289 ms figure that decision cited is **retracted as a
+  comparison** — it measured the in-process pipeline, not a fresh process. The production-shaped CLI
+  reads **260 ms against the comparator's 289.6 ms, 1.12–1.14×** across two trials; WU8 is the
+  authoritative gate. The sprint still owns that result without weakening the base/delta or
+  collision semantics.
 - **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
   B: A must emit its **public type surface** (`export name → type`), and B must give
   those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless

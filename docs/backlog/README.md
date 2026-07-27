@@ -64,7 +64,7 @@ way there — its syntax gates flip OOS→IN as features land — not a numeric 
 
 ## Roadmap at a glance
 
-The active backlog has **55 items**. The release classification comes from
+The active backlog has **53 items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -73,7 +73,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 33 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
+| **C — soundness/parity tail** | 31 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -152,10 +152,8 @@ Default-library base + method (fell out of the ADR-0017 snapshot removal):
 
 - **M** · [`102`](102-frozen-prefix-writes-vanish-silently.md) — binder writes into the frozen library prefix vanish silently; an ordinary cross-file `globals.d.ts` yields a spurious `TK2304`. **Not a collision problem** — schedule ahead of `103`.
 - **XL** · [`103`](103-library-merge-panics-and-routing.md) — a merge into a library-owned name is refused rather than performed (`declare global`, `interface Window`, `namespace Intl`); no collision route exists. The guard tier shipped; this is the correctness tier. Blocks the WU7 CLI cutover.
-- **M** · [`99`](99-library-records-are-not-retained.md) — the frozen base computes the library's own 265 diagnostics and then discards them; **blocks the WU7 CLI cutover**.
-- **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits.
+- **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits. Its forward half shipped with ADR-0018; only the backwards attribution is open.
 - **S** · [`97`](97-orphaned-wire-serialization.md) — ~6,300 lines of wire serialization left with no consumer.
-- **L** · [`96`](96-randomized-differential-corpus.md) — randomized differential corpus against `tsc`. Five defect families in two days (`102`, `104`, and the shipped `45` / `100` / `101` fixes) reached a green hand-written corpus, an official-suite ratchet, and every other gate the project has; a hand-written corpus only covers the cases someone thought of.
 
 Checker scaling (from sprint-2026-07-25; `95` carries a committed RED guard):
 
