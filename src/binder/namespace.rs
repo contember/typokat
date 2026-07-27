@@ -1282,6 +1282,15 @@ pub struct NamespaceTable {
     /// lookup table but shares every name allocation through the `Arc`.
     name_ids: FxHashMap<Arc<str>, NameId>,
     placements: LayeredMap<MergeKey, Arc<Vec<MergeParticipant>>>,
+    /// Row index of every placement participant, keyed by its group and declaration, so finding
+    /// the row a declaration already owns is a lookup instead of a scan of the group.
+    /// Not layered — a sealed group can never take another row, so this only ever describes
+    /// rows a build can still reach.
+    placement_rows: FxHashMap<(MergeKey, DeclId), usize>,
+    /// How many of each group's rows [`NamespaceTable::placement_rows`] already covers. Rows a
+    /// restored or forked table brought with it are folded in on first touch, so a miss in that
+    /// index is proof the group holds no row for the declaration, never a reason to scan it.
+    placement_rows_indexed: FxHashMap<MergeKey, usize>,
     merges: LayeredVec<MergeRecord>,
     merge_indices: LayeredMap<MergeKey, usize>,
     standalone_storage_namespaces: LayeredMap<ValueStorageId, NamespaceId>,
@@ -1757,6 +1766,8 @@ impl NamespaceTable {
             names: self.names.fork_delta()?,
             name_ids: self.name_ids.clone(),
             placements: self.placements.fork_delta()?,
+            placement_rows: FxHashMap::default(),
+            placement_rows_indexed: FxHashMap::default(),
             merges: self.merges.fork_delta()?,
             merge_indices: self.merge_indices.fork_delta()?,
             standalone_storage_namespaces: self.standalone_storage_namespaces.fork_delta()?,
@@ -2235,6 +2246,8 @@ impl NamespaceTable {
             names,
             name_ids,
             placements: layered_placements,
+            placement_rows: FxHashMap::default(),
+            placement_rows_indexed: FxHashMap::default(),
             merges: LayeredVec::default(),
             merge_indices: LayeredMap::default(),
             standalone_storage_namespaces: LayeredMap::default(),
@@ -3168,6 +3181,21 @@ struct QualifiedSymbolView {
     deferred: Option<QualifiedTypePathDeferredReason>,
 }
 
+/// Every member listed by at least one **ambient** fragment of one namespace.
+///
+/// `some ambient fragment lists this member` is asked once per member of the namespace, and the
+/// fragments it would scan grow with the reopens, so the answer is derived once as a union and
+/// read back by lookup instead (backlog 88).
+fn ambient_member_union(
+    fragments: &[&NamespaceFragment],
+) -> rustc_hash::FxHashSet<NamespaceMemberId> {
+    fragments
+        .iter()
+        .filter(|fragment| fragment.ambient)
+        .flat_map(|fragment| fragment.members.iter().copied())
+        .collect()
+}
+
 impl Binder {
     pub(crate) fn namespace_fragment_private_scope(
         &self,
@@ -3210,6 +3238,9 @@ impl Binder {
                     .iter()
                     .filter_map(|fragment| self.namespaces.fragment(*fragment))
                     .collect::<Vec<_>>();
+                // "some ambient fragment lists this member" read off one union instead of
+                // re-scanning every fragment's member list per member (backlog 88).
+                let ambient_members = ambient_member_union(&fragments);
                 let mut members = fragments
                     .iter()
                     .flat_map(|fragment| fragment.members.iter())
@@ -3242,9 +3273,7 @@ impl Binder {
                                 .local_symbol
                                 .and_then(|symbol| self.symbols.get(symbol))
                                 .and_then(|symbol| symbol.value),
-                            ambient: fragments.iter().any(|fragment| {
-                                fragment.members.contains(&member.id) && fragment.ambient
-                            }),
+                            ambient: ambient_members.contains(&member.id),
                             child_namespace,
                             kind: member.kind,
                             publication: member.publication,
@@ -3439,6 +3468,9 @@ impl Binder {
         } else {
             Vec::new()
         };
+        // Same union as the standalone attachment pass: one pass over the fragments instead of
+        // one per member (backlog 88).
+        let ambient_members = ambient_member_union(&fragments);
         let mut members = fragments
             .iter()
             .flat_map(|fragment| fragment.members.iter())
@@ -3466,9 +3498,7 @@ impl Binder {
                         _ => None,
                     },
                     publication: member.publication,
-                    ambient: fragments
-                        .iter()
-                        .any(|fragment| fragment.members.contains(&member.id) && fragment.ambient),
+                    ambient: ambient_members.contains(&member.id),
                 })
             })
             .collect::<Vec<_>>();
@@ -6403,6 +6433,11 @@ fn bind_global(
     );
 }
 
+/// Rows a merge group may hold before [`push_placement`] stops comparing them one by one and
+/// starts keeping a by-declaration index. Scanning below it stays a bounded constant, so the cost
+/// of placing one declaration never grows with its group either side of the line.
+const PLACEMENT_INDEX_THRESHOLD: usize = 8;
+
 #[allow(clippy::too_many_arguments)]
 /// Places `declaration` under `owner`/`name` and returns its row, so a caller that has
 /// more to record reaches it through this one merge-key lookup instead of hunting for
@@ -6444,27 +6479,70 @@ fn push_placement<'state>(
         namespace_instance: None,
     };
     let name = state.namespaces.intern_name(name);
+    let key = MergeKey { owner, name };
     let Ok(entries) = state
         .namespaces
         .placements
-        .get_or_insert_local_with(MergeKey { owner, name }, Arc::default)
+        .get_or_insert_local_with(key, Arc::default)
     else {
         return None;
     };
     // Binding owns the vector outright, so `make_mut` never copies here; classification only
     // starts sharing it once the last placement has landed.
     let entries = Arc::make_mut(entries);
-    // A merge group holds one row per declaration sharing the name, never the project.
-    let index = match entries.iter().position(|entry| {
+    // A merge group holds one row per declaration sharing the name, never the project — and the
+    // overwhelming majority hold one or two, which is cheaper to compare than to index. Only a
+    // group that outgrows the scan takes a by-declaration index, and once it has one a miss in
+    // that index is proof of absence rather than a reason to fall back to the scan.
+    let index = if entries.len() < PLACEMENT_INDEX_THRESHOLD {
+        match entries.iter().position(|entry| {
+            #[cfg(test)]
+            record_placement_row_probe();
+            entry.declaration == declaration
+        }) {
+            Some(index) => index,
+            None => {
+                entries.push(participant);
+                entries.len() - 1
+            }
+        }
+    } else {
+        // Fold in every row the index does not cover yet — once per row over the whole build,
+        // including everything a group placed while it was still below the threshold.
+        let indexed = state
+            .namespaces
+            .placement_rows_indexed
+            .entry(key)
+            .or_default();
+        for (position, entry) in entries.iter().enumerate().skip(*indexed) {
+            #[cfg(test)]
+            record_placement_row_probe();
+            state
+                .namespaces
+                .placement_rows
+                .insert((key, entry.declaration), position);
+        }
         #[cfg(test)]
         record_placement_row_probe();
-        entry.declaration == declaration
-    }) {
-        Some(index) => index,
-        None => {
-            entries.push(participant);
-            entries.len() - 1
-        }
+        let index = match state
+            .namespaces
+            .placement_rows
+            .get(&(key, declaration))
+            .copied()
+        {
+            Some(index) => index,
+            None => {
+                let index = entries.len();
+                entries.push(participant);
+                state
+                    .namespaces
+                    .placement_rows
+                    .insert((key, declaration), index);
+                index
+            }
+        };
+        *indexed = entries.len();
+        index
     };
     let row = entries.get_mut(index)?;
     row.syntax = syntax;

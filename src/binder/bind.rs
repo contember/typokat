@@ -74,6 +74,21 @@ impl SymbolDeclarationAttachWorkScopeForTest {
     }
 }
 
+/// Which key a symbol's declaration list is ordered by. Library binding orders by exact library
+/// file ordinal and every other build by source unit key; the two can disagree, so a list written
+/// under one and continued under the other is not sorted for the second and has to be derived
+/// again rather than inserted into.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum DeclarationOrder {
+    LibraryFileOrdinal,
+    SourceUnit,
+}
+
+/// The total order a symbol's declaration list is kept in: owning source unit, then declaration
+/// span, then binding span, then declaration id. The id makes it total, so no two declarations
+/// compare equal and one binary descent finds the exact slot a full re-sort would have used.
+type DeclarationOrderKey = (u64, u32, u32, u32);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LibraryBinderError {
     EmptyBatch,
@@ -302,6 +317,7 @@ impl LibraryBinderCheckpoint {
                     fn_decl_ids,
                     block_scopes,
                     placement_syntax: FxHashMap::default(),
+                    symbol_declaration_orders: FxHashMap::default(),
                     current_module: module,
                     next_value_storage: decl_count,
                     next_source_key,
@@ -776,6 +792,11 @@ pub(crate) struct BindState {
     /// Build-local on purpose: the readers only ever ask about the local placement
     /// delta, so a sealed base contributes no entry — exactly as the scan it replaces.
     pub(super) placement_syntax: FxHashMap<DeclId, DeclarationSyntaxFacts>,
+    /// The key each symbol's declaration list is currently ordered by. Build-local on purpose:
+    /// a row this build has not attached to yet is derived once on its first attach, which is
+    /// exactly what the snapshot, fork and frozen-continuation seams need, and a build that
+    /// switches key pays one derivation per row it touches afterwards.
+    symbol_declaration_orders: FxHashMap<SymbolId, DeclarationOrder>,
     /// The module scope currently being bound — the disambiguating half of the
     /// scope-map keys (backlog 58). Set before each module's body is walked.
     pub(crate) current_module: ScopeId,
@@ -948,6 +969,13 @@ impl BindState {
             .value_storage = Some(storage);
     }
 
+    /// Append `declaration` to `symbol`'s ordered declaration list.
+    ///
+    /// That list *is* the merge order — it decides which declaration wins and therefore the
+    /// diagnostic text — so the vector this leaves behind must be exactly the one a full re-sort
+    /// would leave. It already is sorted, so one binary descent puts the declaration where a
+    /// stable sort of the appended list would have: after every row ordering at or before it
+    /// (backlog 88). Only a row whose key changed under it is derived again.
     pub(crate) fn attach_symbol_declaration(&mut self, symbol: SymbolId, declaration: DeclId) {
         // A frozen symbol row cannot take the declaration; refuse rather than drop (backlog 102).
         if self.symbols.get_mut(symbol).is_none() {
@@ -957,53 +985,99 @@ impl BindState {
             );
             return;
         }
-        let source_key = |id: DeclId| {
+        // The first declaration of a name needs no order at all, and most names never take a
+        // second one, so the ordered path starts only once the row already holds something.
+        let attached = self
+            .symbols
+            .get(symbol)
+            .map_or(0, |row| row.declarations.len());
+        if attached == 0 {
+            if let Some(row) = self.symbols.get_mut(symbol) {
+                row.declarations.push(declaration);
+            }
+            return;
+        }
+        let ordering = if self.library_module_ordinals.is_empty() {
+            DeclarationOrder::SourceUnit
+        } else {
+            DeclarationOrder::LibraryFileOrdinal
+        };
+        // A one-row list is ordered under every key. A longer one is only insertable if *this*
+        // key ordered it: a row restored across a snapshot or fork seam, or one a library batch
+        // left behind before the key changed, pays one derivation and is inserted into after.
+        let sorted =
+            attached == 1 || self.symbol_declaration_orders.get(&symbol).copied() == Some(ordering);
+        let order_key = |id: DeclId| -> DeclarationOrderKey {
             #[cfg(test)]
             record_symbol_declaration_row_probe();
             self.declarations
                 .get(id)
                 .map(|declaration| {
+                    let unit = match ordering {
+                        DeclarationOrder::LibraryFileOrdinal => u64::try_from(
+                            self.library_module_ordinals
+                                .get(&declaration.site.module)
+                                .copied()
+                                .expect("library declaration has an exact file ordinal")
+                                .index(),
+                        )
+                        .unwrap_or(u64::MAX),
+                        DeclarationOrder::SourceUnit => u64::from(
+                            self.module_sources
+                                .get(&declaration.site.module)
+                                .copied()
+                                .unwrap_or(SourceUnitKey(u32::MAX))
+                                .0,
+                        ),
+                    };
                     (
-                        self.module_sources
-                            .get(&declaration.site.module)
-                            .copied()
-                            .unwrap_or(SourceUnitKey(u32::MAX)),
+                        unit,
                         declaration.site.declaration_span.start,
                         declaration.site.binding_span.start,
                         declaration.id.0,
                     )
                 })
-                .unwrap_or((SourceUnitKey(u32::MAX), u32::MAX, u32::MAX, u32::MAX))
+                .unwrap_or((u64::MAX, u32::MAX, u32::MAX, u32::MAX))
         };
+        let key = order_key(declaration);
+        // Set only where the list below actually ends up ordered by `ordering`. A derivation the
+        // duplicate guard skipped leaves the row under its previous key, exactly as before.
+        let mut derived = attached == 1;
         if let Some(row) = self.symbols.get_mut(symbol) {
-            if !row.declarations.iter().any(|id| {
+            if sorted {
+                let at = row.declarations.partition_point(|id| order_key(*id) <= key);
+                // Only the run sharing this key can already hold the declaration, and the id in
+                // the key keeps that run one row long for every declaration the table still has.
+                let mut run = at;
+                let mut already_listed = false;
+                while let Some(&candidate) = run
+                    .checked_sub(1)
+                    .and_then(|index| row.declarations.get(index))
+                {
+                    if order_key(candidate) != key {
+                        break;
+                    }
+                    if candidate == declaration {
+                        already_listed = true;
+                        break;
+                    }
+                    run -= 1;
+                }
+                if !already_listed {
+                    row.declarations.insert(at, declaration);
+                }
+            } else if !row.declarations.iter().any(|id| {
                 #[cfg(test)]
                 record_symbol_declaration_row_probe();
                 *id == declaration
             }) {
                 row.declarations.push(declaration);
-                if !self.library_module_ordinals.is_empty() {
-                    row.declarations.sort_by_key(|id| {
-                        #[cfg(test)]
-                        record_symbol_declaration_row_probe();
-                        let declaration = self
-                            .declarations
-                            .get(*id)
-                            .expect("library symbol declaration exists");
-                        (
-                            self.library_module_ordinals
-                                .get(&declaration.site.module)
-                                .copied()
-                                .expect("library declaration has an exact file ordinal"),
-                            declaration.site.declaration_span.start,
-                            declaration.site.binding_span.start,
-                            declaration.id.0,
-                        )
-                    });
-                    return;
-                }
-                row.declarations.sort_by_key(|id| source_key(*id));
+                row.declarations.sort_by_key(|id| order_key(*id));
+                derived = true;
             }
+        }
+        if derived {
+            self.symbol_declaration_orders.insert(symbol, ordering);
         }
     }
 }
@@ -1076,6 +1150,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             placement_syntax: FxHashMap::default(),
+            symbol_declaration_orders: FxHashMap::default(),
             current_module: ScopeId(0),
             next_value_storage: 0,
             next_source_key: SourceUnitKey(1),
@@ -1521,6 +1596,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     fn_decl_ids: FxHashMap::default(),
                     block_scopes: FxHashMap::default(),
                     placement_syntax: FxHashMap::default(),
+                    symbol_declaration_orders: FxHashMap::default(),
                     current_module: module,
                     next_value_storage: decl_count,
                     next_source_key,
