@@ -133,6 +133,10 @@ pub struct Binder {
     #[cfg_attr(not(test), allow(dead_code))]
     module_sources: LayeredMap<ScopeId, SourceUnitKey>,
     next_source_key: SourceUnitKey,
+    /// Writes this build refused because their row lives in the frozen library prefix. The
+    /// checker turns each into an incomplete outcome, so a dropped declaration is never silent
+    /// (backlog 102).
+    frozen_prefix_writes: Vec<FrozenPrefixWrite>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,6 +242,7 @@ impl LibraryBinderCheckpoint {
             block_scopes,
             module_sources,
             next_source_key,
+            frozen_prefix_writes,
         } = binder;
         (
             ProjectBinderBuilder {
@@ -257,9 +262,12 @@ impl LibraryBinderCheckpoint {
                     next_value_storage: decl_count,
                     next_source_key,
                     continuation_publication: None,
+                    frozen_prefix_writes,
                 },
                 prelude_module,
                 compilation_global,
+                // Nothing is sealed on the checkpoint path, so it keeps its own routing.
+                delta_compilation_global: None,
                 script_namespace_root,
                 prelude_type_group_count,
                 use_mode: BuilderUseMode::Continuation,
@@ -338,6 +346,7 @@ impl Binder {
             block_scopes: FxHashMap::default(),
             module_sources: self.module_sources.fork_delta()?,
             next_source_key: self.next_source_key,
+            frozen_prefix_writes: Vec::new(),
         })
     }
 
@@ -418,6 +427,11 @@ impl Binder {
             .collect()
     }
 
+    /// Every write this build had to refuse because its row lives in the frozen library prefix.
+    pub(crate) fn frozen_prefix_writes(&self) -> &[FrozenPrefixWrite] {
+        &self.frozen_prefix_writes
+    }
+
     pub(crate) fn snapshot_module_sources(&self) -> &LayeredMap<ScopeId, SourceUnitKey> {
         &self.module_sources
     }
@@ -472,6 +486,7 @@ impl Binder {
                 layered
             },
             next_source_key,
+            frozen_prefix_writes: Vec::new(),
         }
     }
 
@@ -723,9 +738,45 @@ pub(crate) struct BindState {
     /// Running checker storage counter for value declarations.
     pub(crate) next_value_storage: u32,
     continuation_publication: Option<ContinuationPublicationPlan>,
+    /// Writes this build had to refuse because their row belongs to the frozen library prefix,
+    /// in binder order. Recorded rather than dropped so the outcome stops being silence
+    /// (backlog 102); making the merge itself work is backlog 103.
+    frozen_prefix_writes: Vec<FrozenPrefixWrite>,
+}
+
+/// One binder write refused by the frozen library prefix (ADR-0011 forbids mutating a base row).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct FrozenPrefixWrite {
+    /// The user declaration whose effect was refused, when the site owns one.
+    pub declaration: Option<DeclId>,
+    pub site: FrozenPrefixWriteSite,
+}
+
+/// Which binder write a [`FrozenPrefixWrite`] refused.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum FrozenPrefixWriteSite {
+    /// Publishing a name into a frozen scope (`ScopeGraph::declare`).
+    ScopeDeclaration,
+    /// Appending a declaration to a frozen symbol's declaration list.
+    SymbolDeclarationList,
+    /// Rebinding a frozen symbol's value slot.
+    ValueSlot,
+    /// Rebinding a frozen symbol's function-value slots.
+    FunctionValueSlot,
+    /// Rebinding a frozen symbol's import slots.
+    ImportSlot,
 }
 
 impl BindState {
+    pub(super) fn record_frozen_prefix_write(
+        &mut self,
+        declaration: Option<DeclId>,
+        site: FrozenPrefixWriteSite,
+    ) {
+        self.frozen_prefix_writes
+            .push(FrozenPrefixWrite { declaration, site });
+    }
+
     fn continuation_publication_scope(
         &self,
         lexical_scope: ScopeId,
@@ -848,6 +899,14 @@ impl BindState {
     }
 
     pub(crate) fn attach_symbol_declaration(&mut self, symbol: SymbolId, declaration: DeclId) {
+        // A frozen symbol row cannot take the declaration; refuse rather than drop (backlog 102).
+        if self.symbols.get_mut(symbol).is_none() {
+            self.record_frozen_prefix_write(
+                Some(declaration),
+                FrozenPrefixWriteSite::SymbolDeclarationList,
+            );
+            return;
+        }
         let source_key = |id: DeclId| {
             self.declarations
                 .get(id)
@@ -907,6 +966,10 @@ pub(crate) struct ProjectBinderBuilder<'ast> {
     state: BindState,
     prelude_module: ScopeId,
     compilation_global: ScopeId,
+    /// Where a **script** file's top-level declarations publish while continuing a frozen
+    /// library. The prefix `compilation_global` is sealed, so the user run needs its own
+    /// writable global scope layered above it (backlog 102). `None` outside a continuation.
+    delta_compilation_global: Option<ScopeId>,
     script_namespace_root: ScopeId,
     prelude_type_group_count: u32,
     use_mode: BuilderUseMode,
@@ -959,6 +1022,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             next_value_storage: 0,
             next_source_key: SourceUnitKey(1),
             continuation_publication: None,
+            frozen_prefix_writes: Vec::new(),
         };
 
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
@@ -981,6 +1045,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             state,
             prelude_module,
             compilation_global,
+            delta_compilation_global: None,
             script_namespace_root,
             prelude_type_group_count,
             use_mode: BuilderUseMode::Pristine,
@@ -1105,9 +1170,15 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 continue;
             }
             let symbol = self.state.symbols.push(Symbol::new(name.clone()));
-            self.state
+            if self
+                .state
                 .graph
-                .declare(self.script_namespace_root, &name, symbol);
+                .declare(self.script_namespace_root, &name, symbol)
+                .is_err()
+            {
+                self.state
+                    .record_frozen_prefix_write(None, FrozenPrefixWriteSite::ScopeDeclaration);
+            }
         }
     }
 
@@ -1130,10 +1201,16 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             }
             BuilderUseMode::Continuation => {}
         }
+        // Every continuation module hangs off the delta global layer, so a script global one
+        // file publishes is visible from the next file regardless of input order (backlog 102).
+        let module_parent = match self.delta_compilation_global {
+            Some(_) => self.script_namespace_root,
+            None => self.prelude_module,
+        };
         let module = self
             .state
             .graph
-            .push(Scope::new(ScopeKind::Module, Some(self.prelude_module)));
+            .push(Scope::new(ScopeKind::Module, Some(module_parent)));
         self.state.current_module = module;
         self.state.record_module_source(module, unit.source);
         self.state.record_source_declarations(program);
@@ -1147,9 +1224,15 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     .remove(&unit.source)
                     .expect("continuation source has one publication plan"),
             );
+            // A script file contributes to the project-wide global scope — the same rule the
+            // library batch applies to its own script files, one layer up.
+            let ordinary_scope = match self.delta_compilation_global {
+                Some(delta) if !unit.binding.external_module => delta,
+                _ => module,
+            };
             bind_library_statements(
                 &mut self.state,
-                module,
+                ordinary_scope,
                 &program.body,
                 unit,
                 self.compilation_global,
@@ -1161,6 +1244,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 unit,
                 self.compilation_global,
                 self.script_namespace_root,
+                self.delta_compilation_global,
             );
         } else {
             bind_statements(&mut self.state, module, &program.body);
@@ -1171,6 +1255,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 unit,
                 self.compilation_global,
                 self.script_namespace_root,
+                None,
             );
         }
         // The attachment fill publishes through the same plan, so it travels with the module
@@ -1303,9 +1388,11 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
         self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
-        self.state
-            .namespaces
-            .finalize_global_scopes(&mut self.state.graph, &mut self.state.symbols);
+        self.state.namespaces.finalize_global_scopes(
+            &mut self.state.graph,
+            &mut self.state.symbols,
+            &mut self.state.frozen_prefix_writes,
+        );
         Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
@@ -1323,6 +1410,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
             next_source_key: self.state.next_source_key,
+            frozen_prefix_writes: self.state.frozen_prefix_writes,
         }
     }
 
@@ -1346,10 +1434,17 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             block_scopes: _,
             module_sources,
             next_source_key,
+            frozen_prefix_writes,
         } = binder;
+        // The frozen chain below is unwritable, so the user suffix gets its own global layer
+        // above it; script files publish here instead of into the sealed prefix (backlog 102).
+        let delta_compilation_global = graph.push(Scope::new(
+            ScopeKind::CompilationGlobal,
+            Some(script_namespace_root),
+        ));
         let delta_script_namespace_root = graph.push(Scope::new(
             ScopeKind::ScriptNamespaceRoot,
-            Some(script_namespace_root),
+            Some(delta_compilation_global),
         ));
         let prelude_type_group_count =
             u32::try_from(type_groups.len()).expect("frozen type group count fits u32");
@@ -1372,9 +1467,11 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     next_value_storage: decl_count,
                     next_source_key,
                     continuation_publication: None,
+                    frozen_prefix_writes,
                 },
                 prelude_module,
                 compilation_global,
+                delta_compilation_global: Some(delta_compilation_global),
                 script_namespace_root: delta_script_namespace_root,
                 prelude_type_group_count,
                 use_mode: BuilderUseMode::Continuation,
@@ -1424,6 +1521,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
             next_source_key: self.state.next_source_key,
+            frozen_prefix_writes: self.state.frozen_prefix_writes,
         })
     }
 
@@ -2108,8 +2206,10 @@ fn declare_value(
 ) {
     let scope = state.declaration_publication_scope(scope, declaration);
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
-        if let Some(symbol) = state.symbols.get_mut(existing) {
-            symbol.value = Some(storage);
+        match state.symbols.get_mut(existing) {
+            Some(symbol) => symbol.value = Some(storage),
+            None => state
+                .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ValueSlot),
         }
         state.attach_symbol_declaration(existing, declaration);
         return;
@@ -2117,7 +2217,10 @@ fn declare_value(
     let mut symbol = Symbol::new(name);
     symbol.value = Some(storage);
     let symbol_id: SymbolId = state.symbols.push(symbol);
-    state.graph.declare(scope, name, symbol_id);
+    if state.graph.declare(scope, name, symbol_id).is_err() {
+        state
+            .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ScopeDeclaration);
+    }
     state.attach_symbol_declaration(symbol_id, declaration);
 }
 
@@ -2130,9 +2233,15 @@ fn declare_function_value(
 ) {
     let scope = state.declaration_publication_scope(scope, declaration);
     if let Some(existing) = state.graph.get(scope).and_then(|s| s.lookup_local(name)) {
-        if let Some(symbol) = state.symbols.get_mut(existing) {
-            symbol.value = Some(storage);
-            symbol.function_values.push(storage);
+        match state.symbols.get_mut(existing) {
+            Some(symbol) => {
+                symbol.value = Some(storage);
+                symbol.function_values.push(storage);
+            }
+            None => state.record_frozen_prefix_write(
+                Some(declaration),
+                FrozenPrefixWriteSite::FunctionValueSlot,
+            ),
         }
         state.attach_symbol_declaration(existing, declaration);
         return;
@@ -2141,7 +2250,10 @@ fn declare_function_value(
     symbol.value = Some(storage);
     symbol.function_values.push(storage);
     let symbol_id: SymbolId = state.symbols.push(symbol);
-    state.graph.declare(scope, name, symbol_id);
+    if state.graph.declare(scope, name, symbol_id).is_err() {
+        state
+            .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ScopeDeclaration);
+    }
     state.attach_symbol_declaration(symbol_id, declaration);
 }
 
@@ -2256,7 +2368,10 @@ pub(super) fn declare_type(
     symbol.ty = Some(group);
     symbol.owns_type_group = true;
     let symbol_id: SymbolId = state.symbols.push(symbol);
-    state.graph.declare(target_scope, name, symbol_id);
+    if state.graph.declare(target_scope, name, symbol_id).is_err() {
+        state
+            .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ScopeDeclaration);
+    }
     state.attach_symbol_declaration(symbol_id, declaration);
 }
 
@@ -2290,12 +2405,16 @@ fn declare_import(
         .get(scope)
         .and_then(|s| s.lookup_local(&import.name))
     {
-        if let Some(symbol) = state.symbols.get_mut(existing) {
-            symbol.value = value_decl;
-            symbol.ty = type_group;
-            symbol.owns_type_group = false;
-            symbol.blocks_value_lookup = import.value_barrier;
-            symbol.blocks_type_lookup = import.type_barrier;
+        match state.symbols.get_mut(existing) {
+            Some(symbol) => {
+                symbol.value = value_decl;
+                symbol.ty = type_group;
+                symbol.owns_type_group = false;
+                symbol.blocks_value_lookup = import.value_barrier;
+                symbol.blocks_type_lookup = import.type_barrier;
+            }
+            None => state
+                .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ImportSlot),
         }
         state.attach_symbol_declaration(existing, declaration);
         return ImportPlaceholder {
@@ -2309,7 +2428,10 @@ fn declare_import(
     symbol.blocks_value_lookup = import.value_barrier;
     symbol.blocks_type_lookup = import.type_barrier;
     let symbol_id: SymbolId = state.symbols.push(symbol);
-    state.graph.declare(scope, &import.name, symbol_id);
+    if state.graph.declare(scope, &import.name, symbol_id).is_err() {
+        state
+            .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ScopeDeclaration);
+    }
     state.attach_symbol_declaration(symbol_id, declaration);
     ImportPlaceholder {
         value: value_placeholder,
@@ -2685,10 +2807,22 @@ with (source) { var RegExp = 1; }
             .expect("plain-script namespace suffix freezes");
 
         assert!(binder.script_namespace_root.index() >= frozen_scope_count);
+        // The delta root hangs off the delta global layer, which in turn continues the frozen
+        // chain: user script globals are writable without ever touching the sealed prefix.
+        let delta_global = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .and_then(|scope| scope.parent)
+            .expect("delta script root has a parent");
+        assert!(delta_global.index() >= frozen_scope_count);
+        assert_eq!(
+            binder.graph.get(delta_global).map(|scope| scope.kind),
+            Some(ScopeKind::CompilationGlobal)
+        );
         assert_eq!(
             binder
                 .graph
-                .get(binder.script_namespace_root)
+                .get(delta_global)
                 .and_then(|scope| scope.parent),
             Some(frozen_script_root)
         );
@@ -4507,5 +4641,132 @@ namespace Standalone { export const value = 1; }
             })
             .expect("inner function scope");
         assert_ne!(outer_scope, inner_scope);
+    }
+
+    /// Backlog 102: a delta write aimed at a library-owned row is refused, not dropped. Every
+    /// refusal reaches the caller as a typed [`FrozenPrefixWrite`] naming its own declaration.
+    #[test]
+    fn frozen_prefix_writes_are_recorded_instead_of_dropped() {
+        let library_allocator = Allocator::default();
+        let library = Parser::new(
+            &library_allocator,
+            "declare var libraryValue: string;\ndeclare function libraryFn(input: string): string;\n",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(library.diagnostics.is_empty());
+        let (mut base, _) = bind_libraries(&[(
+            &library.program,
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+        )]);
+        base.freeze_as_base().expect("binder base freezes once");
+
+        let user_allocator = Allocator::default();
+        let user = Parser::new(
+            &user_allocator,
+            "declare var libraryValue: number;\ndeclare function libraryFn(a: number, b: number): number;\n",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(user.diagnostics.is_empty());
+        let delta = base.fork_delta().expect("private binder delta");
+        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(delta);
+        let unit = CompilationUnit::implementation(source, &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, unit)]);
+        let (module, _) = builder.add_module(&user.program, &[], unit);
+        let binder = builder
+            .finish_frozen_library_continuation(module)
+            .expect("colliding suffix still binds");
+
+        let sites = binder
+            .frozen_prefix_writes()
+            .iter()
+            .map(|write| write.site)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sites,
+            [
+                FrozenPrefixWriteSite::ValueSlot,
+                FrozenPrefixWriteSite::SymbolDeclarationList,
+                FrozenPrefixWriteSite::FunctionValueSlot,
+                FrozenPrefixWriteSite::SymbolDeclarationList,
+            ]
+        );
+        assert!(
+            binder
+                .frozen_prefix_writes()
+                .iter()
+                .all(|write| write.declaration.is_some()),
+            "every refusal names the declaration whose effect was refused"
+        );
+        // The base rows themselves are untouched: the library declarations still win.
+        let value = binder
+            .resolve_value(binder.module, "libraryValue")
+            .expect("library value survives the refused write");
+        assert!(value.index() < base.symbols.len());
+    }
+
+    /// The complementary half: a fresh script global publishes into the delta layer and refuses
+    /// nothing, so the ledger stays empty on the ordinary path.
+    #[test]
+    fn fresh_script_globals_publish_without_refusing_a_frozen_write() {
+        let library_allocator = Allocator::default();
+        let library = Parser::new(
+            &library_allocator,
+            "declare var libraryValue: string;\n",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(library.diagnostics.is_empty());
+        let (mut base, _) = bind_libraries(&[(
+            &library.program,
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+        )]);
+        base.freeze_as_base().expect("binder base freezes once");
+
+        let declare_allocator = Allocator::default();
+        let declare = Parser::new(
+            &declare_allocator,
+            "declare var freshGlobal: number;\ninterface FreshShape { name: string }\n",
+            SourceType::ts(),
+        )
+        .parse();
+        let consume_allocator = Allocator::default();
+        let consume = Parser::new(
+            &consume_allocator,
+            "declare const witness: FreshShape;\nconst read = freshGlobal;\n",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(declare.diagnostics.is_empty() && consume.diagnostics.is_empty());
+
+        let delta = base.fork_delta().expect("private binder delta");
+        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(delta);
+        let declare_unit = CompilationUnit::implementation(source, &declare.program);
+        let consume_unit =
+            CompilationUnit::implementation(SourceUnitKey(source.0 + 1), &consume.program);
+        builder.reserve_script_namespace_roots([
+            (&declare.program, declare_unit),
+            (&consume.program, consume_unit),
+        ]);
+        let (_declare_module, _) = builder.add_module(&declare.program, &[], declare_unit);
+        let (consume_module, _) = builder.add_module(&consume.program, &[], consume_unit);
+        let binder = builder
+            .finish_frozen_library_continuation(consume_module)
+            .expect("fresh-global suffix binds");
+
+        assert_eq!(binder.frozen_prefix_writes(), &[]);
+        assert!(
+            binder
+                .resolve_value(consume_module, "freshGlobal")
+                .is_some(),
+            "a fresh script value global is visible from another file"
+        );
+        assert!(
+            binder.resolve_type(consume_module, "FreshShape").is_some(),
+            "a fresh script type global is visible from another file"
+        );
     }
 }

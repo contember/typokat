@@ -721,6 +721,9 @@ where
     )
 }
 
+/// The incomplete identity a refused frozen-prefix write reports under (backlog 102).
+const FROZEN_LIBRARY_MERGE_REFUSED: &str = "bind/frozen-library-global/merge-refused";
+
 pub(in crate::check::checker) fn check_bound_user_program<'ast, F>(
     interner: &mut Interner,
     binder: Binder,
@@ -875,6 +878,8 @@ where
     for effects in external_effects.into_values() {
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
+
+    pass.record_frozen_prefix_writes();
 
     // Phase 0: fill named type declarations before walking values.
     pass.fill_type_decls(binder.module);
@@ -1354,6 +1359,7 @@ where
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
 
+    pass.record_frozen_prefix_writes();
     pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
     let standalone_modules = module_scopes
         .iter()
@@ -1370,14 +1376,40 @@ where
     pass.publish_type_groups();
     pass.validate_published_class_surfaces();
 
+    // Script globals span the whole project here, so the hoist reservations every module
+    // contributes must all be in place before the first module executes — otherwise a forward
+    // `declare var`/`function` reads an unfilled slot and its errors vanish (backlog 102).
+    let mut module_surfaces = Vec::with_capacity(units.len());
     for (scope, unit) in module_scopes.iter().copied().zip(units) {
         pass.current_module = scope;
         pass.current_source = SourceUnit::User {
             module_ordinal: unit.module_ordinal,
             unit_slot: unit.unit_slot,
         };
+        let surfaces = pass.reserve_function_surfaces(scope, &unit.program.body);
+        pass.reserve_var_annotation_surfaces(scope, &unit.program.body);
+        module_surfaces.push(surfaces);
+    }
+    for ((scope, unit), mut surfaces) in module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(module_surfaces)
+    {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
         pass.build_flow_graph(scope, &unit.program.body);
-        pass.check_statements(scope, &unit.program.body);
+        let mut no_return = None;
+        pass.check_statement_list_with_surfaces(
+            scope,
+            &unit.program.body,
+            None,
+            &mut no_return,
+            &mut surfaces,
+        );
         emit_test_incomplete(&mut pass);
     }
     #[cfg(test)]
@@ -1982,6 +2014,7 @@ where
         pass.enqueue_effects(CheckerEffects::from_records(effects));
     }
 
+    pass.record_frozen_prefix_writes();
     pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
 
     let standalone_modules = module_scopes
@@ -3570,6 +3603,43 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
                 DeferredRelationObligation::AssertionCompatibility(obligation),
                 owner,
             );
+    }
+
+    /// Turn every binder write refused by the frozen library prefix into an incomplete outcome at
+    /// its own declaration. ADR-0011 forbids mutating a base row, so the declaration cannot take
+    /// effect; recording it is what keeps the drop from being silent (backlog 102). Making the
+    /// merge succeed is backlog 103. Entries without a declaration carry no source position and
+    /// stay in the binder ledger only.
+    pub(in crate::check::checker) fn record_frozen_prefix_writes(&mut self) {
+        let refused: Vec<crate::binder::bind::FrozenPrefixWrite> =
+            self.binder.frozen_prefix_writes().to_vec();
+        let mut reported = rustc_hash::FxHashSet::default();
+        for write in refused {
+            let Some(declaration) = write.declaration else {
+                continue;
+            };
+            if !reported.insert(declaration) {
+                continue;
+            }
+            let Some(span) = self
+                .binder
+                .declarations
+                .get(declaration)
+                .map(|lexical| lexical.site.binding_span)
+            else {
+                continue;
+            };
+            let Some(owner) = self.lexical_events.declaration_owner(declaration) else {
+                continue;
+            };
+            self.with_ticket_effects(owner.ticket, |pass| {
+                pass.record_incomplete(
+                    FROZEN_LIBRARY_MERGE_REFUSED,
+                    span,
+                    "user declaration cannot merge into the frozen default-library global",
+                );
+            });
+        }
     }
 
     pub(in crate::check::checker) fn schedule_override(&mut self, check: OverrideCheck) {

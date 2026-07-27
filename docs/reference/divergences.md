@@ -270,6 +270,33 @@ and validated the same way.
   and stays release-owned by backlog `18`.
   <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
+### Frozen default-library prefix (backlog `102` / `103`)
+
+On the `Library` base the library's binder tables are a sealed prefix a user delta may never
+mutate ([ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)). Backlog `102`
+made every refused write **recorded** rather than silent: the declaration reports
+`incomplete[bind/frozen-library-global/merge-refused]` at its own binding, and the run exits
+`3`. What the merge should have *produced* is backlog `103`'s, so these remain divergences.
+Fresh script-scope globals are unaffected — they publish into the delta global layer and are
+ordinary declarations. Every row below is pinned by the `b102_frozen_prefix_writes/` corpus and
+cross-checked against `tsc 6.0.3 --strict --target es2025 --noEmit`.
+
+- `TK2403` *subsequent variable declarations must have the same type* is not emitted when a
+  script `var` redeclares a library global with a different type; the library declaration wins
+  and only the resulting assignment errors are reported.
+  <!-- div: id=library/var-redeclaration-type dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_var_merge.ts -->
+- `TK2451` *cannot redeclare block-scoped variable* is not emitted when a script `const`/`let`
+  collides with a library value (tsc reports it on the library declarations too).
+  <!-- div: id=library/const-redeclaration dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_const_merge.ts -->
+- `TK2300` *duplicate identifier* is not emitted when a script declaration collides with a
+  library declaration in another declaration space.
+  <!-- div: id=library/duplicate-identifier dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_duplicate_identifier.ts -->
+- **Over-report:** a user overload of a library function cannot be appended to the frozen
+  symbol, so calls that match only the user's signature are rejected against the library
+  signature (`TK2554`/`TK2345`) where tsc is clean. The safe direction, but a false positive on
+  legal input.
+  <!-- div: id=library/refused-overload-arity dir=over scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_function_overload_merge.ts -->
+
 ### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,

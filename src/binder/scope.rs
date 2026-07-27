@@ -8,6 +8,10 @@ use crate::binder::symbol::SymbolId;
 use crate::types::layered::LayeredVec;
 use rustc_hash::FxHashMap;
 
+/// A refused write into a scope that belongs to the frozen library prefix.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct FrozenScopeWrite;
+
 /// Index of a scope within the scope graph.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ScopeId(pub u32);
@@ -144,15 +148,18 @@ impl ScopeGraph {
     }
 
     /// Declare `name → symbol` directly in `scope`; duplicate-name diagnostics are deferred.
+    ///
+    /// `Err` means `scope` lives in a frozen prefix a delta may not mutate (ADR-0011). The write
+    /// is refused rather than silently dropped so the caller must decide (backlog 102).
     pub fn declare(
         &mut self,
         scope: ScopeId,
         name: impl Into<String>,
         symbol: SymbolId,
-    ) -> Option<SymbolId> {
+    ) -> Result<Option<SymbolId>, FrozenScopeWrite> {
         match self.get_mut(scope) {
-            Some(s) => s.symbols.insert(name.into(), symbol),
-            None => None,
+            Some(s) => Ok(s.symbols.insert(name.into(), symbol)),
+            None => Err(FrozenScopeWrite),
         }
     }
 

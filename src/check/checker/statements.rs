@@ -1046,7 +1046,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     /// Reserve explicit `var` annotations from the complete lexical subtree of one
     /// function/module. Nested functions and classes establish their own boundaries.
-    fn reserve_var_annotation_surfaces(&mut self, scope: ScopeId, statements: &[Statement<'_>]) {
+    pub(in crate::check::checker) fn reserve_var_annotation_surfaces(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+    ) {
         for statement in statements {
             self.reserve_var_annotation_statement(scope, statement);
         }
@@ -1297,7 +1301,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Reserve every direct function declaration in a statement list before any of
     /// its executable statements run. Consecutive M33 groups publish their visible
     /// overload object immediately; ordinary functions publish their own signature.
-    fn reserve_function_surfaces(
+    pub(in crate::check::checker) fn reserve_function_surfaces(
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],

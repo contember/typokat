@@ -6,12 +6,12 @@
 
 use crate::binder::bind::{
     bind_class_declaration, bind_declarator, bind_function_declaration, declare_type, BindState,
-    Binder,
+    Binder, FrozenPrefixWrite, FrozenPrefixWriteSite,
 };
 use crate::binder::declaration::{
     DeclId, DeclarationKind, DeclarationSite, TypeFragmentKind, TypeGroupId, ValueStorageId,
 };
-use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
+use crate::binder::scope::{FrozenScopeWrite, Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 #[cfg(test)]
 use crate::source::LibraryFileOrdinal;
@@ -1531,7 +1531,12 @@ impl NamespaceTable {
     }
 
     /// Freeze legal global publication, then connect every user module in one cutover.
-    pub(crate) fn finalize_global_scopes(&self, graph: &mut ScopeGraph, symbols: &mut SymbolTable) {
+    pub(crate) fn finalize_global_scopes(
+        &self,
+        graph: &mut ScopeGraph,
+        symbols: &mut SymbolTable,
+        refused: &mut Vec<FrozenPrefixWrite>,
+    ) {
         let compilation_global = self
             .compilation_global
             .expect("compilation-global scope allocated");
@@ -1607,19 +1612,31 @@ impl NamespaceTable {
             .filter(|global| global.issues.is_empty())
         {
             for (name, symbol) in &safe_symbols {
-                let replaced = graph.declare(global.overlay_scope, name.clone(), *symbol);
-                assert_idempotent_overlay_publication(
-                    replaced,
-                    *symbol,
-                    "global overlay cannot replace a different frozen symbol",
-                );
+                // An overlay scope is always delta-side; a refusal is recorded, never dropped.
+                match graph.declare(global.overlay_scope, name.clone(), *symbol) {
+                    Ok(replaced) => assert_idempotent_overlay_publication(
+                        replaced,
+                        *symbol,
+                        "global overlay cannot replace a different frozen symbol",
+                    ),
+                    Err(FrozenScopeWrite) => refused.push(FrozenPrefixWrite {
+                        declaration: None,
+                        site: FrozenPrefixWriteSite::ScopeDeclaration,
+                    }),
+                }
             }
             for (name, previous, symbol) in &blocked_symbols {
-                let replaced = graph.declare(global.overlay_scope, name.clone(), *symbol);
-                assert!(
-                    replaced.is_none_or(|existing| existing == *symbol || existing == *previous),
-                    "global overlay blocker cannot replace an unrelated symbol"
-                );
+                match graph.declare(global.overlay_scope, name.clone(), *symbol) {
+                    Ok(replaced) => assert!(
+                        replaced
+                            .is_none_or(|existing| existing == *symbol || existing == *previous),
+                        "global overlay blocker cannot replace an unrelated symbol"
+                    ),
+                    Err(FrozenScopeWrite) => refused.push(FrozenPrefixWrite {
+                        declaration: None,
+                        site: FrozenPrefixWriteSite::ScopeDeclaration,
+                    }),
+                }
             }
         }
 
@@ -4240,6 +4257,9 @@ impl WalkContext {
 pub(super) enum NamespaceMetadataRoot {
     Module,
     LibrarySharedGlobal,
+    /// A user suffix continuing a frozen library: script files own the delta global layer,
+    /// because the library's own global scope is sealed (backlog 102).
+    ContinuationSharedGlobal(ScopeId),
 }
 
 /// Collect namespace topology after ordinary declarations.
@@ -4270,6 +4290,14 @@ pub(super) fn collect_namespace_metadata(
         }
         NamespaceMetadataRoot::LibrarySharedGlobal => {
             (DeclarationOwner::CompilationGlobal, compilation_global)
+        }
+        NamespaceMetadataRoot::ContinuationSharedGlobal(_) if unit.binding.external_module => {
+            (DeclarationOwner::Lexical(module), module)
+        }
+        // A delta-side *lexical* owner: one project-wide domain that merges user script globals
+        // with each other, while the sealed library domain stays untouched.
+        NamespaceMetadataRoot::ContinuationSharedGlobal(delta_global) => {
+            (DeclarationOwner::Lexical(delta_global), delta_global)
         }
     };
     let context = WalkContext {
@@ -4311,6 +4339,7 @@ pub(crate) fn collect_project_namespace_metadata(
     unit: CompilationUnit,
     compilation_global: ScopeId,
     script_namespace_root: ScopeId,
+    delta_compilation_global: Option<ScopeId>,
 ) {
     collect_namespace_metadata(
         state,
@@ -4319,7 +4348,10 @@ pub(crate) fn collect_project_namespace_metadata(
         unit,
         compilation_global,
         script_namespace_root,
-        NamespaceMetadataRoot::Module,
+        match delta_compilation_global {
+            Some(delta) => NamespaceMetadataRoot::ContinuationSharedGlobal(delta),
+            None => NamespaceMetadataRoot::Module,
+        },
     );
     publish_continuation_hoisted_variables(state, unit);
 }
@@ -5841,7 +5873,9 @@ fn dormant_symbol_in_scope(state: &mut BindState, scope: ScopeId, name: &str) ->
         return symbol;
     }
     let symbol = state.symbols.push(Symbol::new(name));
-    state.graph.declare(scope, name, symbol);
+    if state.graph.declare(scope, name, symbol).is_err() {
+        state.record_frozen_prefix_write(None, FrozenPrefixWriteSite::ScopeDeclaration);
+    }
     symbol
 }
 

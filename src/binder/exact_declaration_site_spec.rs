@@ -137,6 +137,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
                 && !line.starts_with("pub ")
                 && *line != "module_sources: LayeredMap<ScopeId, SourceUnitKey>,"
                 && *line != "next_source_key: SourceUnitKey,"
+                && *line != "frozen_prefix_writes: Vec<FrozenPrefixWrite>,"
         })
         .collect::<Vec<_>>();
     assert!(
