@@ -1720,7 +1720,9 @@ pub(crate) struct InjectedProfileRun {
     pub(crate) reserved_file_ordinals: Vec<LibraryFileOrdinal>,
     #[cfg(test)]
     pub(crate) reporting_receipts: Vec<LibraryReportingReceipt>,
-    #[cfg(test)]
+    /// The library's own records — empty unless the caller asked for
+    /// [`LibraryRecordRetention::Collect`]. Nothing downstream of a compile retains them
+    /// (ADR-0018).
     pub(crate) library_records: Vec<(LibraryEventKey, CheckerRecord)>,
     #[cfg(test)]
     pub(crate) pass_source_units: Vec<ExactUnit>,
@@ -3555,29 +3557,70 @@ pub(crate) enum ReplayIndexPlan {
     Deferred,
 }
 
+/// Whether a compile hands its own records back, or drops them with the ledger.
+///
+/// The library's records are not user-facing errors — they are typokat's own model gaps
+/// against a library real `tsc` checks clean — so no process retains them and the pinned
+/// suite census is their sole witness (ADR-0018). Draining the ledger is still the
+/// completeness gate every compile pays; only handing the drained records onward is optional.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LibraryRecordRetention {
+    /// Drop the records with the ledger. The production route to a base uses this.
+    Drop,
+    /// Hand the records back to a caller that asked for them explicitly.
+    Collect,
+}
+
 /// Compile a profile into its complete runtime product, collision replay index included.
 pub(crate) fn compile_owned_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
-        compile_owned_injected_frontend(frontend, ReplayIndexPlan::Assemble)
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::Assemble,
+            LibraryRecordRetention::Collect,
+        )
     })
 }
 
 /// Compile a profile into the runtime state a shared default-library base is sealed from.
 ///
-/// Replay-index assembly is deferred to the run that collides (ADR-0017).
+/// Replay-index assembly is deferred to the run that collides (ADR-0017), and the library's
+/// own records are dropped rather than carried into the base (ADR-0018).
 pub(crate) fn compile_owned_injected_base_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
-        compile_owned_injected_frontend(frontend, ReplayIndexPlan::Deferred)
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::Deferred,
+            LibraryRecordRetention::Drop,
+        )
     })
+}
+
+/// Compile a profile for its own records alone, then drop the semantic product.
+///
+/// The deliberate inspection route behind [`crate::library::LibraryRecordCensus`]: it costs a
+/// full source compilation and answers only to a caller that asked (ADR-0018).
+pub(crate) fn compile_owned_injected_records(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<Vec<(LibraryEventKey, CheckerRecord)>, InjectedProfileError> {
+    with_canonical_library_frontend(sources, |frontend| {
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::Deferred,
+            LibraryRecordRetention::Collect,
+        )
+    })
+    .map(|(run, _)| run.library_records)
 }
 
 fn compile_owned_injected_frontend(
     frontend: CanonicalLibraryFrontend<'_, '_>,
     replay_index_plan: ReplayIndexPlan,
+    record_retention: LibraryRecordRetention,
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     let CanonicalLibraryFrontend {
         canonical,
@@ -3909,8 +3952,10 @@ fn compile_owned_injected_frontend(
         reserved_file_ordinals: snapshot.reserved_file_ordinals,
         #[cfg(test)]
         reporting_receipts,
-        #[cfg(test)]
-        library_records,
+        library_records: match record_retention {
+            LibraryRecordRetention::Drop => Vec::new(),
+            LibraryRecordRetention::Collect => library_records,
+        },
         #[cfg(test)]
         pass_source_units,
         #[cfg(test)]
@@ -7153,6 +7198,31 @@ mod tests {
         };
         assert_eq!(run.library_records[0].0.source_start, 23);
         assert_eq!(diagnostic.span.start, 6);
+    }
+
+    /// The route to a shared base drops the library's records; only an explicit inspection
+    /// caller collects them (ADR-0018). The ledger is still drained on both routes — that drain
+    /// is the completeness gate, not the retention.
+    #[test]
+    fn the_base_route_retains_no_record_while_the_census_route_collects_them() {
+        let injected = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(7),
+            name: "broken.ts",
+            source: "const broken: number = 'wrong';",
+        }];
+
+        let (base_run, _base_state) =
+            compile_owned_injected_base_profile(&injected).expect("base-route injected profile");
+        assert!(base_run.library_records.is_empty());
+        assert_eq!(
+            base_run.phase_counts.reserved_records,
+            base_run.phase_counts.filled_records
+        );
+
+        let collected =
+            compile_owned_injected_records(&injected).expect("census-route injected profile");
+        assert_eq!(collected.len(), 1);
+        assert!(matches!(collected[0].1, CheckerRecord::Diagnostic(_)));
     }
 
     #[test]

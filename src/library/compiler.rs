@@ -267,8 +267,10 @@ impl LibraryCompiler {
 
 /// Compile a profile straight into the owned runtime state the frozen base is sealed from.
 ///
-/// This is the production route to a default-library base: no artifact is admitted, and the
-/// collision replay index `compile` assembles is deferred to the run that collides (ADR-0017).
+/// This is the production route to a default-library base: no artifact is admitted, the
+/// collision replay index `compile` assembles is deferred to the run that collides (ADR-0017),
+/// and the library's own records are dropped rather than retained (ADR-0018) — the pinned suite
+/// census in `tests/library_owned_records.rs` is their witness.
 pub(crate) fn compile_owned_library_runtime(
     profile: &ExactLibraryProfile,
 ) -> Result<OwnedLibraryRuntimeState, LibraryCompilerError> {
@@ -294,9 +296,9 @@ pub(crate) fn compile_owned_library_runtime(
     Ok(runtime)
 }
 
-type OwnedLibrarySource = (LibraryFileOrdinal, String, String);
+pub(super) type OwnedLibrarySource = (LibraryFileOrdinal, String, String);
 
-fn owned_library_sources(
+pub(super) fn owned_library_sources(
     sources: &[ExactLibrarySource],
 ) -> Result<Vec<OwnedLibrarySource>, LibraryCompilerError> {
     sources
@@ -313,7 +315,9 @@ fn owned_library_sources(
         .collect()
 }
 
-fn injected_library_sources(owned: &[OwnedLibrarySource]) -> Vec<InjectedLibrarySource<'_>> {
+pub(super) fn injected_library_sources(
+    owned: &[OwnedLibrarySource],
+) -> Vec<InjectedLibrarySource<'_>> {
     owned
         .iter()
         .map(|(ordinal, name, source)| InjectedLibrarySource {
@@ -399,9 +403,9 @@ mod tests {
 
     /// The canonical evidence projection is a suite assertion, not compile work (ADR-0017).
     ///
-    /// It still pins the library's own records byte-for-byte: the blobs are rendered here from
-    /// the same records the base carries, so a drift in any diagnostic or incomplete outcome
-    /// moves a digest below.
+    /// It pins the library's own records byte-for-byte, but a digest only ever says that
+    /// something moved. What moved is named by `tests/library_owned_records.rs` against
+    /// `tests/fixtures/library-owned-records.txt` (ADR-0018); read that pin first.
     #[test]
     fn library_records_project_to_their_pinned_canonical_evidence() {
         let profile = ExactLibraryProfile::load_packaged().expect("exact packaged profile");

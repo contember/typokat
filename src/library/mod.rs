@@ -3,6 +3,7 @@ mod collision_preflight;
 pub mod compiler;
 pub mod profile;
 mod provider;
+pub mod records;
 
 pub use crate::source::LibraryFileOrdinal;
 /// Immutable canonical library state shared by user checks.
@@ -16,6 +17,11 @@ pub use base::FrozenLibraryBase;
 pub use provider::{
     LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage,
     LibraryProjectBinderContinuation,
+};
+/// The library's own records are inspectable only by asking for them (ADR-0018); no base,
+/// provider, or check retains one.
+pub use records::{
+    LibraryRecordCensus, LibraryRecordCensusDifference, LibraryRecordEntry, LibraryRecordKind,
 };
 
 pub(crate) use collision_preflight::CollisionFreeUserDeltaCapability;

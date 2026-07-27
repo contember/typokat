@@ -57,6 +57,11 @@ const PROJECTION_SUBTABLES: [&str; 32] = [
     "next-ids",
 ];
 
+/// The immutable universe every non-colliding check forks from.
+///
+/// It deliberately holds no library-owned diagnostic or incomplete record: those are the
+/// checker's own model gaps, no user reads them, and the pinned suite census is where they are
+/// preserved exactly (ADR-0018, narrowing ADR-0011).
 pub struct FrozenLibraryBase {
     runtime: OwnedLibraryRuntimeState,
     root_names: BTreeSet<String>,
