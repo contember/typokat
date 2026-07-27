@@ -82,6 +82,8 @@ fn interface_scc_construction_work_for_test() -> Vec<InterfaceSccConstructionWor
 mod cycle_tainted_application_cache_spec;
 #[cfg(test)]
 mod eager_application_cache_spec;
+#[cfg(test)]
+mod heritage_base_merge_scan_spec;
 mod interface;
 #[cfg(test)]
 mod interface_scc_pending_spec;
@@ -1863,7 +1865,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     canonical_span.start,
                 )
                 .expect("canonical interface header has one exact preallocated owner");
-            let mut bases = crate::types::repr::ObjectType::default();
             let mut heritage_surfaces = Vec::new();
             let own_owners = self.interface_own_member_owners(&fragments);
             for fragment in fragments {
@@ -1923,9 +1924,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             owner,
                             heritage_span,
                             heritage_display_name(heritage),
-                            base.clone(),
+                            base,
                         ));
-                        bases = interface::merge_object_members_first(bases, base);
                     }
                 }
             }
@@ -1936,6 +1936,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 canonical_span,
             ));
             let own_surface = own.clone();
+            // Composing the whole chain at once keeps one name set over every base member.
+            let bases = interface::compose_base_members_first(
+                &heritage_surfaces
+                    .iter()
+                    .map(|(_, _, _, base)| base)
+                    .collect::<Vec<_>>(),
+            );
             let complete = interface::merge_object_members_overlay(bases, own);
             let derived_name = self
                 .binder
