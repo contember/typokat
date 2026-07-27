@@ -136,6 +136,11 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // instead of the error type, so everything downstream of them is checked again.
     // Enabled by its spec commit, which is RED until the implementation lands.
     ("b101_conditional_logical_values", true, Prelude),
+    // Backlog 104 — the excess-property check must descend through a ternary / logical
+    // into the operands the target contextually shapes, instead of recognising an object
+    // literal only DIRECTLY in the checked position. Enabled by its spec commit, which is
+    // RED until the implementation lands.
+    ("b104_excess_property_descent", true, Prelude),
     // Backlog 100 — a composed condition (`&&`, `||`, and `!` over them) must narrow
     // the branch it guards. `analyze_guard` has no `LogicalExpression` arm and
     // `build_flow_logical` joins both senses back together, so today the guarded branch

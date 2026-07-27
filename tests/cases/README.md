@@ -318,6 +318,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
 | `b45_operator_result_typing/` | backlog `45` | arithmetic/bitwise/shift operators produce `number` instead of the error type; arithmetic operand rule (`TK2362`/`TK2363`) and the `+` general mismatch (`TK2365`) |
 | `b101_conditional_logical_values/` | backlog `101` | a ternary and a logical expression carry a real value type — the arm union, and `falsy`/`truthy`/`non-nullish`-part-of(left) joined with the right operand — instead of the error type, so everything downstream of them is checked again |
+| `b104_excess_property_descent/` | backlog `104` | the excess-property walk descends through a ternary / logical into the operands the target contextually shapes, so a fresh literal in an arm keeps its freshness |
 | `b100_logical_condition_narrowing/` | shipped backlog `100` | composed conditions (`&&`, `\|\|`, `!` over them) narrow the branch they guard, in `if` / `while` / ternary / expression positions — with the complementary branch of every shape pinned, since a fix that narrows the wrong branch deletes diagnostics |
 | `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
 | `b70_this_parameter_typing/` | shipped backlog `70` | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
@@ -376,6 +377,29 @@ merge actually work. The typed refusal itself is additionally pinned by direct b
 (`frozen_prefix_writes_are_recorded_instead_of_dropped`,
 `fresh_script_globals_publish_without_refusing_a_frozen_write`), because a marker fixture observes
 only the downstream surface.
+
+**guard tier**, on the same `Library` base. Where `b102` covered the writes that were silently
+dropped, these cover the ones that **panicked**: an `interface` reopening a library type group
+(`Array`, `String`, `Window`), a `type` alias and a `class` colliding with a library name, an
+`interface` whose name is a library *value* (`console`), and a `namespace`/`declare namespace`
+reopening a library namespace. Each pins the
+`incomplete[bind/frozen-library-global/merge-refused]` record at its own declaration plus whatever
+the surviving library declaration produces, with tsc's own verdict in the header. Reads go through
+a `Window` **annotation**, never the global `window` value: on the library base `window` is not
+modelled and every read through it is silent, which would make the witnesses vacuous.
+
+The project half adds the split shapes — two files merging into two different library names, in
+both input orders — and the two `tooling/full-lib-bench/` workloads (`collision`, `fanout`) that
+exited `101` before the guard. Its controls are backlog `102`'s regression net: fresh cross-file
+script globals must still publish, and module-scope `interface Array<T>`/`class Date` must still
+shadow inside their own file without publishing or refusing anything.
+
+`declare global` has **no fixture**: on the library base it fails the whole run rather than
+producing per-file records, so it is pinned by direct tests instead
+(`binder::bind::tests::frozen_library_continuation_refuses_declare_global`,
+`driver::tests::a_declare_global_project_refuses_the_run_instead_of_panicking`). The refusal
+*sequence* for every panic shape is likewise pinned directly, by
+`binder::bind::tests::frozen_library_merges_are_refused_instead_of_panicking`.
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's
@@ -490,10 +514,42 @@ left are just that left operand) and the `let` literal-union widening that keeps
 later reassignment legal. Rows whose result is a union are **code-only** — typokat
 names the offending member where tsc names the whole union. `falsy_split_divergence.ts`
 is the one accepted over-report, ledgered under `narrowing/logical-value-falsy-split`.
-Two deliberate gaps are NOT pinned here: tsc reports a contextually typed `return`
-ternary once per arm (typokat reports one at the returned expression — noted in
-`result_positions.ts`'s header), and an excess property inside a ternary arm is still
-missed, because `check_excess_properties` does not descend through a ternary.
+One deliberate gap is NOT pinned here: tsc reports a contextually typed `return`
+ternary once per arm, where typokat reports one at the returned expression (noted in
+`result_positions.ts`'s header). The excess property inside an arm, which this corpus
+also left unpinned, is owned by `b104_excess_property_descent/` below.
+
+`b104_excess_property_descent/` is the follow-on defect `b101` surfaced: the
+excess-property walk is syntax-directed and recognised an object literal only
+*directly* in the checked position, so it stopped at the first non-literal node. It
+now descends through the same operands `context_can_shape_fresh_literal` does — both
+ternary arms, both `||`/`??` operands, `&&`'s right — which is stated once in
+`contextual_value_operands` (`src/check/checker/expr.rs`) and consumed by the
+contextual re-walk gate and both excess walks. `ternary_arms.ts` pins each arm
+independently plus the array/tuple and nested-declared-target children;
+`logical_operands.ts` pins each shaped operand; `nested_compositions.ts` pins that the
+descent is recursive; `positions.ts` runs it through every
+`check_excess_properties_for_target` call site (initializer, reassignment, array
+element, object property, call argument, `return`), because a descent added at one
+site only would leave the rest silent; `union_targets.ts` marks the boundary — `T |
+undefined` unwraps and is checked, a multi-shape union is still backlog `60`'s dropped
+error; and `clean_controls.ts` is the must-stay-silent set (a variable-reference arm,
+an admitted extra key, an unannotated `const`, `&&`'s left, optional / index-signature
+/ empty / `unknown` targets). Markers are code-only: tsc nests its excess elaboration
+under one `TS2322` for the whole assignment where typokat emits the freestanding
+`TK2353` at the key. Two count over-reports are ledgered rather than hidden —
+`objects/excess-descent-count` (a key per arm where tsc stops at the first) and
+`objects/excess-dead-logical-operand` (`||`/`??` with a fresh-literal left, whose right
+operand tsc short-circuits away). tsc's `TS2872`/`TS2869` short-circuit warnings are
+unimplemented families and carry no marker.
+
+`absorbed_arm_divergence.ts` is the one accepted **false positive**, ledgered as
+`objects/excess-absorbed-arm`. tsc's excess check runs on the relation of the
+expression's *value*, and that value is a subtype-reduced union whose subtype test
+itself performs the excess check — so an arm whose excess key is admitted by a sibling
+arm's type is absorbed and never checked. A syntax-directed walk cannot see that. The
+fixture pins the three absorbing shapes next to the two non-absorbing controls, so the
+boundary is a fixture, not a footnote.
 
 `b92_contextual_duplicate_diagnostics/` pins **occurrence counts**, not presence.
 Each fixture nests one unresolved name — `undeclaredThing` — inside contextually typed
