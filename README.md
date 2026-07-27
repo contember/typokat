@@ -213,8 +213,12 @@ cargo clippy --all-targets -- -D warnings
 `.github/workflows/ci.yml` runs the same commands a contributor runs — one
 separately-diagnosable job each: `cargo fmt --check`, `cargo test`,
 `cargo clippy --all-targets -- -D warnings`, `cargo build --release`, the
-official-suite harness unit tests (`python3 -m unittest test_tsofficial`), and the
+official-suite harness unit tests (`python3 -m unittest test_tsofficial`), the
 official-suite regression ratchet (`python3 tsofficial.py fetch`, then
 `python3 tsofficial.py run --check`, which rejects regressions against the committed
-`scoreboard.txt` while permitting progress). Formatting is enforced against the toolchain
+`scoreboard.txt` while permitting progress), and the randomized differential harness
+(`tooling/differential/` — its unit tests, the committed minimal-repro ratchet
+`differential.py repros --check`, and a time-capped self-consistency fuzz sweep). A
+weekly scheduled job re-verifies the differential harness's frozen `tsc 6.0.3` baselines
+and prints its truth-mode dashboard. Formatting is enforced against the toolchain
 pinned in `rust-toolchain.toml`, so run `cargo fmt` before pushing.

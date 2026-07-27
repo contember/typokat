@@ -13,11 +13,12 @@ decisions → reference → archive.
 - [`sprints/`](sprints/README.md) — active thematic work-plans.
 - [`archive/`](archive/README.md) — shipped sprints + reference-worthy records.
 
-> Two code-adjacent docs stay **outside** `docs/`: [`tests/cases/README.md`](../tests/cases/README.md)
+> Three code-adjacent docs stay **outside** `docs/`: [`tests/cases/README.md`](../tests/cases/README.md)
 > (how to write/read the conformance fixtures — marker conventions, **not** the divergence ledger,
-> which lives in [`reference/divergences.md`](reference/divergences.md)) and
+> which lives in [`reference/divergences.md`](reference/divergences.md)),
 > [`tooling/official-suite/README.md`](../tooling/official-suite/README.md) (the official-suite
-> harness). The public [`README.md`](../README.md) and the hard-rules
+> harness) and [`tooling/differential/README.md`](../tooling/differential/README.md) (the randomized
+> differential harness). The public [`README.md`](../README.md) and the hard-rules
 > [`CLAUDE.md`](../CLAUDE.md) live at the repo root.
 
 ## Active sprints

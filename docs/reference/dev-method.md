@@ -45,6 +45,30 @@ The build loop, per milestone `Mn`:
 5. **Leader commits** once green. Verify yourself (`cargo test` + `clippy` + spot-run the fixtures)
    before committing — committing unverified code is the one thing the leader owns.
 
+### Required extra gate: inference / contextual typing changes
+
+**If the change touches inference, contextual typing, argument walking, or overload resolution, the
+randomized differential corpus is a required gate — a work unit may not report "zero diff" without
+it.** The fixture corpus is demonstrably blind to this region: `412f321` altered output on ~15 % of
+randomly generated nested-contextual programs while showing zero diff across 471 fixtures in two
+formats, project mode in both file orders, eight bench corpora, the official-suite ratchet, and a
+2,193-binding inferred-type probe (backlog `96`).
+
+Build the **pre-change** binary in a scratch worktree (never in the main one) and diff against it:
+
+```sh
+git worktree add --detach /tmp/pre <base-commit> && (cd /tmp/pre && cargo build --release)
+cargo build --release
+cd tooling/differential
+python3 differential.py fuzz --ref /tmp/pre/target/release/typokat --count 400   # then also --seed 2, 3, …
+python3 differential.py repros --check                                          # committed repros
+```
+
+Any difference is a finding: two builds have no licence to disagree unless the change intended it.
+Each one is auto-shrunk to a minimal repro — adopt the interesting ones into
+`tooling/differential/repros/` and re-record `scoreboard.txt` (`repros --save`) in the same commit.
+Details, modes and the allowlist rules: [`tooling/differential/README.md`](../../tooling/differential/README.md).
+
 You are the **leader/orchestrator**: you write specs, dispatch agents, review their results, and
 commit. Delegate implementation **and** review to subagents; do not write implementation code
 yourself. Run agents in the background (`run_in_background`/`SendMessage`) when waiting.
@@ -81,6 +105,15 @@ The **official TypeScript suite harness** (`tooling/official-suite/`) runs typok
 microsoft/TypeScript conformance baselines at scale and is biased to surface false negatives. The
 gaps it surfaced are filed as backlog items (the `F*` findings — see
 [`../backlog/`](../backlog/README.md)).
+
+The **randomized differential harness** (`tooling/differential/`) generates deep compositions of
+contextually typed calls and diffs two checkers over them — a previous typokat binary (regressions)
+or real `tsc --strict` (truth). It is the answer to a bug class every hand-written gate missed by
+construction, and it is a **required** step for inference/contextual-typing work (§1 above).
+
+- **A gate that cannot see a bug class is not evidence.** Five committed gates passed `412f321`
+  because the trigger shape did not occur in the corpus. When a review reports "no diff", ask what
+  the gate *can* see before believing it.
 
 ---
 

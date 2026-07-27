@@ -26,7 +26,8 @@ reasons — is [`reference/divergences.md`](reference/divergences.md); the code-
 `TK` codes are in scope) is [`reference/scope.md`](reference/scope.md). Two READMEs stay **with the
 code**, not under `docs/` (they describe test tooling, not the system): `tests/cases/README.md` (how
 to write/read the conformance fixtures — marker conventions and type-display rules, **not** the
-divergence ledger) and `tooling/official-suite/README.md` (the official-suite harness).
+divergence ledger), `tooling/official-suite/README.md` (the official-suite harness) and
+`tooling/differential/README.md` (the randomized differential harness).
 
 ## The folders — one purpose each
 

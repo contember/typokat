@@ -66,7 +66,7 @@ scale ladder; the bytecode VM stays a deferred, profiling-gated refactor, ADR-00
 
 ## Testing
 
-Two layers:
+Three layers:
 
 1. **Conformance corpus (the spec)** — `tests/cases/mN_*/*.ts` fixtures carrying inline
    `// error[TK…]: substring` markers, diffed by `tests/conformance.rs`. Marker
@@ -78,6 +78,13 @@ Two layers:
    plus a committed regression scoreboard (`run --check` exits 1 on any regression). It
    is a black-box harness (shells out to the prebuilt binary), independent of the
    checker build. Details: [tooling/official-suite/README.md](./tooling/official-suite/README.md).
+3. **Randomized differential corpus** — `tooling/differential/` generates deep
+   compositions of contextually typed calls and diffs two checkers over them: a
+   previous typokat binary (regressions) or real `tsc --strict` (truth). Findings are
+   auto-shrunk to minimal repros committed under `repros/` and pinned by
+   `scoreboard.txt`. **Required gate for changes touching inference or contextual
+   typing** (dev-method §1) — the fixture corpus is blind to that region by
+   construction. Details: [tooling/differential/README.md](./tooling/differential/README.md).
 
 <!-- AGENT-DOCS:POINTER (managed by the agent-docs skill — edit the body freely,
      keep the markers) -->
