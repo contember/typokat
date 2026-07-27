@@ -154,6 +154,19 @@ recursive rendering would descend beyond depth **64**, the entire display collap
 Displays that fit both bounds are unchanged. Treat a truncated display like any other unstable
 object/union/alias layout and assert its diagnostic code rather than its exact text.
 
+## Reason-chain display (the nested elaboration)
+
+The nested "…are incompatible." cascade below a headline carries the same kind of bound
+(backlog `87`). It renders at most **16** nesting levels; beyond that the remaining wrappers
+collapse into one line — `... <n> more nested levels omitted.` — followed by the innermost
+(terminal) cause, so the reader still learns what actually mismatched. A chain whose first
+level past the cap is *already* terminal has nothing to omit and renders unchanged. The
+indent is clamped with the depth, so a rendered chain is at most 18 lines and its deepest
+indent is 36 characters, however deep the reason tree is.
+
+The deepest chain any fixture in this corpus produces is 6 levels, so the cap is invisible to
+every existing marker. `b87_reason_chain_depth/` is the corpus that pins the boundary itself.
+
 ## Deferred checks & `tsc` divergences
 
 typokat deliberately diverges from `tsc --strict` in bounded, documented ways — it **over-reports**
@@ -319,6 +332,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b45_operator_result_typing/` | backlog `45` | arithmetic/bitwise/shift operators produce `number` instead of the error type; arithmetic operand rule (`TK2362`/`TK2363`) and the `+` general mismatch (`TK2365`) |
 | `b101_conditional_logical_values/` | backlog `101` | a ternary and a logical expression carry a real value type — the arm union, and `falsy`/`truthy`/`non-nullish`-part-of(left) joined with the right operand — instead of the error type, so everything downstream of them is checked again |
 | `b104_excess_property_descent/` | backlog `104` | the excess-property walk descends through a ternary / logical into the operands the target contextually shapes, so a fresh literal in an arm keeps its freshness |
+| `b87_reason_chain_depth/` | backlog `87` | the reason chain is bounded like the type renderer next to it: past 16 nesting levels it collapses to one elision line plus the retained innermost cause, and the indent stops growing |
 | `b100_logical_condition_narrowing/` | shipped backlog `100` | composed conditions (`&&`, `\|\|`, `!` over them) narrow the branch they guard, in `if` / `while` / ternary / expression positions — with the complementary branch of every shape pinned, since a fix that narrows the wrong branch deletes diagnostics |
 | `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
 | `b70_this_parameter_typing/` | shipped backlog `70` | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
@@ -553,6 +567,28 @@ itself performs the excess check — so an arm whose excess key is admitted by a
 arm's type is absorbed and never checked. A syntax-directed walk cannot see that. The
 fixture pins the three absorbing shapes next to the two non-absorbing controls, so the
 boundary is a fixture, not a footnote.
+
+`b87_reason_chain_depth/` pins the **reason-chain depth cap** (see "Reason-chain display"
+above) from both sides, because a cap is only correct if it fires at exactly one depth.
+`property_chain_at_cap.ts` and `array_chain_at_cap.ts` are the *lower* bound: each is a
+chain of exactly 16 levels, and each pins the line an early cap would be the first to
+swallow — the `leaf` property wrapper at level 15, and the `string[]`/`number[]` array line
+at level 15. `property_chain_first_elision.ts` is the *upper* bound: 18 levels un-elided, of
+which exactly one wrapper (the `leaf` wrapper, level 17) is omitted — so a cap of 17 would
+render the chain whole and emit no elision line at all, and a cap of 15 would omit two.
+`property_chain_deep.ts` and `array_chain_elides.ts` then pin that the omitted
+count is exact rather than approximate, and that the innermost cause survives the elision
+on both the property and the array descent. `shallow_chains_unchanged.ts` is the
+regression net for the acceptance bar — the deepest chain measured across this corpus, the
+official-suite corpus, and the unit tests is **6**, so the cap must be invisible to every
+diagnostic that exists today.
+
+Markers cannot express the other half of the contract: a marker substring is trimmed, so it
+cannot assert indentation, and the harness has no notion of a byte budget. The line count,
+the total byte count, the clamped indent, and the collapse of a deep declared *recipe*
+chain are therefore pinned directly in `src/diagnostics/tests.rs`
+(`reason_chain_*`, `type_display_bounds_a_deep_declared_*`), which mirrors the cap as its
+own literal rather than importing the implementation's constant.
 
 `b92_contextual_duplicate_diagnostics/` pins **occurrence counts**, not presence.
 Each fixture nests one unresolved name — `undeclaredThing` — inside contextually typed

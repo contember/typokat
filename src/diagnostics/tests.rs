@@ -795,6 +795,270 @@ fn array_nested_element_nests_each_level() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Backlog 87 — the reason chain is bounded like the type renderer next to it.
+//
+// The cap is written as the literal 16 on purpose: asserting against the
+// implementation's own constant would make these tests self-fulfilling. The
+// value is chosen so the cap cannot fire on anything the checker produces today
+// — the deepest chain measured across the whole conformance corpus, the
+// official-suite corpus, and the unit tests is 6.
+// ---------------------------------------------------------------------------
+
+/// The cap, mirrored from `reason.rs` as an independent expectation.
+const SPEC_REASON_DEPTH_LIMIT: usize = 16;
+
+/// Build a `Property`-wrapper chain `levels` deep over a `string`/`number` leaf.
+/// The head is a `Property`, so `render_reason_chain` starts the elaboration at
+/// level 1 and the leaf lands at level `levels + 1`.
+fn deep_property_chain(src: TypeId, tgt: TypeId, leaf: (TypeId, TypeId), levels: usize) -> Reason {
+    let mut reason = Reason::Leaf {
+        src: leaf.0,
+        tgt: leaf.1,
+    };
+    for _ in 0..levels {
+        reason = Reason::Property {
+            name: "p".to_string(),
+            src,
+            tgt,
+            because: Box::new(reason),
+        };
+    }
+    reason
+}
+
+/// A chain that lands exactly on the cap renders every level in full — no
+/// elision line, indentation growing one step per level. This is the
+/// "must not fire below the cap" half of the acceptance bar.
+#[test]
+fn reason_chain_renders_every_level_at_the_cap() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let src = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.string)],
+        ..Default::default()
+    });
+    let tgt = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.number)],
+        ..Default::default()
+    });
+    let store = interner.store();
+
+    // `LIMIT - 1` wrappers plus the leaf == exactly `LIMIT` elaboration levels.
+    let head = deep_property_chain(
+        src,
+        tgt,
+        (wk.string, wk.number),
+        SPEC_REASON_DEPTH_LIMIT - 1,
+    );
+    let lines = render_reason_chain(store, &head);
+
+    assert_eq!(lines.len(), SPEC_REASON_DEPTH_LIMIT, "{lines:?}");
+    assert!(
+        lines.iter().all(|line| !line.contains("omitted")),
+        "a chain at the cap must not be elided: {lines:?}"
+    );
+    for (index, line) in lines.iter().enumerate() {
+        assert_eq!(
+            line.len() - line.trim_start().len(),
+            2 * (index + 1),
+            "level {index} indent: {line:?}"
+        );
+    }
+    assert_eq!(
+        lines[SPEC_REASON_DEPTH_LIMIT - 1],
+        format!(
+            "{}Type 'string' is not assignable to type 'number'.",
+            "  ".repeat(SPEC_REASON_DEPTH_LIMIT)
+        )
+    );
+}
+
+/// A chain whose first level past the cap is already terminal has nothing to
+/// omit, so it renders unchanged. The elision line is only ever emitted when it
+/// actually replaces something.
+#[test]
+fn reason_chain_terminal_one_past_the_cap_needs_no_elision() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let src = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.string)],
+        ..Default::default()
+    });
+    let tgt = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.number)],
+        ..Default::default()
+    });
+    let store = interner.store();
+
+    let head = deep_property_chain(src, tgt, (wk.string, wk.number), SPEC_REASON_DEPTH_LIMIT);
+    let lines = render_reason_chain(store, &head);
+
+    assert_eq!(lines.len(), SPEC_REASON_DEPTH_LIMIT + 1, "{lines:?}");
+    assert!(
+        lines.iter().all(|line| !line.contains("omitted")),
+        "nothing to omit here: {lines:?}"
+    );
+}
+
+/// One wrapper past the cap: the wrapper collapses into a single elision line
+/// naming how many levels were dropped, and the innermost cause is retained
+/// underneath it so the reader still learns what mismatched.
+#[test]
+fn reason_chain_beyond_the_cap_elides_and_keeps_the_leaf() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let src = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.string)],
+        ..Default::default()
+    });
+    let tgt = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.number)],
+        ..Default::default()
+    });
+    let store = interner.store();
+
+    let head = deep_property_chain(
+        src,
+        tgt,
+        (wk.string, wk.number),
+        SPEC_REASON_DEPTH_LIMIT + 1,
+    );
+    let lines = render_reason_chain(store, &head);
+
+    assert_eq!(lines.len(), SPEC_REASON_DEPTH_LIMIT + 2, "{lines:?}");
+    assert_eq!(
+        lines[SPEC_REASON_DEPTH_LIMIT],
+        format!(
+            "{}... 1 more nested level omitted.",
+            "  ".repeat(SPEC_REASON_DEPTH_LIMIT + 1)
+        )
+    );
+    assert_eq!(
+        lines[SPEC_REASON_DEPTH_LIMIT + 1],
+        format!(
+            "{}Type 'string' is not assignable to type 'number'.",
+            "  ".repeat(SPEC_REASON_DEPTH_LIMIT + 2)
+        )
+    );
+}
+
+/// The measured failure mode (backlog 87): one diagnostic at depth 1600 emitted
+/// 2.6 MB of stderr whose deepest line was 3,253 characters of pure indentation,
+/// and the cost was retained in `Diagnostic::elaboration` for the whole run.
+/// The rendered chain must now be bounded in line count, byte count, and line
+/// width regardless of how deep the reason tree is.
+///
+/// Runs on a wide stack: the *reason tree* is still a `Box` chain, so building and
+/// dropping one this deep recurses even though rendering it no longer does. The
+/// stack size is test scaffolding for the tree, not a property of the renderer.
+#[test]
+fn reason_chain_at_extreme_depth_is_bounded_in_bytes_and_width() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(extreme_depth_reason_chain_is_bounded)
+        .expect("spawning the wide-stack test thread")
+        .join()
+        .expect("the wide-stack test thread must not panic");
+}
+
+fn extreme_depth_reason_chain_is_bounded() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let src = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.string)],
+        ..Default::default()
+    });
+    let tgt = interner.intern_object(ObjectType {
+        properties: vec![prop("p", wk.number)],
+        ..Default::default()
+    });
+    let store = interner.store();
+
+    let levels = 2000;
+    let head = deep_property_chain(src, tgt, (wk.string, wk.number), levels);
+    let lines = render_reason_chain(store, &head);
+
+    // Line count is constant past the cap: the rendered levels, one elision
+    // line, and the retained innermost cause.
+    assert_eq!(lines.len(), SPEC_REASON_DEPTH_LIMIT + 2, "{}", lines.len());
+
+    let bytes: usize = lines.iter().map(|line| line.len() + 1).sum();
+    assert!(bytes < 2048, "rendered chain must stay small, got {bytes}");
+
+    let widest = lines.iter().map(|line| line.chars().count()).max();
+    assert_eq!(widest.map(|width| width < 128), Some(true), "{lines:?}");
+
+    // Indentation is clamped: no line may indent deeper than the last rendered
+    // level, however deep the reason tree goes.
+    let deepest_indent = lines
+        .iter()
+        .map(|line| line.len() - line.trim_start().len())
+        .max();
+    assert_eq!(deepest_indent, Some(2 * (SPEC_REASON_DEPTH_LIMIT + 2)));
+
+    // The elided count is exact, not approximate: `levels` wrappers plus the
+    // `Leaf`, minus the levels that were rendered in full.
+    assert_eq!(
+        lines[SPEC_REASON_DEPTH_LIMIT],
+        format!(
+            "{}... {} more nested levels omitted.",
+            "  ".repeat(SPEC_REASON_DEPTH_LIMIT + 1),
+            levels - SPEC_REASON_DEPTH_LIMIT
+        )
+    );
+    assert!(
+        lines[SPEC_REASON_DEPTH_LIMIT + 1]
+            .ends_with("Type 'string' is not assignable to type 'number'."),
+        "{:?}",
+        lines[SPEC_REASON_DEPTH_LIMIT + 1]
+    );
+}
+
+/// Backlog 87, second half: `render_declared_recipe`'s `Array`/`Tuple`/
+/// `Readonly` arms recursed without going through `render_type_inner`, so they
+/// bypassed `DISPLAY_DEPTH_LIMIT` entirely and carried no cycle guard. A deep
+/// declared array recipe must collapse to `...` exactly like the equivalent
+/// interned array chain (`type_display_bounds_a_deep_chain`) does.
+#[test]
+fn type_display_bounds_a_deep_declared_recipe_chain() {
+    use crate::types::repr::DeclaredRecipeNode;
+
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let mut recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(number));
+    for _ in 0..200 {
+        recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Array(recipe));
+    }
+    let declared = interner.intern_declared(recipe, []);
+
+    assert_eq!(render_type(interner.store(), declared, false), "...");
+}
+
+/// The tag walk (`render_tag_with_limit` → `declared_recipe_tag_with_mapper`)
+/// also recursed without a depth counter. It is unreachable in practice — a
+/// declared indirection costs render depth faster than tag-walk depth, so the
+/// display collapses first — so this is a termination/boundedness net rather
+/// than a changed-output pin: a long declared chain used as an array element
+/// (which is what consults the tag, to decide parenthesization) must still
+/// render, and render bounded.
+#[test]
+fn type_display_bounds_a_deep_declared_indirection_chain() {
+    use crate::types::repr::DeclaredRecipeNode;
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let mut element = interner.union(vec![wk.string, wk.number]);
+    for _ in 0..200 {
+        let recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(element));
+        element = interner.intern_declared(recipe, []);
+    }
+    let array = interner.intern_array(element);
+
+    assert_eq!(render_type(interner.store(), array, false), "...");
+}
+
 #[test]
 fn generic_type_arity_diagnostics_render_exact_messages_and_spans() {
     let exact_span = Span::new(4, 18);

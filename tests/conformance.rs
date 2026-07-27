@@ -141,6 +141,11 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // literal only DIRECTLY in the checked position. Enabled by its spec commit, which is
     // RED until the implementation lands.
     ("b104_excess_property_descent", true, Prelude),
+    // Backlog 87 — the reason chain must be bounded like the type renderer next to it:
+    // past REASON_DEPTH_LIMIT nesting levels it collapses to one elision line plus the
+    // retained innermost cause, and the indent stops growing. Enabled by its spec commit,
+    // which is RED until the implementation lands.
+    ("b87_reason_chain_depth", true, Prelude),
     // Backlog 100 — a composed condition (`&&`, `||`, and `!` over them) must narrow
     // the branch it guards. `analyze_guard` has no `LogicalExpression` arm and
     // `build_flow_logical` joins both senses back together, so today the guarded branch
