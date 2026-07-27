@@ -141,7 +141,10 @@ fn one_project_delta_preserves_cross_file_symbols_and_is_deterministic() {
         .contains(&first.cross_file.producer_value_storage.index()));
     assert!(first.references.delta_to_base > 0);
     assert!(first.references.delta_to_delta > 0);
-    assert_eq!(first.references.base_to_delta, 0);
+    assert_eq!(
+        first.references.base_to_delta, 0,
+        "a frozen base row now references a user-delta row: the delta leaked into the shared base"
+    );
     assert_eq!(first.mutation.base_rows_written, 0);
     assert!(first.mutation.delta_discarded_after_check);
     assert_eq!(first.work.library_source_compiles, 0);

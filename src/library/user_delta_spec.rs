@@ -230,7 +230,10 @@ fn collision_free_external_module_uses_dense_local_suffixes_and_real_interning()
     assert_eq!(left, right, "equal new local aliases hash-cons once");
     assert!(receipt.ranges.types.range.contains(&left.index()));
 
-    assert_eq!(receipt.references.base_to_delta, 0);
+    assert_eq!(
+        receipt.references.base_to_delta, 0,
+        "a frozen base row now references a user-delta row: the delta leaked into the shared base"
+    );
     assert!(receipt.references.delta_to_base > 0);
     assert!(receipt.references.delta_to_delta > 0);
     assert_eq!(receipt.mutation.base_rows_written, 0);
@@ -239,7 +242,7 @@ fn collision_free_external_module_uses_dense_local_suffixes_and_real_interning()
 }
 
 #[test]
-fn user_check_performs_no_library_work_snapshot_work_or_base_row_clones() {
+fn user_check_performs_no_library_work_or_base_row_clones() {
     let base = acquire();
     let receipt = check(&base);
 
