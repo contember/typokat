@@ -9,9 +9,9 @@ pub mod namespace;
 pub mod scope;
 pub mod symbol;
 
-pub(crate) mod roots;
 #[cfg(test)]
-pub(crate) mod snapshot;
+pub(crate) mod references;
+pub(crate) mod roots;
 
 pub use bind::{bind_module_with_prelude, Binder};
 

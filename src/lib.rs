@@ -10,7 +10,6 @@ pub mod diagnostics;
 pub mod driver;
 pub mod library;
 pub mod relate;
-pub(crate) mod snapshot_codec;
 mod source;
 pub mod span;
 pub mod surface;

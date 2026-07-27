@@ -99,7 +99,7 @@ impl SymbolTable {
     }
 
     #[cfg(test)]
-    pub(crate) fn snapshot_symbols(&self) -> impl Iterator<Item = &Symbol> {
+    pub(crate) fn all_symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.symbols.iter()
     }
 

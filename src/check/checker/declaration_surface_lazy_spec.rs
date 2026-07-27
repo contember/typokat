@@ -40,7 +40,7 @@ struct RecipeArenaMeasure {
 fn recipe_arena_measure(interner: &crate::types::Interner) -> RecipeArenaMeasure {
     let store = interner.store();
     let recipes = store
-        .snapshot_declared_recipes()
+        .all_declared_recipes()
         .map(|(id, recipe)| (id, recipe.node.clone()))
         .collect::<Vec<_>>();
     let mut pending = (0..store.len())

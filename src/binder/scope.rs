@@ -106,7 +106,7 @@ impl ScopeGraph {
         self.scopes.get_mut_local(id.index())
     }
 
-    pub(crate) fn snapshot_len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.scopes.len()
     }
 
@@ -116,7 +116,7 @@ impl ScopeGraph {
     }
 
     #[cfg(test)]
-    pub(crate) fn snapshot_scopes(&self) -> impl Iterator<Item = &Scope> {
+    pub(crate) fn all_scopes(&self) -> impl Iterator<Item = &Scope> {
         self.scopes.iter()
     }
 

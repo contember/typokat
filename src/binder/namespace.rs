@@ -375,7 +375,7 @@ pub(crate) struct MergeSubstrateWorkForTest {
     pub(crate) non_merging_merge_records: u64,
     /// Placement groups the canonical-order pass actually reordered. The rows are appended in
     /// ascending `(source, span)` order, so this stays zero — it is the witness that sorting
-    /// them where they live cannot move what the snapshot serializes.
+    /// them where they live cannot move the canonical row order.
     pub(crate) placement_row_reorders: u64,
 }
 
@@ -1321,7 +1321,7 @@ pub struct NamespaceTable {
 
 #[cfg(test)]
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct NamespaceSnapshotPrimary {
+pub(crate) struct NamespacePrimaryRows {
     pub(crate) namespaces: Vec<Namespace>,
     pub(crate) standalone_value_storages: Vec<Option<ValueStorageId>>,
     pub(crate) fragments: Vec<NamespaceFragment>,
@@ -1355,7 +1355,7 @@ pub(crate) struct NamespaceReferenceOffsets {
 
 #[cfg(test)]
 pub(crate) struct NamespaceReferenceRows {
-    pub(crate) primary: NamespaceSnapshotPrimary,
+    pub(crate) primary: NamespacePrimaryRows,
     pub(crate) offsets: NamespaceReferenceOffsets,
     pub(crate) canonical_namespaces: Vec<u32>,
     pub(crate) canonical_source_units: Vec<u32>,
@@ -1988,8 +1988,8 @@ impl NamespaceTable {
     }
 
     #[cfg(test)]
-    pub(crate) fn snapshot_primary(&self) -> NamespaceSnapshotPrimary {
-        NamespaceSnapshotPrimary {
+    pub(crate) fn primary_rows(&self) -> NamespacePrimaryRows {
+        NamespacePrimaryRows {
             namespaces: self.namespaces.iter().cloned().collect(),
             standalone_value_storages: self.standalone_value_storages.iter().copied().collect(),
             fragments: self.fragments.iter().cloned().collect(),
@@ -2018,10 +2018,10 @@ impl NamespaceTable {
     }
 
     #[cfg(test)]
-    pub(crate) fn snapshot_reference_rows(&self, local_only: bool) -> NamespaceReferenceRows {
+    pub(crate) fn reference_rows(&self, local_only: bool) -> NamespaceReferenceRows {
         if !local_only {
             return NamespaceReferenceRows {
-                primary: self.snapshot_primary(),
+                primary: self.primary_rows(),
                 offsets: NamespaceReferenceOffsets::default(),
                 canonical_namespaces: self
                     .canonical_namespaces
@@ -2061,7 +2061,7 @@ impl NamespaceTable {
             };
         }
 
-        let primary = NamespaceSnapshotPrimary {
+        let primary = NamespacePrimaryRows {
             namespaces: self.namespaces.local_iter().cloned().collect(),
             standalone_value_storages: self
                 .standalone_value_storages
@@ -2141,244 +2141,6 @@ impl NamespaceTable {
                 .map(|context| context.0)
                 .collect(),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_snapshot_primary(
-        primary: NamespaceSnapshotPrimary,
-    ) -> Result<Self, &'static str> {
-        Self::validate_snapshot_primary_for_classification(&primary)?;
-        let decoded_primary = primary.clone();
-        let NamespaceSnapshotPrimary {
-            namespaces,
-            standalone_value_storages,
-            fragments,
-            members,
-            placements: primary_placements,
-            globals,
-            deferred_modules,
-            deferred_children,
-            umd_exports,
-            export_contexts,
-            source_units,
-            compilation_global,
-            script_namespace_root,
-            library_shared_globals,
-        } = primary;
-        if namespaces
-            .iter()
-            .enumerate()
-            .any(|(index, namespace)| namespace.id.index() != index)
-            || fragments
-                .iter()
-                .enumerate()
-                .any(|(index, fragment)| fragment.id.index() != index)
-            || members
-                .iter()
-                .enumerate()
-                .any(|(index, member)| member.id.index() != index)
-            || globals
-                .iter()
-                .enumerate()
-                .any(|(index, global)| global.id.index() != index)
-            || deferred_modules
-                .iter()
-                .enumerate()
-                .any(|(index, module)| module.id.index() != index)
-            || export_contexts
-                .iter()
-                .enumerate()
-                .any(|(index, context)| context.id.index() != index)
-        {
-            return Err("snapshot namespace identities are not dense");
-        }
-        if standalone_value_storages.len() != namespaces.len() {
-            return Err("snapshot namespace storage column has the wrong length");
-        }
-        let mut namespace_keys = FxHashMap::default();
-        for namespace in &namespaces {
-            let key = NamespaceKey {
-                owner: namespace.owner,
-                name: namespace.name.clone(),
-            };
-            if namespace_keys.insert(key, namespace.id).is_some() {
-                return Err("snapshot namespace key index contains a duplicate");
-            }
-        }
-        let mut names = LayeredVec::default();
-        let mut name_ids: FxHashMap<Arc<str>, NameId> = FxHashMap::default();
-        let mut placements = FxHashMap::default();
-        for (owner, name, declarations) in primary_placements {
-            let name = match name_ids.get(name.as_str()) {
-                Some(id) => *id,
-                None => {
-                    let text: Arc<str> = Arc::from(name.as_str());
-                    let id =
-                        NameId(u32::try_from(names.len()).expect("interned name count fits u32"));
-                    names.push_local(Arc::clone(&text));
-                    name_ids.insert(text, id);
-                    id
-                }
-            };
-            if placements
-                .insert(MergeKey { owner, name }, Arc::new(declarations))
-                .is_some()
-            {
-                return Err("snapshot merge placement index contains a duplicate");
-            }
-        }
-        let mut layered_namespace_keys = LayeredMap::default();
-        for (key, id) in namespace_keys {
-            layered_namespace_keys.insert_local(key, id)?;
-        }
-        let mut layered_placements = LayeredMap::default();
-        for (key, declarations) in placements {
-            layered_placements.insert_local(key, declarations)?;
-        }
-        let mut table = Self {
-            namespaces: namespaces.into(),
-            aggregate_instance_states: LayeredVec::default(),
-            standalone_value_storages: standalone_value_storages.into(),
-            fragments: fragments.into(),
-            members: members.into(),
-            namespace_keys: layered_namespace_keys,
-            canonical_namespaces: LayeredVec::default(),
-            names,
-            name_ids,
-            placements: layered_placements,
-            placement_rows: FxHashMap::default(),
-            placement_rows_indexed: FxHashMap::default(),
-            merges: LayeredVec::default(),
-            merge_indices: LayeredMap::default(),
-            standalone_storage_namespaces: LayeredMap::default(),
-            declaration_owners_by_scope: LayeredMap::default(),
-            fragments_by_declaration: LayeredMap::default(),
-            fragment_private_scopes_by_site: LayeredMap::default(),
-            global_augmentations_by_site: LayeredMap::default(),
-            umd_exports_by_site: LayeredMap::default(),
-            source_keys_by_module: LayeredMap::default(),
-            library_export_default_sites: LayeredMap::default(),
-            library_module_reporting_sites: LayeredMap::default(),
-            globals: globals.into(),
-            deferred_modules: deferred_modules.into(),
-            deferred_children: deferred_children.into(),
-            umd_exports: umd_exports.into(),
-            export_contexts: export_contexts.into(),
-            source_units: source_units.into(),
-            canonical_source_units: LayeredVec::default(),
-            canonical_globals: LayeredVec::default(),
-            canonical_deferred_modules: LayeredVec::default(),
-            canonical_deferred_children: LayeredVec::default(),
-            canonical_umd_exports: LayeredVec::default(),
-            canonical_export_contexts: LayeredVec::default(),
-            compilation_global,
-            script_namespace_root,
-            library_shared_globals,
-        };
-        table.classify()?;
-        table.rebuild_local_standalone_storage_index()?;
-        if table.snapshot_primary() != decoded_primary {
-            return Err("snapshot namespace derived state is not canonical");
-        }
-        Ok(table)
-    }
-
-    #[cfg(test)]
-    fn validate_snapshot_primary_for_classification(
-        primary: &NamespaceSnapshotPrimary,
-    ) -> Result<(), &'static str> {
-        if primary
-            .namespaces
-            .iter()
-            .enumerate()
-            .any(|(index, namespace)| namespace.id.index() != index)
-            || primary
-                .fragments
-                .iter()
-                .enumerate()
-                .any(|(index, fragment)| fragment.id.index() != index)
-            || primary
-                .members
-                .iter()
-                .enumerate()
-                .any(|(index, member)| member.id.index() != index)
-            || primary
-                .globals
-                .iter()
-                .enumerate()
-                .any(|(index, global)| global.id.index() != index)
-            || primary
-                .deferred_modules
-                .iter()
-                .enumerate()
-                .any(|(index, module)| module.id.index() != index)
-            || primary
-                .export_contexts
-                .iter()
-                .enumerate()
-                .any(|(index, context)| context.id.index() != index)
-        {
-            return Err("snapshot namespace identities are not dense");
-        }
-        if primary.standalone_value_storages.len() != primary.namespaces.len() {
-            return Err("snapshot namespace storage column has the wrong length");
-        }
-        let fragment_len = primary.fragments.len();
-        let member_len = primary.members.len();
-        if primary.namespaces.iter().any(|namespace| {
-            (primary.library_shared_globals && namespace.fragments.is_empty())
-                || namespace
-                    .fragments
-                    .iter()
-                    .any(|fragment| fragment.index() >= fragment_len)
-        }) {
-            return Err("snapshot namespace fragment reference is out of range");
-        }
-        if primary.fragments.iter().any(|fragment| {
-            fragment.namespace.index() >= primary.namespaces.len()
-                || fragment
-                    .members
-                    .iter()
-                    .any(|member| member.index() >= member_len)
-        }) {
-            return Err("snapshot fragment reference is out of range");
-        }
-        if primary.globals.iter().any(|global| {
-            global
-                .members
-                .iter()
-                .any(|member| member.index() >= member_len)
-        }) {
-            return Err("snapshot global member reference is out of range");
-        }
-        if primary.export_contexts.iter().any(|context| {
-            context
-                .members
-                .iter()
-                .any(|member| member.index() >= member_len)
-        }) {
-            return Err("snapshot export-context member reference is out of range");
-        }
-        if primary.placements.iter().any(|(_, _, declarations)| {
-            (primary.library_shared_globals && declarations.is_empty())
-                || declarations.iter().any(|declaration| {
-                    declaration
-                        .namespace_fragment
-                        .is_some_and(|fragment| fragment.index() >= fragment_len)
-                })
-        }) {
-            return Err("snapshot merge placement reference is out of range");
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn validate_snapshot_canonical(&self) -> Result<(), &'static str> {
-        let primary = self.snapshot_primary();
-        let rebuilt = Self::from_snapshot_primary(primary.clone())?;
-        (rebuilt.snapshot_primary() == primary)
-            .then_some(())
-            .ok_or("snapshot namespace derived ordering is not canonical")
     }
 
     fn classify(&mut self) -> Result<(), &'static str> {
@@ -2799,30 +2561,6 @@ impl NamespaceTable {
             {
                 return Err("library module-reporting index contains a duplicate");
             }
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn rebuild_local_standalone_storage_index(&mut self) -> Result<(), &'static str> {
-        self.standalone_storage_namespaces.clear_local();
-        let base_len = self.standalone_value_storages.base_len();
-        let rows = self
-            .standalone_value_storages
-            .local_iter()
-            .enumerate()
-            .filter_map(|(offset, storage)| {
-                let storage = (*storage)?;
-                let index = base_len + offset;
-                Some((
-                    storage,
-                    NamespaceId(u32::try_from(index).expect("namespace index fits u32")),
-                ))
-            })
-            .collect::<Vec<_>>();
-        for (storage, namespace) in rows {
-            self.standalone_storage_namespaces
-                .insert_local(storage, namespace)?;
         }
         Ok(())
     }
@@ -7662,122 +7400,6 @@ mod tests {
             symbol.value,
             Some(storages[1]),
             "a library batch fills one module at a time, so its last file wins"
-        );
-    }
-
-    fn bind_snapshot_validation_library() -> Binder {
-        let prelude_allocator = Allocator::default();
-        let source_allocator = Allocator::default();
-        let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
-        let source = Parser::new(
-            &source_allocator,
-            r#"
-                export {};
-                export as namespace FirstUmd;
-                export as namespace SecondUmd;
-                declare global { interface FirstGlobal {} }
-                declare global { interface SecondGlobal {} }
-                declare namespace FirstNamespace {
-                    export default function first(): void;
-                }
-                declare namespace SecondNamespace {
-                    export default function second(): void;
-                }
-            "#,
-            SourceType::d_ts(),
-        )
-        .parse();
-        assert!(prelude.diagnostics.is_empty());
-        assert!(!source.panicked);
-        let mut builder = ProjectBinderBuilder::new(&prelude.program);
-        let unit = CompilationUnit::library(
-            SourceUnitKey(1),
-            LibraryFileOrdinal::new(0),
-            &source.program,
-        );
-        let module = builder.add_library_modules(&[(&source.program, unit)])[0];
-        builder.finish(module)
-    }
-
-    fn assert_snapshot_corruption(
-        primary: &NamespaceSnapshotPrimary,
-        corrupt: impl FnOnce(&mut NamespaceSnapshotPrimary),
-        expected: &'static str,
-    ) {
-        let mut corrupt_primary = primary.clone();
-        corrupt(&mut corrupt_primary);
-        let actual = NamespaceTable::from_snapshot_primary(corrupt_primary)
-            .err()
-            .expect("corrupt snapshot must be rejected");
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn snapshot_decode_rejects_duplicate_fragment_derived_keys() {
-        let primary = bind_snapshot_validation_library()
-            .namespaces
-            .snapshot_primary();
-        assert!(primary.fragments.len() >= 2);
-        assert!(NamespaceTable::from_snapshot_primary(primary.clone()).is_ok());
-
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| corrupt.fragments[1].declaration = corrupt.fragments[0].declaration,
-            "namespace fragment declaration index contains a duplicate",
-        );
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| {
-                corrupt.fragments[1].module = corrupt.fragments[0].module;
-                corrupt.fragments[1].source_start = corrupt.fragments[0].source_start;
-            },
-            "namespace fragment site index contains a duplicate",
-        );
-    }
-
-    #[test]
-    fn snapshot_decode_rejects_duplicate_statement_and_reporting_keys() {
-        let primary = bind_snapshot_validation_library()
-            .namespaces
-            .snapshot_primary();
-        assert!(primary.globals.len() >= 2);
-        assert!(primary.umd_exports.len() >= 2);
-        assert!(primary.export_contexts.len() >= 2);
-        assert!(NamespaceTable::from_snapshot_primary(primary.clone()).is_ok());
-
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| {
-                corrupt.globals[1].module = corrupt.globals[0].module;
-                corrupt.globals[1].diagnostic_span.start = corrupt.globals[0].diagnostic_span.start;
-            },
-            "global augmentation site index contains a duplicate",
-        );
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| {
-                corrupt.umd_exports[1].module = corrupt.umd_exports[0].module;
-                corrupt.umd_exports[1].span.start = corrupt.umd_exports[0].span.start;
-            },
-            "UMD export site index contains a duplicate",
-        );
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| corrupt.source_units.push(corrupt.source_units[0].clone()),
-            "source-module index contains a duplicate",
-        );
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| {
-                corrupt.export_contexts[1].source = corrupt.export_contexts[0].source;
-                corrupt.export_contexts[1].span.start = corrupt.export_contexts[0].span.start;
-            },
-            "library export-default reporting index contains a duplicate",
-        );
-        assert_snapshot_corruption(
-            &primary,
-            |corrupt| corrupt.export_contexts[1].owner = corrupt.export_contexts[0].owner,
-            "library module-reporting index contains a duplicate",
         );
     }
 

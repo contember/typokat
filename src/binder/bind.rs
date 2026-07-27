@@ -366,7 +366,7 @@ impl Binder {
     #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
     pub(crate) fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
         LibraryBinderCheckpointEnds {
-            scopes: self.graph.snapshot_len(),
+            scopes: self.graph.len(),
             symbols: self.symbols.len(),
             declarations: self.declarations.len(),
             type_groups: self.type_groups.len(),
@@ -479,7 +479,7 @@ impl Binder {
 
     #[cfg(test)]
     pub(crate) fn local_reference_records_for_test(&self) -> Vec<(u8, u32, u8, u32)> {
-        super::snapshot::local_snapshot_reference_records_for_test(self)
+        super::references::local_reference_records_for_test(self)
             .into_iter()
             .map(|(owner_domain, target_domain, _, owner, target)| {
                 (owner_domain, owner, target_domain, target)
@@ -492,13 +492,13 @@ impl Binder {
         &self.frozen_prefix_writes
     }
 
-    pub(crate) fn snapshot_module_sources(&self) -> &LayeredMap<ScopeId, SourceUnitKey> {
+    pub(crate) fn module_sources(&self) -> &LayeredMap<ScopeId, SourceUnitKey> {
         &self.module_sources
     }
 
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_snapshot_parts(
+    pub(crate) fn from_product_parts(
         graph: ScopeGraph,
         symbols: SymbolTable,
         declarations: DeclarationTable,
@@ -794,7 +794,7 @@ pub(crate) struct BindState {
     pub(super) placement_syntax: FxHashMap<DeclId, DeclarationSyntaxFacts>,
     /// The key each symbol's declaration list is currently ordered by. Build-local on purpose:
     /// a row this build has not attached to yet is derived once on its first attach, which is
-    /// exactly what the snapshot, fork and frozen-continuation seams need, and a build that
+    /// exactly what the fork and frozen-continuation seams need, and a build that
     /// switches key pays one derivation per row it touches afterwards.
     symbol_declaration_orders: FxHashMap<SymbolId, DeclarationOrder>,
     /// The module scope currently being bound — the disambiguating half of the
@@ -1003,7 +1003,7 @@ impl BindState {
             DeclarationOrder::LibraryFileOrdinal
         };
         // A one-row list is ordered under every key. A longer one is only insertable if *this*
-        // key ordered it: a row restored across a snapshot or fork seam, or one a library batch
+        // key ordered it: a row restored across a fork seam, or one a library batch
         // left behind before the key changed, pays one derivation and is inserted into after.
         let sorted =
             attached == 1 || self.symbol_declaration_orders.get(&symbol).copied() == Some(ordering);
@@ -2833,7 +2833,7 @@ with (source) { var RegExp = 1; }
             SourceUnitKey(1),
             LibraryFileOrdinal::new(0),
         )]);
-        let base_scopes = base.graph.snapshot_len();
+        let base_scopes = base.graph.len();
         let base_symbols = base.symbols.len();
         let base_declarations = base.declarations.len();
         let base_groups = base.type_groups.len();
@@ -2863,7 +2863,7 @@ with (source) { var RegExp = 1; }
             .finish_frozen_library_continuation(first_module)
             .expect("first namespace suffix freezes");
 
-        assert!(first.graph.snapshot_len() > base_scopes);
+        assert!(first.graph.len() > base_scopes);
         assert!(first.symbols.len() > base_symbols);
         assert!(first.declarations.len() > base_declarations);
         assert!(first.type_groups.len() > base_groups);
@@ -2887,13 +2887,13 @@ with (source) { var RegExp = 1; }
 
         assert!(second_seed
             .graph
-            .snapshot_scopes()
+            .all_scopes()
             .all(|scope| scope.lookup_local("LocalSpace").is_none()));
         assert!(!second_seed
             .namespaces
             .namespaces()
             .any(|namespace| namespace.name == "LocalSpace"));
-        assert_eq!(base.graph.snapshot_len(), base_scopes);
+        assert_eq!(base.graph.len(), base_scopes);
         assert_eq!(base.symbols.len(), base_symbols);
         assert_eq!(base.declarations.len(), base_declarations);
         assert_eq!(base.type_groups.len(), base_groups);
@@ -2916,7 +2916,7 @@ with (source) { var RegExp = 1; }
             LibraryFileOrdinal::new(0),
         )]);
         let frozen_script_root = base.script_namespace_root;
-        let frozen_scope_count = base.graph.snapshot_len();
+        let frozen_scope_count = base.graph.len();
         base.freeze_as_base().expect("binder base freezes once");
 
         let user_allocator = Allocator::default();

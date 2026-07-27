@@ -6,7 +6,7 @@
 mod composites;
 mod declared;
 mod operators;
-mod snapshot;
+mod references;
 #[cfg(test)]
 mod tests;
 
@@ -612,6 +612,54 @@ impl Interner {
                 && (!self.dedup.is_empty()
                     || !self.reserved_types.is_empty()
                     || !self.declared_recipe_local.is_empty()))
+    }
+
+    /// Terminal-state check a completed universe must pass: no unmerged delta, every
+    /// reservation frozen, no dedup bucket holding the same row twice.
+    #[cfg(test)]
+    pub(crate) fn strict_terminal_state_for_test(&self) -> Result<(), String> {
+        if self.has_nonempty_delta() {
+            return Err("interner still carries a non-empty delta".to_owned());
+        }
+        for (id, reserved) in self.reserved_types() {
+            if reserved.state != ReservedTypeState::Frozen {
+                return Err(format!(
+                    "pending reserved type {} ({:?}, name={:?})",
+                    id.0,
+                    reserved.kind,
+                    self.store.template_name(*id)
+                ));
+            }
+        }
+        for (hash, candidates) in self.dedup_buckets() {
+            let mut sorted = candidates.iter().copied().collect::<Vec<_>>();
+            sorted.sort_unstable();
+            if !sorted.windows(2).all(|pair| pair[0] < pair[1]) {
+                return Err(format!("dedup bucket {hash} contains duplicate TypeIds"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The dedup index covers exactly the structural rows: every non-reserved row is a
+    /// candidate in exactly one bucket, and no reserved row is.
+    #[cfg(test)]
+    pub(crate) fn dedup_partitions_structural_rows_exactly(&self) -> bool {
+        let mut seen = vec![false; self.store.len()];
+        for (_, candidates) in self.dedup_buckets() {
+            for candidate in candidates.iter().copied() {
+                if candidate.index() >= seen.len()
+                    || self.contains_reserved_type(candidate)
+                    || std::mem::replace(&mut seen[candidate.index()], true)
+                {
+                    return false;
+                }
+            }
+        }
+        seen.into_iter().enumerate().all(|(index, covered)| {
+            u32::try_from(index)
+                .is_ok_and(|index| covered != self.contains_reserved_type(TypeId(index)))
+        })
     }
 
     #[cfg(test)]

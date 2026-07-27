@@ -167,17 +167,15 @@ fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
     )])
     .expect("base reservation fills before sealing");
 
-    let standalone_snapshot = base
-        .encode_snapshot_bytes_for_test()
-        .expect("standalone interner snapshots");
+    let standalone_references = base.reference_records_for_test();
     let prefix_len = base.store().len();
     let prefix_id = u32::try_from(prefix_len).expect("test prefix fits TypeId");
     let old_graph = Arc::clone(base.store().semantic_graph_identity());
     base.freeze_as_base().expect("complete interner seals");
     assert_eq!(
-        base.encode_snapshot_bytes_for_test()
-            .expect("sealed empty-delta interner snapshots"),
-        standalone_snapshot
+        base.reference_records_for_test(),
+        standalone_references,
+        "sealing a complete interner does not move a single identity edge"
     );
 
     let mut first = base.fork_delta().expect("first private suffix forks");
@@ -244,7 +242,7 @@ fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
         first.store().type_param_constraint(base_parameter_id),
         Some(wk.string)
     );
-    assert!(first.encode_snapshot_bytes_for_test().is_err());
+    assert!(first.strict_terminal_state_for_test().is_err());
 }
 
 #[test]
@@ -269,7 +267,7 @@ fn side_column_only_deltas_fail_closed_and_invalid_template_owners_are_rejected(
     let missing_row = TypeId(u32::try_from(base.store().len()).expect("test base fits TypeId"));
     invalid_template.set_template_name(missing_row, "not-a-row");
     invalid_template
-        .encode_snapshot_bytes_for_test()
+        .strict_terminal_state_for_test()
         .expect("invalid template metadata owner is rejected before mutation");
 
     let mut constraint_only = base.fork_delta().expect("constraint delta forks");
@@ -277,14 +275,14 @@ fn side_column_only_deltas_fail_closed_and_invalid_template_owners_are_rejected(
         constraint_only.set_type_param_constraint(TypeParamId(900_010), base.well_known().string)
     );
     assert_eq!(constraint_only.store().len(), base.store().len());
-    assert!(constraint_only.encode_snapshot_bytes_for_test().is_err());
+    assert!(constraint_only.strict_terminal_state_for_test().is_err());
 
     let mut frozen_only = base.fork_delta().expect("freeze delta forks");
     frozen_only
         .freeze_type_param_metadata(&[TypeParamId(900_011)])
         .expect("declaration metadata may exist without a TypeParam row");
     assert_eq!(frozen_only.store().len(), base.store().len());
-    assert!(frozen_only.encode_snapshot_bytes_for_test().is_err());
+    assert!(frozen_only.strict_terminal_state_for_test().is_err());
 }
 
 #[test]
@@ -416,7 +414,7 @@ fn every_cold_payload_family_routes_across_nonzero_base_offsets() {
         delta.store().template_name(reserved_mapped),
         Some("LocalMapped")
     );
-    assert!(delta.encode_snapshot_bytes_for_test().is_err());
+    assert!(delta.strict_terminal_state_for_test().is_err());
 }
 
 #[test]
@@ -900,7 +898,7 @@ fn reserved_terminalization_rejects_wrong_kind_and_double_use_without_mutation()
 }
 
 #[test]
-fn caller_certified_acyclic_object_promotion_preserves_the_snapshot_partition() {
+fn caller_certified_acyclic_object_promotion_preserves_the_dedup_partition() {
     let mut interner = Interner::with_intrinsics();
     let number = interner.well_known().number;
 
@@ -954,9 +952,10 @@ fn caller_certified_acyclic_object_promotion_preserves_the_snapshot_partition() 
     interner
         .poison_reserved_mapped(mapped)
         .expect("unrelated reservation can still be terminalized");
-    interner
-        .encode_snapshot_bytes_for_test()
-        .expect("promoted row and collision orphan partition exactly");
+    assert!(
+        interner.dedup_partitions_structural_rows_exactly(),
+        "promoted row and collision orphan partition exactly"
+    );
 }
 
 #[test]

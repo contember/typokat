@@ -233,8 +233,8 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
         declaration_compact
             .matches(".declarations_by_site.insert_local(")
             .count(),
-        2,
-        "only push and validated snapshot reconstruction mutate the local site index"
+        1,
+        "only push mutates the local site index"
     );
     let table_push = declaration_production
         .split_once("pub(crate) fn push(")

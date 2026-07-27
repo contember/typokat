@@ -10,8 +10,6 @@ use oxc_ast::ast::{
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
-#[cfg(test)]
-use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Unified lexical identity of one source declaration occurrence.
@@ -832,34 +830,6 @@ impl DeclarationTable {
         self.declarations.is_empty()
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_snapshot(
-        declarations: Vec<LexicalDeclaration>,
-    ) -> Result<Self, &'static str> {
-        let mut declarations_by_site = FxHashMap::default();
-        for (index, declaration) in declarations.iter().enumerate() {
-            if declaration.id.index() != index {
-                return Err("snapshot declaration ids are not dense");
-            }
-            let key = (
-                declaration.site.module,
-                declaration.site.binding_span.start,
-                declaration.kind,
-            );
-            if declarations_by_site.insert(key, declaration.id).is_some() {
-                return Err("snapshot declaration-site index contains a duplicate");
-            }
-        }
-        let mut table = Self::default();
-        for declaration in declarations {
-            table.declarations.push_local(declaration);
-        }
-        for (key, declaration) in declarations_by_site {
-            table.declarations_by_site.insert_local(key, declaration)?;
-        }
-        Ok(table)
-    }
-
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         self.declarations.freeze_as_base()?;
         self.declarations_by_site.freeze_as_base()
@@ -1010,22 +980,6 @@ impl TypeGroupTable {
     #[cfg(test)]
     pub(crate) fn local_row_count_for_test(&self) -> usize {
         self.groups.local_len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_snapshot(groups: Vec<TypeGroup>) -> Result<Self, &'static str> {
-        if groups
-            .iter()
-            .enumerate()
-            .any(|(index, group)| group.id.index() != index)
-        {
-            return Err("snapshot type-group ids are not dense");
-        }
-        let mut table = Self::default();
-        for group in groups {
-            table.groups.push_local(group);
-        }
-        Ok(table)
     }
 
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
