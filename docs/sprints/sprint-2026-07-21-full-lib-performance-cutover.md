@@ -950,7 +950,7 @@ does nothing for arbitrary user code. Recorded as
   [`98`](../backlog/98-library-diagnostic-count-delta.md). Roughly 6,300 lines of orphaned
   byte-level codec are gated `#[cfg(test)]` rather than deleted, because part of it is used as a
   traversal backing live reference-integrity assertions → backlog
-  [`97`](../backlog/97-orphaned-wire-serialization.md).
+  `97` (shipped 2026-07-27, `6d0be9e`..`70f9a91`).
 - **The binding performance claim above is now unreachable as written and must be restated.** The
   snapshot's 112 ms median / 119 ms p95 cold start is what bought ≥2×. Source compilation is at
   277 ms against 289 ms, i.e. ~1.04×. Restating the gate is a contract change and is pending an
@@ -1016,7 +1016,7 @@ Phase attribution before → after (in-place probes, medians of 3, since removed
   has no record store. True before this change as well; the evidence blobs were a byte projection,
   not retention. So ADR-0011's "preserve every library-owned diagnostic outcome exactly" holds today
   only in the sense that they are computed exactly. WU7 needs somewhere to put them →
-  [`99`](../backlog/99-library-records-are-not-retained.md).
+  `99` (shipped 2026-07-27 as [ADR-0018](../decisions/0018-pin-library-owned-records-as-a-named-census.md)).
 - **Where the remaining 296 ms sits, and why it matters for the gate.** `reserve_fill` (99.7 ms) and
   `finish_effects + ledger` (84.3 ms) are 184 of the 296. The ledger half materializes records
   production then discards, so `99` and the gate are the same work. Exploratory native TypeScript
@@ -1072,7 +1072,7 @@ Production still runs `src/prelude.ts`.
 - **The 265 library-owned diagnostics cannot reach user output**, before or after a cutover: each
   user check builds a fresh `EventStore` reserving only user programs (`mod.rs:1195-1207`), confirmed
   empirically by 381/410 byte-identical fixtures and a zero-incomplete probe. Backlog
-  [`99`](../backlog/99-library-records-are-not-retained.md)'s risk is therefore the **inverse** of
+  `99` (shipped 2026-07-27 as [ADR-0018](../decisions/0018-pin-library-owned-records-as-a-named-census.md))'s risk is therefore the **inverse** of
   what WU7 states — not leakage, but that the set is invisible and unmeasurable, exactly as
   [`98`](../backlog/98-library-diagnostic-count-delta.md) predicted.
 - **Sequencing decided, against the leader's first instinct.** The leader proposed closing the model
