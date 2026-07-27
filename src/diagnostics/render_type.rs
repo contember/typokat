@@ -593,7 +593,28 @@ fn pop_overlay(context: &mut RenderContext, frame: OverlayFrame) {
     context.overlay_limit = frame.previous_limit;
 }
 
+/// Cycle- and depth-safe wrapper for [`render_declared_recipe_node`]. The `Array` /
+/// `Tuple` / `Readonly` arms recurse into a *recipe* rather than a type, so they never
+/// reach [`render_type_inner`]'s guard — the budget has to be charged here instead
+/// (backlog 87).
 fn render_declared_recipe(store: &Store, recipe: DeclaredRecipeId, context: &mut RenderContext) {
+    if context.truncated {
+        return;
+    }
+    if context.depth >= DISPLAY_DEPTH_LIMIT {
+        context.stop_at_depth_limit();
+        return;
+    }
+    context.depth += 1;
+    render_declared_recipe_node(store, recipe, context);
+    context.depth -= 1;
+}
+
+fn render_declared_recipe_node(
+    store: &Store,
+    recipe: DeclaredRecipeId,
+    context: &mut RenderContext,
+) {
     let Some(recipe) = store.declared_recipe(recipe) else {
         context.append("<unsupported>");
         return;
@@ -822,7 +843,7 @@ fn declared_recipe_needs_array_parens(
     context: &RenderContext,
 ) -> bool {
     matches!(
-        declared_recipe_tag(store, recipe, context, context.overlay_limit),
+        declared_recipe_tag(store, recipe, context, context.overlay_limit, context.depth),
         TypeTag::Union | TypeTag::Function | TypeTag::Intersection | TypeTag::Readonly
     )
 }
@@ -845,20 +866,34 @@ fn indexed_access_object_needs_parens(
 }
 
 fn render_tag(store: &Store, id: TypeId, context: &RenderContext) -> TypeTag {
-    render_tag_with_limit(store, id, context, context.overlay_limit)
+    render_tag_with_limit(store, id, context, context.overlay_limit, context.depth)
 }
 
+/// Resolve the tag a type *displays* as, following overlay bindings and declared
+/// recipes. This walk produces no output, so it never reaches `RenderContext::append`
+/// or [`render_type_inner`]; `depth` therefore carries the display budget by hand and
+/// the walk stops at [`DISPLAY_DEPTH_LIMIT`] with the type's own shallow tag
+/// (backlog 87). Only parenthesization consults it, and a display that deep has
+/// already collapsed to `...`, so the fallback is not observable today.
 fn render_tag_with_limit(
     store: &Store,
     id: TypeId,
     context: &RenderContext,
     limit: usize,
+    depth: usize,
 ) -> TypeTag {
+    if depth >= DISPLAY_DEPTH_LIMIT {
+        return store.tag(id);
+    }
     if let Some(parameter) = store.type_param(id) {
         if let Some((layer, binding)) = overlay_binding(context, parameter.id, limit) {
             return match binding {
-                RenderBinding::Type(ty) => render_tag_with_limit(store, ty, context, layer),
-                RenderBinding::Recipe(recipe) => declared_recipe_tag(store, recipe, context, layer),
+                RenderBinding::Type(ty) => {
+                    render_tag_with_limit(store, ty, context, layer, depth + 1)
+                }
+                RenderBinding::Recipe(recipe) => {
+                    declared_recipe_tag(store, recipe, context, layer, depth + 1)
+                }
             };
         }
     }
@@ -869,6 +904,7 @@ fn render_tag_with_limit(
             &declared.mapper,
             context,
             limit,
+            depth + 1,
         );
     }
     store.tag(id)
@@ -879,8 +915,9 @@ fn declared_recipe_tag(
     recipe: DeclaredRecipeId,
     context: &RenderContext,
     limit: usize,
+    depth: usize,
 ) -> TypeTag {
-    declared_recipe_tag_with_mapper(store, recipe, &[], context, limit)
+    declared_recipe_tag_with_mapper(store, recipe, &[], context, limit, depth)
 }
 
 fn declared_recipe_tag_with_mapper(
@@ -889,6 +926,7 @@ fn declared_recipe_tag_with_mapper(
     mapper: &[(TypeParamId, TypeId)],
     context: &RenderContext,
     limit: usize,
+    depth: usize,
 ) -> TypeTag {
     let Some(recipe) = store.declared_recipe(recipe) else {
         return TypeTag::Intrinsic;
@@ -900,16 +938,16 @@ fn declared_recipe_tag_with_mapper(
                     .iter()
                     .find(|(candidate, _)| *candidate == parameter.id)
                 {
-                    return render_tag_with_limit(store, *mapped, context, limit);
+                    return render_tag_with_limit(store, *mapped, context, limit, depth + 1);
                 }
             }
-            render_tag_with_limit(store, *ty, context, limit)
+            render_tag_with_limit(store, *ty, context, limit, depth + 1)
         }
         DeclaredRecipeNode::Array(_) => TypeTag::Array,
         DeclaredRecipeNode::Tuple { .. } => TypeTag::Tuple,
         DeclaredRecipeNode::Readonly(_) => TypeTag::Readonly,
         DeclaredRecipeNode::Application { template, .. } => {
-            render_tag_with_limit(store, *template, context, limit)
+            render_tag_with_limit(store, *template, context, limit, depth + 1)
         }
     }
 }

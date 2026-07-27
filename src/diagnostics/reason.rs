@@ -7,11 +7,34 @@ use crate::types::store::Store;
 /// Indentation step for one level of reason-chain nesting (two spaces, tsc-style).
 const REASON_INDENT: &str = "  ";
 
+/// Deepest nesting level rendered in full; past it the chain collapses (backlog 87).
+/// This is the reason-chain twin of `render_type`'s `DISPLAY_DEPTH_LIMIT` one module
+/// over — a level costs a whole line here, so the bound is tighter. It clears the
+/// deepest chain the checker actually produces (6, measured across the conformance
+/// corpus, the official-suite corpus, and the unit tests) by a wide margin, so no
+/// existing diagnostic can reach it.
+const REASON_DEPTH_LIMIT: usize = 16;
+
+/// Deepest indent any line may carry: the elision line and the innermost cause sit
+/// one and two levels past the cap. Independent of the reason tree's own depth.
+const REASON_INDENT_LIMIT: usize = REASON_DEPTH_LIMIT + 2;
+
+fn reason_indent(depth: usize) -> String {
+    REASON_INDENT.repeat(depth.min(REASON_INDENT_LIMIT))
+}
+
 /// Render a relation-failure reason chain into the nested lines below the
 /// diagnostic headline. Terminals stay headline-only, union-source heads descend
 /// to the offending member, and wrappers render their incompatibility line before
 /// the nested cause.
 pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
+    // The headline names the offending union member (the checker's `headline_src`),
+    // so the elaboration is *that member's* reason — exactly as if the member's
+    // reason were itself the head. Iterative: nested union heads must not cost stack.
+    let mut head = head;
+    while let Reason::UnionSourceMember { because, .. } = head {
+        head = because;
+    }
     match head {
         // The headline already states this mismatch in full.
         Reason::Leaf { .. }
@@ -20,11 +43,10 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
         | Reason::ParameterCount { .. }
         // M18: a tuple length mismatch is terminal — the headline states the two
         // tuple types and the cause is just "their lengths differ", so no extra line.
-        | Reason::TupleLength { .. } => Vec::new(),
-        // The headline names the offending union member (the checker's
-        // `headline_src`), so the elaboration is *that member's* reason — exactly
-        // as if the member's reason were itself the head.
-        Reason::UnionSourceMember { because, .. } => render_reason_chain(store, because),
+        | Reason::TupleLength { .. }
+        // Unreachable — the loop above descended past every union head. Grouped with
+        // the terminals so the match stays exhaustive without a catch-all.
+        | Reason::UnionSourceMember { .. } => Vec::new(),
         // Structural wrappers: emit the "…are incompatible." line plus the nested
         // cause, starting one indent level in (the headline sits at level 0).
         Reason::Property { .. } | Reason::Parameter { .. } | Reason::ReturnType { .. } => {
@@ -50,20 +72,73 @@ pub fn render_reason_chain(store: &Store, head: &Reason) -> Vec<String> {
 /// the offending member to avoid a redundant wrapper; nested arrays and structural
 /// causes use the normal reason renderer.
 fn element_reason_lines(store: &Store, cause: &Reason, depth: usize) -> Vec<String> {
-    match cause {
-        // A union element: the offending member is the cause; descend into it so a
-        // scalar member renders one line (its own), not two identical ones.
-        Reason::UnionSourceMember { because, .. } => element_reason_lines(store, because, depth),
-        // Everything else renders normally (a nested `ArrayElement` prints its array
-        // line and recurses; a leaf prints the leaf line).
-        other => reason_lines(store, other, depth),
+    // A union element: the offending member is the cause; descend into it so a
+    // scalar member renders one line (its own), not two identical ones. Iterative,
+    // for the same reason as the head descent.
+    let mut cause = cause;
+    while let Reason::UnionSourceMember { because, .. } = cause {
+        cause = because;
+    }
+    // Everything else renders normally (a nested `ArrayElement` prints its array
+    // line and recurses; a leaf prints the leaf line).
+    reason_lines(store, cause, depth)
+}
+
+/// Render `reason` and its nested causes as indented lines, leaf last. Bounded at
+/// [`REASON_DEPTH_LIMIT`] levels (backlog 87).
+fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
+    if depth > REASON_DEPTH_LIMIT {
+        return elided_reason_lines(store, reason, depth);
+    }
+    reason_line_group(store, reason, depth)
+}
+
+/// Collapse everything from `reason` down to its innermost cause into one elision
+/// line plus that cause, so a deeply nested mismatch still reports what actually
+/// mismatched. A `reason` that is *already* terminal has nothing to omit and renders
+/// unchanged — the elision line is only emitted where it replaces something.
+fn elided_reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
+    let mut omitted = 0usize;
+    let mut cause = reason;
+    while let Some(nested) = nested_cause(cause) {
+        omitted += 1;
+        cause = nested;
+    }
+    if omitted == 0 {
+        return reason_line_group(store, cause, depth);
+    }
+    let indent = reason_indent(depth);
+    let levels = if omitted == 1 { "level" } else { "levels" };
+    let mut lines = vec![format!(
+        "{indent}... {omitted} more nested {levels} omitted."
+    )];
+    // `cause` is terminal, so this is exactly one more line and never recurses.
+    lines.extend(reason_line_group(store, cause, depth + 1));
+    lines
+}
+
+/// The nested cause of a structural wrapper, or `None` for a terminal reason.
+fn nested_cause(reason: &Reason) -> Option<&Reason> {
+    match reason {
+        Reason::Property { because, .. }
+        | Reason::Parameter { because, .. }
+        | Reason::ReturnType { because, .. }
+        | Reason::UnionSourceMember { because, .. }
+        | Reason::ArrayElement { because, .. }
+        | Reason::TupleElement { because, .. }
+        | Reason::IndexSignature { because, .. } => Some(because),
+        Reason::Leaf { .. }
+        | Reason::MissingProperty { .. }
+        | Reason::NoUnionMember { .. }
+        | Reason::ParameterCount { .. }
+        | Reason::TupleLength { .. } => None,
     }
 }
 
-/// Render `reason` and its nested causes as indented lines, leaf last. Every
-/// variant is handled exhaustively.
-fn reason_lines(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
-    let indent = REASON_INDENT.repeat(depth);
+/// Render one reason's own line(s) at `depth`. Every variant is handled
+/// exhaustively; wrappers recurse through [`reason_lines`], which applies the cap.
+fn reason_line_group(store: &Store, reason: &Reason, depth: usize) -> Vec<String> {
+    let indent = reason_indent(depth);
     match reason {
         // The base mismatch. Source widened (literal → base) to match the headline
         // rendering convention; target as-is.
