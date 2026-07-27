@@ -3,7 +3,7 @@
 use super::calls::intrinsic_id;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
-use super::expr::contextual_literal_target;
+use super::expr::{contextual_literal_target, contextual_value_operands};
 use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::declaration::ValueStorageId;
 use crate::binder::scope::ScopeId;
@@ -752,7 +752,25 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 DemandOutcome::Ready(())
             }
-            _ => DemandOutcome::Ready(()),
+            // Backlog 104: a ternary / logical is not itself a literal, but its shaped
+            // operands are — the same target has to reach them here too, or the walk
+            // below finds an unresolved declared child target.
+            expr => {
+                let Some(operands) = contextual_value_operands(expr) else {
+                    return DemandOutcome::Ready(());
+                };
+                for operand in operands.into_iter().flatten() {
+                    match self
+                        .prepare_declared_excess_property_targets(operand, target_ty, normalized)
+                    {
+                        DemandOutcome::Ready(()) => {}
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion);
+                        }
+                    }
+                }
+                DemandOutcome::Ready(())
+            }
         }
     }
 
@@ -875,7 +893,17 @@ fn collect_excess_properties(
         Expression::ArrayExpression(array) => {
             check_array_excess_properties(store, array, target_ty, normalized, diagnostics);
         }
-        _ => {}
+        // Backlog 104: freshness survives a ternary / logical — tsc checks each shaped
+        // operand against the same contextual target, so the walk descends instead of
+        // stopping at the first non-literal node.
+        expr => {
+            let Some(operands) = contextual_value_operands(expr) else {
+                return;
+            };
+            for operand in operands.into_iter().flatten() {
+                collect_excess_properties(store, operand, target_ty, normalized, diagnostics);
+            }
+        }
     }
 }
 

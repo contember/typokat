@@ -1184,16 +1184,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             // Backlog 101: a ternary / logical passes the target on to the operands that
             // carry the value, so it is re-walkable exactly when one of them is.
-            Expression::ConditionalExpression(cond) => {
-                self.context_can_shape_fresh_literal(&cond.consequent, context)
-                    || self.context_can_shape_fresh_literal(&cond.alternate, context)
-            }
-            Expression::LogicalExpression(logical) => {
-                self.context_can_shape_fresh_literal(&logical.right, context)
-                    || (logical.operator != LogicalOperator::And
-                        && self.context_can_shape_fresh_literal(&logical.left, context))
-            }
-            _ => false,
+            _ => contextual_value_operands(expr).is_some_and(|operands| {
+                operands
+                    .into_iter()
+                    .flatten()
+                    .any(|operand| self.context_can_shape_fresh_literal(operand, context))
+            }),
         }
     }
 
@@ -2326,6 +2322,28 @@ fn is_contextual_literal_shape(store: &Store, ty: TypeId) -> bool {
         store.tag(ty),
         TypeTag::Object | TypeTag::Array | TypeTag::Tuple
     )
+}
+
+/// The sub-expressions a ternary / logical expression passes its contextual target
+/// down to — the ones that carry the value, per tsc's
+/// `getContextualTypeForBinaryOperand`: both ternary arms, both `||` / `??`
+/// operands, and only `&&`'s right (its left is a condition, not a shaped value).
+/// `None` for every other shape. The single statement of that rule: the value
+/// inference ([`Pass::infer_conditional`] / [`Pass::infer_logical`]), the
+/// contextual re-walk gate, and the excess-property walk must agree on it.
+pub(in crate::check::checker) fn contextual_value_operands<'e, 'ast>(
+    expr: &'e Expression<'ast>,
+) -> Option<[Option<&'e Expression<'ast>>; 2]> {
+    match expr {
+        Expression::ConditionalExpression(cond) => {
+            Some([Some(&cond.consequent), Some(&cond.alternate)])
+        }
+        Expression::LogicalExpression(logical) => Some([
+            (logical.operator != LogicalOperator::And).then_some(&logical.left),
+            Some(&logical.right),
+        ]),
+        _ => None,
+    }
 }
 
 fn is_numeric_property_name(name: &str) -> bool {

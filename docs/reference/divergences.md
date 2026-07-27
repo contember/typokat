@@ -97,6 +97,35 @@ and validated the same way.
   diagnostics (`TK2322` plus `TK2353`), while tsc 6.0.3 gives the known-property
   mismatch precedence and reports only `TS2322`.
   <!-- div: id=objects/wrong-known-and-excess dir=over scope=s-excess-property owner=design-oos witness=../../tests/cases/m30_contextual_literals/excess_properties.ts -->
+- **Excess keys reached through a ternary / logical over-report in count.** The
+  excess-property walk descends into both ternary arms and both `||`/`??` operands
+  (backlog `104`) and reports a `TK2353` for **every** excess key it finds, the same
+  per-key rule a directly assigned literal already follows. tsc frames the whole
+  expression as one `TS2322` whose elaboration stops at the first failing arm, so a
+  ternary with an excess key in each arm is two diagnostics here and one there. Same
+  verdict, same lines, more of them.
+  <!-- div: id=objects/excess-descent-count dir=over scope=s-excess-property owner=design-oos witness=../../tests/cases/b104_excess_property_descent/ternary_arms.ts -->
+- **A `||`/`??` right operand that tsc short-circuits away is still excess-checked
+  (over-report).** An object literal is always truthy and never nullish, so when it is
+  the *left* operand tsc drops the right one from the result type and never relates it
+  — no excess check. typokat's excess walk is syntax-directed and has no operand types,
+  so it checks both. Dead code only: the right operand of such an expression can never
+  be evaluated. Making it precise means teaching the walk the short-circuit, which is
+  the value model's job, not a second freshness rule.
+  <!-- div: id=objects/excess-dead-logical-operand dir=over scope=s-excess-property owner=design-oos witness=../../tests/cases/b104_excess_property_descent/logical_operands.ts -->
+- **A ternary/logical arm that tsc's union subtype reduction absorbs is still
+  excess-checked (over-report).** tsc's excess check runs on the RELATION of the
+  expression's value, and that value is a subtype-reduced union whose subtype test
+  itself performs the excess check. So an arm whose excess key is admitted by a
+  sibling arm's type (`flag ? { kind: "a", extra: 1 } : wide` with
+  `wide: { kind: string; extra: number }`) is dropped from the union before anything
+  is related, and tsc reports nothing; a sibling that does not admit the key absorbs
+  nothing and both agree. typokat's excess walk is syntax-directed and has no operand
+  types, so it reports either way. A false positive against tsc, in the over-reporting
+  direction, on a literal that already names a key its annotation does not declare.
+  Closing it means giving `Interner::union` tsc's subtype reduction — a change to the
+  value model backlog `101` shipped, not to the freshness rule.
+  <!-- div: id=objects/excess-absorbed-arm dir=over scope=s-excess-property owner=design-oos witness=../../tests/cases/b104_excess_property_descent/absorbed_arm_divergence.ts -->
 - **Diagnosed ambient export-alias endpoints suppress qualified-use cascades
   (cosmetic).** After `TK2661` rejects an alias-only local name, typokat keeps the
   exported endpoint unavailable and omits tsc's follow-on `TS2694` at each use.
@@ -296,6 +325,8 @@ cross-checked against `tsc 6.0.3 --strict --target es2025 --noEmit`.
   signature (`TK2554`/`TK2345`) where tsc is clean. The safe direction, but a false positive on
   legal input.
   <!-- div: id=library/refused-overload-arity dir=over scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_function_overload_merge.ts -->
+
+
 
 ### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 
