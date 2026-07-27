@@ -2,7 +2,7 @@ use super::context::{
     ConstructionDrafts, Pass, PublishedTypeDecl, TypeDecl, TypeDeclTable, TypeResolvedTable,
 };
 use crate::binder::declaration::TypeGroupId;
-use crate::class_semantics::PublishedClassSnapshotTerminal;
+use crate::class_semantics::OwnedPublishedClassTerminal;
 use crate::class_semantics::PublishedClasses;
 use crate::types::layered::LayeredVec;
 use crate::types::repr::{ClassId, TypeParamId};
@@ -94,8 +94,8 @@ pub(in crate::check::checker) struct PublishedTypeEnvironment {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::check::checker) struct PublishedTypeEnvironmentSnapshotParts {
-    pub(in crate::check::checker) classes: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
+pub(in crate::check::checker) struct PublishedTypeEnvironmentProductParts {
+    pub(in crate::check::checker) classes: Vec<(ClassId, OwnedPublishedClassTerminal)>,
     pub(in crate::check::checker) groups: Vec<PublishedTypeGroupTerminal>,
 }
 
@@ -235,21 +235,21 @@ impl PublishedTypeEnvironment {
         )
     }
 
-    pub(in crate::check::checker) fn snapshot_parts(
+    pub(in crate::check::checker) fn product_parts(
         &self,
-    ) -> Result<PublishedTypeEnvironmentSnapshotParts, &'static str> {
-        Ok(PublishedTypeEnvironmentSnapshotParts {
+    ) -> Result<PublishedTypeEnvironmentProductParts, &'static str> {
+        Ok(PublishedTypeEnvironmentProductParts {
             classes: self
                 .classes
-                .snapshot_terminals()
-                .ok_or("snapshot class publication contains a non-terminal state")?,
+                .owned_terminals()
+                .ok_or("class publication contains a non-terminal state")?,
             groups: self.groups.entries.iter().cloned().collect(),
         })
     }
 
     #[cfg(test)]
-    pub(in crate::check::checker) fn from_snapshot_parts(
-        parts: PublishedTypeEnvironmentSnapshotParts,
+    pub(in crate::check::checker) fn from_product_parts(
+        parts: PublishedTypeEnvironmentProductParts,
     ) -> Result<Self, &'static str> {
         for terminal in &parts.groups {
             let PublishedTypeGroupTerminal::Ready(group) = terminal else {
@@ -258,7 +258,7 @@ impl PublishedTypeEnvironment {
             if group.parameters.len() != group.parameter_names.len()
                 || group.parameters.len() != group.parameter_defaults.len()
             {
-                return Err("snapshot type-group parameter columns have different lengths");
+                return Err("restored type-group parameter columns have different lengths");
             }
             let mut parameters = std::collections::BTreeSet::new();
             if group
@@ -266,11 +266,11 @@ impl PublishedTypeEnvironment {
                 .iter()
                 .any(|parameter| !parameters.insert(*parameter))
             {
-                return Err("snapshot type group repeats a parameter id");
+                return Err("restored type group repeats a parameter id");
             }
         }
         Ok(Self {
-            classes: PublishedClasses::from_snapshot_terminals(parts.classes)?,
+            classes: PublishedClasses::from_owned_terminals(parts.classes)?,
             groups: published_type_groups_from_terminals(parts.groups),
         })
     }
@@ -351,8 +351,8 @@ impl PublishedTypeEnvironment {
     #[cfg(test)]
     pub(in crate::check::checker) fn local_class_terminals(
         &self,
-    ) -> Vec<(ClassId, PublishedClassSnapshotTerminal)> {
-        self.classes.local_snapshot_terminals()
+    ) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
+        self.classes.local_owned_terminals()
     }
 }
 

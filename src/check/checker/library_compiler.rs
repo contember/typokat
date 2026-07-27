@@ -67,7 +67,7 @@ use crate::binder::Binder;
 use crate::class_semantics::CanonicalPublishedClassTerminal;
 #[cfg(test)]
 use crate::class_semantics::DemandOutcome;
-use crate::class_semantics::PublishedClassSnapshotTerminal;
+use crate::class_semantics::OwnedPublishedClassTerminal;
 #[cfg(test)]
 use crate::diagnostics::render_type;
 use crate::diagnostics::{render_to_writer_with_format, DiagnosticFormat};
@@ -105,14 +105,14 @@ pub(crate) struct OwnedLibraryRuntimeState {
     replay_index: Option<Box<AdmittedCollisionReplayIndex>>,
 }
 
-pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
+pub(in crate::check::checker) struct OwnedLibraryRuntimeProductParts {
     pub(in crate::check::checker) interner: Interner,
     pub(in crate::check::checker) binder: Binder,
     pub(in crate::check::checker) published_types:
-        super::type_groups::PublishedTypeEnvironmentSnapshotParts,
+        super::type_groups::PublishedTypeEnvironmentProductParts,
     pub(in crate::check::checker) decl_types: Vec<Option<TypeId>>,
     pub(in crate::check::checker) semantic_identities:
-        Option<super::library_identities::LibrarySemanticIdentitiesSnapshotParts>,
+        Option<super::library_identities::LibrarySemanticIdentitiesProductParts>,
     pub(in crate::check::checker) runtime: super::FrozenCheckerRuntimeSnapshotParts,
     pub(in crate::check::checker) next_type_param: u32,
     pub(in crate::check::checker) next_class_id: u32,
@@ -120,7 +120,7 @@ pub(in crate::check::checker) struct OwnedLibraryRuntimeSnapshotParts {
 }
 
 pub(crate) struct CompiledLibraryRuntimeProduct {
-    pub(in crate::check::checker) _parts: OwnedLibraryRuntimeSnapshotParts,
+    pub(in crate::check::checker) _parts: OwnedLibraryRuntimeProductParts,
     pub(crate) _replay_index: AdmittedCollisionReplayIndex,
 }
 
@@ -132,7 +132,7 @@ pub(crate) fn freeze_library_runtime_product(
         .take()
         .ok_or("source library compiler did not produce a replay index")?;
     state
-        .into_snapshot_parts()
+        .into_product_parts()
         .map(|parts| CompiledLibraryRuntimeProduct {
             _parts: parts,
             _replay_index: *replay_index,
@@ -144,44 +144,44 @@ fn validate_library_source_prefix(
     source_file_count: u32,
 ) -> Result<(), &'static str> {
     if source_file_count == 0 {
-        return Err("snapshot library state has no source files");
+        return Err("product library state has no source files");
     }
     let mut source_keys = binder
-        .snapshot_module_sources()
+        .module_sources()
         .values()
         .map(|source| source.0)
         .collect::<Vec<_>>();
     if source_keys.is_empty() {
-        return Err("snapshot binder has no retained source ownership");
+        return Err("product binder has no retained source ownership");
     }
     source_keys.sort_unstable();
     if source_keys.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err("snapshot binder repeats a retained source key");
+        return Err("product binder repeats a retained source key");
     }
     let expected_len = source_file_count
         .checked_add(1)
-        .ok_or("snapshot source count overflows the prelude prefix")?;
-    if u32::try_from(source_keys.len()).map_err(|_| "snapshot source-key count does not fit u32")?
+        .ok_or("product source count overflows the prelude prefix")?;
+    if u32::try_from(source_keys.len()).map_err(|_| "product source-key count does not fit u32")?
         != expected_len
         || source_keys
             .iter()
             .enumerate()
             .any(|(index, source)| *source != u32::try_from(index).unwrap_or(u32::MAX))
     {
-        return Err("snapshot binder source keys are not the contiguous prelude/library prefix");
+        return Err("product binder source keys are not the contiguous prelude/library prefix");
     }
     if binder
-        .snapshot_module_sources()
+        .module_sources()
         .keys()
         .any(|scope| binder.graph.get(*scope).is_none())
     {
-        return Err("snapshot binder source ownership refers to an unknown scope");
+        return Err("product binder source ownership refers to an unknown scope");
     }
     Ok(())
 }
 
-fn validate_owned_library_snapshot_parts(
-    parts: &OwnedLibraryRuntimeSnapshotParts,
+fn validate_owned_library_product_parts(
+    parts: &OwnedLibraryRuntimeProductParts,
 ) -> Result<(), &'static str> {
     fn type_in_range(id: TypeId, store_len: usize) -> bool {
         usize::try_from(id.0).is_ok_and(|index| index < store_len)
@@ -193,13 +193,13 @@ fn validate_owned_library_snapshot_parts(
 
     validate_library_source_prefix(&parts.binder, parts.source_file_count)?;
     if parts.published_types.groups.len() != parts.binder.type_groups.len() {
-        return Err("snapshot published type-group count does not match the binder");
+        return Err("product published type-group count does not match the binder");
     }
     if parts.decl_types.len()
         != usize::try_from(parts.binder.decl_count)
-            .map_err(|_| "snapshot binder storage count does not fit usize")?
+            .map_err(|_| "product binder storage count does not fit usize")?
     {
-        return Err("snapshot declaration types do not cover the binder storage prefix");
+        return Err("product declaration types do not cover the binder storage prefix");
     }
 
     let store = parts.interner.store();
@@ -210,18 +210,18 @@ fn validate_owned_library_snapshot_parts(
         .flatten()
         .any(|ty| !type_in_range(*ty, store_len))
     {
-        return Err("snapshot declaration type is out of range");
+        return Err("product declaration type is out of range");
     }
 
     let mut classes = BTreeSet::new();
     for (class, terminal) in &parts.published_types.classes {
         if !classes.insert(*class) {
-            return Err("snapshot class publication repeats a class id");
+            return Err("product class publication repeats a class id");
         }
         if class.0 >= parts.next_class_id {
-            return Err("snapshot class id collides with the next class counter");
+            return Err("product class id collides with the next class counter");
         }
-        let PublishedClassSnapshotTerminal::Ready(surface) = terminal else {
+        let OwnedPublishedClassTerminal::Ready(surface) = terminal else {
             continue;
         };
         if surface
@@ -229,7 +229,7 @@ fn validate_owned_library_snapshot_parts(
             .iter()
             .any(|parameter| !type_param_precedes_counter(*parameter, parts.next_type_param))
         {
-            return Err("snapshot type parameter id collides with the next parameter counter");
+            return Err("product type parameter id collides with the next parameter counter");
         }
         if surface.class() != *class
             || !type_in_range(surface.instance_template(), store_len)
@@ -238,7 +238,7 @@ fn validate_owned_library_snapshot_parts(
                 .constructor_template()
                 .is_some_and(|ty| !type_in_range(ty, store_len))
         {
-            return Err("snapshot published class surface has an invalid reference");
+            return Err("product published class surface has an invalid reference");
         }
     }
 
@@ -248,7 +248,7 @@ fn validate_owned_library_snapshot_parts(
             continue;
         };
         let group_id = TypeGroupId(
-            u32::try_from(index).map_err(|_| "snapshot type-group index does not fit u32")?,
+            u32::try_from(index).map_err(|_| "product type-group index does not fit u32")?,
         );
         if parts
             .binder
@@ -256,7 +256,7 @@ fn validate_owned_library_snapshot_parts(
             .get(group_id)
             .is_none_or(|binding| binding.name != group.name)
         {
-            return Err("snapshot published type-group name does not match the binder");
+            return Err("product published type-group name does not match the binder");
         }
         if group
             .parameters
@@ -271,33 +271,33 @@ fn validate_owned_library_snapshot_parts(
                 .flat_map(|alternative| &alternative.types)
                 .any(|ty| !type_in_range(*ty, store_len))
         {
-            return Err("snapshot published type group has an invalid type reference");
+            return Err("product published type group has an invalid type reference");
         }
         match group.surface {
             PublishedTypeGroupSurface::Template(ty) if !type_in_range(ty, store_len) => {
-                return Err("snapshot published type-group template is out of range")
+                return Err("product published type-group template is out of range")
             }
             PublishedTypeGroupSurface::Class(class) => {
                 if !classes.contains(&class) {
-                    return Err("snapshot published type group refers to an unknown class");
+                    return Err("product published type group refers to an unknown class");
                 }
                 if class_group_names
                     .insert(class, group.name.as_str())
                     .is_some()
                 {
-                    return Err("snapshot class identity is published by multiple type groups");
+                    return Err("product class identity is published by multiple type groups");
                 }
             }
             PublishedTypeGroupSurface::Template(_) => {}
         }
     }
     if class_group_names.keys().copied().collect::<BTreeSet<_>>() != classes {
-        return Err("snapshot published classes do not have exact type-group ownership");
+        return Err("product published classes do not have exact type-group ownership");
     }
 
     for index in 0..store_len {
         let ty = TypeId(
-            u32::try_from(index).map_err(|_| "snapshot type-store length does not fit TypeId")?,
+            u32::try_from(index).map_err(|_| "product type-store length does not fit TypeId")?,
         );
         if store
             .type_param(ty)
@@ -315,12 +315,12 @@ fn validate_owned_library_snapshot_parts(
                     .any(|(parameter, _)| parameter.0 >= parts.next_type_param)
             })
         {
-            return Err("snapshot type parameter id collides with the next parameter counter");
+            return Err("product type parameter id collides with the next parameter counter");
         }
         if store.class_instance_type(ty).is_some_and(|instance| {
             instance.class.0 >= parts.next_class_id || !classes.contains(&instance.class)
         }) {
-            return Err("snapshot class instance refers to an unknown class identity");
+            return Err("product class instance refers to an unknown class identity");
         }
         if store.object_type(ty).is_some_and(|object| {
             object.properties.iter().any(|property| {
@@ -329,7 +329,7 @@ fn validate_owned_library_snapshot_parts(
                 })
             })
         }) {
-            return Err("snapshot object property refers to an unknown class identity");
+            return Err("product object property refers to an unknown class identity");
         }
     }
 
@@ -346,7 +346,7 @@ fn validate_owned_library_snapshot_parts(
         ];
         for (terminal, expected_name) in identities.iter().zip(expected_names) {
             let LibraryIdentityTerminal::Ready(identity) = terminal else {
-                return Err("snapshot installed semantic identities are not all ready");
+                return Err("product installed semantic identities are not all ready");
             };
             if !type_in_range(identity.template, store_len)
                 || identity
@@ -354,18 +354,18 @@ fn validate_owned_library_snapshot_parts(
                     .iter()
                     .any(|parameter| parameter.0 >= parts.next_type_param)
             {
-                return Err("snapshot semantic identity has an invalid type reference");
+                return Err("product semantic identity has an invalid type reference");
             }
             let Some(PublishedTypeGroupTerminal::Ready(group)) =
                 parts.published_types.groups.get(identity.group.index())
             else {
-                return Err("snapshot semantic identity refers to an unpublished type group");
+                return Err("product semantic identity refers to an unpublished type group");
             };
             if group.name != expected_name
                 || group.parameters != identity.parameters
                 || group.surface != PublishedTypeGroupSurface::Template(identity.template)
             {
-                return Err("snapshot semantic identity does not match its published type group");
+                return Err("product semantic identity does not match its published type group");
             }
         }
     }
@@ -379,7 +379,7 @@ fn validate_owned_library_snapshot_parts(
         .map(|(class, _)| *class)
         .collect::<BTreeSet<_>>();
     if application_classes != classes {
-        return Err("snapshot class application metadata does not exactly cover published classes");
+        return Err("product class application metadata does not exactly cover published classes");
     }
     let new_metadata_classes = parts
         .runtime
@@ -388,7 +388,7 @@ fn validate_owned_library_snapshot_parts(
         .map(|(class, _)| *class)
         .collect::<BTreeSet<_>>();
     if new_metadata_classes != classes {
-        return Err("snapshot new metadata does not exactly cover published classes");
+        return Err("product new metadata does not exactly cover published classes");
     }
     let class_name_rows = parts
         .runtime
@@ -404,7 +404,7 @@ fn validate_owned_library_snapshot_parts(
                 .is_none_or(|group_name| group_name != name)
         })
     {
-        return Err("snapshot class names do not exactly match published class groups");
+        return Err("product class names do not exactly match published class groups");
     }
     let mut bound_classes = BTreeSet::new();
     if parts
@@ -414,11 +414,11 @@ fn validate_owned_library_snapshot_parts(
         .any(|(_, binding)| !bound_classes.insert(binding.class_id))
         || bound_classes != classes
     {
-        return Err("snapshot class value bindings do not exactly cover published classes");
+        return Err("product class value bindings do not exactly cover published classes");
     }
     for (class, parameters) in &parts.runtime.class_application_parameters {
         if !valid_class(*class) {
-            return Err("snapshot class application metadata refers to an unknown class");
+            return Err("product class application metadata refers to an unknown class");
         }
         for parameter in parameters {
             if parameter.id.0 >= parts.next_type_param
@@ -427,10 +427,10 @@ fn validate_owned_library_snapshot_parts(
                     .is_some_and(|ty| !type_in_range(ty, store_len))
                 || matches!(parameter.default, ClassTypeParameterDefault::Ready(ty) if !type_in_range(ty, store_len))
             {
-                return Err("snapshot class application metadata has an invalid type reference");
+                return Err("product class application metadata has an invalid type reference");
             }
         }
-        if let Some((_, PublishedClassSnapshotTerminal::Ready(surface))) = parts
+        if let Some((_, OwnedPublishedClassTerminal::Ready(surface))) = parts
             .published_types
             .classes
             .iter()
@@ -442,14 +442,14 @@ fn validate_owned_library_snapshot_parts(
                 .collect::<Vec<_>>();
             if parameter_ids != surface.type_params() {
                 return Err(
-                    "snapshot class application parameters do not match the published class",
+                    "product class application parameters do not match the published class",
                 );
             }
         }
     }
     for (class, metadata) in &parts.runtime.class_new_metadata {
         if !valid_class(*class) || !valid_class(metadata.ctor_declaring_class) {
-            return Err("snapshot runtime class metadata refers to an unknown class");
+            return Err("product runtime class metadata refers to an unknown class");
         }
         let mut current = *class;
         let mut visited = BTreeSet::new();
@@ -465,7 +465,7 @@ fn validate_owned_library_snapshot_parts(
             current = parent;
         }
         if current != metadata.ctor_declaring_class {
-            return Err("snapshot constructor owner is not on the class parent chain");
+            return Err("product constructor owner is not on the class parent chain");
         }
     }
     if parts
@@ -479,7 +479,7 @@ fn validate_owned_library_snapshot_parts(
             .iter()
             .any(|(class, _)| !valid_class(*class))
     {
-        return Err("snapshot runtime class metadata refers to an unknown class");
+        return Err("product runtime class metadata refers to an unknown class");
     }
     if parts
         .runtime
@@ -488,7 +488,7 @@ fn validate_owned_library_snapshot_parts(
         .chain(&parts.runtime.standalone_namespace_value_aliases)
         .any(|(alias, target)| !valid_storage(*alias) || !valid_storage(*target))
     {
-        return Err("snapshot runtime value alias is out of range");
+        return Err("product runtime value alias is out of range");
     }
     if parts
         .runtime
@@ -496,7 +496,7 @@ fn validate_owned_library_snapshot_parts(
         .iter()
         .any(|(storage, binding)| !valid_storage(*storage) || !valid_class(binding.class_id))
     {
-        return Err("snapshot class value binding has an invalid reference");
+        return Err("product class value binding has an invalid reference");
     }
     for (_, binding) in &parts.runtime.class_value_bindings {
         let Some((_, parameters)) = parts
@@ -505,12 +505,12 @@ fn validate_owned_library_snapshot_parts(
             .iter()
             .find(|(class, _)| *class == binding.class_id)
         else {
-            return Err("snapshot class value binding has no application metadata");
+            return Err("product class value binding has no application metadata");
         };
         let expected_generic = !parameters.is_empty();
         if binding.has_header_type_params != expected_generic {
             return Err(
-                "snapshot class value binding generic bit does not match application metadata",
+                "product class value binding generic bit does not match application metadata",
             );
         }
     }
@@ -521,7 +521,7 @@ fn validate_owned_library_snapshot_parts(
             .iter()
             .any(|(storage, _)| storage == target)
     }) {
-        return Err("snapshot class value alias does not target a class binding");
+        return Err("product class value alias does not target a class binding");
     }
 
     let ready_namespace_storages = parts
@@ -535,11 +535,11 @@ fn validate_owned_library_snapshot_parts(
         .collect::<Vec<_>>();
     for row in &parts.runtime.namespace_terminals {
         if parts.binder.namespaces.get(row.namespace).is_none() {
-            return Err("snapshot namespace terminal refers to an unknown namespace");
+            return Err("product namespace terminal refers to an unknown namespace");
         }
         if let FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } = row.terminal {
             if !valid_storage(storage) || !type_in_range(ty, store_len) {
-                return Err("snapshot namespace terminal has an invalid ready reference");
+                return Err("product namespace terminal has an invalid ready reference");
             }
         }
     }
@@ -549,7 +549,7 @@ fn validate_owned_library_snapshot_parts(
         .iter()
         .any(|(_, target)| !ready_namespace_storages.contains(target))
     {
-        return Err("snapshot namespace alias does not target a ready namespace root");
+        return Err("product namespace alias does not target a ready namespace root");
     }
     if parts.runtime.named_function_symbols.iter().any(|symbol| {
         parts
@@ -558,7 +558,7 @@ fn validate_owned_library_snapshot_parts(
             .get(*symbol)
             .is_none_or(|binding| binding.function_values.is_empty())
     }) {
-        return Err("snapshot named-function metadata refers to a non-function symbol");
+        return Err("product named-function metadata refers to a non-function symbol");
     }
     Ok(())
 }
@@ -649,8 +649,8 @@ impl OwnedLibraryRuntimeState {
     /// A user delta that leaked a row into the base would move one of these.
     #[cfg(test)]
     pub(crate) fn reference_record_counts_for_test(&self) -> [usize; 3] {
-        let (store, interner) = self.interner.snapshot_reference_records_for_test();
-        let binder = crate::binder::snapshot::snapshot_reference_records(&self.binder)
+        let (store, interner) = self.interner.reference_records_for_test();
+        let binder = crate::binder::references::reference_records(&self.binder)
             .expect("frozen binder projects its reference rows")
             .len();
         [store.len(), interner.len(), binder]
@@ -694,7 +694,7 @@ impl OwnedLibraryRuntimeState {
             usize::try_from(self.next_type_param)
                 .map_err(|_| "type parameter end exceeds usize")?,
             usize::try_from(self.next_class_id).map_err(|_| "class end exceeds usize")?,
-            self.binder.graph.snapshot_len(),
+            self.binder.graph.len(),
             self.binder.symbols.len(),
             self.binder.declarations.len(),
             self.binder.type_groups.len(),
@@ -707,11 +707,11 @@ impl OwnedLibraryRuntimeState {
     pub(crate) fn identity_ends_for_test(&self) -> OwnedBaseFinalIdentityEnds {
         OwnedBaseFinalIdentityEnds {
             store: self.interner.store().len(),
-            declared_recipes: self.interner.store().snapshot_declared_recipes().count(),
+            declared_recipes: self.interner.store().all_declared_recipes().count(),
             type_params: usize::try_from(self.next_type_param)
                 .expect("type parameter end fits usize"),
             classes: usize::try_from(self.next_class_id).expect("class end fits usize"),
-            scopes: self.binder.graph.snapshot_len(),
+            scopes: self.binder.graph.len(),
             symbols: self.binder.symbols.len(),
             declarations: self.binder.declarations.len(),
             type_groups: self.binder.type_groups.len(),
@@ -897,31 +897,31 @@ impl OwnedLibraryRuntimeState {
         self.interner.store().len()
     }
 
-    pub(in crate::check::checker) fn into_snapshot_parts(
+    pub(in crate::check::checker) fn into_product_parts(
         self,
-    ) -> Result<OwnedLibraryRuntimeSnapshotParts, &'static str> {
+    ) -> Result<OwnedLibraryRuntimeProductParts, &'static str> {
         if self
             .semantic_identities
             .as_ref()
             .is_some_and(|identities| !identities.all_ready())
         {
-            return Err("snapshot installed semantic identities are not all ready");
+            return Err("product installed semantic identities are not all ready");
         }
-        let parts = OwnedLibraryRuntimeSnapshotParts {
+        let parts = OwnedLibraryRuntimeProductParts {
             interner: self.interner,
             binder: self.binder,
-            published_types: self.published_types.snapshot_parts()?,
+            published_types: self.published_types.product_parts()?,
             decl_types: self.decl_types.snapshot_slots(),
             semantic_identities: self
                 .semantic_identities
                 .as_ref()
-                .map(super::library_identities::LibrarySemanticIdentities::snapshot_parts),
+                .map(super::library_identities::LibrarySemanticIdentities::product_parts),
             runtime: self.runtime.snapshot_parts()?,
             next_type_param: self.next_type_param,
             next_class_id: self.next_class_id,
             source_file_count: self.source_file_count,
         };
-        validate_owned_library_snapshot_parts(&parts)?;
+        validate_owned_library_product_parts(&parts)?;
         Ok(parts)
     }
 
@@ -930,27 +930,27 @@ impl OwnedLibraryRuntimeState {
         self.replay_index.as_deref()
     }
 
-    /// Restore a runtime from its own snapshot parts; the base it yields carries no replay index.
+    /// Restore a runtime from its own product parts; the base it yields carries no replay index.
     #[cfg(test)]
-    pub(in crate::check::checker) fn from_snapshot_parts(
-        parts: OwnedLibraryRuntimeSnapshotParts,
+    pub(in crate::check::checker) fn from_product_parts(
+        parts: OwnedLibraryRuntimeProductParts,
     ) -> Result<Self, &'static str> {
-        validate_owned_library_snapshot_parts(&parts)?;
+        validate_owned_library_product_parts(&parts)?;
         let decl_types = DeclTypes::from_snapshot_slots(parts.decl_types, parts.binder.decl_count)?;
         let semantic_identities = parts
             .semantic_identities
-            .map(super::library_identities::LibrarySemanticIdentities::from_snapshot_parts)
+            .map(super::library_identities::LibrarySemanticIdentities::from_product_parts)
             .transpose()?;
         if semantic_identities
             .as_ref()
             .is_some_and(|identities| !identities.all_ready())
         {
-            return Err("snapshot installed semantic identities are not all ready");
+            return Err("product installed semantic identities are not all ready");
         }
         Ok(Self {
             interner: parts.interner,
             binder: parts.binder,
-            published_types: PublishedTypeEnvironment::from_snapshot_parts(parts.published_types)?,
+            published_types: PublishedTypeEnvironment::from_product_parts(parts.published_types)?,
             decl_types,
             semantic_identities,
             runtime: FrozenCheckerRuntimeMetadata::from_snapshot_parts(parts.runtime)?,
@@ -1335,7 +1335,7 @@ fn final_reference_summary(
     }
     for (class, terminal) in published.local_class_terminals() {
         classify_live_reference(&mut summary, base, 3, class.0, 3, class.0);
-        let PublishedClassSnapshotTerminal::Ready(surface) = &terminal else {
+        let OwnedPublishedClassTerminal::Ready(surface) = &terminal else {
             continue;
         };
         classify_live_reference(&mut summary, base, 3, class.0, 3, surface.class().0);
@@ -1540,10 +1540,10 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
     OwnedBaseFinalIdentityWitness {
         ends: OwnedBaseFinalIdentityEnds {
             store: interner.store().len(),
-            declared_recipes: interner.store().snapshot_declared_recipes().count(),
+            declared_recipes: interner.store().all_declared_recipes().count(),
             type_params: usize::try_from(next_type_param).expect("type parameter end fits usize"),
             classes: usize::try_from(next_class_id).expect("class end fits usize"),
-            scopes: binder.graph.snapshot_len(),
+            scopes: binder.graph.len(),
             symbols: binder.symbols.len(),
             declarations: binder.declarations.len(),
             type_groups: binder.type_groups.len(),
@@ -4391,7 +4391,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         replay_index: _,
     } = state;
     let base_store_len = interner.store().len();
-    let base_declared_recipe_len = interner.store().snapshot_declared_recipes().count();
+    let base_declared_recipe_len = interner.store().all_declared_recipes().count();
     let base_store_digest = verify_store_prefix
         .then(|| store_prefix_digest(interner.store(), base_store_len, base_declared_recipe_len))
         .transpose()?;
@@ -4403,7 +4403,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         declared_recipes: base_declared_recipe_len,
         type_params: usize::try_from(next_type_param).expect("base type parameter end fits usize"),
         classes: usize::try_from(next_class_id).expect("base class end fits usize"),
-        scopes: binder.graph.snapshot_len(),
+        scopes: binder.graph.len(),
         symbols: binder.symbols.len(),
         declarations: binder.declarations.len(),
         type_groups: base_type_group_count,
@@ -4945,7 +4945,7 @@ mod tests {
     }
 
     const TINY_SOURCE: &str = "export const typokatLibraryProbe: number = 1;\n";
-    const SNAPSHOT_SEMANTIC_LIBRARY: &str = r#"
+    const PRODUCT_SEMANTIC_LIBRARY: &str = r#"
         interface Array<T> { item: T; }
         interface ReadonlyArray<T> { item: T; }
         interface String { stringMarker: string; }
@@ -4955,28 +4955,28 @@ mod tests {
         interface Object { objectMarker: string; }
         interface Function { functionMarker: string; }
         interface CallableFunction extends Function { callableMarker: number; }
-        interface SnapshotWitness { value: number; }
-        declare class SnapshotBase { base: string; }
-        declare class SnapshotCtorBase { protected constructor(); }
-        declare class SnapshotInheritedCtor extends SnapshotCtorBase {}
-        declare class SnapshotClass<T> extends SnapshotBase {
+        interface SeamWitness { value: number; }
+        declare class SeamBase { base: string; }
+        declare class SeamCtorBase { protected constructor(); }
+        declare class SeamInheritedCtor extends SeamCtorBase {}
+        declare class SeamClass<T> extends SeamBase {
             constructor(value: T);
             value: T;
         }
-        declare namespace SnapshotClass { export const tag: string; }
-        declare namespace SnapshotSpace { export const enabled: boolean; }
-        declare function snapshotNamed(value: number): string;
-        declare namespace snapshotNamed { export const version: number; }
+        declare namespace SeamClass { export const tag: string; }
+        declare namespace SeamSpace { export const enabled: boolean; }
+        declare function seamNamed(value: number): string;
+        declare namespace seamNamed { export const version: number; }
     "#;
 
-    fn compile_semantic_snapshot_parts() -> OwnedLibraryRuntimeSnapshotParts {
+    fn compile_semantic_product_parts() -> OwnedLibraryRuntimeProductParts {
         let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
-            name: "snapshot-seam.d.ts",
-            source: SNAPSHOT_SEMANTIC_LIBRARY,
+            name: "product-seam.d.ts",
+            source: PRODUCT_SEMANTIC_LIBRARY,
         }])
         .expect("focused owned library profile");
-        state.into_snapshot_parts().expect("extract snapshot parts")
+        state.into_product_parts().expect("extract product parts")
     }
 
     fn compile_reservation_fixture(file_name: &str, source: &str) -> OwnedLibraryRuntimeState {
@@ -5027,7 +5027,7 @@ mod tests {
         target: TypeId,
     ) -> bool {
         const TYPE_DOMAIN: u8 = 1;
-        let (references, _) = state.interner.snapshot_reference_records_for_test();
+        let (references, _) = state.interner.reference_records_for_test();
         let mut edges = rustc_hash::FxHashMap::<u32, Vec<u32>>::default();
         for (owner_domain, target_domain, _, owner, referenced) in references {
             if owner_domain == TYPE_DOMAIN && target_domain == TYPE_DOMAIN {
@@ -5047,11 +5047,11 @@ mod tests {
         false
     }
 
-    fn assert_strict_interner_snapshot(state: &OwnedLibraryRuntimeState, label: &str) {
+    fn assert_strict_interner_state(state: &OwnedLibraryRuntimeState, label: &str) {
         state
             .interner
-            .encode_snapshot_bytes_for_test()
-            .unwrap_or_else(|error| panic!("{label}: strict interner snapshot failed: {error:?}"));
+            .strict_terminal_state_for_test()
+            .unwrap_or_else(|error| panic!("{label}: interner is not in terminal state: {error}"));
     }
 
     fn assert_type_group_is_error_or_unavailable(state: &OwnedLibraryRuntimeState, name: &str) {
@@ -5079,14 +5079,18 @@ mod tests {
         }
     }
 
-    fn strict_snapshot_failure(label: &str, source: &'static str, root: &str) -> Option<String> {
+    fn strict_interner_state_failure(
+        label: &str,
+        source: &'static str,
+        root: &str,
+    ) -> Option<String> {
         let state = compile_reservation_fixture("reservation-lifecycle.d.ts", source);
         assert_type_group_is_error_or_unavailable(&state, root);
         state
             .interner
-            .encode_snapshot_bytes_for_test()
+            .strict_terminal_state_for_test()
             .err()
-            .map(|error| format!("{label}: {error:?}"))
+            .map(|error| format!("{label}: {error}"))
     }
 
     fn assert_valid_class_interface_merge(label: &str, source: &'static str) {
@@ -5121,15 +5125,15 @@ mod tests {
         );
         state
             .interner
-            .encode_snapshot_bytes_for_test()
-            .unwrap_or_else(|error| panic!("{label}: strict interner encoding failed: {error:?}"));
+            .strict_terminal_state_for_test()
+            .unwrap_or_else(|error| panic!("{label}: interner is not in terminal state: {error}"));
     }
 
     fn replace_module_sources(
-        parts: &mut OwnedLibraryRuntimeSnapshotParts,
+        parts: &mut OwnedLibraryRuntimeProductParts,
         module_sources: rustc_hash::FxHashMap<ScopeId, crate::binder::namespace::SourceUnitKey>,
     ) {
-        let placeholder = Binder::from_snapshot_parts(
+        let placeholder = Binder::from_product_parts(
             Default::default(),
             Default::default(),
             Default::default(),
@@ -5147,7 +5151,7 @@ mod tests {
             Default::default(),
         );
         let binder = std::mem::replace(&mut parts.binder, placeholder);
-        parts.binder = Binder::from_snapshot_parts(
+        parts.binder = Binder::from_product_parts(
             binder.graph,
             binder.symbols,
             binder.declarations,
@@ -5166,19 +5170,19 @@ mod tests {
         );
     }
 
-    fn assert_snapshot_restore_error(
-        parts: OwnedLibraryRuntimeSnapshotParts,
+    fn assert_product_restore_error(
+        parts: OwnedLibraryRuntimeProductParts,
         expected: &'static str,
     ) {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            OwnedLibraryRuntimeState::from_snapshot_parts(parts)
+            OwnedLibraryRuntimeState::from_product_parts(parts)
         }));
         let Ok(result) = outcome else {
-            panic!("snapshot corruption must return an error, not panic")
+            panic!("product-parts corruption must return an error, not panic")
         };
         match result {
             Err(actual) => assert_eq!(actual, expected),
-            Ok(_) => panic!("snapshot corruption unexpectedly restored"),
+            Ok(_) => panic!("product-parts corruption unexpectedly restored"),
         }
     }
 
@@ -5199,7 +5203,7 @@ mod tests {
                 } ? F extends ((value: infer V, ...args: infer _) => any) ?
                     FailedAwaited<V> : never : T;
         "#;
-        let failure = strict_snapshot_failure("FailedAwaited", source, "FailedAwaited");
+        let failure = strict_interner_state_failure("FailedAwaited", source, "FailedAwaited");
         assert!(failure.is_none(), "{failure:#?}");
     }
 
@@ -5208,7 +5212,7 @@ mod tests {
         let source = r#"
             type FailedMapped<T> = { [K in FailedMapped<T>]: T };
         "#;
-        let failure = strict_snapshot_failure("FailedMapped", source, "FailedMapped");
+        let failure = strict_interner_state_failure("FailedMapped", source, "FailedMapped");
         assert!(failure.is_none(), "{failure:#?}");
     }
 
@@ -5223,12 +5227,12 @@ mod tests {
             type ConditionalCollision<T> = T extends string ? string : number;
         "#;
         let failures = [
-            strict_snapshot_failure(
+            strict_interner_state_failure(
                 "conditional-alias-first",
                 alias_first,
                 "ConditionalCollision",
             ),
-            strict_snapshot_failure(
+            strict_interner_state_failure(
                 "conditional-interface-first",
                 interface_first,
                 "ConditionalCollision",
@@ -5251,8 +5255,12 @@ mod tests {
             type MappedCollision<T> = { [K in keyof T]: T[K] };
         "#;
         let failures = [
-            strict_snapshot_failure("mapped-alias-first", alias_first, "MappedCollision"),
-            strict_snapshot_failure("mapped-interface-first", interface_first, "MappedCollision"),
+            strict_interner_state_failure("mapped-alias-first", alias_first, "MappedCollision"),
+            strict_interner_state_failure(
+                "mapped-interface-first",
+                interface_first,
+                "MappedCollision",
+            ),
         ]
         .into_iter()
         .flatten()
@@ -5271,8 +5279,12 @@ mod tests {
             type ObjectCollision = { aliasMember: string };
         "#;
         let failures = [
-            strict_snapshot_failure("object-alias-first", alias_first, "ObjectCollision"),
-            strict_snapshot_failure("object-interface-first", interface_first, "ObjectCollision"),
+            strict_interner_state_failure("object-alias-first", alias_first, "ObjectCollision"),
+            strict_interner_state_failure(
+                "object-interface-first",
+                interface_first,
+                "ObjectCollision",
+            ),
         ]
         .into_iter()
         .flatten()
@@ -5315,7 +5327,7 @@ mod tests {
 
         assert_eq!(first, second, "equal acyclic aliases must hash-cons");
         assert!(!store_type_reaches(&state, first, first));
-        assert_strict_interner_snapshot(&state, "equal acyclic aliases");
+        assert_strict_interner_state(&state, "equal acyclic aliases");
     }
 
     #[test]
@@ -5339,7 +5351,7 @@ mod tests {
         let named = published_template_type(&state, "NamedShape");
 
         assert_eq!(named, anonymous, "named alias must reuse the anonymous row");
-        assert_strict_interner_snapshot(&state, "anonymous shape collision");
+        assert_strict_interner_state(&state, "anonymous shape collision");
     }
 
     #[test]
@@ -5365,7 +5377,7 @@ mod tests {
         assert!(store_type_reaches(&state, mutual_left, mutual_right));
         assert!(store_type_reaches(&state, mutual_right, mutual_left));
         assert!(store_type_reaches(&state, nested, nested));
-        assert_strict_interner_snapshot(&state, "recursive aliases");
+        assert_strict_interner_state(&state, "recursive aliases");
     }
 
     #[test]
@@ -5395,7 +5407,7 @@ mod tests {
                 "{consumer} must retain the published identity of {dependency}"
             );
         }
-        assert_strict_interner_snapshot(&state, "captured alias roots");
+        assert_strict_interner_state(&state, "captured alias roots");
     }
 
     #[test]
@@ -5423,7 +5435,7 @@ mod tests {
         };
 
         assert_eq!(first, named, "equal acyclic aliases must hash-cons");
-        assert_strict_interner_snapshot(&state, "type parameter default alias capture");
+        assert_strict_interner_state(&state, "type parameter default alias capture");
         assert_eq!(
             box_surface.parameter_defaults,
             [PublishedTypeParameterDefault::Ready(named)],
@@ -5497,7 +5509,7 @@ mod tests {
             .expect("consumer type group")
             .id;
         let consumer_template = published_template_type(&state, "RecipeConsumer");
-        let (store_references, _) = state.interner.snapshot_reference_records_for_test();
+        let (store_references, _) = state.interner.reference_records_for_test();
         let mut pending = vec![(TYPE_DOMAIN, consumer_template.0, false)];
         let mut visited = BTreeSet::new();
         let mut reaches_class_through_recipe = false;
@@ -6215,7 +6227,7 @@ mod tests {
             "interface RecipeOwner { values: string[]; }",
         );
         let base = owned_state_identity_ends(&state);
-        let recipe_end = state.interner.store().snapshot_declared_recipes().count();
+        let recipe_end = state.interner.store().all_declared_recipes().count();
         assert!(recipe_end > 0, "fixture must plan declaration recipes");
 
         let mut summary = OwnedBaseReferenceSummary::default();
@@ -6251,12 +6263,12 @@ mod tests {
     fn store_prefix_digest_authenticates_unreferenced_planned_recipes() {
         let mut interner = Interner::with_intrinsics();
         let prefix_len = interner.store().len();
-        let recipe_prefix_len = interner.store().snapshot_declared_recipes().count();
+        let recipe_prefix_len = interner.store().all_declared_recipes().count();
         let before = store_prefix_digest(interner.store(), prefix_len, recipe_prefix_len)
             .expect("initial prefix digest");
         let string = interner.well_known().string;
         interner.intern_declared_recipe(crate::types::repr::DeclaredRecipeNode::Type(string));
-        let planned_recipe_prefix_len = interner.store().snapshot_declared_recipes().count();
+        let planned_recipe_prefix_len = interner.store().all_declared_recipes().count();
         let after = store_prefix_digest(interner.store(), prefix_len, planned_recipe_prefix_len)
             .expect("prefix digest after recipe planning");
 
@@ -6454,7 +6466,7 @@ mod tests {
             published_template_type(&state, "OrderedSecond"),
             "member source order is not structural identity"
         );
-        assert_strict_interner_snapshot(&state, "object alias member order");
+        assert_strict_interner_state(&state, "object alias member order");
     }
 
     #[test]
@@ -6485,7 +6497,7 @@ mod tests {
                 "{left} and {right} differ in identity-bearing metadata"
             );
         }
-        assert_strict_interner_snapshot(&state, "object alias identity metadata");
+        assert_strict_interner_state(&state, "object alias identity metadata");
     }
 
     #[test]
@@ -6523,7 +6535,7 @@ mod tests {
                     terminal => panic!("scale alias did not publish: {terminal:?}"),
                 })
                 .collect::<rustc_hash::FxHashSet<_>>();
-            assert_strict_interner_snapshot(&state, "object alias scale");
+            assert_strict_interner_state(&state, "object alias scale");
             eprintln!(
                 "typokat-object-alias-scale-v1 aliases={count} store_rows={} reserve_fill_us={} unique_published={}",
                 state.interner.store().len(),
@@ -6558,8 +6570,8 @@ mod tests {
             .expect("source-compiled full-library profile");
         state
             .interner
-            .encode_snapshot_bytes_for_test()
-            .expect("full profile must close every reserved type before snapshot");
+            .strict_terminal_state_for_test()
+            .expect("full profile must close every reserved type");
     }
 
     #[test]
@@ -6660,8 +6672,8 @@ mod tests {
     }
 
     #[test]
-    fn owned_runtime_snapshot_parts_restore_a_consumable_base() {
-        let parts = compile_semantic_snapshot_parts();
+    fn owned_runtime_product_parts_restore_a_consumable_base() {
+        let parts = compile_semantic_product_parts();
         assert_eq!(parts.source_file_count, 1);
         assert!(parts.semantic_identities.is_some());
         assert!(!parts.runtime.class_application_parameters.is_empty());
@@ -6670,24 +6682,24 @@ mod tests {
         assert!(!parts.runtime.namespace_terminals.is_empty());
         assert!(!parts.runtime.named_function_symbols.is_empty());
         let restored =
-            OwnedLibraryRuntimeState::from_snapshot_parts(parts).expect("restore snapshot parts");
+            OwnedLibraryRuntimeState::from_product_parts(parts).expect("restore product parts");
         let user = check_caller_certified_collision_free_source_with_owned_library(
             restored,
             r#"
-                declare const witness: SnapshotWitness;
+                declare const witness: SeamWitness;
                 const witnessValue: number = witness.value;
                 declare const nativeValues: number[];
                 const nativeArrayItem: number = nativeValues.item;
                 const nativeStringMarker: string = "value".stringMarker;
-                const instance = new SnapshotClass<number>(1);
+                const instance = new SeamClass<number>(1);
                 const classValue: number = instance.value;
                 const inheritedValue: string = instance.base;
-                const base = new SnapshotBase();
+                const base = new SeamBase();
                 const directBaseValue: string = base.base;
-                const classTag: string = SnapshotClass.tag;
-                const enabled: boolean = SnapshotSpace.enabled;
-                const called: string = snapshotNamed(1);
-                const functionVersion: number = snapshotNamed.version;
+                const classTag: string = SeamClass.tag;
+                const enabled: boolean = SeamSpace.enabled;
+                const called: string = seamNamed(1);
+                const functionVersion: number = seamNamed.version;
             "#,
         )
         .expect("consume restored base");
@@ -6698,10 +6710,10 @@ mod tests {
     }
 
     #[test]
-    fn owned_runtime_snapshot_restores_native_bridge_error_behavior() {
+    fn owned_runtime_product_parts_restore_native_bridge_error_behavior() {
         let restored =
-            OwnedLibraryRuntimeState::from_snapshot_parts(compile_semantic_snapshot_parts())
-                .expect("restore snapshot parts");
+            OwnedLibraryRuntimeState::from_product_parts(compile_semantic_product_parts())
+                .expect("restore product parts");
         let user = check_caller_certified_collision_free_source_with_owned_library(
             restored,
             r#"
@@ -6720,15 +6732,15 @@ mod tests {
     }
 
     #[test]
-    fn owned_runtime_snapshot_rejects_empty_and_gapped_source_prefixes() {
-        let mut empty = compile_semantic_snapshot_parts();
+    fn owned_runtime_product_parts_reject_empty_and_gapped_source_prefixes() {
+        let mut empty = compile_semantic_product_parts();
         replace_module_sources(&mut empty, Default::default());
-        assert_snapshot_restore_error(empty, "snapshot binder has no retained source ownership");
+        assert_product_restore_error(empty, "product binder has no retained source ownership");
 
-        let mut gapped = compile_semantic_snapshot_parts();
+        let mut gapped = compile_semantic_product_parts();
         let mut sources = gapped
             .binder
-            .snapshot_module_sources()
+            .module_sources()
             .iter()
             .map(|(&scope, &source)| (scope, source))
             .collect::<rustc_hash::FxHashMap<_, _>>();
@@ -6738,43 +6750,43 @@ mod tests {
             .expect("library source owner");
         sources.insert(library_scope, exact_key(2));
         replace_module_sources(&mut gapped, sources);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             gapped,
-            "snapshot binder source keys are not the contiguous prelude/library prefix",
+            "product binder source keys are not the contiguous prelude/library prefix",
         );
     }
 
     #[test]
-    fn owned_runtime_snapshot_rejects_group_and_counter_collisions() {
-        let mut groups = compile_semantic_snapshot_parts();
+    fn owned_runtime_product_parts_reject_group_and_counter_collisions() {
+        let mut groups = compile_semantic_product_parts();
         groups.published_types.groups.pop();
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             groups,
-            "snapshot published type-group count does not match the binder",
+            "product published type-group count does not match the binder",
         );
 
-        let mut type_parameters = compile_semantic_snapshot_parts();
+        let mut type_parameters = compile_semantic_product_parts();
         type_parameters.next_type_param = 0;
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             type_parameters,
-            "snapshot type parameter id collides with the next parameter counter",
+            "product type parameter id collides with the next parameter counter",
         );
 
-        let mut classes = compile_semantic_snapshot_parts();
+        let mut classes = compile_semantic_product_parts();
         classes.next_class_id = 0;
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             classes,
-            "snapshot class id collides with the next class counter",
+            "product class id collides with the next class counter",
         );
 
-        let mut renamed = compile_semantic_snapshot_parts();
+        let mut renamed = compile_semantic_product_parts();
         let template_group = renamed
             .published_types
             .groups
             .iter_mut()
             .find_map(|terminal| match terminal {
                 PublishedTypeGroupTerminal::Ready(group)
-                    if group.name == "SnapshotWitness"
+                    if group.name == "SeamWitness"
                         && matches!(group.surface, PublishedTypeGroupSurface::Template(_)) =>
                 {
                     Some(group)
@@ -6783,16 +6795,16 @@ mod tests {
                 | PublishedTypeGroupTerminal::Unavailable(_) => None,
             })
             .expect("ready template group");
-        template_group.name = "RenamedSnapshotWitness".to_owned();
-        assert_snapshot_restore_error(
+        template_group.name = "RenamedSeamWitness".to_owned();
+        assert_product_restore_error(
             renamed,
-            "snapshot published type-group name does not match the binder",
+            "product published type-group name does not match the binder",
         );
     }
 
     #[test]
-    fn owned_runtime_snapshot_rejects_missing_required_class_rows() {
-        let mut new_metadata = compile_semantic_snapshot_parts();
+    fn owned_runtime_product_parts_reject_missing_required_class_rows() {
+        let mut new_metadata = compile_semantic_product_parts();
         let removed_class = new_metadata
             .runtime
             .class_new_metadata
@@ -6804,41 +6816,41 @@ mod tests {
             .class_value_bindings
             .iter()
             .any(|(_, binding)| binding.class_id == removed_class));
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             new_metadata,
-            "snapshot new metadata does not exactly cover published classes",
+            "product new metadata does not exactly cover published classes",
         );
 
-        let mut applications = compile_semantic_snapshot_parts();
+        let mut applications = compile_semantic_product_parts();
         applications
             .runtime
             .class_application_parameters
             .pop()
             .expect("class application row");
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             applications,
-            "snapshot class application metadata does not exactly cover published classes",
+            "product class application metadata does not exactly cover published classes",
         );
 
-        let mut names = compile_semantic_snapshot_parts();
+        let mut names = compile_semantic_product_parts();
         names.runtime.class_names.pop().expect("class name row");
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             names,
-            "snapshot class names do not exactly match published class groups",
+            "product class names do not exactly match published class groups",
         );
 
-        let mut bindings = compile_semantic_snapshot_parts();
+        let mut bindings = compile_semantic_product_parts();
         bindings
             .runtime
             .class_value_bindings
             .pop()
             .expect("class value binding row");
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             bindings,
-            "snapshot class value bindings do not exactly cover published classes",
+            "product class value bindings do not exactly cover published classes",
         );
 
-        let mut parent_chain = compile_semantic_snapshot_parts();
+        let mut parent_chain = compile_semantic_product_parts();
         let inherited = parent_chain
             .runtime
             .class_new_metadata
@@ -6854,19 +6866,19 @@ mod tests {
             .position(|(class, _)| *class == inherited)
             .expect("inherited class parent row");
         parent_chain.runtime.class_parents.remove(parent_row);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             parent_chain,
-            "snapshot constructor owner is not on the class parent chain",
+            "product constructor owner is not on the class parent chain",
         );
 
-        let mut wrong_name = compile_semantic_snapshot_parts();
+        let mut wrong_name = compile_semantic_product_parts();
         wrong_name.runtime.class_names[0].1 = "DifferentClass".to_owned();
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             wrong_name,
-            "snapshot class names do not exactly match published class groups",
+            "product class names do not exactly match published class groups",
         );
 
-        let mut generic_bit = compile_semantic_snapshot_parts();
+        let mut generic_bit = compile_semantic_product_parts();
         let generic_class = generic_bit
             .runtime
             .class_application_parameters
@@ -6880,15 +6892,15 @@ mod tests {
             .find_map(|(_, binding)| (binding.class_id == generic_class).then_some(binding))
             .expect("generic class value binding");
         binding.has_header_type_params = !binding.has_header_type_params;
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             generic_bit,
-            "snapshot class value binding generic bit does not match application metadata",
+            "product class value binding generic bit does not match application metadata",
         );
     }
 
     #[test]
-    fn owned_runtime_snapshot_rejects_dangling_semantic_and_type_references() {
-        let mut semantic = compile_semantic_snapshot_parts();
+    fn owned_runtime_product_parts_reject_dangling_semantic_and_type_references() {
+        let mut semantic = compile_semantic_product_parts();
         let LibraryIdentityTerminal::Ready(identity) = &mut semantic
             .semantic_identities
             .as_mut()
@@ -6897,12 +6909,12 @@ mod tests {
             panic!("Array identity is ready")
         };
         identity.group = TypeGroupId(u32::MAX);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             semantic,
-            "snapshot semantic identity refers to an unpublished type group",
+            "product semantic identity refers to an unpublished type group",
         );
 
-        let mut types = compile_semantic_snapshot_parts();
+        let mut types = compile_semantic_product_parts();
         let ready = types
             .runtime
             .namespace_terminals
@@ -6913,39 +6925,39 @@ mod tests {
             })
             .expect("ready namespace terminal");
         *ready = TypeId(u32::MAX);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             types,
-            "snapshot namespace terminal has an invalid ready reference",
+            "product namespace terminal has an invalid ready reference",
         );
     }
 
     #[test]
-    fn owned_runtime_snapshot_rejects_dangling_runtime_binder_references() {
-        let mut values = compile_semantic_snapshot_parts();
+    fn owned_runtime_product_parts_reject_dangling_runtime_binder_references() {
+        let mut values = compile_semantic_product_parts();
         values
             .runtime
             .class_value_bindings
             .first_mut()
             .expect("class value binding")
             .0 = ValueStorageId(u32::MAX);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             values,
-            "snapshot class value binding has an invalid reference",
+            "product class value binding has an invalid reference",
         );
 
-        let mut symbols = compile_semantic_snapshot_parts();
+        let mut symbols = compile_semantic_product_parts();
         symbols.runtime.named_function_symbols[0] = SymbolId(u32::MAX);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             symbols,
-            "snapshot named-function metadata refers to a non-function symbol",
+            "product named-function metadata refers to a non-function symbol",
         );
 
-        let mut namespaces = compile_semantic_snapshot_parts();
+        let mut namespaces = compile_semantic_product_parts();
         namespaces.runtime.namespace_terminals[0].namespace =
             crate::binder::namespace::NamespaceId(u32::MAX);
-        assert_snapshot_restore_error(
+        assert_product_restore_error(
             namespaces,
-            "snapshot namespace terminal refers to an unknown namespace",
+            "product namespace terminal refers to an unknown namespace",
         );
     }
 
@@ -7547,16 +7559,16 @@ mod tests {
     #[test]
     fn owned_generic_promise_identity_preserves_resolve_argument() {
         let library = r#"
-            type SnapshotAwaited<T> = T;
-            interface SnapshotPromise<T> {
+            type SeamAwaited<T> = T;
+            interface SeamPromise<T> {
                 then<Result = T>(
                     onfulfilled?: ((value: T) => Result) | null,
-                ): SnapshotPromise<Result>;
+                ): SeamPromise<Result>;
             }
-            interface SnapshotPromiseConstructor {
-                resolve<T>(value: T): SnapshotPromise<SnapshotAwaited<T>>;
+            interface SeamPromiseConstructor {
+                resolve<T>(value: T): SeamPromise<SeamAwaited<T>>;
             }
-            declare var SnapshotPromise: SnapshotPromiseConstructor;
+            declare var SeamPromise: SeamPromiseConstructor;
         "#;
         let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
@@ -7567,16 +7579,16 @@ mod tests {
         let run = check_caller_certified_collision_free_source_with_owned_library(
             state,
             r#"
-                declare const awaited: SnapshotAwaited<number>;
+                declare const awaited: SeamAwaited<number>;
                 const wrongAwaited: string = awaited;
-                const resolved = SnapshotPromise.resolve(1);
-                const numberControl: SnapshotPromise<number> = resolved;
+                const resolved = SeamPromise.resolve(1);
+                const numberControl: SeamPromise<number> = resolved;
                 resolved.then(value => {
                     const valueControl: number = value;
                     const wrongValue: string = value;
                     return value;
                 });
-                const wrongPromise: SnapshotPromise<string> = resolved;
+                const wrongPromise: SeamPromise<string> = resolved;
             "#,
         )
         .expect("focused Promise suffix checks");
@@ -7608,21 +7620,21 @@ mod tests {
     #[test]
     fn owned_conditional_awaited_preserves_non_thenable_argument() {
         let library = r#"
-            type SnapshotAwaited<T> = T extends null | undefined ? T :
+            type SeamAwaited<T> = T extends null | undefined ? T :
                 T extends object & { then(onfulfilled: infer F, ...args: infer _): any; } ?
                     F extends ((value: infer V, ...args: infer _) => any) ?
-                        SnapshotAwaited<V> :
+                        SeamAwaited<V> :
                     never :
                 T;
-            interface SnapshotPromise<T> {
+            interface SeamPromise<T> {
                 then<Result = T>(
                     onfulfilled?: ((value: T) => Result) | null,
-                ): SnapshotPromise<Result>;
+                ): SeamPromise<Result>;
             }
-            interface SnapshotPromiseConstructor {
-                resolve<T>(value: T): SnapshotPromise<SnapshotAwaited<T>>;
+            interface SeamPromiseConstructor {
+                resolve<T>(value: T): SeamPromise<SeamAwaited<T>>;
             }
-            declare var SnapshotPromise: SnapshotPromiseConstructor;
+            declare var SeamPromise: SeamPromiseConstructor;
         "#;
         let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
@@ -7633,16 +7645,16 @@ mod tests {
         let run = check_caller_certified_collision_free_source_with_owned_library(
             state,
             r#"
-                declare const awaited: SnapshotAwaited<number>;
+                declare const awaited: SeamAwaited<number>;
                 const wrongAwaited: string = awaited;
-                const resolved = SnapshotPromise.resolve(1);
-                const numberControl: SnapshotPromise<number> = resolved;
+                const resolved = SeamPromise.resolve(1);
+                const numberControl: SeamPromise<number> = resolved;
                 resolved.then(value => {
                     const valueControl: number = value;
                     const wrongValue: string = value;
                     return value;
                 });
-                const wrongPromise: SnapshotPromise<string> = resolved;
+                const wrongPromise: SeamPromise<string> = resolved;
             "#,
         )
         .expect("focused conditional Awaited suffix checks");
@@ -7674,11 +7686,11 @@ mod tests {
     fn owned_state_identity_ends(state: &OwnedLibraryRuntimeState) -> OwnedBaseFinalIdentityEnds {
         OwnedBaseFinalIdentityEnds {
             store: state.interner.store().len(),
-            declared_recipes: state.interner.store().snapshot_declared_recipes().count(),
+            declared_recipes: state.interner.store().all_declared_recipes().count(),
             type_params: usize::try_from(state.next_type_param)
                 .expect("base type parameter end fits usize"),
             classes: usize::try_from(state.next_class_id).expect("base class end fits usize"),
-            scopes: state.binder.graph.snapshot_len(),
+            scopes: state.binder.graph.len(),
             symbols: state.binder.symbols.len(),
             declarations: state.binder.declarations.len(),
             type_groups: state.binder.type_groups.len(),

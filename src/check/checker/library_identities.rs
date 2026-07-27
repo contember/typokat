@@ -54,7 +54,7 @@ struct LibrarySemanticIdentityRows {
     callable_function: LibraryIdentityTerminal,
 }
 
-pub(crate) type LibrarySemanticIdentitiesSnapshotParts = [LibraryIdentityTerminal; 8];
+pub(crate) type LibrarySemanticIdentitiesProductParts = [LibraryIdentityTerminal; 8];
 
 /// Which native array syntax a library type group *is*. `Array<T>` and
 /// `ReadonlyArray<T>` name the intrinsic array types themselves; their interface
@@ -208,7 +208,7 @@ impl LibrarySemanticIdentities {
         }
     }
 
-    pub(crate) fn snapshot_parts(&self) -> LibrarySemanticIdentitiesSnapshotParts {
+    pub(crate) fn product_parts(&self) -> LibrarySemanticIdentitiesProductParts {
         [
             self.inner.array.clone(),
             self.inner.readonly_array.clone(),
@@ -222,8 +222,8 @@ impl LibrarySemanticIdentities {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_snapshot_parts(
-        terminals: LibrarySemanticIdentitiesSnapshotParts,
+    pub(crate) fn from_product_parts(
+        terminals: LibrarySemanticIdentitiesProductParts,
     ) -> Result<Self, &'static str> {
         for terminal in &terminals {
             let LibraryIdentityTerminal::Ready(identity) = terminal else {
@@ -235,7 +235,7 @@ impl LibrarySemanticIdentities {
                 .iter()
                 .any(|parameter| !parameters.insert(*parameter))
             {
-                return Err("snapshot semantic identity repeats a parameter id");
+                return Err("restored semantic identity repeats a parameter id");
             }
         }
         Ok(Self::from_explicit_for_test(terminals))

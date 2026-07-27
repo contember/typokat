@@ -140,9 +140,10 @@ pub(crate) enum CanonicalPublishedClassTerminal<'a> {
     SurfacePoison,
 }
 
-/// Lifetime-free class publication row used by the semantic snapshot prototype.
+/// Lifetime-free class publication row: the owned form of
+/// [`CanonicalPublishedClassTerminal`], used when the frozen product is decomposed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PublishedClassSnapshotTerminal {
+pub(crate) enum OwnedPublishedClassTerminal {
     Ready(PublishedClassSurface),
     Poisoned(PublishedClassPoison),
 }
@@ -168,27 +169,23 @@ impl Clone for PublishedClasses {
 }
 
 impl PublishedClasses {
-    pub(crate) fn snapshot_terminals(
-        &self,
-    ) -> Option<Vec<(ClassId, PublishedClassSnapshotTerminal)>> {
+    pub(crate) fn owned_terminals(&self) -> Option<Vec<(ClassId, OwnedPublishedClassTerminal)>> {
         self.canonical_terminals().map(|terminals| {
             terminals
                 .into_iter()
                 .map(|(class, terminal)| {
                     let terminal = match terminal {
                         CanonicalPublishedClassTerminal::Ready(surface) => {
-                            PublishedClassSnapshotTerminal::Ready(surface.clone())
+                            OwnedPublishedClassTerminal::Ready(surface.clone())
                         }
                         CanonicalPublishedClassTerminal::HeritagePoison => {
-                            PublishedClassSnapshotTerminal::Poisoned(PublishedClassPoison::Heritage)
+                            OwnedPublishedClassTerminal::Poisoned(PublishedClassPoison::Heritage)
                         }
                         CanonicalPublishedClassTerminal::InitializerPoison => {
-                            PublishedClassSnapshotTerminal::Poisoned(
-                                PublishedClassPoison::Initializer,
-                            )
+                            OwnedPublishedClassTerminal::Poisoned(PublishedClassPoison::Initializer)
                         }
                         CanonicalPublishedClassTerminal::SurfacePoison => {
-                            PublishedClassSnapshotTerminal::Poisoned(PublishedClassPoison::Surface)
+                            OwnedPublishedClassTerminal::Poisoned(PublishedClassPoison::Surface)
                         }
                     };
                     (class, terminal)
@@ -198,9 +195,7 @@ impl PublishedClasses {
     }
 
     #[cfg(test)]
-    pub(crate) fn local_snapshot_terminals(
-        &self,
-    ) -> Vec<(ClassId, PublishedClassSnapshotTerminal)> {
+    pub(crate) fn local_owned_terminals(&self) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
         self.states
             .local_iter()
             .filter_map(|(&class, state)| match state {
@@ -208,12 +203,12 @@ impl PublishedClasses {
                     .surfaces
                     .get(&class)
                     .cloned()
-                    .map(|surface| (class, PublishedClassSnapshotTerminal::Ready(surface))),
+                    .map(|surface| (class, OwnedPublishedClassTerminal::Ready(surface))),
                 ClassConstructionState::Poisoned => self
                     .poison
                     .get(&class)
                     .cloned()
-                    .map(|cause| (class, PublishedClassSnapshotTerminal::Poisoned(cause))),
+                    .map(|cause| (class, OwnedPublishedClassTerminal::Poisoned(cause))),
                 ClassConstructionState::Pending
                 | ClassConstructionState::Building
                 | ClassConstructionState::Built => None,
@@ -227,32 +222,32 @@ impl PublishedClasses {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_snapshot_terminals(
-        terminals: Vec<(ClassId, PublishedClassSnapshotTerminal)>,
+    pub(crate) fn from_owned_terminals(
+        terminals: Vec<(ClassId, OwnedPublishedClassTerminal)>,
     ) -> Result<Self, &'static str> {
         if terminals.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
-            return Err("snapshot class terminals are not strictly ordered");
+            return Err("owned class terminals are not strictly ordered");
         }
         let mut states = FxHashMap::default();
         let mut surfaces = FxHashMap::default();
         let mut poison = FxHashMap::default();
         for (class, terminal) in terminals {
             match terminal {
-                PublishedClassSnapshotTerminal::Ready(surface) => {
+                OwnedPublishedClassTerminal::Ready(surface) => {
                     if surface.class() != class {
-                        return Err("snapshot class surface owns a different class id");
+                        return Err("owned class surface owns a different class id");
                     }
                     states.insert(class, ClassConstructionState::Published);
                     surfaces.insert(class, surface);
                 }
-                PublishedClassSnapshotTerminal::Poisoned(cause) => {
+                OwnedPublishedClassTerminal::Poisoned(cause) => {
                     states.insert(class, ClassConstructionState::Poisoned);
                     poison.insert(class, cause);
                 }
             }
         }
         Self::from_publication(states, surfaces, poison)
-            .ok_or("snapshot class publication is not terminal")
+            .ok_or("owned class publication is not terminal")
     }
 
     pub(crate) fn canonical_terminals(
@@ -449,7 +444,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snapshot_class_terminals_round_trip_exactly() {
+    fn owned_class_terminals_round_trip_exactly() {
         let ready = ClassId(2);
         let poisoned = ClassId(7);
         let surface = PublishedClassSurface::new(
@@ -469,33 +464,31 @@ mod tests {
         )
         .expect("terminal publication");
 
-        let parts = publication
-            .snapshot_terminals()
-            .expect("snapshot terminals");
+        let parts = publication.owned_terminals().expect("owned terminals");
         let restored =
-            PublishedClasses::from_snapshot_terminals(parts.clone()).expect("restore terminals");
+            PublishedClasses::from_owned_terminals(parts.clone()).expect("restore terminals");
 
-        assert_eq!(restored.snapshot_terminals(), Some(parts));
+        assert_eq!(restored.owned_terminals(), Some(parts));
     }
 
     #[test]
-    fn snapshot_class_terminals_reject_unordered_and_mismatched_rows() {
+    fn owned_class_terminals_reject_unordered_and_mismatched_rows() {
         let surface =
             PublishedClassSurface::new(ClassId(3), Vec::new(), TypeId(5), TypeId(7), None);
-        assert!(PublishedClasses::from_snapshot_terminals(vec![
+        assert!(PublishedClasses::from_owned_terminals(vec![
             (
                 ClassId(2),
-                PublishedClassSnapshotTerminal::Poisoned(PublishedClassPoison::Surface),
+                OwnedPublishedClassTerminal::Poisoned(PublishedClassPoison::Surface),
             ),
             (
                 ClassId(1),
-                PublishedClassSnapshotTerminal::Ready(surface.clone())
+                OwnedPublishedClassTerminal::Ready(surface.clone())
             ),
         ])
         .is_err());
-        assert!(PublishedClasses::from_snapshot_terminals(vec![(
+        assert!(PublishedClasses::from_owned_terminals(vec![(
             ClassId(4),
-            PublishedClassSnapshotTerminal::Ready(surface),
+            OwnedPublishedClassTerminal::Ready(surface),
         )])
         .is_err());
     }
