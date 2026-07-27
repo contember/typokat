@@ -131,6 +131,11 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // (TK2362/TK2363) and the `+` general mismatch (TK2365). Enabled by its spec
     // commit, which is RED until the implementation lands.
     ("b45_operator_result_typing", true, Prelude),
+    // Backlog 101 — a ternary and a logical expression carry a real VALUE type (the
+    // arm union / the falsy-truthy-nullish split joined with the right operand)
+    // instead of the error type, so everything downstream of them is checked again.
+    // Enabled by its spec commit, which is RED until the implementation lands.
+    ("b101_conditional_logical_values", true, Prelude),
     // Backlog 100 — a composed condition (`&&`, `||`, and `!` over them) must narrow
     // the branch it guards. `analyze_guard` has no `LogicalExpression` arm and
     // `build_flow_logical` joins both senses back together, so today the guarded branch

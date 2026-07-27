@@ -317,6 +317,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
 | `b45_operator_result_typing/` | backlog `45` | arithmetic/bitwise/shift operators produce `number` instead of the error type; arithmetic operand rule (`TK2362`/`TK2363`) and the `+` general mismatch (`TK2365`) |
+| `b101_conditional_logical_values/` | backlog `101` | a ternary and a logical expression carry a real value type — the arm union, and `falsy`/`truthy`/`non-nullish`-part-of(left) joined with the right operand — instead of the error type, so everything downstream of them is checked again |
 | `b100_logical_condition_narrowing/` | shipped backlog `100` | composed conditions (`&&`, `\|\|`, `!` over them) narrow the branch they guard, in `if` / `while` / ternary / expression positions — with the complementary branch of every shape pinned, since a fix that narrows the wrong branch deletes diagnostics |
 | `b67_utility_alias_constraint/` | shipped backlog `67` | the modeled `ReturnType` callable constraint rejects non-callable arguments while represented function shapes preserve their evaluated return types |
 | `b70_this_parameter_typing/` | shipped backlog `70` | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
@@ -473,6 +474,26 @@ strict-null / unknown-receiver families typokat does not implement;
 operand diagnostics with the single `TS2447` boolean-operator suggestion. Comparison
 operators, `in`/`instanceof`, unary and update forms stay out of this corpus and remain
 owned by backlog `45`.
+
+`b101_conditional_logical_values/` is `b45`'s sibling for the two remaining
+coarse-typed expression forms. `ternary_result_assignment.ts` and
+`logical_result_assignment.ts` pin the value of each operator in annotation position;
+`result_positions.ts` carries it into a call argument, a `return`, a nested
+initializer, and the `b45` arithmetic operand rule; `nested_compositions.ts` composes
+the forms; `narrowed_arms.ts` pins that each arm/operand reads its own flow edge,
+including through a `&&`-composed test (backlog `100`); `contextual_arms.ts` pins that
+the target contextually types the operands that carry the value (both ternary arms,
+both `||`/`??` operands, `&&`'s right — tsc's `getContextualTypeForBinaryOperand`);
+and `clean_controls.ts` is the negative set, including the tsc short-circuits (`??`
+over a non-nullish left, `||` over an always-truthy left, `&&` over a never-truthy
+left are just that left operand) and the `let` literal-union widening that keeps a
+later reassignment legal. Rows whose result is a union are **code-only** — typokat
+names the offending member where tsc names the whole union. `falsy_split_divergence.ts`
+is the one accepted over-report, ledgered under `narrowing/logical-value-falsy-split`.
+Two deliberate gaps are NOT pinned here: tsc reports a contextually typed `return`
+ternary once per arm (typokat reports one at the returned expression — noted in
+`result_positions.ts`'s header), and an excess property inside a ternary arm is still
+missed, because `check_excess_properties` does not descend through a ternary.
 
 `b92_contextual_duplicate_diagnostics/` pins **occurrence counts**, not presence.
 Each fixture nests one unresolved name — `undeclaredThing` — inside contextually typed
