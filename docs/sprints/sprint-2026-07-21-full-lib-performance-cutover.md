@@ -1158,3 +1158,42 @@ number for the shape WU8 will eventually gate on, rather than for an in-process 
   WU5's and WU8's own bullets still carried `≥2.00`; they now point at the claim. At ~1.2× the gate
   is met and the `1.25×` engineering target is close. **What blocks closure is not performance —
   it is `103`'s correctness tier**, without which WU7 cannot cut the CLI over.
+
+### 2026-07-27 — the corpus hole is closed, and two scaling twins with it
+
+Four items shipped in parallel. None of them is on the critical path to closure — `103`'s
+correctness tier still owns that — but three of the four are prerequisites the sprint would
+otherwise have discovered late.
+
+- **`96` shipped as `tooling/differential/`** (`9e3be88`, `33c15d4`, `be62ba3`). Against a
+  `412f321` binary it finds **24–28 % divergent across five seeds** (the original ad-hoc fuzzer
+  found 17 %), in exactly the token families `95` names; HEAD-vs-HEAD and self-consistency runs
+  find zero. Two design choices are what make it a gate rather than a dashboard: the grammar
+  carries a unit test asserting it still reaches the trigger shape (85 % of programs), so it
+  cannot silently degrade into green noise; and allowlist entries are **cancellation rules, not
+  line labels**, so a line with an allowed divergence *plus* a new one still reports the new one.
+  The standing 3–4 % truth-mode residue is deliberately left unsuppressed — the only rule broad
+  enough to cancel it would also cancel every genuinely dropped `TS2322`.
+- **`99` shipped as ADR-0018** (`f05cb25`, `9419222`, `3ef88d7`). Option 3: nothing retained in
+  production, the full 875-record set pinned as a named `(code, site)` **multiset** —
+  99 of the 265 diagnostics are exact duplicates, so a set would have hidden 99 records. Deleting
+  one `record_incomplete` call now reports `0 added, 6 removed` with every site named. WU7's
+  acceptance absorbed the one residual: the CLI-output half stays a weak witness until the cutover
+  gives it 875 records to actually suppress.
+- **`87` shipped** (`00cf349`, `5aba26e`). `REASON_DEPTH_LIMIT = 16`, chosen by probing the real
+  corpora — the deepest chain the checker actually produces is **6**. Depth 1600 goes 2.64 MB → 1,350
+  bytes and 1,609 lines → 25. Byte-identity was proven with an md5 gate gating that all 167 other
+  sources were identical across both build windows.
+- **`88` shipped** (`8c6c5b1`, `8388308`). Binary insert instead of a full re-sort per attach: 128×
+  less attach work at 1,024 reopens, overload sets 166 ms → 3.3 ms. The non-merging control is the
+  reason the placement index carries a threshold — the first cut made the common case 27 % slower.
+  Order proved byte-identical by a 72,056-line merge-order dump with matching md5, not asserted.
+
+**The finding worth carrying forward** is `88`'s leftover, filed as `105`. `declare_type` has the
+same quadratic re-sort, *and* a `#[cfg(not(test))]` second sort that overwrites the library-ordinal
+ordering the branch above it just computed — so `cargo test --lib` and the release binary order
+library type-group fragments by different keys. Deleting that sort changes nothing observable: the
+census is identical and all six integration targets stay green, and those are `not(test)` builds so
+the deletion is live in them. That does not exonerate it; it means **no gate this project has can
+see the second sort at all**. Fourth time this sprint a behaviour turned out to be untested by
+construction, after `92`, `94`, and the whole reason `96` exists.
