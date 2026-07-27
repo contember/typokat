@@ -16,6 +16,9 @@ decided work or status.
 - [`sota-checker-lessons.md`](sota-checker-lessons.md) — SOTA checker survey (tsgo, ty,
   Pyrefly, Flow, Sorbet, Hack, rustc, papers) + peer-review verdicts; reference shelf for
   the `14`–`17` scale era and profiling-gated relation/evaluator ideas.
+- [`workspace-crate-split.md`](workspace-crate-split.md) — measured proposal for splitting
+  the single package into a `crates/` workspace: the real DAG, the ~294-path cross-layer
+  surface, the three cycles to cut first, and why it does *not* fix build times.
 
 *(shipped/graduated: `benchmark-harness` → `tooling/bench/`; `minimal-prelude-slice` →
 the shipped backlog `38` sprint.)*

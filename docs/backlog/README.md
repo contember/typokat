@@ -111,7 +111,7 @@ fillers.
 - **L** · [`49`](49-possibly-undefined-family.md) — nullable receivers, optional members/calls, optional chaining, and non-null assertions.
 - **L** · [`50`](50-type-predicates-assertions.md) — predicate/assertion signatures wired into flow narrowing.
 - **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, and closure narrowing.
-- **M** · [`101`](101-ternary-and-logical-values-are-the-error-type.md) — ternary and `&&`/`||`/`??` *values* are the error type, so everything downstream is unchecked.
+- **S** · [`104`](104-excess-property-check-does-not-descend-through-expressions.md) — the excess-property check does not descend into a ternary arm or a logical operand.
 - **M** · [`52`](52-type-reference-tail.md) — value/type-space misuse, generic arity, and explicit call-site type args.
 - **XL** · [`75`](75-scope-surface-tail.md) — family-by-family disposition of the remaining Tier S/A/B semantic surface.
 
@@ -156,7 +156,7 @@ Default-library base + method (fell out of the ADR-0017 snapshot removal):
 - **M** · [`99`](99-library-records-are-not-retained.md) — the frozen base computes the library's own 265 diagnostics and then discards them; **blocks the WU7 CLI cutover**.
 - **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits.
 - **S** · [`97`](97-orphaned-wire-serialization.md) — ~6,300 lines of wire serialization left with no consumer.
-- **L** · [`96`](96-randomized-differential-corpus.md) — randomized differential corpus against `tsc`. Four defect families in two days (`45`, `101`, `102`, and the shipped composed-condition narrowing) reached a green hand-written corpus, an official-suite ratchet, and every other gate the project has; a hand-written corpus only covers the cases someone thought of.
+- **L** · [`96`](96-randomized-differential-corpus.md) — randomized differential corpus against `tsc`. Five defect families in two days (`102`, `104`, and the shipped `45` / `100` / `101` fixes) reached a green hand-written corpus, an official-suite ratchet, and every other gate the project has; a hand-written corpus only covers the cases someone thought of.
 
 Checker scaling (from sprint-2026-07-25; `95` carries a committed RED guard):
 
