@@ -286,9 +286,12 @@ fn check_project_with_library_inner(
     inputs: Vec<FileInput>,
 ) -> Result<Vec<FileReport>, String> {
     let state = base.fork_user_delta().map_err(str::to_owned)?;
-    Ok(check_project_inner_with_checker(inputs, |_, units| {
+    // The continuation can refuse the whole run (a `declare global` the frozen base cannot admit).
+    // It has to reach the caller as a typed failure with no partial report (backlog 103).
+    check_project_reports(inputs, |_, units| {
         crate::check::checker::check_project_programs_with_library(state, units)
-    }))
+    })
+    .map_err(str::to_owned)
 }
 
 #[cfg(test)]
@@ -325,8 +328,25 @@ fn check_project_inner_with_checker<F>(inputs: Vec<FileInput>, check_project: F)
 where
     F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
 {
+    match check_project_reports::<_, std::convert::Infallible>(inputs, |interner, units| {
+        Ok(check_project(interner, units))
+    }) {
+        Ok(reports) => reports,
+        Err(never) => match never {},
+    }
+}
+
+/// [`check_project_inner_with_checker`] for a checker that can refuse the run outright. A refusal
+/// yields `Err` before any [`FileReport`] is built, so no partial user output precedes it.
+fn check_project_reports<F, E>(
+    inputs: Vec<FileInput>,
+    check_project: F,
+) -> Result<Vec<FileReport>, E>
+where
+    F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Result<Vec<CheckResult>, E>,
+{
     if inputs.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let ProjectFrontendRun {
@@ -340,6 +360,7 @@ where
             .collect::<Vec<_>>();
         (project_units_by_slot, check_project(interner, units))
     });
+    let ordered_results = ordered_results?;
     let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
         (0..inputs.len()).map(|_| Vec::new()).collect();
     let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
@@ -358,7 +379,7 @@ where
         }
     }
 
-    inputs
+    Ok(inputs
         .into_iter()
         .enumerate()
         .map(|(index, input)| FileReport {
@@ -376,7 +397,7 @@ where
                     .unwrap_or_default(),
             },
         })
-        .collect()
+        .collect())
 }
 
 pub(crate) struct ProjectFrontendRun<Product> {
@@ -2448,5 +2469,48 @@ const publishedWrong: boolean = published.value;
                 "reverse={reverse}"
             );
         }
+    }
+
+    /// Backlog 103, the guard tier. A project the frozen library base cannot admit must reach the
+    /// caller as a typed failure with NO reports — the project path used to `.expect` it into a
+    /// panic while the single-source path already propagated it.
+    #[test]
+    fn a_declare_global_project_refuses_the_run_instead_of_panicking() {
+        const REFUSAL: &str = "frozen-library continuation does not yet admit declare global";
+        let cases: &[(&str, &str)] = &[
+            (
+                "a library-owned name",
+                "export {};\ndeclare global {\n  interface Window { b103Flag: boolean }\n}\n",
+            ),
+            (
+                "a fresh name",
+                "export {};\ndeclare global {\n  interface B103Brand { tag: string }\n  var b103Counter: number;\n}\n",
+            ),
+        ];
+        for (label, source) in cases {
+            let inputs = vec![
+                FileInput {
+                    name: "augment.ts".to_string(),
+                    source: (*source).to_string(),
+                },
+                FileInput {
+                    name: "read.ts".to_string(),
+                    source: "export const value: number = 1;\n".to_string(),
+                },
+            ];
+            assert_eq!(
+                check_project_with_library(inputs).err().as_deref(),
+                Some(REFUSAL),
+                "{label}: declare global refuses the whole run"
+            );
+        }
+
+        // The single-source path already behaved this way and must keep doing so.
+        assert_eq!(
+            check_source_with_library("export {};\ndeclare global { var b103Solo: number; }\n")
+                .err()
+                .as_deref(),
+            Some(REFUSAL)
+        );
     }
 }

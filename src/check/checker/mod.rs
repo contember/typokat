@@ -1188,13 +1188,13 @@ pub(in crate::check::checker) fn check_project_programs_with_owned_library<'ast,
     units: &[ProjectProgram<'ast>],
     inspect_bindings: F,
     inspect_final: G,
-) -> Vec<CheckResult>
+) -> Result<Vec<CheckResult>, &'static str>
 where
     F: FnOnce(&Binder, &[ScopeId]),
     G: FnOnce(&Pass<'_, 'ast>, u32),
 {
     if units.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let (mut interner, binder, base) = state.into_user_project_base();
@@ -1269,9 +1269,9 @@ where
         exports.push(surface);
     }
     let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
-    let binder = builder
-        .finish_frozen_library_continuation(binder_module)
-        .expect("collision-free project continuation binds");
+    // The single-source path already propagates this; the project path must not turn it into a
+    // panic (backlog 103).
+    let binder = builder.finish_frozen_library_continuation(binder_module)?;
     #[cfg(test)]
     library_compiler::record_user_source_binds_for_test(units.len());
     decl_types.resize(binder.decl_count);
@@ -1417,7 +1417,7 @@ where
 
     let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
     inspect_final(&pass, next_class_id);
-    units
+    Ok(units
         .iter()
         .map(|unit| {
             let (diagnostics, incomplete) =
@@ -1429,7 +1429,7 @@ where
                 incomplete,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Check a dependency-ordered project in a universe forked from a published default-library base.
@@ -1439,7 +1439,7 @@ where
 pub(crate) fn check_project_programs_with_library<'ast>(
     state: library_compiler::OwnedLibraryRuntimeState,
     units: &[ProjectProgram<'ast>],
-) -> Vec<CheckResult> {
+) -> Result<Vec<CheckResult>, &'static str> {
     check_project_programs_with_owned_library(state, units, |_, _| {}, |_, _| {})
 }
 

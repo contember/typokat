@@ -181,6 +181,7 @@ fn check_measured_continuation(modules: usize) -> MeasuredRun {
             },
             |_, _| {},
         )
+        .expect("the scaling profile's continuation binds")
     });
 
     let reports =

@@ -4270,6 +4270,7 @@ pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
                 })));
             },
         )
+        .expect("the owned-base project route's continuation binds")
     });
     Ok(OwnedBaseUserProjectRun {
         reports,

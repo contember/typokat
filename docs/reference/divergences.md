@@ -326,7 +326,33 @@ cross-checked against `tsc 6.0.3 --strict --target es2025 --noEmit`.
   legal input.
   <!-- div: id=library/refused-overload-arity dir=over scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_function_overload_merge.ts -->
 
+Backlog `103`'s **guard tier** extends the same channel to the shapes that used to *panic*: an
+`interface`/`type`/`class`/`namespace` merging into a library-owned name. Those are now refusals
+too, pinned by the `b103_library_merge_refusals/` corpora against the same `tsc` invocation. The
+merge itself still does not happen, which is what the rows below record; making it happen is
+backlog `103`'s correctness tier.
 
+- **Over-report:** a user `interface` that reopens a library-owned type group (`Array`, `String`,
+  `Window`, …) cannot append its fragment, so reads of the augmented member are rejected with
+  `TK2339` where tsc accepts them. The safe direction, but a false positive on legal input.
+  <!-- div: id=library/refused-interface-merge dir=over scope=s-member-access owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b103_library_merge_refusals/library_interface_merge.ts -->
+- **Over-report:** a user `namespace`/`declare namespace` that reopens a library namespace cannot
+  append its fragment, so its own members are not reachable through the namespace and qualified
+  reads report `TK2694` where tsc is clean.
+  <!-- div: id=library/refused-namespace-merge dir=over scope=b-namespaces owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b103_library_merge_refusals/library_namespace_merge.ts -->
+- An `interface` whose name is a library **value** (`interface console`) cannot take the frozen
+  symbol's type slot, so the annotation degrades to an error type and every member read through it
+  is **not reported** — including members that were never declared. tsc types the annotation as
+  the user's interface and checks those reads.
+  <!-- div: id=library/refused-value-name-type-slot dir=under scope=s-member-access owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b103_library_merge_refusals/library_value_name_interface_merge.ts -->
+- `declare global` is **not supported** on the library base at all: the frozen prefix admits no new
+  global augmentation, so the whole run fails closed with
+  `frozen-library continuation does not yet admit declare global` and renders no user results
+  (CLI exit `2`). tsc checks the file normally. This is a refusal, not silence — but it means no
+  diagnostics for that project are produced at all. Pinned by
+  `driver::tests::a_declare_global_project_refuses_the_run_instead_of_panicking`, because a marker
+  fixture cannot express a run-level failure.
+  <!-- div: id=library/declare-global-unsupported dir=under scope=b-namespaces owner=../backlog/103-library-merge-panics-and-routing.md witness=../../src/driver.rs -->
 
 ### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 

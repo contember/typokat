@@ -5472,13 +5472,15 @@ fn bind_module_declaration(
         instance_state: NamespaceInstanceState::NonInstantiated,
         members: Vec::new(),
     });
-    state
-        .namespaces
-        .namespaces
-        .get_mut_local(namespace.index())
-        .expect("namespace exists")
-        .fragments
-        .push(fragment);
+    // A namespace row inside the frozen prefix can never take another fragment (ADR-0011); refuse
+    // the merge rather than panic, so the user's declaration stops being a crash (backlog 103).
+    match state.namespaces.namespaces.get_mut_local(namespace.index()) {
+        Some(row) => row.fragments.push(fragment),
+        None => state.record_frozen_prefix_write(
+            Some(declaration_id),
+            FrozenPrefixWriteSite::NamespaceFragmentList,
+        ),
+    }
 
     let placement_owner = match owner {
         NamespaceOwner::Lexical(scope) => DeclarationOwner::Lexical(scope),

@@ -930,17 +930,56 @@ pub struct TypeGroupTable {
     groups: LayeredVec<TypeGroup>,
 }
 
+/// Where [`TypeGroupTable::append_fragment`] put a fragment.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct AppendedFragment {
+    pub(crate) group: TypeGroupId,
+    /// The requested group belongs to the frozen prefix, so the fragment went to a fresh
+    /// delta-local group instead.
+    pub(crate) frozen_merge_refused: bool,
+}
+
 impl TypeGroupTable {
-    pub(crate) fn push(&mut self, name: impl Into<String>) -> TypeGroupId {
+    fn push_with_fragment(&mut self, name: &str, fragment: TypeGroupFragment) -> TypeGroupId {
         let id = TypeGroupId(
             u32::try_from(self.groups.len()).expect("type group table length fits u32"),
         );
         self.groups.push_local(TypeGroup {
             id,
-            name: name.into(),
-            fragments: Vec::new(),
+            name: name.to_owned(),
+            fragments: vec![fragment],
         });
         id
+    }
+
+    /// Append `fragment` to `group`, or to a fresh delta-local group when there is none yet.
+    ///
+    /// A group inside the frozen library prefix can never take another fragment (ADR-0011), so
+    /// the merge is refused there and the fragment gets a group of its own; the caller records
+    /// the refusal rather than mutating a base row (backlog 103).
+    pub(crate) fn append_fragment(
+        &mut self,
+        group: Option<TypeGroupId>,
+        name: &str,
+        fragment: TypeGroupFragment,
+    ) -> AppendedFragment {
+        if let Some(id) = group {
+            if let Some(row) = self.groups.get_mut_local(id.index()) {
+                row.fragments.push(fragment);
+                return AppendedFragment {
+                    group: id,
+                    frozen_merge_refused: false,
+                };
+            }
+            return AppendedFragment {
+                group: self.push_with_fragment(name, fragment),
+                frozen_merge_refused: true,
+            };
+        }
+        AppendedFragment {
+            group: self.push_with_fragment(name, fragment),
+            frozen_merge_refused: false,
+        }
     }
 
     pub fn get(&self, id: TypeGroupId) -> Option<&TypeGroup> {

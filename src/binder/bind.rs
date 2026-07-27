@@ -765,6 +765,12 @@ pub enum FrozenPrefixWriteSite {
     FunctionValueSlot,
     /// Rebinding a frozen symbol's import slots.
     ImportSlot,
+    /// Appending a source fragment to a frozen type group.
+    TypeGroupFragment,
+    /// Rebinding a frozen symbol's type slot.
+    TypeSlot,
+    /// Appending a fragment to a frozen namespace.
+    NamespaceFragmentList,
 }
 
 impl BindState {
@@ -2272,49 +2278,57 @@ pub(super) fn declare_type(
         .expect("fresh type declaration exists")
         .site;
     let fragment_scope = site.scope.expect("type declaration has a lexical scope");
+    let fragment = TypeGroupFragment {
+        declaration,
+        source,
+        scope: fragment_scope,
+        site,
+        kind,
+    };
     if let Some(existing) = state
         .graph
         .get(target_scope)
         .and_then(|s| s.lookup_local(name))
     {
-        let group = match state
+        let owned = state
             .symbols
             .get(existing)
-            .and_then(|symbol| symbol.owns_type_group.then_some(symbol.ty).flatten())
+            .and_then(|symbol| symbol.owns_type_group.then_some(symbol.ty).flatten());
+        let appended = state.type_groups.append_fragment(owned, name, fragment);
+        let group = appended.group;
+        if appended.frozen_merge_refused {
+            state.record_frozen_prefix_write(
+                Some(declaration),
+                FrozenPrefixWriteSite::TypeGroupFragment,
+            );
+        }
+        if let Some(fragments) = state
+            .type_groups
+            .get_mut(group)
+            .map(|row| &mut row.fragments)
         {
-            Some(group) => group,
-            None => state.type_groups.push(name),
-        };
-        state
-            .type_groups
-            .get_mut(group)
-            .expect("allocated type group exists")
-            .fragments
-            .push(TypeGroupFragment {
-                declaration,
-                source,
-                scope: fragment_scope,
-                site,
-                kind,
-            });
-        let fragments = &mut state
-            .type_groups
-            .get_mut(group)
-            .expect("allocated type group exists")
-            .fragments;
-        if !state.library_module_ordinals.is_empty() {
-            fragments.sort_by_key(|fragment| {
-                (
-                    state
-                        .library_module_ordinals
-                        .get(&fragment.site.module)
-                        .copied()
-                        .expect("library type fragment has an exact file ordinal"),
-                    fragment.site.declaration_span.start,
-                    fragment.declaration.0,
-                )
-            });
-        } else {
+            if !state.library_module_ordinals.is_empty() {
+                fragments.sort_by_key(|fragment| {
+                    (
+                        state
+                            .library_module_ordinals
+                            .get(&fragment.site.module)
+                            .copied()
+                            .expect("library type fragment has an exact file ordinal"),
+                        fragment.site.declaration_span.start,
+                        fragment.declaration.0,
+                    )
+                });
+            } else {
+                fragments.sort_by_key(|fragment| {
+                    (
+                        fragment.source,
+                        fragment.site.declaration_span.start,
+                        fragment.declaration.0,
+                    )
+                });
+            }
+            #[cfg(not(test))]
             fragments.sort_by_key(|fragment| {
                 (
                     fragment.source,
@@ -2323,42 +2337,30 @@ pub(super) fn declare_type(
                 )
             });
         }
-        #[cfg(not(test))]
-        fragments.sort_by_key(|fragment| {
-            (
-                fragment.source,
-                fragment.site.declaration_span.start,
-                fragment.declaration.0,
-            )
-        });
         let lexical = state
             .declarations
             .get_mut(declaration)
             .expect("fresh type declaration exists");
         lexical.type_group = Some(group);
-        let symbol = state
-            .symbols
-            .get_mut(existing)
-            .expect("resolved symbol exists");
-        symbol.ty = Some(group);
-        symbol.owns_type_group = true;
-        symbol.blocks_type_lookup = false;
+        // A frozen symbol row cannot take the group either; refuse rather than panic (backlog 103).
+        match state.symbols.get_mut(existing) {
+            Some(symbol) => {
+                symbol.ty = Some(group);
+                symbol.owns_type_group = true;
+                symbol.blocks_type_lookup = false;
+            }
+            None => {
+                state
+                    .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::TypeSlot);
+            }
+        }
         state.attach_symbol_declaration(existing, declaration);
         return;
     }
-    let group = state.type_groups.push(name);
-    state
+    let group = state
         .type_groups
-        .get_mut(group)
-        .expect("allocated type group exists")
-        .fragments
-        .push(TypeGroupFragment {
-            declaration,
-            source,
-            scope: fragment_scope,
-            site,
-            kind,
-        });
+        .append_fragment(None, name, fragment)
+        .group;
     let lexical = state
         .declarations
         .get_mut(declaration)
@@ -4768,5 +4770,122 @@ namespace Standalone { export const value = 1; }
             binder.resolve_type(consume_module, "FreshShape").is_some(),
             "a fresh script type global is visible from another file"
         );
+    }
+
+    /// A frozen library base with a type group, a bare value name, and a namespace — the three
+    /// rows backlog 103's panic shapes reach.
+    fn frozen_merge_target_base() -> (Binder, Allocator) {
+        let library_allocator = Allocator::default();
+        let library = Parser::new(
+            &library_allocator,
+            "interface LibraryShape { first: string }\n\
+             declare var libraryValue: string;\n\
+             declare namespace LibrarySpace { const inner: number; }\n",
+            SourceType::d_ts(),
+        )
+        .parse();
+        assert!(library.diagnostics.is_empty());
+        let (mut base, _) = bind_libraries(&[(
+            &library.program,
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+        )]);
+        base.freeze_as_base().expect("binder base freezes once");
+        (base, library_allocator)
+    }
+
+    /// Backlog 103, the guard tier: every merge into a library-owned name is a recorded refusal
+    /// with its own declaration, not a panic. A marker fixture only sees the downstream surface,
+    /// so the ledger sequence is pinned directly.
+    #[test]
+    fn frozen_library_merges_are_refused_instead_of_panicking() {
+        let (base, _library_allocator) = frozen_merge_target_base();
+
+        // Each user shape reached a different `.expect` before the guard. The flag is whether the
+        // entry names a user declaration, which is what turns it into an incomplete record.
+        type RefusalCase<'a> = (&'a str, &'a str, &'a [(FrozenPrefixWriteSite, bool)]);
+        let cases: &[RefusalCase<'_>] = &[
+            (
+                "an interface merging into a frozen type group",
+                "interface LibraryShape { second: number }\n",
+                &[
+                    (FrozenPrefixWriteSite::TypeGroupFragment, true),
+                    (FrozenPrefixWriteSite::TypeSlot, true),
+                    (FrozenPrefixWriteSite::SymbolDeclarationList, true),
+                ],
+            ),
+            (
+                "an interface taking the type slot of a frozen value symbol",
+                "interface libraryValue { probe: number }\n",
+                &[
+                    (FrozenPrefixWriteSite::TypeSlot, true),
+                    (FrozenPrefixWriteSite::SymbolDeclarationList, true),
+                ],
+            ),
+            (
+                "a namespace merging into a frozen namespace",
+                "declare namespace LibrarySpace { const extra: number; }\n",
+                // The two trailing scope refusals are the frozen global-scope finalization, which
+                // owns no declaration of its own (backlog 102); the namespace declaration above
+                // them is what carries this run's refusal to the user.
+                &[
+                    (FrozenPrefixWriteSite::SymbolDeclarationList, true),
+                    (FrozenPrefixWriteSite::NamespaceFragmentList, true),
+                    (FrozenPrefixWriteSite::ScopeDeclaration, false),
+                    (FrozenPrefixWriteSite::ScopeDeclaration, false),
+                ],
+            ),
+        ];
+
+        for (label, source, expected) in cases {
+            let user_allocator = Allocator::default();
+            let user = Parser::new(&user_allocator, source, SourceType::ts()).parse();
+            assert!(user.diagnostics.is_empty(), "{label}: fixture parses");
+
+            let delta = base.fork_delta().expect("private binder delta");
+            let (mut builder, key) = ProjectBinderBuilder::resume_frozen_library(delta);
+            let unit = CompilationUnit::implementation(key, &user.program);
+            builder.reserve_script_namespace_roots([(&user.program, unit)]);
+            let (module, _) = builder.add_module(&user.program, &[], unit);
+            let binder = builder
+                .finish_frozen_library_continuation(module)
+                .expect("a colliding suffix still binds");
+
+            let refusals = binder
+                .frozen_prefix_writes()
+                .iter()
+                .map(|write| (write.site, write.declaration.is_some()))
+                .collect::<Vec<_>>();
+            assert_eq!(refusals, *expected, "{label}: refusal sequence");
+        }
+    }
+
+    /// The `declare global` half. The frozen base cannot admit a new global augmentation at all,
+    /// so the continuation refuses the whole run — a typed `Err`, which the project path used to
+    /// turn into a panic.
+    #[test]
+    fn frozen_library_continuation_refuses_declare_global() {
+        let (base, _library_allocator) = frozen_merge_target_base();
+
+        for source in [
+            "export {};\ndeclare global { interface LibraryShape { second: number } }\n",
+            "export {};\ndeclare global { interface B103Brand { tag: string } }\n",
+            "export {};\ndeclare global { var b103Counter: number; }\n",
+        ] {
+            let user_allocator = Allocator::default();
+            let user = Parser::new(&user_allocator, source, SourceType::ts()).parse();
+            assert!(user.diagnostics.is_empty(), "fixture parses: {source}");
+
+            let delta = base.fork_delta().expect("private binder delta");
+            let (mut builder, key) = ProjectBinderBuilder::resume_frozen_library(delta);
+            let unit = CompilationUnit::implementation(key, &user.program);
+            builder.reserve_script_namespace_roots([(&user.program, unit)]);
+            let (module, _) = builder.add_module(&user.program, &[], unit);
+            assert_eq!(
+                builder.finish_frozen_library_continuation(module).err(),
+                Some("frozen-library continuation does not yet admit declare global"),
+                "declare global is refused, not bound: {source}"
+            );
+        }
     }
 }
