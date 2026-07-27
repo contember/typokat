@@ -1112,6 +1112,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return (raw, ContextualRewalk::KeptRaw);
             }
         };
+        // Backlog 95: only the effect-discarding mode is memoized. There the walk's
+        // whole `CheckerEffects` is dropped, so the answer returned here plus the
+        // declaration bindings it leaves behind are the whole of its observable
+        // output, and replaying those is indistinguishable from re-walking. The
+        // retaining mode is the one that reports (backlog 92) and must always run.
+        let memo_key = if retain_contextual_arrow_checks {
+            None
+        } else {
+            self.contextual_walk_key(scope, raw, context, use_contextual_arrow)
+        };
+        if let Some(key) = &memo_key {
+            if let Some(memoized) = self.memoized_contextual_walk(key) {
+                return memoized;
+            }
+        }
+        let mark = DeclTypes::log_mark();
         if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
             #[cfg(test)]
             super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), true);
@@ -1128,14 +1144,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 #[cfg(test)]
                 super::calls::measure_contextual_rollback(discarded_records);
                 if let Some(decl_types) = decl_types {
-                    self.decl_types = decl_types;
+                    self.decl_types.restore(decl_types, mark);
                 }
                 contextual
             };
-            return match contextual {
+            let resolved = match contextual {
                 Some(ty) => ((ty, raw.1), ContextualRewalk::Rewalked),
                 None => (raw, ContextualRewalk::KeptRaw),
             };
+            if let Some(key) = memo_key {
+                self.memoize_contextual_walk(key, mark, resolved);
+            }
+            return resolved;
         }
 
         if !self.context_can_shape_fresh_literal(expr, context) {
@@ -1157,10 +1177,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             super::calls::measure_contextual_rollback(discarded_records);
             contextual
         };
-        match contextual {
+        let resolved = match contextual {
             Some(source) => (source, ContextualRewalk::Rewalked),
             None => (raw, ContextualRewalk::KeptRaw),
+        };
+        if let Some(key) = memo_key {
+            self.memoize_contextual_walk(key, mark, resolved);
         }
+        resolved
     }
 
     fn context_can_shape_fresh_literal(&self, expr: &Expression<'_>, context: TypeId) -> bool {

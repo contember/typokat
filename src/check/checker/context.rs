@@ -17,10 +17,14 @@ use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 
+use super::calls::{
+    ArgumentWalkKey, ContextualWalkKey, MemoizedArgumentWalk, MemoizedContextualWalk,
+};
 use super::classes::body::{BodyClassView, BodyMemberEnvironment};
 use super::classes::construction::DraftClassTypeParameter;
 use super::classes::publication::StagedClassValidation;
@@ -218,6 +222,28 @@ impl<Ticket: Copy + PartialEq> CheckerRecordBatch<Ticket> {
         );
         self.records.extend(child.records);
     }
+}
+
+/// One call/`new` argument's raw walk, as the in-flight call frame sees it.
+///
+/// Exactly one walk of a re-walkable argument may report. The raw walk runs first, so
+/// its records are parked here until the committed contextual walk says whether it
+/// superseded them (backlog `92`); whatever is still parked when the frame closes
+/// commits.
+pub(in crate::check::checker) enum ProvisionalArgumentWalk<Ticket: Copy = UserRecordTicket> {
+    /// Nothing is parked: either the shape admits no contextual re-walk and the raw
+    /// walk already reported in place, or the committed walk superseded it.
+    Settled,
+    /// The raw walk's records, parked until the committed walk reports.
+    Held(CheckerEffects<Ticket>),
+    /// The raw walk was served from [`Pass::raw_argument_walk_memo`], so no records
+    /// exist for this argument yet (backlog `95`). If the committed contextual walk
+    /// supersedes the argument this is the whole saving; if it does **not**, the walk
+    /// is re-run before the frame closes and parks its records here, so the raw walk
+    /// still reports wherever it is the only walk. The index is the argument's
+    /// position in the call's own argument list, which is what makes that re-walk
+    /// possible.
+    Memoized { argument_index: usize },
 }
 
 pub(in crate::check::checker) struct CheckerEffects<Ticket: Copy = UserRecordTicket> {
@@ -487,6 +513,63 @@ impl PendingEffectSlots {
     }
 }
 
+/// One observation of a declaration slot while an argument frame is open.
+///
+/// The log these form is what makes an argument-walk memo sound (backlog `95`): a
+/// memoized walk records the slots it *read* before it wrote them — its dependency on
+/// the incoming environment — and the slots it *wrote*, which are replayed when the
+/// walk is skipped.
+#[derive(Clone, Copy)]
+struct DeclEvent {
+    id: ValueStorageId,
+    /// The slot's value before a write; equal to `value` for a read.
+    previous: Option<TypeId>,
+    value: Option<TypeId>,
+    write: bool,
+}
+
+/// One slot's net movement across a stretch of walking: what it held when the stretch
+/// began and what it holds now. A slot written and then restored has `previous ==
+/// value` and is not a net write at all, which is what keeps a discarded contextual
+/// excursion from being replayed as a real rebinding.
+#[derive(Clone, Copy)]
+pub(in crate::check::checker) struct NetDeclWrite {
+    pub(in crate::check::checker) id: ValueStorageId,
+    pub(in crate::check::checker) previous: Option<TypeId>,
+    pub(in crate::check::checker) value: Option<TypeId>,
+}
+
+thread_local! {
+    /// The live declaration observation log, `None` when closed. It is thread-local
+    /// rather than a field because [`DeclTypes`] is also the process-wide frozen
+    /// library base and must stay `Sync`; exactly one table is live per checking
+    /// thread, and the log is open only for the outermost in-flight call/`new`
+    /// argument frame.
+    static DECL_OBSERVATIONS: RefCell<Option<Vec<DeclEvent>>> = const { RefCell::new(None) };
+}
+
+fn observing_declarations() -> bool {
+    DECL_OBSERVATIONS.with(|log| log.borrow().is_some())
+}
+
+fn observe_declaration(
+    id: ValueStorageId,
+    previous: Option<TypeId>,
+    value: Option<TypeId>,
+    write: bool,
+) {
+    DECL_OBSERVATIONS.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.push(DeclEvent {
+                id,
+                previous,
+                value,
+                write,
+            });
+        }
+    });
+}
+
 /// Per-declaration computed types, indexed by [`ValueStorageId`]. `None` means a
 /// declaration whose type could not be computed (out of subset); a reference to
 /// it resolves to the error type defensively.
@@ -506,17 +589,31 @@ impl DeclTypes {
         }
     }
 
-    pub(in crate::check::checker) fn set(&mut self, id: ValueStorageId, ty: TypeId) {
-        if let Some(slot) = id
+    /// The single mutator: every declaration-type change in the checker reaches the
+    /// table through here, so the observation log cannot fall behind.
+    fn put(&mut self, id: ValueStorageId, value: Option<TypeId>) {
+        let Some(slot) = id
             .index()
             .checked_sub(self.base.len())
             .and_then(|index| self.local.get_mut(index))
-        {
-            *slot = Some(ty);
+        else {
+            return;
+        };
+        let previous = *slot;
+        if previous == value {
+            return;
         }
+        *slot = value;
+        observe_declaration(id, previous, value, true);
     }
 
-    pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
+    pub(in crate::check::checker) fn set(&mut self, id: ValueStorageId, ty: TypeId) {
+        self.put(id, Some(ty));
+    }
+
+    /// Read a slot without recording the read. Reserved for the memo's own validity
+    /// check, which asks what a slot holds *now* rather than depending on it.
+    fn untracked_get(&self, id: ValueStorageId) -> Option<TypeId> {
         let index = id.index();
         self.base
             .get(index)
@@ -525,7 +622,144 @@ impl DeclTypes {
             .flatten()
     }
 
+    /// Open/close the observation log. The checker keeps it open for exactly the
+    /// duration of the outermost in-flight call/`new` argument frame. Opening resets,
+    /// so a log abandoned by a panicking check cannot leak into the next one.
+    pub(in crate::check::checker) fn open_log() {
+        DECL_OBSERVATIONS.with(|log| {
+            let mut log = log.borrow_mut();
+            debug_assert!(log.is_none(), "argument observation logs do not nest");
+            *log = Some(Vec::new());
+        });
+    }
+
+    pub(in crate::check::checker) fn close_log() {
+        DECL_OBSERVATIONS.with(|log| *log.borrow_mut() = None);
+    }
+
+    /// Where the log stands now, so a walk can later ask what it read and wrote.
+    pub(in crate::check::checker) fn log_mark() -> usize {
+        DECL_OBSERVATIONS.with(|log| log.borrow().as_ref().map_or(0, Vec::len))
+    }
+
+    /// The slots a walk depended on: those it read **before** it wrote them. A slot
+    /// the walk wrote first is its own output, not an input, so re-running the walk in
+    /// an environment that disagrees only there would still take the same path.
+    pub(in crate::check::checker) fn dependencies_since(
+        mark: usize,
+    ) -> Vec<(ValueStorageId, Option<TypeId>)> {
+        let mut seen: FxHashSet<ValueStorageId> = FxHashSet::default();
+        let mut dependencies = Vec::new();
+        Self::with_log_tail(mark, |tail| {
+            for event in tail {
+                if !seen.insert(event.id) {
+                    continue;
+                }
+                if !event.write {
+                    dependencies.push((event.id, event.value));
+                }
+            }
+        });
+        dependencies
+    }
+
+    /// The net effect of everything written since `mark`: each touched slot once,
+    /// carrying its final value, in first-touch order. Replaying this on the state the
+    /// mark was taken in reproduces the current state exactly.
+    pub(in crate::check::checker) fn net_writes_since(mark: usize) -> Vec<NetDeclWrite> {
+        let mut order: Vec<ValueStorageId> = Vec::new();
+        let mut movement: FxHashMap<ValueStorageId, (Option<TypeId>, Option<TypeId>)> =
+            FxHashMap::default();
+        Self::with_log_tail(mark, |tail| {
+            for event in tail.iter().filter(|event| event.write) {
+                match movement.get_mut(&event.id) {
+                    Some(entry) => entry.1 = event.value,
+                    None => {
+                        movement.insert(event.id, (event.previous, event.value));
+                        order.push(event.id);
+                    }
+                }
+            }
+        });
+        order
+            .into_iter()
+            .filter_map(|id| {
+                movement
+                    .get(&id)
+                    .map(|&(previous, value)| (id, previous, value))
+            })
+            .filter(|&(_, previous, value)| previous != value)
+            .map(|(id, previous, value)| NetDeclWrite {
+                id,
+                previous,
+                value,
+            })
+            .collect()
+    }
+
+    fn with_log_tail(mark: usize, mut visit: impl FnMut(&[DeclEvent])) {
+        DECL_OBSERVATIONS.with(|log| {
+            if let Some(tail) = log.borrow().as_ref().and_then(|log| log.get(mark..)) {
+                visit(tail);
+            }
+        });
+    }
+
+    /// Whether every slot a memoized walk depended on still holds the value it saw.
+    pub(in crate::check::checker) fn dependencies_hold(
+        &self,
+        dependencies: &[(ValueStorageId, Option<TypeId>)],
+    ) -> bool {
+        dependencies
+            .iter()
+            .all(|&(id, value)| self.untracked_get(id) == value)
+    }
+
+    /// Re-observe a memoized walk's dependencies, so an enclosing walk inherits them
+    /// as its own — the skipped walk read those slots, and the enclosing walk's memo
+    /// entry must say so.
+    pub(in crate::check::checker) fn replay_dependencies(
+        dependencies: &[(ValueStorageId, Option<TypeId>)],
+    ) {
+        for &(id, value) in dependencies {
+            observe_declaration(id, value, value, false);
+        }
+    }
+
+    /// Republish a memoized walk's declaration writes, so skipping the walk leaves the
+    /// same bindings behind that performing it would have.
+    pub(in crate::check::checker) fn apply_writes(&mut self, writes: &[NetDeclWrite]) {
+        for write in writes {
+            self.put(write.id, write.value);
+        }
+    }
+
+    /// Restore a snapshot taken at `mark`, recording the undo in the log so the log
+    /// still describes the table's net movement across the excursion.
+    pub(in crate::check::checker) fn restore(&mut self, saved: Self, mark: usize) {
+        let undo = Self::net_writes_since(mark);
+        *self = saved;
+        for write in undo {
+            debug_assert_eq!(write.previous, self.untracked_get(write.id));
+            observe_declaration(write.id, write.value, write.previous, true);
+        }
+    }
+
+    pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
+        let value = self.untracked_get(id);
+        // A slot in the frozen base is immutable for the whole pass — `put` refuses to
+        // write one — so depending on it is vacuous and recording it is pure cost.
+        if id.index() >= self.base.len() {
+            observe_declaration(id, value, value, false);
+        }
+        value
+    }
+
     pub(in crate::check::checker) fn resize(&mut self, count: u32) {
+        debug_assert!(
+            !observing_declarations(),
+            "declaration storage never grows inside an argument frame"
+        );
         assert!(
             count as usize >= self.len(),
             "declaration type storage grows only by suffix"
@@ -562,6 +796,10 @@ impl DeclTypes {
     }
 
     pub(in crate::check::checker) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        debug_assert!(
+            !observing_declarations(),
+            "declaration storage never seals inside an argument frame"
+        );
         if self.sealed || !self.base.is_empty() {
             return Err("declaration types are already sealed");
         }
@@ -571,6 +809,10 @@ impl DeclTypes {
     }
 
     pub(in crate::check::checker) fn fork_delta(&self) -> Result<Self, &'static str> {
+        debug_assert!(
+            !observing_declarations(),
+            "declaration storage never forks inside an argument frame"
+        );
         if !self.sealed || !self.local.is_empty() {
             return Err("declaration type base is not sealed");
         }
@@ -1376,7 +1618,22 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// only one of the two may commit, so the earlier walk is held here until the
     /// committed walk reports whether it superseded it — backlog `92`.
     pub(in crate::check::checker) provisional_argument_effects:
-        Vec<Vec<Option<CheckerEffects<Ticket>>>>,
+        Vec<Vec<ProvisionalArgumentWalk<Ticket>>>,
+    /// Nesting depth of in-flight call/`new` argument frames. The argument-walk memos
+    /// below live for exactly the outermost frame and are cleared as it closes, so a
+    /// memoized answer can never outlive the walk region it was taken in.
+    pub(in crate::check::checker) argument_walk_depth: u32,
+    /// Memo for the raw (context-free) walk of a re-walkable call/`new` argument
+    /// (backlog `95`). Re-executing an enclosing call — which is what a contextual
+    /// re-walk of an enclosing argument does — otherwise re-walks this whole subtree.
+    pub(in crate::check::checker) raw_argument_walk_memo:
+        FxHashMap<ArgumentWalkKey, Vec<MemoizedArgumentWalk>>,
+    /// Memo for the *effect-discarding* contextual argument re-walk (backlog `95`).
+    /// Only that mode is eligible: its whole `CheckerEffects` is dropped, so the type
+    /// it returns and the declaration bindings it leaves behind are its entire
+    /// observable output. The walk that reports is never memoized.
+    pub(in crate::check::checker) contextual_walk_memo:
+        FxHashMap<ContextualWalkKey, Vec<MemoizedContextualWalk>>,
     /// Completed lexical owners awaiting deferred relation/override resolution.
     pub(in crate::check::checker) pending_effects: Vec<CheckerEffects<Ticket>>,
     /// O(1) owner-to-batch lookup over the reservation ledger's dense ticket keys.
@@ -1634,6 +1891,54 @@ mod tests {
     use oxc_parser::Parser;
     use oxc_span::SourceType;
     use rustc_hash::FxHashMap;
+
+    /// The two rules the argument-walk memo's soundness rests on (backlog `95`).
+    #[test]
+    fn the_observation_log_separates_a_walks_inputs_from_its_outputs() {
+        let mut types = DeclTypes::new(4);
+        types.set(ValueStorageId(0), TypeId(10));
+        types.set(ValueStorageId(1), TypeId(11));
+
+        DeclTypes::open_log();
+        let mark = DeclTypes::log_mark();
+
+        // Read before write: an input the walk depended on.
+        assert_eq!(types.get(ValueStorageId(0)), Some(TypeId(10)));
+        // Written before it is read: the walk's own output, not an input.
+        types.set(ValueStorageId(1), TypeId(21));
+        assert_eq!(types.get(ValueStorageId(1)), Some(TypeId(21)));
+        // Never observed at all.
+        types.set(ValueStorageId(2), TypeId(22));
+
+        let dependencies = DeclTypes::dependencies_since(mark);
+        assert_eq!(dependencies, [(ValueStorageId(0), Some(TypeId(10)))]);
+        let writes: Vec<(ValueStorageId, Option<TypeId>)> = DeclTypes::net_writes_since(mark)
+            .into_iter()
+            .map(|write| (write.id, write.value))
+            .collect();
+        assert_eq!(
+            writes,
+            [
+                (ValueStorageId(1), Some(TypeId(21))),
+                (ValueStorageId(2), Some(TypeId(22))),
+            ]
+        );
+
+        // A slot written and then restored has moved nowhere, so it is not a write the
+        // memo may replay — replaying it would reimpose a stale binding.
+        let excursion = DeclTypes::log_mark();
+        let saved = types.clone();
+        types.set(ValueStorageId(3), TypeId(33));
+        types.restore(saved, excursion);
+        assert_eq!(types.get(ValueStorageId(3)), None);
+        assert!(DeclTypes::net_writes_since(excursion).is_empty());
+
+        DeclTypes::close_log();
+        // Nothing is recorded outside an open log.
+        assert_eq!(DeclTypes::log_mark(), 0);
+        assert_eq!(types.get(ValueStorageId(0)), Some(TypeId(10)));
+        assert!(DeclTypes::dependencies_since(0).is_empty());
+    }
 
     #[test]
     fn declaration_types_share_a_frozen_prefix_and_isolate_dense_suffixes() {

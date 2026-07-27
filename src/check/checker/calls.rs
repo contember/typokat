@@ -10,7 +10,10 @@ use super::decls::alloc_type_param_ids;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
 use super::expr::{contextual_literal_target, ContextualRewalk};
 use super::function_groups::FunctionGroupDemand;
-use super::type_groups::{PublishedTypeGroupSurface, PublishedTypeGroupTerminal};
+use super::type_groups::{
+    PublishedTypeGroupSurface, PublishedTypeGroupTerminal, TypeEnvironmentState,
+};
+use crate::binder::declaration::ValueStorageId;
 use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
 use crate::check::infer;
@@ -21,22 +24,291 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId, TypeTag,
+    ClassId, FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId,
+    TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
 use oxc_ast::ast::{
-    ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
+    Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, FormalParameter,
     FormalParameterRest, FormalParameters, Function, FunctionBody, NewExpression,
     TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::{Hash, Hasher};
 
 #[cfg(test)]
 mod contextual_duplicate_diagnostics_spec;
 #[cfg(test)]
 mod contextual_rewalk_scaling_spec;
+
+/// How many declaration slots a memoized walk may depend on or republish, and how
+/// many distinct environments one node keeps entries for. A walk outside these bounds
+/// is walked again rather than replayed — the memo is an optimization, and neither an
+/// unbounded replay list nor an unbounded bucket scan is worth carrying.
+const ARGUMENT_WALK_SLOT_BUDGET: usize = 64;
+const ARGUMENT_WALK_BUCKET_BUDGET: usize = 8;
+
+/// Everything an argument walk of one expression node reads that the node itself does
+/// **not** fix and that is not a declaration type (backlog `95`).
+///
+/// The premise of the reverted first attempt (`412f321`) — that `this` and the current
+/// class are the only such state — was false: a contextual walk rebinds the callback
+/// parameter, so a walk performed with the parameter unbound was served to one running
+/// with it bound. Declaration types are therefore **not** modelled here at all but
+/// tracked exactly: a memoized walk records which slots it read before writing them,
+/// and an entry is only served while every one of them still holds the value the walk
+/// saw (`DeclTypes::dependencies_since`/`dependencies_hold`).
+///
+/// What remains is the rest of the pass's mutable state, which divides in three:
+///
+/// * **Named here** — `this`, the current class, the base-constructor signature, the
+///   in-constructor flag, the type-parameter frames and their static barriers, the
+///   enclosing class chain, and `next_type_param`, which covers every id allocated
+///   fresh by a walk of the subtree.
+/// * **Refused** — the type-lowering, replay-evidence, class-construction and
+///   loop-fixpoint contexts. [`Pass::argument_walk_environment`] is the only
+///   constructor and returns `None` in all of them, so a walk running there is simply
+///   never memoized.
+/// * **Deliberately absent** — the interner, the semantic-query caches, the flow-node
+///   arena and its memo, and the reservation ledgers. These are content-addressed or
+///   append-only: growing them does not change the answer to a query that was already
+///   asked, which is the same premise the relation cache itself rests on
+///   (`docs/reference/invariants.md` §1). Narrowing in particular is not ambient — the
+///   flow-node CFG resolves a reference from its own `(module scope, span)`, both of
+///   which the node fixes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::check::checker) struct WalkEnvironment {
+    module: ScopeId,
+    scope: ScopeId,
+    start: u32,
+    end: u32,
+    this: Option<TypeId>,
+    class: Option<ClassId>,
+    super_ctor: Option<TypeId>,
+    in_ctor: bool,
+    /// Fresh type-parameter ids are allocated from this counter, so a walk of a
+    /// subtree that declares a generic cannot collide with an earlier one.
+    next_type_param: u32,
+    /// Hash of the type-parameter scope stack, its static barriers, and the enclosing
+    /// class chain — the frames a type reference inside the argument resolves through.
+    type_params: u64,
+}
+
+/// One raw (context-free) walk of a call/`new` argument whose shape a committed
+/// contextual walk can supersede. The raw walk takes no contextual type, so the
+/// environment is the whole key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::check::checker) struct ArgumentWalkKey {
+    environment: WalkEnvironment,
+}
+
+/// One effect-discarding contextual re-walk: the same environment, plus the raw type
+/// it refines, the already-resolved contextual type it is walked against, and which of
+/// the two branches (`use_contextual_arrow`) it takes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::check::checker) struct ContextualWalkKey {
+    environment: WalkEnvironment,
+    raw: TypeId,
+    context: TypeId,
+    use_contextual_arrow: bool,
+}
+
+/// A memoized walk's whole observable output, plus the declaration environment it is
+/// valid in: the slots it read before writing them (`reads`) must still hold those
+/// values, and the slots it published (`writes`) are replayed so that skipping the
+/// walk leaves the same environment behind that performing it would have.
+pub(in crate::check::checker) struct MemoizedWalk<T> {
+    value: T,
+    reads: Vec<(ValueStorageId, Option<TypeId>)>,
+    writes: Vec<NetDeclWrite>,
+}
+
+/// A served entry, detached from the memo so the pass can be mutated while it is
+/// adopted: the answer, the declaration slots it depended on, and the ones it wrote.
+type ServedWalk<T> = (T, Vec<(ValueStorageId, Option<TypeId>)>, Vec<NetDeclWrite>);
+
+pub(in crate::check::checker) type MemoizedArgumentWalk = MemoizedWalk<(TypeId, Span)>;
+pub(in crate::check::checker) type MemoizedContextualWalk =
+    MemoizedWalk<((TypeId, Span), ContextualRewalk)>;
+
+impl<T: Copy> MemoizedWalk<T> {
+    /// The entry in `bucket` whose recorded reads all still hold, if any.
+    fn serve(bucket: &[Self], decl_types: &DeclTypes) -> Option<ServedWalk<T>> {
+        bucket
+            .iter()
+            .find(|entry| decl_types.dependencies_hold(&entry.reads))
+            .map(|entry| (entry.value, entry.reads.clone(), entry.writes.clone()))
+    }
+}
+
+impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
+    /// The environment key for a walk of `span` in `scope`, or `None` when this walk
+    /// may not be memoized at all.
+    ///
+    /// The refusals are the other half of the completeness argument: rather than model
+    /// the type-lowering, replay-evidence, and loop-fixpoint contexts, a walk running
+    /// in any of them is simply never memoized. Each of them is rare and none of them
+    /// occurs in the shapes this memo exists for.
+    fn argument_walk_environment(&self, scope: ScopeId, span: Span) -> Option<WalkEnvironment> {
+        // Only inside a call/`new` argument frame: that frame owns the memo's lifetime
+        // and is the only place the declaration observation log is open.
+        if self.argument_walk_depth == 0 {
+            return None;
+        }
+        // Replay evidence records what each walk demanded; skipping a walk would drop
+        // its dependencies. Suppressed effects are prelude lowering, not user checking.
+        if self.replay_trace.is_some() || self.suppress_effects {
+            return None;
+        }
+        // Type-declaration lowering contexts. A walk under any of these resolves names
+        // through frames this key does not model.
+        if self.building_template
+            || !self.cond_frames.is_empty()
+            || !self.mapped_frames.is_empty()
+            || self.resolving_alias.is_some()
+            || self.resolving_conditional_alias.is_some()
+            || !self.resolving_alias_stack.is_empty()
+            || self.alias_indirection_depth != 0
+            || self.annotation_depth != 0
+        {
+            return None;
+        }
+        // A narrowed reference resolved under an unfinished loop fixpoint depends on a
+        // provisional seed that is not durable (invariants §1, narrowing).
+        if self.flow_loop_depth != 0 || !self.flow_provisional.is_empty() {
+            return None;
+        }
+        // Class construction states: member surfaces are still moving.
+        if self.staged_class_validation.is_some()
+            || self.current_body_this_environment.is_some()
+            || !matches!(self.type_environment, TypeEnvironmentState::Published(_))
+        {
+            return None;
+        }
+        Some(WalkEnvironment {
+            module: self.current_module,
+            scope,
+            start: span.start,
+            end: span.end,
+            this: self.current_this,
+            class: self.current_class,
+            super_ctor: self.current_super_ctor,
+            in_ctor: self.current_in_ctor,
+            next_type_param: self.next_type_param,
+            type_params: self.type_param_environment_hash(),
+        })
+    }
+
+    /// Hash the type-parameter frames a reference inside the argument resolves
+    /// through. Sorted per frame so two frames with the same bindings hash alike
+    /// whatever order the map iterates in, and **empty frames are skipped**: a
+    /// non-generic function still pushes one, and `lookup_type_param` walks the whole
+    /// stack, so an empty frame shadows nothing and changes no resolution.
+    fn type_param_environment_hash(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        for frame in self
+            .type_param_scopes
+            .iter()
+            .filter(|frame| !frame.is_empty())
+        {
+            let mut entries: Vec<(&str, u32)> = frame
+                .iter()
+                .map(|(name, ty)| (name.as_str(), ty.0))
+                .collect();
+            entries.sort_unstable();
+            entries.hash(&mut hasher);
+        }
+        for barrier in self
+            .static_class_type_param_barriers
+            .iter()
+            .filter(|barrier| !barrier.is_empty())
+        {
+            let mut ids: Vec<u32> = barrier.iter().map(|id| id.0).collect();
+            ids.sort_unstable();
+            ids.hash(&mut hasher);
+        }
+        self.enclosing_classes.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Adopt a served entry: inherit its declaration dependencies so the enclosing
+    /// walk records them as its own, and republish the bindings it left behind.
+    fn adopt_memoized_walk(
+        &mut self,
+        reads: &[(ValueStorageId, Option<TypeId>)],
+        writes: &[NetDeclWrite],
+    ) {
+        DeclTypes::replay_dependencies(reads);
+        self.decl_types.apply_writes(writes);
+    }
+
+    /// Record a walk's answer under `key`, unless it read or wrote more declarations
+    /// than the memo carries or the node already has enough distinct environments.
+    fn memoize_walk<T>(
+        bucket: &mut Vec<MemoizedWalk<T>>,
+        reads: Vec<(ValueStorageId, Option<TypeId>)>,
+        writes: Vec<NetDeclWrite>,
+        value: T,
+    ) {
+        if bucket.len() >= ARGUMENT_WALK_BUCKET_BUDGET
+            || reads.len() > ARGUMENT_WALK_SLOT_BUDGET
+            || writes.len() > ARGUMENT_WALK_SLOT_BUDGET
+        {
+            return;
+        }
+        bucket.push(MemoizedWalk {
+            value,
+            reads,
+            writes,
+        });
+    }
+
+    pub(in crate::check::checker) fn contextual_walk_key(
+        &self,
+        scope: ScopeId,
+        raw: (TypeId, Span),
+        context: TypeId,
+        use_contextual_arrow: bool,
+    ) -> Option<ContextualWalkKey> {
+        Some(ContextualWalkKey {
+            environment: self.argument_walk_environment(scope, raw.1)?,
+            raw: raw.0,
+            context,
+            use_contextual_arrow,
+        })
+    }
+
+    /// Serve a memoized contextual walk, republishing what it left behind.
+    pub(in crate::check::checker) fn memoized_contextual_walk(
+        &mut self,
+        key: &ContextualWalkKey,
+    ) -> Option<((TypeId, Span), ContextualRewalk)> {
+        let bucket = self.contextual_walk_memo.get(key)?;
+        let (value, reads, writes) = MemoizedWalk::serve(bucket, &self.decl_types)?;
+        self.adopt_memoized_walk(&reads, &writes);
+        #[cfg(test)]
+        measure_call(|measure| measure.contextual_memo_hits += 1);
+        Some(value)
+    }
+
+    pub(in crate::check::checker) fn memoize_contextual_walk(
+        &mut self,
+        key: ContextualWalkKey,
+        mark: usize,
+        value: ((TypeId, Span), ContextualRewalk),
+    ) {
+        let reads = DeclTypes::dependencies_since(mark);
+        let writes = DeclTypes::net_writes_since(mark);
+        Self::memoize_walk(
+            self.contextual_walk_memo.entry(key).or_default(),
+            reads,
+            writes,
+            value,
+        );
+    }
+}
 
 /// The argument shapes a committed contextual walk can re-walk: an arrow function,
 /// or a fresh object/array literal (also through parentheses, which
@@ -113,6 +385,10 @@ pub(super) struct CallMeasure {
     pub selected_receiver_relation_queries: u64,
     pub speculative_query_forks: u64,
     pub speculative_query_writes_discarded: u64,
+    /// Effect-discarding contextual re-walks served from the memo (backlog `95`).
+    pub contextual_memo_hits: u64,
+    /// Raw argument walks served from the memo (backlog `95`).
+    pub raw_argument_memo_hits: u64,
 }
 
 #[cfg(test)]
@@ -505,28 +781,113 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// The held batch is index-aligned with `arg_types` by
     /// [`Pass::hold_provisional_argument_effects`]; an argument whose type inference
     /// yields nothing is never paired with a parameter, so its effects commit here.
+    ///
+    /// A re-walkable shape is also memoized per call region (backlog `95`):
+    /// re-executing the enclosing call — which is what a contextual re-walk of an
+    /// enclosing argument does — otherwise re-walks this whole subtree, and that is
+    /// one of the two factors that made nesting exponential. Only a walk that
+    /// produced **no effects at all** is memoized, so serving it emits nothing that a
+    /// real walk would have emitted and there is nothing to recover later; the
+    /// declaration bindings it published are replayed so the environment it leaves
+    /// behind is the one a real walk would leave.
     fn walk_raw_argument(
         &mut self,
         scope: ScopeId,
+        argument_index: usize,
         arg_expr: &Expression<'_>,
     ) -> Option<(TypeId, Span)> {
         if !contextual_rewalk_candidate_shape(arg_expr) {
             let inferred = self.infer_expr(scope, arg_expr);
             if inferred.is_some() {
-                self.hold_provisional_argument_effects(None);
+                self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Settled);
             }
             return inferred;
         }
+        let key = self
+            .argument_walk_environment(scope, Span::from_oxc(arg_expr.span()))
+            .map(|environment| ArgumentWalkKey { environment });
+        if let Some(key) = &key {
+            if let Some(served) = self
+                .raw_argument_walk_memo
+                .get(key)
+                .and_then(|bucket| MemoizedWalk::serve(bucket, &self.decl_types))
+            {
+                let (value, reads, writes) = served;
+                self.adopt_memoized_walk(&reads, &writes);
+                #[cfg(test)]
+                measure_call(|measure| measure.raw_argument_memo_hits += 1);
+                self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Memoized {
+                    argument_index,
+                });
+                return Some(value);
+            }
+        }
+        let mark = DeclTypes::log_mark();
         let (inferred, effects) =
             self.capture_candidate_effects(|pass| pass.infer_expr(scope, arg_expr));
         match inferred {
             Some(inferred) => {
-                self.hold_provisional_argument_effects(Some(effects));
+                if let Some(key) = key {
+                    let reads = DeclTypes::dependencies_since(mark);
+                    let writes = DeclTypes::net_writes_since(mark);
+                    Self::memoize_walk(
+                        self.raw_argument_walk_memo.entry(key).or_default(),
+                        reads,
+                        writes,
+                        inferred,
+                    );
+                }
+                self.hold_provisional_argument_effects(ProvisionalArgumentWalk::Held(effects));
                 Some(inferred)
             }
             None => {
                 self.merge_candidate_effects(effects);
                 None
+            }
+        }
+    }
+
+    /// Re-run every raw argument walk this call served from the memo and that nothing
+    /// superseded, so its records exist and are parked where the un-memoized walk's
+    /// were (backlog `95`).
+    ///
+    /// Runs on **every** exit path of the call, immediately before the frame closes, so
+    /// the shapes `tests/cases/b92_contextual_duplicate_diagnostics/retained_raw_walks.ts`
+    /// pins — a generic arrow, a multi-signature contextual target, failed overload
+    /// resolution, a `never` parameter cutting the committed loop short — report exactly
+    /// as they do without the memo. The batch is parked rather than emitted so it still
+    /// merges at frame close, keeping record order identical too.
+    pub(in crate::check::checker) fn rewalk_memoized_raw_arguments(
+        &mut self,
+        scope: ScopeId,
+        arguments: &[Argument<'_>],
+    ) {
+        let Some(frame) = self.provisional_argument_effects.last() else {
+            return;
+        };
+        let pending: Vec<(usize, usize)> = frame
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, walk)| match walk {
+                ProvisionalArgumentWalk::Memoized { argument_index } => {
+                    Some((slot, *argument_index))
+                }
+                ProvisionalArgumentWalk::Settled | ProvisionalArgumentWalk::Held(_) => None,
+            })
+            .collect();
+        for (slot, argument_index) in pending {
+            let Some(arg_expr) = arguments
+                .get(argument_index)
+                .and_then(|argument| argument.as_expression())
+            else {
+                continue;
+            };
+            let (_, effects) =
+                self.capture_candidate_effects(|pass| pass.infer_expr(scope, arg_expr));
+            if let Some(frame) = self.provisional_argument_effects.last_mut() {
+                if let Some(entry) = frame.get_mut(slot) {
+                    *entry = ProvisionalArgumentWalk::Held(effects);
+                }
             }
         }
     }
@@ -592,7 +953,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         call: &CallExpression<'_>,
     ) -> Option<(TypeId, Span)> {
-        self.with_provisional_argument_effects(|pass| pass.infer_call_inner(scope, call))
+        self.with_provisional_argument_effects(
+            |pass| pass.infer_call_inner(scope, call),
+            |pass| pass.rewalk_memoized_raw_arguments(scope, &call.arguments),
+        )
     }
 
     fn infer_call_inner(
@@ -694,11 +1058,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
-        for arg in &call.arguments {
+        for (argument_index, arg) in call.arguments.iter().enumerate() {
             if let Some(arg_expr) = arg.as_expression() {
                 #[cfg(test)]
                 measure_call(|measure| measure.raw_call_argument_walks += 1);
-                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, argument_index, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);
@@ -1376,9 +1740,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         call: &CallExpression<'_>,
         call_span: Span,
     ) -> Option<(TypeId, Span)> {
-        self.with_provisional_argument_effects(|pass| {
-            pass.infer_super_call_inner(scope, call, call_span)
-        })
+        self.with_provisional_argument_effects(
+            |pass| pass.infer_super_call_inner(scope, call, call_span),
+            |pass| pass.rewalk_memoized_raw_arguments(scope, &call.arguments),
+        )
     }
 
     fn infer_super_call_inner(
@@ -1393,9 +1758,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // into nested calls/`new`/functions inside the arguments.
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(call.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(call.arguments.len());
-        for arg in &call.arguments {
+        for (argument_index, arg) in call.arguments.iter().enumerate() {
             if let Some(arg_expr) = arg.as_expression() {
-                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, argument_index, arg_expr) {
                     arg_types.push(inferred);
                     arg_exprs.push(arg_expr);
                 }
@@ -2019,7 +2384,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         new_expr: &NewExpression<'_>,
     ) -> Option<(TypeId, Span)> {
-        self.with_provisional_argument_effects(|pass| pass.infer_new_inner(scope, new_expr))
+        self.with_provisional_argument_effects(
+            |pass| pass.infer_new_inner(scope, new_expr),
+            |pass| pass.rewalk_memoized_raw_arguments(scope, &new_expr.arguments),
+        )
     }
 
     fn infer_new_inner(
@@ -2054,11 +2422,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut arg_types: Vec<(TypeId, Span)> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_fresh: Vec<bool> = Vec::with_capacity(new_expr.arguments.len());
         let mut arg_exprs: Vec<&Expression<'_>> = Vec::with_capacity(new_expr.arguments.len());
-        for arg in &new_expr.arguments {
+        for (argument_index, arg) in new_expr.arguments.iter().enumerate() {
             if let Some(arg_expr) = arg.as_expression() {
                 #[cfg(test)]
                 measure_call(|measure| measure.raw_construct_argument_walks += 1);
-                if let Some(inferred) = self.walk_raw_argument(scope, arg_expr) {
+                if let Some(inferred) = self.walk_raw_argument(scope, argument_index, arg_expr) {
                     arg_types.push(inferred);
                     arg_fresh.push(is_fresh_literal(arg_expr));
                     arg_exprs.push(arg_expr);
