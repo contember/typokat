@@ -6,7 +6,7 @@ use crate::types::repr::{ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{Expression, TSInterfaceHeritage, TSSignature};
 use oxc_span::GetSpan;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Default)]
 struct InterfaceMethodOverloadAccumulator {
@@ -573,25 +573,66 @@ pub(super) fn merge_object_members_overlay(base: ObjectType, overlay: ObjectType
     }
 }
 
-/// Compose base surfaces in source order without letting later conflicts replace the first.
-pub(super) fn merge_object_members_first(primary: ObjectType, fallback: ObjectType) -> ObjectType {
-    let mut properties = primary.properties;
-    for property in fallback.properties {
-        if properties
-            .iter()
-            .all(|existing| existing.name != property.name)
-        {
-            properties.push(property);
-        }
+#[cfg(test)]
+thread_local! {
+    static HERITAGE_BASE_NAME_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One probe per member name tested for membership in the composed base surface. Nothing in
+/// the output can see the difference between a scan and a lookup, so the probe count is the
+/// only witness that composing a heritage chain stays linear.
+#[cfg(test)]
+fn record_heritage_base_name_probes_for_test(probes: usize) {
+    let probes = u64::try_from(probes).unwrap_or(u64::MAX);
+    HERITAGE_BASE_NAME_PROBES.with(|counter| counter.set(counter.get().saturating_add(probes)));
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) struct HeritageBaseNameProbeScopeForTest(u64);
+
+#[cfg(test)]
+impl HeritageBaseNameProbeScopeForTest {
+    pub(in crate::check::checker) fn start() -> Self {
+        Self(HERITAGE_BASE_NAME_PROBES.with(std::cell::Cell::get))
     }
-    let mut call_signatures = primary.call_signatures;
-    call_signatures.extend(fallback.call_signatures);
-    let mut construct_signatures = primary.construct_signatures;
-    construct_signatures.extend(fallback.construct_signatures);
+
+    pub(in crate::check::checker) fn finish(self) -> u64 {
+        HERITAGE_BASE_NAME_PROBES
+            .with(std::cell::Cell::get)
+            .saturating_sub(self.0)
+    }
+}
+
+/// Compose base surfaces in source order without letting later conflicts replace the first.
+///
+/// One name set spans the whole chain. Folding the bases pairwise instead re-tests every
+/// member already accumulated, which is quadratic in a composed surface that reaches
+/// hundreds of members.
+pub(super) fn compose_base_members_first(bases: &[&ObjectType]) -> ObjectType {
+    let member_count = bases.iter().map(|base| base.properties.len()).sum();
+    let mut names = FxHashSet::with_capacity_and_hasher(member_count, Default::default());
+    let mut properties = Vec::with_capacity(member_count);
+    let mut string_index = None;
+    let mut number_index = None;
+    let mut call_signatures = Vec::new();
+    let mut construct_signatures = Vec::new();
+    for base in bases {
+        for property in &base.properties {
+            #[cfg(test)]
+            record_heritage_base_name_probes_for_test(1);
+            if names.insert(property.name.as_str()) {
+                properties.push(property.clone());
+            }
+        }
+        string_index = string_index.or(base.string_index);
+        number_index = number_index.or(base.number_index);
+        call_signatures.extend(base.call_signatures.iter().copied());
+        construct_signatures.extend(base.construct_signatures.iter().copied());
+    }
     ObjectType {
         properties,
-        string_index: primary.string_index.or(fallback.string_index),
-        number_index: primary.number_index.or(fallback.number_index),
+        string_index,
+        number_index,
         call_signatures,
         construct_signatures,
     }
