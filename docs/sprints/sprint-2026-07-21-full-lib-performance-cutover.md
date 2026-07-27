@@ -1184,7 +1184,7 @@ otherwise have discovered late.
   corpora — the deepest chain the checker actually produces is **6**. Depth 1600 goes 2.64 MB → 1,350
   bytes and 1,609 lines → 25. Byte-identity was proven with an md5 gate gating that all 167 other
   sources were identical across both build windows.
-- **`88` shipped** (`8c6c5b1`, `8388308`). Binary insert instead of a full re-sort per attach: 128×
+- **`88` shipped** (`06301dc`, `8388308`). Binary insert instead of a full re-sort per attach: 128×
   less attach work at 1,024 reopens, overload sets 166 ms → 3.3 ms. The non-merging control is the
   reason the placement index carries a threshold — the first cut made the common case 27 % slower.
   Order proved byte-identical by a 72,056-line merge-order dump with matching md5, not asserted.
