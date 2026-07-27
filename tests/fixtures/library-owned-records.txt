@@ -1,0 +1,880 @@
+# typokat library-owned record census (ADR-0018).
+# Regenerate: TYPOKAT_BLESS_LIBRARY_RECORDS=1 cargo test --test library_owned_records
+# Columns are tab-separated: kind, name, file:line:column, detail.
+# profile: ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d
+# diagnostics: 265, incompletes: 610, records: 875
+incomplete	annotation-lower/type-reference/default-argument	lib.decorators.d.ts:31:7	type-parameter default unavailable at application
+incomplete	annotation-lower/type-query/typeof	lib.decorators.d.ts:36:26	typeof type query not lowered
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:36:83	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:87:29	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:153:29	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:200:29	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:247:29	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:349:29	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.legacy.d.ts:18:73	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.legacy.d.ts:19:74	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.decorators.legacy.d.ts:20:74	symbol keyword type not modeled
+diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:3572:11	Interface 'Animation' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:3572:11	Interface 'Animation' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:4157:11	Interface 'AudioDecoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:4157:11	Interface 'AudioDecoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:4248:11	Interface 'AudioEncoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:4248:11	Interface 'AudioEncoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:4598:11	Interface 'AudioScheduledSourceNode' incorrectly extends interface 'AudioNode'.
+diagnostic	TK2430	lib.dom.d.ts:4598:11	Interface 'AudioScheduledSourceNode' incorrectly extends interface 'AudioNode'.
+diagnostic	TK2430	lib.dom.d.ts:4648:11	Interface 'AudioWorkletNode' incorrectly extends interface 'AudioNode'.
+diagnostic	TK2430	lib.dom.d.ts:4648:11	Interface 'AudioWorkletNode' incorrectly extends interface 'AudioNode'.
+diagnostic	TK2430	lib.dom.d.ts:4798:11	Interface 'BaseAudioContext' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:4798:11	Interface 'BaseAudioContext' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:5142:11	Interface 'BroadcastChannel' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:5142:11	Interface 'BroadcastChannel' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:10996:11	Interface 'CookieStore' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:10996:11	Interface 'CookieStore' incorrectly extends interface 'EventTarget'.
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:11578:24	typeof type query not lowered
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:11581:30	typeof type query not lowered
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:11832:23	typeof type query not lowered
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:11994:22	typeof type query not lowered
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'Node'.
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'Node'.
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'NonElementParentNode'.
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'ParentNode'.
+diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'ParentNode'.
+diagnostic	TK2344	lib.dom.d.ts:12587:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:12649:42	typeof type query not lowered
+diagnostic	TK2344	lib.dom.d.ts:12692:39	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:12705:38	Type '{ [x: string]: any; [x: number]: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:12742:39	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:12773:38	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:12805:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:12830:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13092:56	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13098:101	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13099:100	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13100:103	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13102:111	Type '{ acronym: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13109:111	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13110:109	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13111:117	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:13221:11	Interface 'DocumentFragment' incorrectly extends interface 'NonElementParentNode'.
+diagnostic	TK2430	lib.dom.d.ts:13508:11	Interface 'Element' incorrectly extends interface 'ChildNode'.
+diagnostic	TK2430	lib.dom.d.ts:13508:11	Interface 'Element' incorrectly extends interface 'ChildNode'.
+diagnostic	TK2430	lib.dom.d.ts:13508:11	Interface 'Element' incorrectly extends interface 'Node'.
+diagnostic	TK2430	lib.dom.d.ts:13508:11	Interface 'Element' incorrectly extends interface 'Node'.
+diagnostic	TK2430	lib.dom.d.ts:13508:11	Interface 'Element' incorrectly extends interface 'ParentNode'.
+diagnostic	TK2430	lib.dom.d.ts:13508:11	Interface 'Element' incorrectly extends interface 'ParentNode'.
+diagnostic	TK2344	lib.dom.d.ts:13729:101	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13730:100	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13731:103	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13733:111	Type '{ acronym: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13740:111	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13741:109	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:13742:117	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+incomplete	annotation-lower/type-predicate/self	lib.dom.d.ts:13797:67	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.dom.d.ts:13798:66	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.dom.d.ts:13799:69	type predicate not lowered
+diagnostic	TK2430	lib.dom.d.ts:14319:11	Interface 'EventSource' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:14319:11	Interface 'EventSource' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2344	lib.dom.d.ts:14472:28	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14473:28	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14474:27	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14475:30	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14476:32	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14477:31	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2430	lib.dom.d.ts:14485:11	Interface 'FileReader' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:14485:11	Interface 'FileReader' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2344	lib.dom.d.ts:14493:52	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14495:52	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14497:51	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14499:54	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14501:56	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:14503:55	Type '{ DONE: 2; EMPTY: 0; LOADING: 1; abort: () => void; addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { ...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2430	lib.dom.d.ts:14964:11	Interface 'FontFaceSet' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:14964:11	Interface 'FontFaceSet' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:15601:11	Interface 'GPUDevice' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:15601:11	Interface 'GPUDevice' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly extends interface 'HTMLElement'.
+diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly extends interface 'HTMLElement'.
+diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2344	lib.dom.d.ts:17345:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:17573:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:17729:11	Interface 'HTMLElement' incorrectly extends interface 'Element'.
+diagnostic	TK2430	lib.dom.d.ts:17729:11	Interface 'HTMLElement' incorrectly extends interface 'Element'.
+diagnostic	TK2430	lib.dom.d.ts:17729:11	Interface 'HTMLElement' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:17729:11	Interface 'HTMLElement' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:18261:11	Interface 'HTMLFrameSetElement' incorrectly extends interface 'HTMLElement'.
+diagnostic	TK2430	lib.dom.d.ts:18261:11	Interface 'HTMLFrameSetElement' incorrectly extends interface 'HTMLElement'.
+diagnostic	TK2430	lib.dom.d.ts:18261:11	Interface 'HTMLFrameSetElement' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:18261:11	Interface 'HTMLFrameSetElement' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2344	lib.dom.d.ts:18865:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:19387:11	Interface 'HTMLMediaElement' incorrectly extends interface 'HTMLElement'.
+diagnostic	TK2430	lib.dom.d.ts:19387:11	Interface 'HTMLMediaElement' incorrectly extends interface 'HTMLElement'.
+diagnostic	TK2344	lib.dom.d.ts:19742:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:20088:58	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:20165:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:20324:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:20502:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:20544:48	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:21047:37	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:21067:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:21185:38	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:21274:37	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:21400:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:21717:11	Interface 'HTMLVideoElement' incorrectly extends interface 'HTMLMediaElement'.
+diagnostic	TK2430	lib.dom.d.ts:21717:11	Interface 'HTMLVideoElement' incorrectly extends interface 'HTMLMediaElement'.
+diagnostic	TK2430	lib.dom.d.ts:22074:11	Interface 'IDBDatabase' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:22074:11	Interface 'IDBDatabase' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:22461:11	Interface 'IDBOpenDBRequest' incorrectly extends interface 'IDBRequest'.
+diagnostic	TK2430	lib.dom.d.ts:22461:11	Interface 'IDBOpenDBRequest' incorrectly extends interface 'IDBRequest'.
+diagnostic	TK2430	lib.dom.d.ts:22487:11	Interface 'IDBRequest' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:22487:11	Interface 'IDBRequest' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:22544:11	Interface 'IDBTransaction' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:22544:11	Interface 'IDBTransaction' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23516:11	Interface 'MIDIAccess' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23516:11	Interface 'MIDIAccess' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23578:11	Interface 'MIDIInput' incorrectly extends interface 'MIDIPort'.
+diagnostic	TK2430	lib.dom.d.ts:23578:11	Interface 'MIDIInput' incorrectly extends interface 'MIDIPort'.
+diagnostic	TK2430	lib.dom.d.ts:23676:11	Interface 'MIDIPort' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23676:11	Interface 'MIDIPort' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23752:11	Interface 'MathMLElement' incorrectly extends interface 'Element'.
+diagnostic	TK2430	lib.dom.d.ts:23752:11	Interface 'MathMLElement' incorrectly extends interface 'Element'.
+diagnostic	TK2430	lib.dom.d.ts:23752:11	Interface 'MathMLElement' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:23752:11	Interface 'MathMLElement' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:23843:11	Interface 'MediaDevices' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23843:11	Interface 'MediaDevices' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23995:11	Interface 'MediaKeySession' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:23995:11	Interface 'MediaKeySession' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24253:11	Interface 'MediaQueryList' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24253:11	Interface 'MediaQueryList' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24332:11	Interface 'MediaRecorder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24332:11	Interface 'MediaRecorder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24482:11	Interface 'MediaSource' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24482:11	Interface 'MediaSource' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24589:11	Interface 'MediaStream' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24589:11	Interface 'MediaStream' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24710:11	Interface 'MediaStreamTrack' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24710:11	Interface 'MediaStreamTrack' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24921:11	Interface 'MessagePort' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24921:11	Interface 'MessagePort' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24921:11	Interface 'MessagePort' incorrectly extends interface 'MessageEventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:24921:11	Interface 'MessagePort' incorrectly extends interface 'MessageEventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:25424:11	Interface 'Navigation' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:25424:11	Interface 'Navigation' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:25630:11	Interface 'NavigationHistoryEntry' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:25630:11	Interface 'NavigationHistoryEntry' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
+diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
+diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
+diagnostic	TK2430	lib.dom.d.ts:26410:11	Interface 'Notification' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:26410:11	Interface 'Notification' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:26689:11	Interface 'OfflineAudioContext' incorrectly extends interface 'BaseAudioContext'.
+diagnostic	TK2430	lib.dom.d.ts:26689:11	Interface 'OfflineAudioContext' incorrectly extends interface 'BaseAudioContext'.
+diagnostic	TK2430	lib.dom.d.ts:26738:11	Interface 'OffscreenCanvas' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:26738:11	Interface 'OffscreenCanvas' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2344	lib.dom.d.ts:27097:87	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:27098:86	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:27099:89	Type '{ a: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECED...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:27101:97	Type '{ acronym: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:27102:82	Type 'E' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:27249:11	Interface 'PaymentRequest' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:27249:11	Interface 'PaymentRequest' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:27350:11	Interface 'PaymentResponse' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:27350:11	Interface 'PaymentResponse' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:27439:11	Interface 'Performance' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:27439:11	Interface 'Performance' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28252:11	Interface 'PermissionStatus' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28252:11	Interface 'PermissionStatus' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28325:11	Interface 'PictureInPictureWindow' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28325:11	Interface 'PictureInPictureWindow' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28876:11	Interface 'RTCDTMFSender' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28876:11	Interface 'RTCDTMFSender' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28941:11	Interface 'RTCDataChannel' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:28941:11	Interface 'RTCDataChannel' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29075:11	Interface 'RTCDtlsTransport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29075:11	Interface 'RTCDtlsTransport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29356:11	Interface 'RTCIceTransport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29356:11	Interface 'RTCIceTransport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29409:11	Interface 'RTCPeerConnection' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29409:11	Interface 'RTCPeerConnection' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29888:11	Interface 'RTCSctpTransport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:29888:11	Interface 'RTCSctpTransport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2344	lib.dom.d.ts:30013:44	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:30426:11	Interface 'RemotePlayback' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:30426:11	Interface 'RemotePlayback' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:31494:11	Interface 'SVGElement' incorrectly extends interface 'Element'.
+diagnostic	TK2430	lib.dom.d.ts:31494:11	Interface 'SVGElement' incorrectly extends interface 'Element'.
+diagnostic	TK2430	lib.dom.d.ts:31494:11	Interface 'SVGElement' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:31494:11	Interface 'SVGElement' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:33724:11	Interface 'SVGSVGElement' incorrectly extends interface 'SVGGraphicsElement'.
+diagnostic	TK2430	lib.dom.d.ts:33724:11	Interface 'SVGSVGElement' incorrectly extends interface 'SVGGraphicsElement'.
+diagnostic	TK2430	lib.dom.d.ts:33724:11	Interface 'SVGSVGElement' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:33724:11	Interface 'SVGSVGElement' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2344	lib.dom.d.ts:33847:94	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2344	lib.dom.d.ts:33848:97	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:34723:11	Interface 'ScreenOrientation' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:34723:11	Interface 'ScreenOrientation' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:34771:11	Interface 'ScriptProcessorNode' incorrectly extends interface 'AudioNode'.
+diagnostic	TK2430	lib.dom.d.ts:34771:11	Interface 'ScriptProcessorNode' incorrectly extends interface 'AudioNode'.
+diagnostic	TK2430	lib.dom.d.ts:35075:11	Interface 'ServiceWorker' incorrectly extends interface 'AbstractWorker'.
+diagnostic	TK2430	lib.dom.d.ts:35075:11	Interface 'ServiceWorker' incorrectly extends interface 'AbstractWorker'.
+diagnostic	TK2430	lib.dom.d.ts:35075:11	Interface 'ServiceWorker' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35075:11	Interface 'ServiceWorker' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35120:11	Interface 'ServiceWorkerContainer' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35120:11	Interface 'ServiceWorkerContainer' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35184:11	Interface 'ServiceWorkerRegistration' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35184:11	Interface 'ServiceWorkerRegistration' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35273:11	Interface 'ShadowRoot' incorrectly extends interface 'DocumentFragment'.
+diagnostic	TK2430	lib.dom.d.ts:35273:11	Interface 'ShadowRoot' incorrectly extends interface 'DocumentFragment'.
+diagnostic	TK2430	lib.dom.d.ts:35345:11	Interface 'SharedWorker' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35345:11	Interface 'SharedWorker' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35381:11	Interface 'SourceBuffer' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35381:11	Interface 'SourceBuffer' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35473:11	Interface 'SourceBufferList' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35473:11	Interface 'SourceBufferList' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35641:11	Interface 'SpeechSynthesis' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35641:11	Interface 'SpeechSynthesis' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35780:11	Interface 'SpeechSynthesisUtterance' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:35780:11	Interface 'SpeechSynthesisUtterance' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:36371:11	Interface 'TaskSignal' incorrectly extends interface 'AbortSignal'.
+diagnostic	TK2430	lib.dom.d.ts:36371:11	Interface 'TaskSignal' incorrectly extends interface 'AbortSignal'.
+diagnostic	TK2430	lib.dom.d.ts:36653:11	Interface 'TextTrack' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:36653:11	Interface 'TextTrack' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:36737:11	Interface 'TextTrackCue' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:36737:11	Interface 'TextTrackCue' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:36820:11	Interface 'TextTrackList' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:36820:11	Interface 'TextTrackList' incorrectly extends interface 'EventTarget'.
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:37426:24	typeof type query not lowered
+diagnostic	TK2430	lib.dom.d.ts:37832:11	Interface 'VideoDecoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:37832:11	Interface 'VideoDecoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:37904:11	Interface 'VideoEncoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:37904:11	Interface 'VideoEncoder' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:38200:11	Interface 'VisualViewport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:38200:11	Interface 'VisualViewport' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:38552:11	Interface 'WakeLockSentinel' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:38552:11	Interface 'WakeLockSentinel' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:40868:11	Interface 'WebSocket' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:40868:11	Interface 'WebSocket' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'GlobalEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'WindowEventHandlers'.
+diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'WindowEventHandlers'.
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:41420:29	typeof type query not lowered
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:41463:31	typeof type query not lowered
+diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'AbstractWorker'.
+diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'AbstractWorker'.
+diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'MessageEventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'MessageEventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41953:11	Interface 'XMLHttpRequest' incorrectly extends interface 'XMLHttpRequestEventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:41953:11	Interface 'XMLHttpRequest' incorrectly extends interface 'XMLHttpRequestEventTarget'.
+diagnostic	TK2344	lib.dom.d.ts:42087:28	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:42088:28	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:42089:27	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:42090:30	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:42091:32	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:42092:31	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2344	lib.dom.d.ts:42093:30	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
+diagnostic	TK2430	lib.dom.d.ts:42101:11	Interface 'XMLHttpRequestEventTarget' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:42101:11	Interface 'XMLHttpRequestEventTarget' incorrectly extends interface 'EventTarget'.
+incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.dom.d.ts:42465:5	namespace function duplicates an earlier exported value
+incomplete	annotation-lower/type-syntax/unsupported	lib.dom.d.ts:42546:17	namespace member type syntax could not be lowered
+incomplete	annotation-lower/bigint-keyword/self	lib.dom.d.ts:42742:14	bigint keyword type not modeled
+incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.dom.d.ts:42773:5	namespace function duplicates an earlier exported value
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:43605:28	typeof type query not lowered
+incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:43648:30	typeof type query not lowered
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44511:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44515:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44522:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44526:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44530:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44537:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44581:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44585:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44589:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44596:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44603:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44610:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44614:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44689:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44693:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44697:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44701:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44705:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44709:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44713:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44747:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44766:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44770:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44777:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44786:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44790:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44810:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44820:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44830:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44834:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44850:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44854:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44858:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44862:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44866:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44870:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44874:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44878:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44882:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44886:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44893:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44929:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44933:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44937:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44941:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44945:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45108:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45112:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45119:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45123:6	computed method signature key not visited
+incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:42:28	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:81:28	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:94:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:134:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:27:73	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:49:51	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:60:62	this type annotation not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.core.d.ts:317:36	symbol keyword type not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:350:82	type predicate not lowered
+incomplete	signature/method-signature/computed-key	lib.es2015.generator.d.ts:24:6	computed method signature key not visited
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.iterable.d.ts:24:24	unique symbol operator not lowered
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:47:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:54:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:61:6	computed method signature key not visited
+incomplete	annotation-lower/intrinsic-keyword/self	lib.es2015.iterable.d.ts:68:30	intrinsic keyword type not modeled
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:71:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:76:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:112:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:132:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:136:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:141:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:161:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:191:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:196:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:216:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:265:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:270:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:274:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:311:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:348:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:385:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:421:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:458:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:495:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:532:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:569:6	computed method signature key not visited
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:36:51	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:44:44	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:52:33	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:59:54	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:72:33	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:84:45	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:99:33	symbol keyword type not modeled
+incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.es2015.reflect.d.ts:30:5	namespace function duplicates an earlier exported value
+incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.es2015.reflect.d.ts:44:5	namespace function duplicates an earlier exported value
+incomplete	annotation-lower/type-syntax/unsupported	lib.es2015.reflect.d.ts:111:5	namespace member type syntax could not be lowered
+incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.es2015.reflect.d.ts:133:5	namespace function duplicates an earlier exported value
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.d.ts:27:38	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.d.ts:34:23	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.d.ts:41:17	symbol keyword type not modeled
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:24:27	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:30:34	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:36:21	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:42:23	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:48:22	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:54:23	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:60:21	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:66:27	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:72:27	unique symbol operator not lowered
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:78:27	unique symbol operator not lowered
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:85:6	computed method signature key not visited
+incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.wellknown.d.ts:85:41	symbol keyword type not modeled
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:87:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:95:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:105:15	computed property signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:114:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:118:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:122:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:131:6	computed method signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:135:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:139:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:143:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:147:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:151:15	computed property signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:162:6	computed method signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:166:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:170:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:174:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:178:15	computed property signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:187:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:196:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:204:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:212:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:226:6	computed method signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:230:15	computed property signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:239:23	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:246:29	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:253:29	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:259:25	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:266:24	computed method signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:270:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:274:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:278:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:282:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:286:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:290:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:294:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:298:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:302:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:306:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:310:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:314:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:317:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:320:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:323:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2017.sharedmemory.d.ts:30:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2017.sharedmemory.d.ts:36:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2017.sharedmemory.d.ts:130:15	computed property signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2018.asyncgenerator.d.ts:24:6	computed method signature key not visited
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2018.asynciterable.d.ts:25:29	unique symbol operator not lowered
+incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:36:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:43:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:50:6	computed method signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2018.intl.d.ts:79:41	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:116:16	bigint keyword type not modeled
+incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:118:15	computed property signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:122:13	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:122:50	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:131:31	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:131:40	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:138:32	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:138:41	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:169:62	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:172:39	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:182:30	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:192:17	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:192:56	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:201:31	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:212:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:212:116	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:223:34	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:232:33	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:239:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:247:28	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:265:32	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:278:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:278:91	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:40	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:62	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:131	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:140	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:302:60	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:45	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:67	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:136	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:145	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:326:65	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:329:16	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:336:26	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:353:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:359:26	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:359:37	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:359:57	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:359:66	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:379:29	bigint keyword type not modeled
+incomplete	signature/method-signature/computed-key	lib.es2020.bigint.d.ts:381:6	computed method signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:381:40	bigint keyword type not modeled
+incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:383:15	computed property signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:385:22	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:390:27	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:390:46	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:393:27	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:402:18	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:408:31	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:416:66	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:422:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:430:65	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:460:62	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:463:39	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:473:30	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:483:17	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:483:56	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:492:31	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:503:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:503:117	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:514:34	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:523:33	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:530:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:538:28	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:556:32	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:569:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:569:92	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:40	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:62	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:132	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:141	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:593:60	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:45	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:67	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:137	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:146	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:617:65	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:620:16	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:627:26	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:644:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:650:26	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:650:37	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:650:57	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:650:66	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:670:29	bigint keyword type not modeled
+incomplete	signature/method-signature/computed-key	lib.es2020.bigint.d.ts:672:6	computed method signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:672:40	bigint keyword type not modeled
+incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:674:15	computed property signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:676:22	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:681:27	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:681:46	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:684:27	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:693:18	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:699:31	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:707:66	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:713:29	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:721:65	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:732:62	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:740:63	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:748:44	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:756:45	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:761:32	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:25:109	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:25:118	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:32:109	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:32:118	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:39:129	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:39:155	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:39:164	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:46:114	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:46:123	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:52:104	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:59:108	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:59:117	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:65:111	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:65:120	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:72:109	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:72:118	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:80:76	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:96:109	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:96:118	bigint keyword type not modeled
+incomplete	annotation-lower/type-operator/unique-operand	lib.es2020.symbol.wellknown.d.ts:25:24	unique symbol operator not lowered
+incomplete	signature/method-signature/computed-key	lib.es2020.symbol.wellknown.d.ts:29:6	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2020.symbol.wellknown.d.ts:38:6	computed method signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:35:48	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:35:81	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:36:55	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:36:88	bigint keyword type not modeled
+incomplete	signature/property-signature/computed-key	lib.es2021.weakref.d.ts:20:15	computed property signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2021.weakref.d.ts:44:15	computed property signature key not visited
+incomplete	annotation-lower/bigint-keyword/self	lib.es2022.array.d.ts:110:24	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2022.array.d.ts:118:24	bigint keyword type not modeled
+incomplete	signature/method-signature/computed-key	lib.es2022.intl.d.ts:60:10	computed method signature key not visited
+incomplete	signature/method-signature/computed-key	lib.es2022.intl.d.ts:79:10	computed method signature key not visited
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:27:79	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:97:70	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:178:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:179:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:183:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:197:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:242:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:243:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:247:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:261:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:306:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:307:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:314:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:332:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:378:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:379:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:383:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:397:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:442:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:443:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:450:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:468:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:514:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:515:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:519:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:533:58	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:578:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:579:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:586:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:604:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:650:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:651:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:658:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:676:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:722:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:723:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:730:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:748:20	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:790:24	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:792:20	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:794:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:795:14	type predicate not lowered
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:800:20	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:802:20	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:805:8	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:818:20	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:820:20	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:840:30	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:840:41	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:849:32	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:862:24	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:864:20	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:866:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:867:14	type predicate not lowered
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:872:20	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:874:20	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:877:8	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:890:20	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:892:20	this type annotation not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:912:30	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:912:41	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:921:32	bigint keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es2023.collection.d.ts:18:13	symbol keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:57:32	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:58:39	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:59:37	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:59:82	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:60:44	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:60:89	bigint keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es2024.sharedmemory.d.ts:38:64	bigint keyword type not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:60:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:70:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:80:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:89:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:100:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:111:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:126:20	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es2025.float16.d.ts:127:14	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:134:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:152:20	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:164:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:209:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:221:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:222:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:234:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:246:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:247:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:259:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:264:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:288:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:299:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:337:16	this type annotation not modeled
+incomplete	signature/method-signature/computed-key	lib.es2025.float16.d.ts:350:6	computed method signature key not visited
+incomplete	signature/property-signature/computed-key	lib.es2025.float16.d.ts:367:15	computed property signature key not visited
+diagnostic	TK2503	lib.es2025.iterator.d.ts:31:47	Cannot find namespace 'globalThis'.
+incomplete	annotation-lower/type-query/typeof	lib.es2025.iterator.d.ts:34:34	typeof type query not lowered
+incomplete	decl/global-declaration/self	lib.es2025.iterator.d.ts:36:1	global augmentation value publication not modeled
+incomplete	signature/method-signature/computed-key	lib.es2025.iterator.d.ts:42:10	computed method signature key not visited
+incomplete	annotation-lower/type-predicate/self	lib.es2025.iterator.d.ts:54:69	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es2025.iterator.d.ts:129:67	type predicate not lowered
+incomplete	signature/property-signature/computed-key	lib.es2025.iterator.d.ts:132:19	computed property signature key not visited
+diagnostic	TK2304	lib.es2025.iterator.d.ts:136:43	Cannot find name 'IteratorObjectConstructor'
+incomplete	annotation-lower/symbol-keyword/self	lib.es5.d.ts:103:16	symbol keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es5.d.ts:106:46	symbol keyword type not modeled
+incomplete	annotation-lower/bigint-keyword/self	lib.es5.d.ts:226:92	bigint keyword type not modeled
+incomplete	annotation-lower/symbol-keyword/self	lib.es5.d.ts:226:120	symbol keyword type not modeled
+diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
+diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
+diagnostic	TK2430	lib.es5.d.ts:366:11	Interface 'NewableFunction' incorrectly extends interface 'Function'.
+diagnostic	TK2430	lib.es5.d.ts:366:11	Interface 'NewableFunction' incorrectly extends interface 'Function'.
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1020:47	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1243:85	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1243:113	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1279:86	type predicate not lowered
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1393:47	this type annotation not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1438:76	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1438:104	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1474:77	type predicate not lowered
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1518:24	type predicate not lowered
+incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1658:36	intrinsic keyword type not modeled
+incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1663:36	intrinsic keyword type not modeled
+incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1668:37	intrinsic keyword type not modeled
+incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1673:39	intrinsic keyword type not modeled
+incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1678:19	intrinsic keyword type not modeled
+incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1723:23	type predicate not lowered
+diagnostic	TK2344	lib.es5.d.ts:1873:155	Type 'TArrayBuffer' does not satisfy the constraint '{ byteLength: number; resize: (newByteLength?: number) => void; slice: (begin?: number, end?: number) => ...; transfer: (newByteLength?: number) => ...; transferToFixedLength: (newByteLength?: number) => ... } | { byteLength: number; grow: (newByteLength?: number) => void; slice: (begin?: number, end?: number) => ... }'.
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1911:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1921:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1931:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1940:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1951:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1962:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1971:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2009:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2021:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2022:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2034:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2046:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2047:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2059:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2064:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2088:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2099:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2120:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2193:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2203:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2213:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2222:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2233:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2244:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2253:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2291:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2303:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2304:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2316:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2328:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2329:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2341:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2346:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2370:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2381:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2402:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2475:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2485:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2495:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2504:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2515:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2526:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2535:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2573:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2585:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2586:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2598:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2610:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2611:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2623:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2628:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2652:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2663:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2684:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2757:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2767:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2777:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2786:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2797:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2808:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2817:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2854:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2866:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2867:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2879:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2891:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2892:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2904:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2909:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2933:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2944:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:2965:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3038:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3048:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3058:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3067:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3078:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3089:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3098:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3136:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3148:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3149:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3161:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3173:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3174:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3186:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3191:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3215:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3226:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3247:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3319:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3329:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3339:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3348:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3359:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3370:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3379:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3417:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3429:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3430:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3442:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3454:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3455:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3467:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3472:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3496:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3507:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3528:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3601:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3611:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3621:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3630:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3641:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3652:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3661:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3698:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3710:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3711:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3723:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3735:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3736:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3748:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3753:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3777:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3788:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3809:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3882:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3892:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3902:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3911:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3922:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3933:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3942:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3980:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3992:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:3993:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4005:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4017:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4018:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4030:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4035:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4059:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4070:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4091:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4164:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4174:60	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4184:56	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4193:61	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4204:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4215:62	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4224:63	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4262:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4274:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4275:99	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4287:97	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4299:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4300:104	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4312:102	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4317:16	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4341:59	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4352:57	this type annotation not modeled
+incomplete	annotation-lower/this-type/self	lib.es5.d.ts:4373:16	this type annotation not modeled
+incomplete	annotation-lower/type-query/typeof	lib.scripthost.d.ts:220:18	typeof type query not lowered
+incomplete	annotation-lower/type-parameter-default/self	lib.scripthost.d.ts:225:29	type-parameter default not lowered
