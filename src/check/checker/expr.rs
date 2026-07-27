@@ -8,7 +8,7 @@ use super::library_identities::{LibraryComposedMember, LibraryMemberProjection};
 use crate::binder::bind::{ResolvedValueKind, ValueResolution};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
-use crate::check::flow::FlowNodeId;
+use crate::check::flow::{narrow_by_truthiness, FlowNodeId};
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_type, Diagnostic};
 use crate::relate::RelationOutcome;
@@ -20,9 +20,9 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator, ChainElement,
-    ComputedMemberExpression, Expression, LogicalExpression, ObjectExpression, ObjectPropertyKind,
-    SimpleAssignmentTarget, StaticMemberExpression, TSType, TSTypeName, UnaryExpression,
-    UnaryOperator,
+    ComputedMemberExpression, ConditionalExpression, Expression, LogicalExpression,
+    LogicalOperator, ObjectExpression, ObjectPropertyKind, SimpleAssignmentTarget,
+    StaticMemberExpression, TSType, TSTypeName, UnaryExpression, UnaryOperator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -162,23 +162,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                 }
             }
-            // M7: condition shapes (`typeof x`, `!x`, `x === null`, …). They are walked
-            // for their operands' side effects (resolving references / descending into
-            // nested constructs); their *value* type is only ever a condition, never an
+            // M7: condition shapes (`typeof x`, `!x`). They are walked for their
+            // operands' side effects (resolving references / descending into nested
+            // constructs); their *value* type is only ever a condition, never an
             // assignment source in the subset, so a coarse result type is sufficient.
             Expression::UnaryExpression(unary) => Some(self.infer_unary(scope, unary)),
             Expression::BinaryExpression(binary) => Some(self.infer_binary(scope, binary)),
-            Expression::LogicalExpression(logical) => Some(self.infer_logical(scope, logical)),
-            // M23: a ternary `test ? a : b` — walk all three parts for their side
-            // effects (references resolve against the flow node the pre-pass recorded,
-            // so a guarded arm is narrowed). Its value type is coarse (never an
-            // assignment source in the subset), like a logical expression.
-            Expression::ConditionalExpression(cond) => {
-                self.infer_expr(scope, &cond.test);
-                self.infer_expr(scope, &cond.consequent);
-                self.infer_expr(scope, &cond.alternate);
-                Some((well_known.error, Span::from_oxc(cond.span)))
-            }
+            // Backlog 101: `&&`/`||`/`??` and a ternary carry real value types, so this
+            // position is context-free but no longer coarse.
+            Expression::LogicalExpression(logical) => self.infer_logical(scope, logical, None),
+            Expression::ConditionalExpression(cond) => self.infer_conditional(scope, cond, None),
             // A sequence `(a, b, …, z)` (backlog 53): walk every operand for its side
             // effects (references, nested checks), and take the value/type of the
             // **last** operand — the comma operator's result.
@@ -862,16 +855,81 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    /// Infer a logical expression (`&&`/`||`/`??`, M7 condition support). Both operands
-    /// are walked for side effects; the result type is the error type — `&&`/`||`
-    /// condition narrowing is deferred (mvp-plan, README "Deferred checks"), so a
-    /// logical expression is treated as an unrecognized guard (it narrows nothing).
-    fn infer_logical(&mut self, scope: ScopeId, logical: &LogicalExpression<'_>) -> (TypeId, Span) {
-        let wk = self.interner.well_known();
+    /// Infer a ternary `test ? a : b` (backlog `101`): the union of the two arm types.
+    /// Each arm is walked at the flow edge `build_flow_conditional` built for it, so a
+    /// guarded arm reads its branch's narrow; `context` (the assignment target) reaches
+    /// both arms through the ordinary contextual-initializer path.
+    fn infer_conditional(
+        &mut self,
+        scope: ScopeId,
+        cond: &ConditionalExpression<'_>,
+        context: Option<TypeId>,
+    ) -> Option<(TypeId, Span)> {
+        self.infer_expr(scope, &cond.test);
+        let consequent = self.infer_initializer(scope, &cond.consequent, context);
+        let alternate = self.infer_initializer(scope, &cond.alternate, context);
+        // An arm outside the expression subset contributes no member; a smaller union
+        // only ever under-reports, never invents a mismatch.
+        let members = consequent
+            .into_iter()
+            .chain(alternate)
+            .map(|(ty, _)| ty)
+            .collect();
+        Some((self.interner.union(members), Span::from_oxc(cond.span)))
+    }
+
+    /// Infer a logical expression (`&&`/`||`/`??`, backlog `101`): the surviving part of
+    /// the left operand joined with the right. The split reuses the narrowing engine —
+    /// `NarrowOp::Truthy`'s [`narrow_by_truthiness`] for `&&`/`||` and [`Self::strip_nullish`]
+    /// (tsc's `getNonNullableType`) for `??` — so there is one truthiness model, not two.
+    /// A left operand that can never take the other branch short-circuits to itself,
+    /// mirroring `checkBinaryLikeExpression`.
+    fn infer_logical(
+        &mut self,
+        scope: ScopeId,
+        logical: &LogicalExpression<'_>,
+        context: Option<TypeId>,
+    ) -> Option<(TypeId, Span)> {
         let span = Span::from_oxc(logical.span);
-        self.infer_expr(scope, &logical.left);
-        self.infer_expr(scope, &logical.right);
-        (wk.error, span)
+        // tsc's `getContextualTypeForBinaryOperand`: `||`/`??` shape both operands,
+        // `&&` only its right one (its left is a condition).
+        let left_context = match logical.operator {
+            LogicalOperator::And => None,
+            LogicalOperator::Or | LogicalOperator::Coalesce => context,
+        };
+        let left = self
+            .infer_initializer(scope, &logical.left, left_context)
+            .map(|(ty, _)| ty);
+        let right = self
+            .infer_initializer(scope, &logical.right, context)
+            .map(|(ty, _)| ty);
+        let Some(left) = left else {
+            let members = right.into_iter().collect();
+            return Some((self.interner.union(members), span));
+        };
+        let never = self.interner.well_known().never;
+        let (kept, taken) = match logical.operator {
+            LogicalOperator::And => (
+                narrow_by_truthiness(self.interner, left, false),
+                narrow_by_truthiness(self.interner, left, true),
+            ),
+            LogicalOperator::Or => (
+                narrow_by_truthiness(self.interner, left, true),
+                narrow_by_truthiness(self.interner, left, false),
+            ),
+            LogicalOperator::Coalesce => {
+                let non_nullish = self.strip_nullish(left);
+                // `??` takes its right operand exactly when the left had a nullish member.
+                let taken = if non_nullish == left { never } else { left };
+                (non_nullish, taken)
+            }
+        };
+        // The right operand is unreachable, so the value is the whole left operand.
+        if taken == never {
+            return Some((left, span));
+        }
+        let members = std::iter::once(kept).chain(right).collect();
+        Some((self.interner.union(members), span))
     }
 
     /// Infer the type of an object literal in `scope`. Unchanged from M2: member
@@ -931,6 +989,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         init: &Expression<'_>,
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
+        // A ternary / logical is not itself a fresh literal — the value lives in its
+        // operands, so the raw target is pushed down to each of them before any
+        // literal-shaping transform runs on it (backlog `101`).
+        match init {
+            Expression::ConditionalExpression(cond) => {
+                return self.infer_conditional(scope, cond, context);
+            }
+            Expression::LogicalExpression(logical) => {
+                return self.infer_logical(scope, logical, context);
+            }
+            _ => {}
+        }
         let (context, contextual_this) = match context {
             Some(context) => match self.with_semantic_query_transaction(|pass| {
                 let context = match pass.demand_composite_apparent_type(context) {
@@ -1111,6 +1181,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::ArrayExpression(_) => {
                 self.interner.store().tag(context) == TypeTag::Tuple
                     || self.interner.store().array_type(context).is_some()
+            }
+            // Backlog 101: a ternary / logical passes the target on to the operands that
+            // carry the value, so it is re-walkable exactly when one of them is.
+            Expression::ConditionalExpression(cond) => {
+                self.context_can_shape_fresh_literal(&cond.consequent, context)
+                    || self.context_can_shape_fresh_literal(&cond.alternate, context)
+            }
+            Expression::LogicalExpression(logical) => {
+                self.context_can_shape_fresh_literal(&logical.right, context)
+                    || (logical.operator != LogicalOperator::And
+                        && self.context_can_shape_fresh_literal(&logical.left, context))
             }
             _ => false,
         }

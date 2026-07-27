@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
 # corpus 874  in-scope 318  out-of-scope 556
-# clean-kept 79/107  error-exact 43/211  diag-recall 507/1949
+# clean-kept 78/107  error-exact 43/211  diag-recall 508/1949
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	8 0 1 8	15:2341,16:2341,17:2341,18:2341,20:2341,21:2341,22:2341,23:2341|21:2349	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	8 0 1 8	15:2445,16:2445,17:2445,18:2445,20:2445,21:2445,22:2445,23:2445|21:2349	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -386,16 +386,16 @@ IN	0 0 4 0	|10:2339,59:2339,69:2339,85:2339	conformance/expressions/typeGuards/t
 IN	3 0 0 3	6:2322,15:2322,24:2322|	conformance/expressions/typeGuards/typeGuardsInDoStatement.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardsInExternalModule.ts
 IN	6 0 0 6	3:2322,3:2322,9:2322,9:2322,16:2322,16:2322|	conformance/expressions/typeGuards/typeGuardsInForStatement.ts
-IN	0 25 18 25	|10:2339,14:2339,17:2339,24:2339,27:2339,30:2339,34:2339,35:2339,45:2339,48:2339,51:2339,55:2339,56:2339,66:2339,69:2339,72:2339,76:2339,77:2339	conformance/expressions/typeGuards/typeGuardsInFunction.ts
+IN	1 24 18 25	87:2322|10:2339,14:2339,17:2339,24:2339,27:2339,30:2339,34:2339,35:2339,45:2339,48:2339,51:2339,55:2339,56:2339,66:2339,69:2339,72:2339,76:2339,77:2339	conformance/expressions/typeGuards/typeGuardsInFunction.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardsInFunctionAndModuleBlock.ts
 IN	0 3 1 3	|8:2339	conformance/expressions/typeGuards/typeGuardsInGlobal.ts
 IN	1 1 6 2	139:2339|7:2339,88:2339,120:2339,124:2339,132:2339,138:2339	conformance/expressions/typeGuards/typeGuardsInIfStatement.ts
 OOS:syntax:module	- - - -	-	conformance/expressions/typeGuards/typeGuardsInModule.ts
-IN	0 0 0 0	|	conformance/expressions/typeGuards/typeGuardsInProperties.ts
+IN	0 0 6 0	|14:2322,15:2322,16:2322,20:2322,21:2322,25:2322	conformance/expressions/typeGuards/typeGuardsInProperties.ts
 IN	0 0 3 0	|4:2339,41:2339,43:2339	conformance/expressions/typeGuards/typeGuardsInRightOperandOfAndAndOperator.ts
 IN	1 0 2 1	44:2339|5:2339,42:2339	conformance/expressions/typeGuards/typeGuardsInRightOperandOfOrOrOperator.ts
 IN	3 0 0 3	5:2322,13:2322,21:2322|	conformance/expressions/typeGuards/typeGuardsInWhileStatement.ts
-IN	0 0 8 0	|12:2339,16:2339,19:2339,25:2339,29:2339,35:2339,39:2339,42:2339	conformance/expressions/typeGuards/typeGuardsObjectMethods.ts
+IN	0 0 10 0	|12:2339,16:2339,19:2339,25:2339,29:2339,35:2339,39:2339,42:2339,46:2322,49:2322	conformance/expressions/typeGuards/typeGuardsObjectMethods.ts
 IN	0 1 4 1	|11:2339,15:2339,27:2339,29:2339	conformance/expressions/typeGuards/typeGuardsOnClassProperty.ts
 OOS:syntax:instanceof	- - - -	-	conformance/expressions/typeGuards/typeGuardsWithAny.ts
 OOS:syntax:instanceof	- - - -	-	conformance/expressions/typeGuards/typeGuardsWithInstanceOf.ts

@@ -1154,9 +1154,30 @@ pub(in crate::check::checker) fn declared_from_init(
     if kind.is_const() {
         return init_ty;
     }
-    match interner.store().literal_value(init_ty) {
-        Some(lit) => intrinsic_id(interner.well_known(), lit.base_kind()),
-        None => init_ty,
+    widen_declared_literals(interner, init_ty)
+}
+
+/// Widen the literal types an initializer produced, **member-wise** for a union
+/// (tsc's `getWidenedLiteralType` maps over constituents), so `let x = c ? 1 : 2` is
+/// `number` and a later `x = 3` stays legal.
+fn widen_declared_literals(interner: &mut Interner, ty: TypeId) -> TypeId {
+    if let Some(lit) = interner.store().literal_value(ty) {
+        return intrinsic_id(interner.well_known(), lit.base_kind());
+    }
+    let Some(members) = interner.store().union_members(ty).map(<[TypeId]>::to_vec) else {
+        return ty;
+    };
+    let mut widened = Vec::with_capacity(members.len());
+    let mut changed = false;
+    for member in members {
+        let base = widen_declared_literals(interner, member);
+        changed |= base != member;
+        widened.push(base);
+    }
+    if changed {
+        interner.union(widened)
+    } else {
+        ty
     }
 }
 

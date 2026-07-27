@@ -341,6 +341,17 @@ flow-node CFG (M23), the single narrowing model.
   publishing a value with only `null | undefined` removed. Official `partiallyNamedTuples2.ts`
   exposes the same boundary after tuple-label support.
   <!-- div: id=assertions/non-null-expression-oos dir=over scope=a-nullish-receivers owner=../backlog/49-possibly-undefined-family.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **A logical expression's VALUE keeps the whole falsy-capable left operand (over-report).**
+  `a && b` is `falsy-part-of(a) | b` and `a || b` is `truthy-part-of(a) | b`, and both splits
+  reuse the narrowing engine's `NarrowOp::Truthy` — which deliberately does not split a
+  falsy-capable primitive. tsc's `extractDefinitelyFalsyTypes` reduces `string` → `""`,
+  `number` → `0`, `boolean` → `false`, so typokat's result is a safe **superset**: identical
+  verdict at any target admitting the whole primitive, over-reporting only at a target that
+  admits just the falsy remainder (`const x: "" | number = s && n`). `||` has the mirror gap
+  for a definitely-falsy left operand, with no clean witness — tsc rejects those operands with
+  its own `TS2873`. One truthiness model, not two; making it precise is the same change as
+  making `if (s)` split `string` into `"" `/`string`.
+  <!-- div: id=narrowing/logical-value-falsy-split dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b101_conditional_logical_values/falsy_split_divergence.ts -->
 - **Deferred:** `for`/`for-of`/`do-while` loop narrowing and narrowing seen by a
   **closure** over a never-reassigned binding (tsc narrows; typokat keeps the
   function-boundary reset — over-report, safe direction). Member-path narrowing

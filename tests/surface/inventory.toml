@@ -512,7 +512,9 @@ slot = "self"
 oxc_variant = "Expression::ConditionalExpression"
 disposition = "supported"
 owner = "shipped"
-witness = "../cases/sr_wu1_expressions"
+# `sr_wu1_expressions` only pins that the three parts are WALKED. Backlog 101 is the
+# witness that the ternary has a value type (the arm union, contextually typed).
+witness = "../cases/b101_conditional_logical_values"
 
 [[surface]]
 id = "expr-infer/element-access/self"
@@ -592,7 +594,9 @@ slot = "self"
 oxc_variant = "Expression::LogicalExpression"
 disposition = "supported"
 owner = "shipped"
-witness = "../cases/sr_wu1_expressions"
+# Same as the ternary above: the value type (`&&`/`||`/`??` split joined with the
+# right operand) is pinned by the backlog-101 corpus, not by the walk-only fixtures.
+witness = "../cases/b101_conditional_logical_values"
 
 [[surface]]
 id = "expr-infer/member-access/self"
