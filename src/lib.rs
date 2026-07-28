@@ -11,13 +11,13 @@ pub mod driver;
 pub mod frontend;
 pub mod library;
 pub mod relate;
-mod source;
-pub mod span;
+pub(crate) use typokat_core::source;
+pub use typokat_core::span;
 pub mod surface;
 pub mod types;
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub(crate) use typokat_core::test_support;
 
 #[cfg(test)]
 mod build_reproducibility_tests {
@@ -25,7 +25,15 @@ mod build_reproducibility_tests {
     fn libtest_sources_do_not_capture_the_compile_time_repository_root() {
         let root = crate::test_support::repository_root();
         let forbidden = concat!("env!", "(\"CARGO_MANIFEST_DIR\")");
-        let offenders = crate::test_support::rust_sources(&root.join("src"))
+        let sources = crate::test_support::workspace_rust_sources();
+        assert!(
+            sources.iter().any(|path| path == &root.join("src/lib.rs"))
+                && sources
+                    .iter()
+                    .any(|path| path == &root.join("crates/typokat-core/src/lib.rs")),
+            "reproducibility scan must cover root and workspace-member sources"
+        );
+        let offenders = sources
             .into_iter()
             .filter(|path| {
                 std::fs::read_to_string(path)
@@ -78,6 +86,10 @@ mod build_reproducibility_tests {
         assert_absent(
             "src/frontend.rs",
             &["crate::check", "crate::library", "crate::driver"],
+        );
+        assert_absent(
+            "crates/typokat-core/src",
+            &["typokat_types", "typokat_binder", "typokat_check"],
         );
         assert_absent("src/library", &["crate::driver"]);
         assert_absent("src/check", &["crate::library", "crate::driver"]);

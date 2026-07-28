@@ -115,7 +115,11 @@ fn namespace_provenance_has_no_zero_reconstruction_or_public_private_leak() {
         );
     }
     assert!(production.contains("pub(crate) struct SourceUnitKey"));
-    assert!(!include_str!("../source.rs").contains("SourceUnitKey"));
+    let core_source = std::fs::read_to_string(
+        crate::test_support::repository_root().join("crates/typokat-core/src/source.rs"),
+    )
+    .expect("core source identity module");
+    assert!(!core_source.contains("SourceUnitKey"));
 }
 
 #[test]

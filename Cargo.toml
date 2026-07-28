@@ -1,13 +1,41 @@
 [package]
 name = "typokat"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 
-# Single crate for the MVP (mvp-plan §3): a library holding the checker pipeline
-# plus a thin binary front-end. Splitting `src/<module>` into workspace crates in
-# Phase 2 is a mechanical move. The library exists so the conformance harness in
-# `tests/` can drive the pipeline (Rust integration tests cannot reach a binary
-# crate's private modules).
+[workspace.dependencies]
+codespan-reporting = "0.13.1"
+dragonbox_ecma = "0.1.12"
+oxc_allocator = "0.137.0"
+oxc_ast = "0.137.0"
+oxc_ast_visit = "0.137.0"
+oxc_parser = "0.137.0"
+oxc_span = "0.137.0"
+rayon = "1.12.0"
+rustc-hash = "2.1.2"
+sha2 = "0.10.9"
+smallvec = "1.15.2"
+tikv-jemallocator = "0.7.0"
+toml = "0.8.23"
+rustix = { version = "1.1.4", features = ["fs"] }
+typokat-core = { path = "crates/typokat-core" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# Root facade and CLI over the layered checker workspace. Integration tests keep
+# using this package while implementation layers move into member crates.
 
 [lib]
 name = "typokat"
@@ -20,44 +48,46 @@ path = "src/main.rs"
 [dependencies]
 # Frontend: oxc parser stack. The AST is allocated in a bumpalo arena owned
 # by `oxc_allocator::Allocator`; all AST borrows live for that arena's lifetime.
-oxc_parser = "0.137.0"
-oxc_ast = "0.137.0"
-oxc_ast_visit = "0.137.0"
-oxc_allocator = "0.137.0"
-oxc_span = "0.137.0"
+oxc_parser.workspace = true
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+oxc_allocator.workspace = true
+oxc_span.workspace = true
+typokat-core.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
-dragonbox_ecma = "0.1.12"
+dragonbox_ecma.workspace = true
 
 # FxHashMap / FxHashSet for the interner dedup map and the relation cache/stack.
-rustc-hash = "2.1.2"
+rustc-hash.workspace = true
 
 # SmallVec for interner dedup buckets (mvp-plan §4.2).
-smallvec = "1.15.2"
+smallvec.workspace = true
 
 # Diagnostic rendering to the terminal (mvp-plan §6).
-codespan-reporting = "0.13.1"
+codespan-reporting.workspace = true
 
 # Data-parallelism for the multi-file driver (architecture §8): each file's whole
 # parse→bind→check pipeline runs on its own worker. The oxc AST is `!Send + !Sync`
 # (pinned to its parsing thread), so the per-file pipeline is the unit of work.
-rayon = "1.12.0"
+rayon.workspace = true
 
 # Vendored library profile identity (`library/profile.rs`) and the collision replay
 # manifest digest (`check/checker/replay_index.rs`).
-sha2 = "0.10.9"
+sha2.workspace = true
 
 # Allocator for the CLI (`src/main.rs` only — the library must not pick its
 # consumers' allocator). Building the default library from source is allocation-churn
 # heavy and glibc malloc costs ~20 ms per run on it; measured against mimalloc and
 # snmalloc, jemalloc was fastest at the smallest RSS cost (+2.8 MB).
-tikv-jemallocator = "0.7.0"
+tikv-jemallocator.workspace = true
 
 [dev-dependencies]
-toml = "0.8.23"
+toml.workspace = true
+typokat-core = { workspace = true, features = ["test-utils"] }
 
 [target.'cfg(unix)'.dev-dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix.workspace = true
 
 # The test suite is checker-bound, not compile-bound: at `opt-level = 0` the libtest
 # run is 63.8 s, at `opt-level = 2` it is 4.95 s (conformance 7.84 s → 1.23 s). The

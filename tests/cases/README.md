@@ -52,7 +52,8 @@ Rules the harness enforces:
   mid-text (not at the segment start) is still ignored.
 
 Exact column spans are validated separately by dedicated M0 snapshot tests, not by every
-fixture (keeps fixtures robust to author miscounting). Those tests live in `src/span.rs`
+fixture (keeps fixtures robust to author miscounting). Those tests live in
+`crates/typokat-core/src/span.rs`
 (`LineIndex` byte-column mapping) and `src/diagnostics/tests.rs` (compact/rich renderer
 columns): exact start/end columns, same-line distinction, and multiline / tab / UTF-8 /
 EOF spans.

@@ -139,3 +139,8 @@ independent reviewer; fixes return to the implementation agent before closure.
   `check`. Wrong-layer specs moved to their consumers, and an active source scan
   pins the boundary. Gate: 1,227 libtests passed, 13 ignored; every integration
   test and doctest passed; all-target clippy is warning-free.
+- 2026-07-28: WU2 started bottom-up. `typokat-core` now owns source identity,
+  spans, and feature-gated repository test support; its sole normal dependency is
+  `oxc_span`. The root remains a real package and aliases the moved modules while
+  the other layers are still local. Workspace gate: root 1,218 passed / 13
+  ignored, core 9 passed, all integrations and doctests passed, clippy clean.

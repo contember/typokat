@@ -1,0 +1,13 @@
+[package]
+name = "typokat-core"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-utils = []
+
+[dependencies]
+oxc_span.workspace = true
+
+[lints]
+workspace = true
