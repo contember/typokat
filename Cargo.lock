@@ -814,7 +814,6 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 name = "typokat"
 version = "0.1.0"
 dependencies = [
- "codespan-reporting",
  "dragonbox_ecma",
  "oxc_allocator",
  "oxc_ast",
@@ -830,6 +829,7 @@ dependencies = [
  "toml",
  "typokat-binder",
  "typokat-core",
+ "typokat-diagnostics",
  "typokat-relate",
  "typokat-types",
 ]
@@ -853,6 +853,18 @@ name = "typokat-core"
 version = "0.1.0"
 dependencies = [
  "oxc_span",
+]
+
+[[package]]
+name = "typokat-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "codespan-reporting",
+ "rustc-hash",
+ "typokat-binder",
+ "typokat-core",
+ "typokat-relate",
+ "typokat-types",
 ]
 
 [[package]]

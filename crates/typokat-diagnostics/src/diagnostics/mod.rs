@@ -262,12 +262,12 @@ pub struct Diagnostic {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct QualifiedTypeIncomplete {
+pub struct QualifiedTypeIncomplete {
     pub id: &'static str,
     pub context: &'static str,
 }
 
-pub(crate) fn qualified_type_incomplete(
+pub fn qualified_type_incomplete(
     resolution: QualifiedTypePathResolution,
 ) -> Option<QualifiedTypeIncomplete> {
     let (id, context) = match resolution {
@@ -299,7 +299,7 @@ pub(crate) fn qualified_type_incomplete(
     Some(QualifiedTypeIncomplete { id, context })
 }
 
-pub(crate) fn qualified_type_topology_diagnostic(
+pub fn qualified_type_topology_diagnostic(
     resolution: QualifiedTypePathResolution,
     names: &[&str],
     spans: &[Span],

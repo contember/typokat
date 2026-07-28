@@ -161,3 +161,9 @@ independent reviewer; fixes return to the implementation agent before closure.
   on `types` and `rustc-hash`; higher-layer cache and source-cold measurements
   are feature-gated without enabling relation test modules. Workspace gate stays
   at 1,287 passed / 16 ignored, with all-target clippy clean.
+- 2026-07-28: `typokat-diagnostics` now owns structured diagnostics, incomplete
+  outcomes, type/reason rendering, and terminal writers. It depends only on
+  `core`, `types`, `binder`, `relate`, `codespan-reporting`, and `rustc-hash`;
+  the root no longer names the renderer dependency directly. Its 48 owned tests
+  moved intact, and the workspace gate remains 1,287 passed / 16 ignored with
+  clean all-target clippy.

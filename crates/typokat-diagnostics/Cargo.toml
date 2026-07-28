@@ -1,0 +1,15 @@
+[package]
+name = "typokat-diagnostics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+codespan-reporting.workspace = true
+rustc-hash.workspace = true
+typokat-binder.workspace = true
+typokat-core.workspace = true
+typokat-relate.workspace = true
+typokat-types.workspace = true
+
+[lints]
+workspace = true

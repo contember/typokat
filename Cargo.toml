@@ -33,6 +33,7 @@ typokat-core = { path = "crates/typokat-core" }
 typokat-types = { path = "crates/typokat-types" }
 typokat-binder = { path = "crates/typokat-binder" }
 typokat-relate = { path = "crates/typokat-relate" }
+typokat-diagnostics = { path = "crates/typokat-diagnostics" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -60,6 +61,7 @@ typokat-core.workspace = true
 typokat-types.workspace = true
 typokat-binder.workspace = true
 typokat-relate.workspace = true
+typokat-diagnostics.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
 dragonbox_ecma.workspace = true
@@ -69,9 +71,6 @@ rustc-hash.workspace = true
 
 # SmallVec for interner dedup buckets (mvp-plan §4.2).
 smallvec.workspace = true
-
-# Diagnostic rendering to the terminal (mvp-plan §6).
-codespan-reporting.workspace = true
 
 # Data-parallelism for the multi-file driver (architecture §8): each file's whole
 # parse→bind→check pipeline runs on its own worker. The oxc AST is `!Send + !Sync`
