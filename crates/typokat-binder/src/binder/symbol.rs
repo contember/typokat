@@ -98,17 +98,21 @@ impl SymbolTable {
         self.symbols.get_mut_local(id.index())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn all_symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.symbols.iter()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.symbols.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_symbols(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
+    pub fn is_empty(&self) -> bool {
+        self.symbols.is_empty()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_symbols(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
         let base_len = self.symbols.base_len();
         self.symbols
             .local_iter()
@@ -129,13 +133,13 @@ impl SymbolTable {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn symbols_share_base_with(&self, other: &Self) -> bool {
         self.symbols.shares_base_with(&other.symbols)
     }
 
-    #[cfg(test)]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn iter(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
         self.symbols.iter().enumerate().map(|(index, symbol)| {
             (
                 SymbolId(u32::try_from(index).expect("symbol table index fits u32")),

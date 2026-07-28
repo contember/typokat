@@ -30,7 +30,7 @@ use oxc_ast::ast::{
 use rustc_hash::FxHashMap;
 use std::fmt;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static SYMBOL_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -39,34 +39,34 @@ thread_local! {
 /// every row its duplicate guard compares and every row it orders. Ordering the whole list again
 /// per attach makes this grow with declarations x group size, and the list it produces is
 /// identical either way, so no output assertion can see the difference. Only a counter can.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SymbolDeclarationAttachWorkForTest {
+pub struct SymbolDeclarationAttachWorkForTest {
     pub(crate) row_probes: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn symbol_declaration_attach_work_for_test() -> SymbolDeclarationAttachWorkForTest {
     SymbolDeclarationAttachWorkForTest {
         row_probes: SYMBOL_DECLARATION_ROW_PROBES.get(),
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_symbol_declaration_row_probe() {
     SYMBOL_DECLARATION_ROW_PROBES.set(SYMBOL_DECLARATION_ROW_PROBES.get() + 1);
 }
 
-#[cfg(test)]
-pub(crate) struct SymbolDeclarationAttachWorkScopeForTest(SymbolDeclarationAttachWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct SymbolDeclarationAttachWorkScopeForTest(SymbolDeclarationAttachWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl SymbolDeclarationAttachWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(symbol_declaration_attach_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> SymbolDeclarationAttachWorkForTest {
+    pub fn finish(self) -> SymbolDeclarationAttachWorkForTest {
         let end = symbol_declaration_attach_work_for_test();
         SymbolDeclarationAttachWorkForTest {
             row_probes: end.row_probes.saturating_sub(self.0.row_probes),
@@ -90,7 +90,7 @@ enum DeclarationOrder {
 type DeclarationOrderKey = (u64, u32, u32, u32);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum LibraryBinderError {
+pub enum LibraryBinderError {
     EmptyBatch,
     NonEmptyPrelude,
     NonLibraryUnit {
@@ -105,7 +105,7 @@ pub(crate) enum LibraryBinderError {
     DuplicateFileOrdinal {
         input_index: usize,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     RequiresPristineBuilder,
     AlreadyAdded,
 }
@@ -141,7 +141,7 @@ impl fmt::Display for LibraryBinderError {
                     "library file ordinal is unique (repeated by unit {input_index})"
                 )
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             Self::RequiresPristineBuilder => {
                 formatter.write_str("library batch requires a pristine project builder")
             }
@@ -200,22 +200,21 @@ pub struct Binder {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
-pub(crate) struct LibraryBinderCheckpointEnds {
-    pub(crate) scopes: usize,
-    pub(crate) symbols: usize,
-    pub(crate) declarations: usize,
-    pub(crate) type_groups: usize,
-    pub(crate) namespaces: usize,
-    pub(crate) value_storages: usize,
-    pub(crate) next_source: usize,
+pub struct LibraryBinderCheckpointEnds {
+    pub scopes: usize,
+    pub symbols: usize,
+    pub declarations: usize,
+    pub type_groups: usize,
+    pub namespaces: usize,
+    pub value_storages: usize,
+    pub next_source: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
-pub(crate) struct LibraryBinderUnit {
-    pub(crate) ordinal: LibraryFileOrdinal,
-    pub(crate) source: SourceUnitKey,
-    pub(crate) module: ScopeId,
+pub struct LibraryBinderUnit {
+    pub ordinal: LibraryFileOrdinal,
+    pub source: SourceUnitKey,
+    pub module: ScopeId,
 }
 
 /// One compiled default-library binder, opaque outside the crate.
@@ -229,17 +228,17 @@ pub struct LibraryBinderCheckpoint {
     ends: LibraryBinderCheckpointEnds,
 }
 
-#[cfg(test)]
-pub(crate) struct LibraryBinderCheckpointInspectionForTest<'checkpoint> {
-    pub(crate) library_units: &'checkpoint [LibraryBinderUnit],
-    pub(crate) ends: LibraryBinderCheckpointEnds,
-    pub(crate) array_symbol: SymbolId,
-    pub(crate) array_type_group: TypeGroupId,
+#[cfg(any(test, feature = "test-utils"))]
+pub struct LibraryBinderCheckpointInspectionForTest<'checkpoint> {
+    pub library_units: &'checkpoint [LibraryBinderUnit],
+    pub ends: LibraryBinderCheckpointEnds,
+    pub array_symbol: SymbolId,
+    pub array_type_group: TypeGroupId,
 }
 
 #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
 impl LibraryBinderCheckpoint {
-    pub(crate) fn new(binder: Binder, library_units: Vec<LibraryBinderUnit>) -> Self {
+    pub fn new(binder: Binder, library_units: Vec<LibraryBinderUnit>) -> Self {
         let ends = binder.checkpoint_ends();
         Self {
             binder,
@@ -253,8 +252,8 @@ impl LibraryBinderCheckpoint {
         self.library_units.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn inspection_for_test(&self) -> LibraryBinderCheckpointInspectionForTest<'_> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn inspection_for_test(&self) -> LibraryBinderCheckpointInspectionForTest<'_> {
         let binder = &self.binder;
         let array_symbol = binder
             .resolve_type(binder.compilation_global, "Array")
@@ -272,13 +271,11 @@ impl LibraryBinderCheckpoint {
         }
     }
 
-    pub(crate) fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
+    pub fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
         self.ends
     }
 
-    pub(crate) fn into_continuation<'ast>(
-        self,
-    ) -> (ProjectBinderBuilder<'ast>, Vec<LibraryBinderUnit>) {
+    pub fn into_continuation<'ast>(self) -> (ProjectBinderBuilder<'ast>, Vec<LibraryBinderUnit>) {
         let Self {
             binder,
             library_units,
@@ -342,7 +339,7 @@ impl LibraryBinderCheckpoint {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum ResolvedValueKind {
+pub enum ResolvedValueKind {
     Ordinary,
     StandaloneNamespace {
         namespace: NamespaceId,
@@ -351,7 +348,7 @@ pub(crate) enum ResolvedValueKind {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum ValueResolution {
+pub enum ValueResolution {
     Resolved {
         symbol: SymbolId,
         kind: ResolvedValueKind,
@@ -364,7 +361,7 @@ pub(crate) enum ValueResolution {
 
 impl Binder {
     #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
-    pub(crate) fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
+    pub fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
         LibraryBinderCheckpointEnds {
             scopes: self.graph.len(),
             symbols: self.symbols.len(),
@@ -378,7 +375,7 @@ impl Binder {
         }
     }
 
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         self.graph.freeze_as_base()?;
         self.symbols.freeze_as_base()?;
         self.declarations.freeze_as_base()?;
@@ -388,7 +385,7 @@ impl Binder {
         Ok(())
     }
 
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             graph: self.graph.fork_delta()?,
             symbols: self.symbols.fork_delta()?,
@@ -410,8 +407,8 @@ impl Binder {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_storage_with(&self, other: &Self) -> bool {
         self.graph.scopes_share_base_with(&other.graph)
             && self.symbols.symbols_share_base_with(&other.symbols)
             && self
@@ -424,8 +421,8 @@ impl Binder {
             && self.module_sources.shares_base_with(&other.module_sources)
     }
 
-    #[cfg(test)]
-    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 8] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn base_family_sharing_with(&self, other: &Self) -> [bool; 8] {
         let declarations = self
             .declarations
             .base_family_sharing_with(&other.declarations);
@@ -443,8 +440,8 @@ impl Binder {
         ]
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 8] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_family_row_counts_for_test(&self) -> [usize; 8] {
         let declarations = self.declarations.local_family_row_counts_for_test();
         let namespaces = self.namespaces.local_family_row_counts_for_test();
         [
@@ -459,8 +456,8 @@ impl Binder {
         ]
     }
 
-    #[cfg(test)]
-    pub(crate) fn max_source_key(&self) -> SourceUnitKey {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn max_source_key(&self) -> SourceUnitKey {
         SourceUnitKey(
             self.next_source_key
                 .0
@@ -469,16 +466,16 @@ impl Binder {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_names_for_test(&self) -> std::collections::BTreeSet<String> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_names_for_test(&self) -> std::collections::BTreeSet<String> {
         self.graph
             .local_scopes()
             .flat_map(|(_, scope)| scope.symbols.keys().cloned())
             .collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_reference_records_for_test(&self) -> Vec<(u8, u32, u8, u32)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_reference_records_for_test(&self) -> Vec<(u8, u32, u8, u32)> {
         super::references::local_reference_records_for_test(self)
             .into_iter()
             .map(|(owner_domain, target_domain, _, owner, target)| {
@@ -488,17 +485,17 @@ impl Binder {
     }
 
     /// Every write this build had to refuse because its row lives in the frozen library prefix.
-    pub(crate) fn frozen_prefix_writes(&self) -> &[FrozenPrefixWrite] {
+    pub fn frozen_prefix_writes(&self) -> &[FrozenPrefixWrite] {
         &self.frozen_prefix_writes
     }
 
-    pub(crate) fn module_sources(&self) -> &LayeredMap<ScopeId, SourceUnitKey> {
+    pub fn module_sources(&self) -> &LayeredMap<ScopeId, SourceUnitKey> {
         &self.module_sources
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_product_parts(
+    pub fn from_product_parts(
         graph: ScopeGraph,
         symbols: SymbolTable,
         declarations: DeclarationTable,
@@ -551,7 +548,7 @@ impl Binder {
     }
 
     /// Return the canonical semantically admitted declaration at one exact syntax site.
-    pub(crate) fn exact_declaration_at(
+    pub fn exact_declaration_at(
         &self,
         syntax_module: ScopeId,
         binding_start: u32,
@@ -563,11 +560,11 @@ impl Binder {
     }
 
     /// Resolve a value binding and its namespace provenance in one scope walk.
-    pub(crate) fn resolve_value_binding(&self, scope: ScopeId, name: &str) -> ValueResolution {
+    pub fn resolve_value_binding(&self, scope: ScopeId, name: &str) -> ValueResolution {
         self.resolve_value_binding_traced(scope, name, || {})
     }
 
-    pub(crate) fn resolve_value_binding_traced(
+    pub fn resolve_value_binding_traced(
         &self,
         scope: ScopeId,
         name: &str,
@@ -585,7 +582,7 @@ impl Binder {
     }
 
     /// Resolve only the ordinary symbol projection of [`Binder::resolve_value_binding`].
-    pub(crate) fn resolve_value(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    pub fn resolve_value(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
         match self.resolve_value_binding(scope, name) {
             ValueResolution::Resolved { symbol, .. } => Some(symbol),
             ValueResolution::TypeOnlyNamespace { .. } | ValueResolution::Missing => None,
@@ -594,11 +591,11 @@ impl Binder {
 
     /// Resolve a type-space binding, skipping same-named value-only symbols while
     /// walking parents.
-    pub(crate) fn resolve_type(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    pub fn resolve_type(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
         self.resolve_type_traced(scope, name, || {})
     }
 
-    pub(crate) fn resolve_type_traced(
+    pub fn resolve_type_traced(
         &self,
         scope: ScopeId,
         name: &str,
@@ -710,7 +707,7 @@ fn resolve_type_symbol(
 }
 
 /// Mutable binder state threaded through the recursive walk.
-pub(crate) struct ImportedSymbol {
+pub struct ImportedSymbol {
     name: String,
     value: Option<ImportedValueSlot>,
     ty: Option<ImportedTypeSlot>,
@@ -720,7 +717,7 @@ pub(crate) struct ImportedSymbol {
 }
 
 impl ImportedSymbol {
-    pub(crate) fn new(
+    pub fn new(
         name: String,
         value: Option<ValueStorageId>,
         ty: Option<TypeGroupId>,
@@ -738,7 +735,7 @@ impl ImportedSymbol {
         }
     }
 
-    pub(crate) fn placeholder_type(name: String, site: Span) -> Self {
+    pub fn placeholder_type(name: String, site: Span) -> Self {
         ImportedSymbol {
             name,
             value: None,
@@ -749,7 +746,7 @@ impl ImportedSymbol {
         }
     }
 
-    pub(crate) fn placeholder_value_and_type(name: String, site: Span) -> Self {
+    pub fn placeholder_value_and_type(name: String, site: Span) -> Self {
         ImportedSymbol {
             name,
             value: Some(ImportedValueSlot::Placeholder),
@@ -770,8 +767,8 @@ pub(crate) enum ImportedTypeSlot {
     Existing(TypeGroupId),
 }
 
-pub(crate) struct ImportPlaceholder {
-    pub(crate) value: Option<ValueStorageId>,
+pub struct ImportPlaceholder {
+    pub value: Option<ValueStorageId>,
 }
 
 pub(crate) struct BindState {
@@ -1008,7 +1005,7 @@ impl BindState {
         let sorted =
             attached == 1 || self.symbol_declaration_orders.get(&symbol).copied() == Some(ordering);
         let order_key = |id: DeclId| -> DeclarationOrderKey {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_symbol_declaration_row_probe();
             self.declarations
                 .get(id)
@@ -1067,7 +1064,7 @@ impl BindState {
                     row.declarations.insert(at, declaration);
                 }
             } else if !row.declarations.iter().any(|id| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_symbol_declaration_row_probe();
                 *id == declaration
             }) {
@@ -1094,7 +1091,7 @@ pub fn bind_module_with_prelude(prelude: &Program<'_>, program: &Program<'_>) ->
 }
 
 /// Incremental binder for one serial project graph (M29 slice 1).
-pub(crate) struct ProjectBinderBuilder<'ast> {
+pub struct ProjectBinderBuilder<'ast> {
     state: BindState,
     prelude_module: ScopeId,
     compilation_global: ScopeId,
@@ -1129,7 +1126,7 @@ struct ContinuationPublicationPlan {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum BuilderUseMode {
     Pristine,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     Project,
     Library,
     Continuation,
@@ -1137,7 +1134,7 @@ enum BuilderUseMode {
 
 impl<'ast> ProjectBinderBuilder<'ast> {
     /// Bind the prelude first so its checker storage keeps the low id ranges.
-    pub(crate) fn new(prelude: &Program<'_>) -> Self {
+    pub fn new(prelude: &Program<'_>) -> Self {
         let mut state = BindState {
             graph: ScopeGraph::new(),
             symbols: SymbolTable::new(),
@@ -1189,11 +1186,11 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         }
     }
 
-    pub(crate) fn reserve_script_namespace_roots<'a>(
+    pub fn reserve_script_namespace_roots<'a>(
         &mut self,
         units: impl IntoIterator<Item = (&'a Program<'a>, CompilationUnit)>,
     ) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         match self.use_mode {
             BuilderUseMode::Pristine | BuilderUseMode::Project => {
                 self.use_mode = BuilderUseMode::Project;
@@ -1318,13 +1315,13 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     /// Add one project module. Imported symbols are declared before local names so
     /// declarations in this file can reference imports during reserve/fill. Namespace
     /// classification is deferred to the finish that drains `pending_namespace_modules`.
-    pub(crate) fn add_module(
+    pub fn add_module(
         &mut self,
         program: &'ast Program<'ast>,
         imports: &[ImportedSymbol],
         unit: CompilationUnit,
     ) -> (ScopeId, Vec<ImportPlaceholder>) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         match self.use_mode {
             BuilderUseMode::Pristine | BuilderUseMode::Project => {
                 self.use_mode = BuilderUseMode::Project;
@@ -1422,7 +1419,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     }
 
     /// Bind declaration-library files into one shared global identity domain.
-    pub(crate) fn try_add_library_modules(
+    pub fn try_add_library_modules(
         &mut self,
         units: &[(&'ast Program<'ast>, CompilationUnit)],
     ) -> Result<Vec<ScopeId>, LibraryBinderError> {
@@ -1453,7 +1450,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         canonical_units.sort_by_key(|(file_ordinal, _, _, _)| *file_ordinal);
         match self.use_mode {
             BuilderUseMode::Pristine => self.use_mode = BuilderUseMode::Library,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             BuilderUseMode::Project => return Err(LibraryBinderError::RequiresPristineBuilder),
             BuilderUseMode::Library | BuilderUseMode::Continuation => {
                 return Err(LibraryBinderError::AlreadyAdded);
@@ -1509,8 +1506,8 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .collect())
     }
 
-    #[cfg(test)]
-    pub(crate) fn add_library_modules(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn add_library_modules(
         &mut self,
         units: &[(&'ast Program<'ast>, CompilationUnit)],
     ) -> Vec<ScopeId> {
@@ -1518,7 +1515,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
-    pub(crate) fn finish(mut self, module: ScopeId) -> Binder {
+    pub fn finish(mut self, module: ScopeId) -> Binder {
         self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
         self.state.namespaces.finalize_global_scopes(
@@ -1548,7 +1545,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     }
 
     /// Resume one AST-free library binder for a single user suffix.
-    pub(crate) fn resume_frozen_library(binder: Binder) -> (Self, SourceUnitKey) {
+    pub fn resume_frozen_library(binder: Binder) -> (Self, SourceUnitKey) {
         let next_source = binder.next_source_key;
         let Binder {
             mut graph,
@@ -1619,7 +1616,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     }
 
     /// Freeze only the appended user suffix; the library global prefix is already final.
-    pub(crate) fn finish_frozen_library_continuation(
+    pub fn finish_frozen_library_continuation(
         mut self,
         module: ScopeId,
     ) -> Result<Binder, &'static str> {
@@ -1661,7 +1658,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
 
     /// Return only slots declared directly by this module, never inherited ones.
     /// Export lists use this to avoid leaking the ambient prelude across modules.
-    pub(crate) fn local_symbol_slots(
+    pub fn local_symbol_slots(
         &self,
         scope: ScopeId,
         name: &str,
@@ -1677,7 +1674,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
 
     /// Whether a local imported name blocks parent value lookup after its source
     /// erased a value export. Re-export lists preserve this provenance.
-    pub(crate) fn local_value_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
+    pub fn local_value_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
         self.state
             .graph
             .get(scope)
@@ -1686,7 +1683,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .is_some_and(|symbol| symbol.blocks_value_lookup)
     }
 
-    pub(crate) fn local_type_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
+    pub fn local_type_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
         self.state
             .graph
             .get(scope)
@@ -2456,7 +2453,7 @@ pub(super) fn declare_type(
                     )
                 });
             }
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "test-utils")))]
             fragments.sort_by_key(|fragment| {
                 (
                     fragment.source,

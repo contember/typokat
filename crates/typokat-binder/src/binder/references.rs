@@ -10,14 +10,15 @@ use super::declaration::{LexicalDeclaration, TypeGroup};
 use super::namespace::*;
 use super::scope::{Scope, ScopeId};
 use super::symbol::Symbol;
+#[cfg(test)]
 use std::collections::BTreeSet;
 
-type ReferenceRecord = (u8, u8, u8, u32, u32);
+pub type ReferenceRecord = (u8, u8, u8, u32, u32);
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ReferenceView {
     Full,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     Local,
 }
 
@@ -25,7 +26,7 @@ impl ReferenceView {
     const fn local_only(self) -> bool {
         match self {
             Self::Full => false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             Self::Local => true,
         }
     }
@@ -235,7 +236,7 @@ fn push_canonical_index_references(
 }
 
 /// Enumerate every typed binder reference.
-pub(crate) fn reference_records(binder: &Binder) -> Result<Vec<ReferenceRecord>, &'static str> {
+pub fn reference_records(binder: &Binder) -> Result<Vec<ReferenceRecord>, &'static str> {
     reference_records_with_view(binder, ReferenceView::Full)
 }
 
@@ -249,11 +250,11 @@ fn reference_records_with_view(
         if !view.local_only() {
             return true;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             _scope.index() >= binder.graph.base_len_for_test()
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-utils")))]
         unreachable!("local reference view is test-only")
     };
     for (field, scope) in [
@@ -300,7 +301,7 @@ fn reference_records_with_view(
         }
     };
     if view.local_only() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         for (owner, scope) in binder.graph.local_scopes() {
             record_scope(owner.0, scope);
         }
@@ -311,7 +312,7 @@ fn reference_records_with_view(
         }
     }
     if view.local_only() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         for (scope, source) in binder.module_sources().local_iter() {
             push_reference(
                 &mut records,
@@ -388,7 +389,7 @@ fn reference_records_with_view(
         }
     };
     if view.local_only() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         for (owner, symbol) in binder.symbols.local_symbols() {
             record_symbol(owner.0, symbol);
         }
@@ -400,11 +401,11 @@ fn reference_records_with_view(
     }
 
     let declarations: Box<dyn Iterator<Item = &LexicalDeclaration>> = if view.local_only() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             Box::new(binder.declarations.local_declarations())
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-utils")))]
         unreachable!("local reference view is test-only")
     } else {
         Box::new(binder.declarations.iter())
@@ -478,11 +479,11 @@ fn reference_records_with_view(
     }
 
     let groups: Box<dyn Iterator<Item = &TypeGroup>> = if view.local_only() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             Box::new(binder.type_groups.local_groups())
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-utils")))]
         unreachable!("local reference view is test-only")
     } else {
         Box::new(binder.type_groups.iter())
@@ -794,11 +795,11 @@ fn reference_records_with_view(
         }
     }
     let merges: Box<dyn Iterator<Item = &MergeRecord>> = if view.local_only() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             Box::new(binder.namespaces.local_merges())
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-utils")))]
         unreachable!("local reference view is test-only")
     } else {
         Box::new(binder.namespaces.merges())
@@ -1094,13 +1095,13 @@ fn reference_records_with_view(
     Ok(records)
 }
 
-#[cfg(test)]
-pub(crate) fn reference_records_for_test(binder: &Binder) -> Vec<ReferenceRecord> {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn reference_records_for_test(binder: &Binder) -> Vec<ReferenceRecord> {
     reference_records(binder).expect("typed binder references enumerate")
 }
 
-#[cfg(test)]
-pub(crate) fn local_reference_records_for_test(binder: &Binder) -> Vec<ReferenceRecord> {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn local_reference_records_for_test(binder: &Binder) -> Vec<ReferenceRecord> {
     reference_records_with_view(binder, ReferenceView::Local)
         .expect("typed local binder references enumerate")
 }

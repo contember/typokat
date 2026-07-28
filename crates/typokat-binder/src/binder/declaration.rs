@@ -75,14 +75,14 @@ pub struct DeclarationSite {
 
 /// Source-only declaration occurrence found independently of semantic support.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct SourceDeclarationOccurrence {
+pub struct SourceDeclarationOccurrence {
     pub kind: DeclarationKind,
     pub declaration_span: Span,
     pub binding_span: Span,
 }
 
 /// Global binding projection from the exhaustive visitor shared with semantic binding.
-pub(crate) fn source_global_binding_census(
+pub fn source_global_binding_census(
     program: &Program<'_>,
     context: ModuleBindingContext,
 ) -> SourceGlobalBindingCensus {
@@ -94,7 +94,7 @@ pub(crate) fn source_global_binding_census(
         .result
 }
 
-pub(crate) fn source_global_binding_census_with_provenance(
+pub fn source_global_binding_census_with_provenance(
     program: &Program<'_>,
     context: ModuleBindingContext,
 ) -> SourceGlobalBindingProvenance {
@@ -117,9 +117,7 @@ pub(crate) fn source_global_binding_census_with_provenance(
     }
 }
 
-pub(crate) fn source_declaration_occurrences(
-    program: &Program<'_>,
-) -> Vec<SourceDeclarationOccurrence> {
+pub fn source_declaration_occurrences(program: &Program<'_>) -> Vec<SourceDeclarationOccurrence> {
     let mut visitor = SourceDeclarationVisitor::occurrences_only();
     visitor.visit_program(program);
     visitor
@@ -128,34 +126,34 @@ pub(crate) fn source_declaration_occurrences(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SourceBindingSlot {
+pub enum SourceBindingSlot {
     Value,
     Type,
     Namespace,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SourceGlobalBindingCandidate {
-    pub(crate) slots: BTreeSet<SourceBindingSlot>,
-    pub(crate) global_object_contributor: bool,
+pub struct SourceGlobalBindingCandidate {
+    pub slots: BTreeSet<SourceBindingSlot>,
+    pub global_object_contributor: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SourceGlobalBindingCensus {
-    pub(crate) candidates: BTreeMap<String, SourceGlobalBindingCandidate>,
-    pub(crate) uncertain_candidates: BTreeMap<String, SourceGlobalBindingCandidate>,
-    pub(crate) explicit_global_this: bool,
-    pub(crate) umd_global: bool,
-    pub(crate) uncertain_relevant_syntax: bool,
-    pub(crate) source_nodes_visited: u64,
-    pub(crate) binding_leaves_visited: u64,
+pub struct SourceGlobalBindingCensus {
+    pub candidates: BTreeMap<String, SourceGlobalBindingCandidate>,
+    pub uncertain_candidates: BTreeMap<String, SourceGlobalBindingCandidate>,
+    pub explicit_global_this: bool,
+    pub umd_global: bool,
+    pub uncertain_relevant_syntax: bool,
+    pub source_nodes_visited: u64,
+    pub binding_leaves_visited: u64,
 }
 
-pub(crate) struct SourceGlobalBindingProvenance {
-    pub(crate) census: SourceGlobalBindingCensus,
+pub struct SourceGlobalBindingProvenance {
+    pub census: SourceGlobalBindingCensus,
     pub(crate) binding_sites: Vec<SourceGlobalBindingSite>,
-    pub(crate) contributor_sites: Vec<SourceGlobalContributorSite>,
-    pub(crate) explicit_global_this_sites: Vec<Span>,
+    pub contributor_sites: Vec<SourceGlobalContributorSite>,
+    pub explicit_global_this_sites: Vec<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,16 +163,16 @@ pub(crate) struct SourceGlobalBindingSite {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourceGlobalContributorKind {
+pub enum SourceGlobalContributorKind {
     Ordinary,
     Namespace,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SourceGlobalContributorSite {
-    pub(crate) name: String,
-    pub(crate) kind: SourceGlobalContributorKind,
-    pub(crate) span: Span,
+pub struct SourceGlobalContributorSite {
+    pub name: String,
+    pub kind: SourceGlobalContributorKind,
+    pub span: Span,
 }
 
 struct SourceDeclarationVisitor {
@@ -794,7 +792,7 @@ impl DeclarationTable {
         id
     }
 
-    pub(crate) fn declaration_at_site(
+    pub fn declaration_at_site(
         &self,
         syntax_module: ScopeId,
         binding_start: u32,
@@ -818,7 +816,7 @@ impl DeclarationTable {
         self.declarations.iter()
     }
 
-    pub(crate) fn local_declarations(&self) -> impl Iterator<Item = &LexicalDeclaration> {
+    pub fn local_declarations(&self) -> impl Iterator<Item = &LexicalDeclaration> {
         self.declarations.local_iter()
     }
 
@@ -842,16 +840,16 @@ impl DeclarationTable {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_storage_with(&self, other: &Self) -> bool {
         self.declarations.shares_base_with(&other.declarations)
             && self
                 .declarations_by_site
                 .shares_base_with(&other.declarations_by_site)
     }
 
-    #[cfg(test)]
-    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
         [
             self.declarations.shares_base_with(&other.declarations),
             self.declarations_by_site
@@ -859,8 +857,8 @@ impl DeclarationTable {
         ]
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_family_row_counts_for_test(&self) -> [usize; 2] {
         [
             self.declarations.local_len(),
             self.declarations_by_site.local_len(),
@@ -880,7 +878,7 @@ pub enum TypeFragmentKind {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct TypeGroupFragment {
     pub declaration: DeclId,
-    pub(crate) source: SourceUnitKey,
+    pub source: SourceUnitKey,
     pub scope: ScopeId,
     pub site: DeclarationSite,
     pub kind: TypeFragmentKind,
@@ -972,12 +970,12 @@ impl TypeGroupTable {
         self.groups.iter()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_groups(&self) -> impl Iterator<Item = &TypeGroup> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_groups(&self) -> impl Iterator<Item = &TypeGroup> {
         self.groups.local_iter()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn local_row_count_for_test(&self) -> usize {
         self.groups.local_len()
     }
@@ -992,8 +990,8 @@ impl TypeGroupTable {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_storage_with(&self, other: &Self) -> bool {
         self.groups.shares_base_with(&other.groups)
     }
 }

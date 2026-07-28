@@ -150,3 +150,9 @@ independent reviewer; fixes return to the implementation agent before closure.
   feature-gated for root invariant specs. Workspace gate: root 1,110 passed / 12
   ignored, types 108 passed / 1 ignored, core 9 passed, all integrations and
   doctests passed, clippy clean.
+- 2026-07-28: `typokat-binder` now owns declaration binding, scopes, symbols,
+  namespaces, reference records, and binder-owned scaling specs. Its normal
+  dependency set is exactly `core`, `types`, Oxc AST/visitor/span, and
+  `rustc-hash`; higher-layer test introspection is feature-gated. Workspace gate:
+  1,287 tests passed / 16 ignored across unit, integration, and doc targets;
+  all-target clippy is clean.

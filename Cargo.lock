@@ -828,6 +828,21 @@ dependencies = [
  "smallvec",
  "tikv-jemallocator",
  "toml",
+ "typokat-binder",
+ "typokat-core",
+ "typokat-types",
+]
+
+[[package]]
+name = "typokat-binder"
+version = "0.1.0"
+dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_span",
+ "rustc-hash",
  "typokat-core",
  "typokat-types",
 ]

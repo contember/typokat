@@ -39,6 +39,15 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn binder_source(relative: &str) -> String {
+    std::fs::read_to_string(
+        crate::test_support::repository_root()
+            .join("crates/typokat-binder/src/binder")
+            .join(relative),
+    )
+    .expect("binder source")
+}
+
 fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
     let declaration_offset = source.find(declaration).expect("struct declaration");
     let body_offset = source[declaration_offset..]
@@ -997,7 +1006,7 @@ if (condition) {
 
 #[test]
 fn library_binder_checkpoint_is_unforgeable_and_resumes_only_through_the_continuation() {
-    let binder = include_str!("../binder/bind.rs");
+    let binder = binder_source("bind.rs");
     let private_compiler = include_str!("../check/checker/library_compiler.rs");
     let library_compiler = include_str!("compiler.rs");
     let checkpoint_offset = binder
@@ -1021,12 +1030,11 @@ fn library_binder_checkpoint_is_unforgeable_and_resumes_only_through_the_continu
         .split_once("\n}\n")
         .expect("checkpoint impl body")
         .0;
-    // Provenance is structural: private fields, no Clone, and one crate-internal constructor.
+    // Provenance is structural: private fields, no Clone, and one boundary constructor.
     assert!(!body.contains("pub"));
     assert!(!attributes.contains("derive"));
     assert!(!binder.contains("AuthenticatedLibraryBinderCheckpoint"));
-    assert!(checkpoint_impl.contains("pub(crate) fn new("));
-    assert!(!checkpoint_impl.contains("pub fn new("));
+    assert!(checkpoint_impl.contains("pub fn new("));
     assert_eq!(
         private_compiler
             .matches("LibraryBinderCheckpoint::new(")

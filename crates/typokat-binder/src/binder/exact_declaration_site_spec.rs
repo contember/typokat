@@ -257,7 +257,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
     );
 
     let table_lookup = declaration_production
-        .split_once("pub(crate) fn declaration_at_site(")
+        .split_once("pub fn declaration_at_site(")
         .and_then(|(_, rest)| rest.split_once("\n    }"))
         .map(|(body, _)| body)
         .expect("DeclarationTable exact-site lookup");
@@ -286,7 +286,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
     }
 
     let exact_lookup = binder_production
-        .split_once("pub(crate) fn exact_declaration_at(")
+        .split_once("pub fn exact_declaration_at(")
         .and_then(|(_, rest)| rest.split_once("\n    }"))
         .map(|(body, _)| body)
         .expect("binder exact-site API");

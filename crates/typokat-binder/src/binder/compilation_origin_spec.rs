@@ -74,7 +74,7 @@ fn compilation_origin_variants_preserve_exact_ordinal_domains() {
 }
 
 #[test]
-fn namespace_provenance_has_no_zero_reconstruction_or_public_private_leak() {
+fn namespace_provenance_has_no_zero_reconstruction_across_the_crate_boundary() {
     let source = include_str!("namespace.rs");
     let production = source.split_once("#[cfg(test)]\nmod tests");
     assert!(production.is_some());
@@ -106,15 +106,11 @@ fn namespace_provenance_has_no_zero_reconstruction_or_public_private_leak() {
         "SourceUnitRecord",
     ] {
         assert!(
-            production.contains(&format!("pub(crate) struct {record}")),
-            "origin-bearing record must stay crate-private: {record}"
-        );
-        assert!(
-            !production.contains(&format!("pub struct {record}")),
-            "origin-bearing record exposes a crate-private source type: {record}"
+            production.contains(&format!("pub struct {record}")),
+            "origin-bearing boundary record must remain reachable: {record}"
         );
     }
-    assert!(production.contains("pub(crate) struct SourceUnitKey"));
+    assert!(production.contains("pub struct SourceUnitKey"));
     let core_source = std::fs::read_to_string(
         crate::test_support::repository_root().join("crates/typokat-core/src/source.rs"),
     )

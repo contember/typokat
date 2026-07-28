@@ -106,22 +106,26 @@ impl ScopeGraph {
         self.scopes.get_mut_local(id.index())
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.scopes.len()
     }
 
-    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.scopes.is_empty()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn base_len_for_test(&self) -> usize {
         self.scopes.base_len()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn all_scopes(&self) -> impl Iterator<Item = &Scope> {
         self.scopes.iter()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_scopes(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_scopes(&self) -> impl Iterator<Item = (ScopeId, &Scope)> {
         let base_len = self.scopes.base_len();
         self.scopes
             .local_iter()
@@ -142,7 +146,7 @@ impl ScopeGraph {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn scopes_share_base_with(&self, other: &Self) -> bool {
         self.scopes.shares_base_with(&other.scopes)
     }

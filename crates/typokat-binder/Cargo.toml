@@ -1,0 +1,24 @@
+[package]
+name = "typokat-binder"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-utils = []
+
+[dependencies]
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+oxc_span.workspace = true
+rustc-hash.workspace = true
+typokat-core.workspace = true
+typokat-types.workspace = true
+
+[dev-dependencies]
+oxc_allocator.workspace = true
+oxc_parser.workspace = true
+typokat-core = { workspace = true, features = ["test-utils"] }
+typokat-types = { workspace = true, features = ["test-utils"] }
+
+[lints]
+workspace = true

@@ -6,7 +6,7 @@ use super::namespace::NamespaceId;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RootIndexError {
+pub enum RootIndexError {
     MissingCompilationGlobalScope,
     MissingGlobalSymbol,
 }
@@ -23,15 +23,15 @@ impl fmt::Display for RootIndexError {
 }
 
 #[derive(Clone)]
-pub(crate) struct RootNameRow {
-    pub(crate) name: String,
-    pub(crate) value: Option<ValueStorageId>,
-    pub(crate) ty: Option<TypeGroupId>,
-    pub(crate) namespace: Option<NamespaceId>,
+pub struct RootNameRow {
+    pub name: String,
+    pub value: Option<ValueStorageId>,
+    pub ty: Option<TypeGroupId>,
+    pub namespace: Option<NamespaceId>,
 }
 
 /// Every compilation-global name, sorted, with the slots it publishes.
-pub(crate) fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, RootIndexError> {
+pub fn collect_root_rows(binder: &Binder) -> Result<Vec<RootNameRow>, RootIndexError> {
     let scope = binder
         .graph
         .get(binder.compilation_global)

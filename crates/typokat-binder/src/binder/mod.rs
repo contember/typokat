@@ -9,9 +9,9 @@ pub mod namespace;
 pub mod scope;
 pub mod symbol;
 
-#[cfg(test)]
-pub(crate) mod references;
-pub(crate) mod roots;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod references;
+pub mod roots;
 
 pub use bind::{bind_module_with_prelude, Binder};
 

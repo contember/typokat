@@ -13,7 +13,7 @@ use crate::binder::declaration::{
 };
 use crate::binder::scope::{FrozenScopeWrite, Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::source::LibraryFileOrdinal;
 use crate::source::{CompilationOrigin, OriginalModuleOrdinal};
 use crate::span::Span;
@@ -28,7 +28,7 @@ use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static CONTINUATION_MERGE_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static CONTINUATION_INSTANCE_FRAGMENT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -46,9 +46,9 @@ thread_local! {
     static CONTINUATION_LIBRARY_REPORTING_LOOKUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct NamespaceContinuationWorkForTest {
+pub struct NamespaceContinuationWorkForTest {
     pub(crate) merge_rows: u64,
     pub(crate) instance_fragment_rows: u64,
     pub(crate) child_fragment_lookups: u64,
@@ -65,7 +65,7 @@ pub(crate) struct NamespaceContinuationWorkForTest {
     pub(crate) library_reporting_lookups: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn namespace_continuation_work_for_test() -> NamespaceContinuationWorkForTest {
     NamespaceContinuationWorkForTest {
         merge_rows: CONTINUATION_MERGE_ROWS.get(),
@@ -85,86 +85,86 @@ fn namespace_continuation_work_for_test() -> NamespaceContinuationWorkForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_merge_row() {
     CONTINUATION_MERGE_ROWS.set(CONTINUATION_MERGE_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_instance_fragment_row() {
     CONTINUATION_INSTANCE_FRAGMENT_ROWS.set(CONTINUATION_INSTANCE_FRAGMENT_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_child_fragment_lookup() {
     CONTINUATION_CHILD_FRAGMENT_LOOKUPS.set(CONTINUATION_CHILD_FRAGMENT_LOOKUPS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_allocation_namespace_row() {
     CONTINUATION_ALLOCATION_NAMESPACE_ROWS.set(CONTINUATION_ALLOCATION_NAMESPACE_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_attachment_namespace_row() {
     CONTINUATION_ATTACHMENT_NAMESPACE_ROWS.set(CONTINUATION_ATTACHMENT_NAMESPACE_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_fragment_scope_lookup() {
     CONTINUATION_FRAGMENT_SCOPE_LOOKUPS.set(CONTINUATION_FRAGMENT_SCOPE_LOOKUPS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_placement_merge_row() {
     CONTINUATION_PLACEMENT_MERGE_ROWS.set(CONTINUATION_PLACEMENT_MERGE_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_global_row() {
     CONTINUATION_GLOBAL_ROWS.set(CONTINUATION_GLOBAL_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_umd_row() {
     CONTINUATION_UMD_ROWS.set(CONTINUATION_UMD_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_ambient_alias_member_row() {
     CONTINUATION_AMBIENT_ALIAS_MEMBER_ROWS.set(CONTINUATION_AMBIENT_ALIAS_MEMBER_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_umd_statement_query() {
     CONTINUATION_UMD_STATEMENT_QUERIES.set(CONTINUATION_UMD_STATEMENT_QUERIES.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_global_statement_query() {
     CONTINUATION_GLOBAL_STATEMENT_QUERIES.set(CONTINUATION_GLOBAL_STATEMENT_QUERIES.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_library_source_lookup() {
     CONTINUATION_LIBRARY_SOURCE_LOOKUPS.set(CONTINUATION_LIBRARY_SOURCE_LOOKUPS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_continuation_library_reporting_lookup() {
     CONTINUATION_LIBRARY_REPORTING_LOOKUPS.set(CONTINUATION_LIBRARY_REPORTING_LOOKUPS.get() + 1);
 }
 
-#[cfg(test)]
-pub(crate) struct NamespaceContinuationWorkScopeForTest(NamespaceContinuationWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct NamespaceContinuationWorkScopeForTest(NamespaceContinuationWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl NamespaceContinuationWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(namespace_continuation_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> NamespaceContinuationWorkForTest {
+    pub fn finish(self) -> NamespaceContinuationWorkForTest {
         let end = namespace_continuation_work_for_test();
         NamespaceContinuationWorkForTest {
             merge_rows: end.merge_rows.saturating_sub(self.0.merge_rows),
@@ -207,41 +207,41 @@ impl NamespaceContinuationWorkScopeForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static PLACEMENT_ROW_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Placement participant rows visited to resolve one declaration — the merge-group rows
 /// `push_placement` compares, plus every by-declaration syntax read it answers.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PlacementLookupWorkForTest {
+pub struct PlacementLookupWorkForTest {
     pub(crate) row_probes: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn placement_lookup_work_for_test() -> PlacementLookupWorkForTest {
     PlacementLookupWorkForTest {
         row_probes: PLACEMENT_ROW_PROBES.get(),
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_placement_row_probe() {
     PLACEMENT_ROW_PROBES.set(PLACEMENT_ROW_PROBES.get() + 1);
 }
 
-#[cfg(test)]
-pub(crate) struct PlacementLookupWorkScopeForTest(PlacementLookupWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct PlacementLookupWorkScopeForTest(PlacementLookupWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl PlacementLookupWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(placement_lookup_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> PlacementLookupWorkForTest {
+    pub fn finish(self) -> PlacementLookupWorkForTest {
         let end = placement_lookup_work_for_test();
         PlacementLookupWorkForTest {
             row_probes: end.row_probes.saturating_sub(self.0.row_probes),
@@ -249,7 +249,7 @@ impl PlacementLookupWorkScopeForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static FINALIZATION_CLASSIFICATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static FINALIZATION_MERGE_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -261,9 +261,9 @@ thread_local! {
 /// Project-wide rows re-processed by namespace finalization. Every field is derived from
 /// the accumulated project, so a per-module finalization pass makes each of them grow with
 /// the file split at constant program size.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct NamespaceFinalizationWorkForTest {
+pub struct NamespaceFinalizationWorkForTest {
     /// Times `classify` rebuilt the canonical indexes over the whole accumulated project.
     pub(crate) classifications: u64,
     /// Placement participants cloned, sorted and classified into the merges vector.
@@ -276,7 +276,7 @@ pub(crate) struct NamespaceFinalizationWorkForTest {
     pub(crate) alias_member_rows: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn namespace_finalization_work_for_test() -> NamespaceFinalizationWorkForTest {
     NamespaceFinalizationWorkForTest {
         classifications: FINALIZATION_CLASSIFICATIONS.get(),
@@ -287,12 +287,12 @@ fn namespace_finalization_work_for_test() -> NamespaceFinalizationWorkForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_finalization_classification() {
     FINALIZATION_CLASSIFICATIONS.set(FINALIZATION_CLASSIFICATIONS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_finalization_merge_participant_rows(rows: usize) {
     FINALIZATION_MERGE_PARTICIPANT_ROWS.set(
         FINALIZATION_MERGE_PARTICIPANT_ROWS
@@ -301,17 +301,17 @@ fn record_finalization_merge_participant_rows(rows: usize) {
     );
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_finalization_merge_index_row() {
     FINALIZATION_MERGE_INDEX_ROWS.set(FINALIZATION_MERGE_INDEX_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_finalization_attachment_merge_row() {
     FINALIZATION_ATTACHMENT_MERGE_ROWS.set(FINALIZATION_ATTACHMENT_MERGE_ROWS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_finalization_alias_member_rows(rows: usize) {
     FINALIZATION_ALIAS_MEMBER_ROWS.set(
         FINALIZATION_ALIAS_MEMBER_ROWS
@@ -320,16 +320,16 @@ fn record_finalization_alias_member_rows(rows: usize) {
     );
 }
 
-#[cfg(test)]
-pub(crate) struct NamespaceFinalizationWorkScopeForTest(NamespaceFinalizationWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct NamespaceFinalizationWorkScopeForTest(NamespaceFinalizationWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl NamespaceFinalizationWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(namespace_finalization_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> NamespaceFinalizationWorkForTest {
+    pub fn finish(self) -> NamespaceFinalizationWorkForTest {
         let end = namespace_finalization_work_for_test();
         NamespaceFinalizationWorkForTest {
             classifications: end.classifications.saturating_sub(self.0.classifications),
@@ -347,7 +347,7 @@ impl NamespaceFinalizationWorkScopeForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static MERGE_KEY_NAME_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static MERGE_KEY_NAME_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -359,9 +359,9 @@ thread_local! {
 /// Per-declaration substrate the merge lane pays for before anything merges. Every field is
 /// keyed to one declaration, so a project of declarations that never merge grows all of them
 /// even though its merge set never changes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct MergeSubstrateWorkForTest {
+pub struct MergeSubstrateWorkForTest {
     /// Owned `String`s allocated to name a merge key or merge record. Interned names cost one
     /// allocation per *distinct* name; owned ones cost one per key, record and lookup.
     pub(crate) merge_key_name_allocations: u64,
@@ -379,7 +379,7 @@ pub(crate) struct MergeSubstrateWorkForTest {
     pub(crate) placement_row_reorders: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
     MergeSubstrateWorkForTest {
         merge_key_name_allocations: MERGE_KEY_NAME_ALLOCATIONS.get(),
@@ -390,12 +390,12 @@ fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_placement_row_reorder() {
     PLACEMENT_ROW_REORDERS.set(PLACEMENT_ROW_REORDERS.get() + 1);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_merge_key_name_allocation(name: &str) {
     MERGE_KEY_NAME_ALLOCATIONS.set(MERGE_KEY_NAME_ALLOCATIONS.get() + 1);
     MERGE_KEY_NAME_BYTES.set(
@@ -405,7 +405,7 @@ fn record_merge_key_name_allocation(name: &str) {
     );
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_non_merging_participant_rows(rows: usize) {
     NON_MERGING_PARTICIPANT_ROWS.set(
         NON_MERGING_PARTICIPANT_ROWS
@@ -414,21 +414,21 @@ fn record_non_merging_participant_rows(rows: usize) {
     );
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_non_merging_merge_record() {
     NON_MERGING_MERGE_RECORDS.set(NON_MERGING_MERGE_RECORDS.get() + 1);
 }
 
-#[cfg(test)]
-pub(crate) struct MergeSubstrateWorkScopeForTest(MergeSubstrateWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct MergeSubstrateWorkScopeForTest(MergeSubstrateWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl MergeSubstrateWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(merge_substrate_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> MergeSubstrateWorkForTest {
+    pub fn finish(self) -> MergeSubstrateWorkForTest {
         let end = merge_substrate_work_for_test();
         MergeSubstrateWorkForTest {
             merge_key_name_allocations: end
@@ -469,7 +469,7 @@ impl NamespaceFragmentId {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct NamespaceMemberId(pub(crate) u32);
+pub struct NamespaceMemberId(pub(crate) u32);
 
 impl NamespaceMemberId {
     pub fn index(self) -> usize {
@@ -478,7 +478,7 @@ impl NamespaceMemberId {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct GlobalAugmentationId(pub(crate) u32);
+pub struct GlobalAugmentationId(pub(crate) u32);
 
 impl GlobalAugmentationId {
     pub fn index(self) -> usize {
@@ -496,7 +496,7 @@ impl DeferredModuleId {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct ExportContextId(pub(crate) u32);
+pub struct ExportContextId(pub(crate) u32);
 
 impl ExportContextId {
     pub fn index(self) -> usize {
@@ -506,16 +506,16 @@ impl ExportContextId {
 
 /// Run-stable project source ordering key. Project mode derives it from normalized paths.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct SourceUnitKey(pub(crate) u32);
+pub struct SourceUnitKey(pub u32);
 
 impl SourceUnitKey {
     pub(crate) const PRELUDE: Self = Self(0);
-    pub(crate) const SINGLE_SOURCE: Self = Self(1);
+    pub const SINGLE_SOURCE: Self = Self(1);
 }
 
-pub(crate) type ExactKey = SourceUnitKey;
+pub type ExactKey = SourceUnitKey;
 
-pub(crate) const fn exact_key(index: u32) -> ExactKey {
+pub const fn exact_key(index: u32) -> ExactKey {
     SourceUnitKey(index)
 }
 
@@ -543,7 +543,7 @@ impl SourceFileKind {
 }
 
 /// Canonical filename classifier shared by parsing, binding, and source-only preflight.
-pub(crate) fn source_file_kind(name: &str) -> SourceFileKind {
+pub fn source_file_kind(name: &str) -> SourceFileKind {
     if name.ends_with(".d.mts") {
         SourceFileKind::DeclarationMts
     } else if name.ends_with(".d.cts") {
@@ -589,14 +589,14 @@ impl ModuleBindingContext {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) struct CompilationUnit {
-    pub(crate) source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
-    pub(crate) binding: ModuleBindingContext,
+pub struct CompilationUnit {
+    pub source: SourceUnitKey,
+    pub origin: CompilationOrigin,
+    pub binding: ModuleBindingContext,
 }
 
 impl CompilationUnit {
-    pub(crate) fn implementation(source: SourceUnitKey, program: &Program<'_>) -> Self {
+    pub fn implementation(source: SourceUnitKey, program: &Program<'_>) -> Self {
         Self {
             source,
             origin: CompilationOrigin::User(OriginalModuleOrdinal::new(0)),
@@ -604,8 +604,8 @@ impl CompilationUnit {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn library(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn library(
         source: SourceUnitKey,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
@@ -683,7 +683,7 @@ pub struct Namespace {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct NamespaceFragment {
+pub struct NamespaceFragment {
     pub id: NamespaceFragmentId,
     pub namespace: NamespaceId,
     pub declaration: DeclId,
@@ -710,7 +710,7 @@ pub enum DeclarationOwner {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum NamespaceMemberOwner {
+pub enum NamespaceMemberOwner {
     Fragment(NamespaceFragmentId),
     GlobalAugmentation(GlobalAugmentationId),
     DeferredAmbientModule(DeferredModuleId),
@@ -744,13 +744,13 @@ pub enum AliasSpaceIntent {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum QualifiedTypePathDeferredReason {
+pub enum QualifiedTypePathDeferredReason {
     Import,
     Enum,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum QualifiedTypePathResolution {
+pub enum QualifiedTypePathResolution {
     TypeGroup(TypeGroupId),
     MissingRoot {
         segment: usize,
@@ -777,15 +777,15 @@ pub(crate) enum QualifiedTypePathResolution {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct LocalAmbientExportAliasFailure {
-    pub(crate) origin: CompilationOrigin,
+pub struct LocalAmbientExportAliasFailure {
+    pub origin: CompilationOrigin,
     pub local_span: Span,
     pub local_name: String,
     pub kind: LocalAmbientExportAliasFailureKind,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum LocalAmbientExportAliasFailureKind {
+pub enum LocalAmbientExportAliasFailureKind {
     Missing,
     NonLocal,
 }
@@ -884,7 +884,7 @@ pub enum MergeDeclarationKind {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct NamespaceMember {
+pub struct NamespaceMember {
     pub id: NamespaceMemberId,
     pub owner: NamespaceMemberOwner,
     pub target: DeclarationOwner,
@@ -900,7 +900,7 @@ pub(crate) struct NamespaceMember {
     pub local_span: Option<Span>,
     pub exported_span: Option<Span>,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
     pub module_specifier: Option<MetadataName>,
     pub outer_type_only: bool,
     pub specifier_type_only: bool,
@@ -936,11 +936,11 @@ pub enum GlobalIssue {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct GlobalAugmentation {
+pub struct GlobalAugmentation {
     pub id: GlobalAugmentationId,
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
     pub module: ScopeId,
     pub owner: GlobalOwner,
     pub body_span: Span,
@@ -954,11 +954,11 @@ pub(crate) struct GlobalAugmentation {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct DeferredAmbientModule {
+pub struct DeferredAmbientModule {
     pub id: DeferredModuleId,
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
     pub module: ScopeId,
     pub owner: DeclarationOwner,
     pub kind: DeferredModuleKind,
@@ -981,7 +981,7 @@ pub enum DeferredChildKind {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct DeferredAmbientChild {
+pub struct DeferredAmbientChild {
     pub module: DeferredModuleId,
     pub declaration: Option<DeclId>,
     pub kind: DeferredChildKind,
@@ -989,11 +989,11 @@ pub(crate) struct DeferredAmbientChild {
     pub span: Span,
     pub binding_span: Option<Span>,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum ExportContextOwner {
+pub enum ExportContextOwner {
     NamespaceFragment(NamespaceFragmentId),
     GlobalAugmentation(GlobalAugmentationId),
     DeferredAmbientModule(DeferredModuleId),
@@ -1024,7 +1024,7 @@ pub enum ExportResolutionDisposition {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct ExportContext {
+pub struct ExportContext {
     pub id: ExportContextId,
     pub owner: ExportContextOwner,
     pub kind: ExportContextKind,
@@ -1032,7 +1032,7 @@ pub(crate) struct ExportContext {
     pub resolution: ExportResolutionDisposition,
     pub has_module_specifier: bool,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
     pub span: Span,
     pub members: Vec<NamespaceMemberId>,
 }
@@ -1046,10 +1046,10 @@ pub enum UmdContext {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct UmdNamespaceExport {
+pub struct UmdNamespaceExport {
     pub declaration: DeclId,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
     pub module: ScopeId,
     pub owner: DeclarationOwner,
     pub name: String,
@@ -1127,16 +1127,16 @@ pub enum PlacementIssueKind {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct PlacementIssue {
+pub struct PlacementIssue {
     pub kind: PlacementIssueKind,
     pub owner: DeclId,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub origin: CompilationOrigin,
     pub span: Span,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct MergeParticipant {
+pub struct MergeParticipant {
     pub declaration: DeclId,
     pub kind: MergeDeclarationKind,
     pub source: SourceUnitKey,
@@ -1157,9 +1157,9 @@ pub struct MergeRecord {
     pub name: Arc<str>,
     /// Shares the placement map's participant vector — classification reads the rows the
     /// placement lane already owns instead of copying them.
-    pub(crate) declarations: Arc<Vec<MergeParticipant>>,
+    pub declarations: Arc<Vec<MergeParticipant>>,
     pub classification: MergeClassification,
-    pub(crate) placement_issues: Vec<PlacementIssue>,
+    pub placement_issues: Vec<PlacementIssue>,
 }
 
 /// Whole-group decision consumed by the class/function namespace lanes.
@@ -1168,7 +1168,7 @@ pub struct MergeRecord {
 /// from one apparently legal pair. The exact enum/function/namespace chimera keeps
 /// its callable recovery separate from admitted publication.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum NamespaceValueAttachmentDisposition {
+pub enum NamespaceValueAttachmentDisposition {
     AdmittedFunction,
     AdmittedClass,
     DeferredFunctionBacklog42,
@@ -1178,65 +1178,65 @@ pub(crate) enum NamespaceValueAttachmentDisposition {
 
 /// One exported namespace value declaration exposed to an owner draft or typed recovery.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct AttachedNamespaceValueMember<'a> {
-    pub(crate) member: NamespaceMemberId,
-    pub(crate) declaration: DeclId,
-    pub(crate) name: &'a str,
-    pub(crate) source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
-    pub(crate) scope: ScopeId,
-    pub(crate) site: DeclarationSite,
-    pub(crate) value_storage: Option<ValueStorageId>,
-    pub(crate) symbol: Option<SymbolId>,
-    pub(crate) kind: MergeDeclarationKind,
-    pub(crate) variable_kind: Option<VariableKind>,
-    pub(crate) publication: NamespacePublication,
-    pub(crate) ambient: bool,
+pub struct AttachedNamespaceValueMember<'a> {
+    pub member: NamespaceMemberId,
+    pub declaration: DeclId,
+    pub name: &'a str,
+    pub source: SourceUnitKey,
+    pub origin: CompilationOrigin,
+    pub scope: ScopeId,
+    pub site: DeclarationSite,
+    pub value_storage: Option<ValueStorageId>,
+    pub symbol: Option<SymbolId>,
+    pub kind: MergeDeclarationKind,
+    pub variable_kind: Option<VariableKind>,
+    pub publication: NamespacePublication,
+    pub ambient: bool,
 }
 
 /// Frozen binder view of all namespace fragments attached to one same-name group.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct NamespaceValueAttachment<'a> {
-    pub(crate) owner: DeclarationOwner,
-    pub(crate) name: &'a str,
-    pub(crate) symbol: SymbolId,
-    pub(crate) disposition: NamespaceValueAttachmentDisposition,
-    pub(crate) fragments: Vec<&'a NamespaceFragment>,
-    pub(crate) members: Vec<AttachedNamespaceValueMember<'a>>,
+pub struct NamespaceValueAttachment<'a> {
+    pub owner: DeclarationOwner,
+    pub name: &'a str,
+    pub symbol: SymbolId,
+    pub disposition: NamespaceValueAttachmentDisposition,
+    pub fragments: Vec<&'a NamespaceFragment>,
+    pub members: Vec<AttachedNamespaceValueMember<'a>>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) struct StandaloneNamespaceValueMember<'a> {
-    pub(crate) member: NamespaceMemberId,
-    pub(crate) declaration: Option<DeclId>,
-    pub(crate) name: Option<&'a str>,
-    pub(crate) source: SourceUnitKey,
-    pub(crate) site: Option<DeclarationSite>,
-    pub(crate) declaration_span: Span,
-    pub(crate) local_span: Option<Span>,
-    pub(crate) origin: CompilationOrigin,
-    pub(crate) value_storage: Option<ValueStorageId>,
-    pub(crate) alias_target_storage: Option<ValueStorageId>,
-    pub(crate) ambient: bool,
-    pub(crate) child_namespace: Option<NamespaceId>,
-    pub(crate) kind: MergeDeclarationKind,
-    pub(crate) publication: NamespacePublication,
-    pub(crate) spaces: DeclarationSpaces,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct StandaloneNamespaceValueAttachment<'a> {
-    pub(crate) namespace: NamespaceId,
-    pub(crate) storage: ValueStorageId,
-    pub(crate) symbol: SymbolId,
-    pub(crate) fragments: Vec<&'a NamespaceFragment>,
-    pub(crate) members: Vec<StandaloneNamespaceValueMember<'a>>,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct SourceUnitRecord {
+pub struct StandaloneNamespaceValueMember<'a> {
+    pub member: NamespaceMemberId,
+    pub declaration: Option<DeclId>,
+    pub name: Option<&'a str>,
     pub source: SourceUnitKey,
-    pub(crate) origin: CompilationOrigin,
+    pub site: Option<DeclarationSite>,
+    pub declaration_span: Span,
+    pub local_span: Option<Span>,
+    pub origin: CompilationOrigin,
+    pub value_storage: Option<ValueStorageId>,
+    pub alias_target_storage: Option<ValueStorageId>,
+    pub ambient: bool,
+    pub child_namespace: Option<NamespaceId>,
+    pub kind: MergeDeclarationKind,
+    pub publication: NamespacePublication,
+    pub spaces: DeclarationSpaces,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StandaloneNamespaceValueAttachment<'a> {
+    pub namespace: NamespaceId,
+    pub storage: ValueStorageId,
+    pub(crate) symbol: SymbolId,
+    pub fragments: Vec<&'a NamespaceFragment>,
+    pub members: Vec<StandaloneNamespaceValueMember<'a>>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SourceUnitRecord {
+    pub source: SourceUnitKey,
+    pub origin: CompilationOrigin,
     pub module: ScopeId,
     pub context: ModuleBindingContext,
 }
@@ -1319,7 +1319,7 @@ pub struct NamespaceTable {
     library_shared_globals: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct NamespacePrimaryRows {
     pub(crate) namespaces: Vec<Namespace>,
@@ -1338,7 +1338,7 @@ pub(crate) struct NamespacePrimaryRows {
     pub(crate) library_shared_globals: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Copy, Clone, Default)]
 pub(crate) struct NamespaceReferenceOffsets {
     pub(crate) placements: usize,
@@ -1353,7 +1353,7 @@ pub(crate) struct NamespaceReferenceOffsets {
     pub(crate) canonical_export_contexts: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) struct NamespaceReferenceRows {
     pub(crate) primary: NamespacePrimaryRows,
     pub(crate) offsets: NamespaceReferenceOffsets,
@@ -1378,7 +1378,7 @@ impl NamespaceTable {
             return *id;
         }
         let text: Arc<str> = Arc::from(name);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_merge_key_name_allocation(name);
         let id = NameId(u32::try_from(self.names.len()).expect("interned name count fits u32"));
         self.names.push_local(Arc::clone(&text));
@@ -1404,11 +1404,11 @@ impl NamespaceTable {
         self.namespaces.get(id.index())
     }
 
-    pub(crate) fn fragment(&self, id: NamespaceFragmentId) -> Option<&NamespaceFragment> {
+    pub fn fragment(&self, id: NamespaceFragmentId) -> Option<&NamespaceFragment> {
         self.fragments.get(id.index())
     }
 
-    pub(crate) fn member(&self, id: NamespaceMemberId) -> Option<&NamespaceMember> {
+    pub fn member(&self, id: NamespaceMemberId) -> Option<&NamespaceMember> {
         self.members.get(id.index())
     }
 
@@ -1419,40 +1419,37 @@ impl NamespaceTable {
     }
 
     /// Whole-group instantiation after joining every reopening.
-    pub(crate) fn aggregate_instance_state(
-        &self,
-        id: NamespaceId,
-    ) -> Option<NamespaceInstanceState> {
+    pub fn aggregate_instance_state(&self, id: NamespaceId) -> Option<NamespaceInstanceState> {
         self.aggregate_instance_states.get(id.index()).copied()
     }
 
     /// Dormant owner slot for an admitted instantiated standalone namespace.
-    pub(crate) fn standalone_value_storage(&self, id: NamespaceId) -> Option<ValueStorageId> {
+    pub fn standalone_value_storage(&self, id: NamespaceId) -> Option<ValueStorageId> {
         self.standalone_value_storages
             .get(id.index())
             .copied()
             .flatten()
     }
 
-    #[cfg(test)]
-    fn fragments(&self) -> impl Iterator<Item = &NamespaceFragment> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn fragments(&self) -> impl Iterator<Item = &NamespaceFragment> {
         self.fragments.iter()
     }
 
-    pub(crate) fn members(&self) -> impl Iterator<Item = &NamespaceMember> {
+    pub fn members(&self) -> impl Iterator<Item = &NamespaceMember> {
         self.members.iter()
     }
 
     pub fn merges(&self) -> impl Iterator<Item = &MergeRecord> {
         self.merges.iter().inspect(|_| {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_continuation_merge_row();
         })
     }
 
-    pub(crate) fn local_merges(&self) -> impl Iterator<Item = &MergeRecord> {
+    pub fn local_merges(&self) -> impl Iterator<Item = &MergeRecord> {
         self.merges.local_iter().inspect(|_| {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_continuation_merge_row();
         })
     }
@@ -1472,12 +1469,12 @@ impl NamespaceTable {
     }
 
     /// Exact source-ordered placement outcomes ready for checker emission.
-    pub(crate) fn placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
+    pub fn placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
         let mut issues = self
             .merges
             .iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_placement_merge_row();
             })
             .flat_map(|record| record.placement_issues.iter())
@@ -1486,12 +1483,12 @@ impl NamespaceTable {
         issues.into_iter()
     }
 
-    pub(crate) fn local_placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
+    pub fn local_placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
         let mut issues = self
             .merges
             .local_iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_placement_merge_row();
             })
             .flat_map(|record| record.placement_issues.iter())
@@ -1500,15 +1497,15 @@ impl NamespaceTable {
         issues.into_iter()
     }
 
-    #[cfg(test)]
-    pub(crate) fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
         self.canonical_source_units
             .iter()
             .filter_map(|index| self.source_units.get(*index))
     }
 
-    #[cfg(test)]
-    pub(crate) fn compilation_origin_for_source(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn compilation_origin_for_source(
         &self,
         source: SourceUnitKey,
     ) -> Option<CompilationOrigin> {
@@ -1519,21 +1516,21 @@ impl NamespaceTable {
             .map(|unit| unit.origin)
     }
 
-    pub(crate) fn globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
+    pub fn globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
         self.canonical_globals
             .iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_global_row();
             })
             .filter_map(|id| self.globals.get(id.index()))
     }
 
-    pub(crate) fn local_globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
+    pub fn local_globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
         self.canonical_globals
             .local_iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_global_row();
             })
             .filter_map(|id| self.globals.get(id.index()))
@@ -1658,41 +1655,41 @@ impl NamespaceTable {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn deferred_modules(&self) -> impl Iterator<Item = &DeferredAmbientModule> {
         self.canonical_deferred_modules
             .iter()
             .filter_map(|id| self.deferred_modules.get(id.index()))
     }
 
-    #[cfg(test)]
-    pub(crate) fn deferred_children(&self) -> impl Iterator<Item = &DeferredAmbientChild> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn deferred_children(&self) -> impl Iterator<Item = &DeferredAmbientChild> {
         self.canonical_deferred_children
             .iter()
             .filter_map(|index| self.deferred_children.get(*index))
     }
 
-    pub(crate) fn umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
+    pub fn umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
         self.canonical_umd_exports
             .iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_umd_row();
             })
             .filter_map(|index| self.umd_exports.get(*index))
     }
 
-    pub(crate) fn local_umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
+    pub fn local_umd_exports(&self) -> impl Iterator<Item = &UmdNamespaceExport> {
         self.canonical_umd_exports
             .local_iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_umd_row();
             })
             .filter_map(|index| self.umd_exports.get(*index))
     }
 
-    pub(crate) fn export_contexts(&self) -> impl Iterator<Item = &ExportContext> {
+    pub fn export_contexts(&self) -> impl Iterator<Item = &ExportContext> {
         self.canonical_export_contexts
             .iter()
             .filter_map(|id| self.export_contexts.get(id.index()))
@@ -1702,8 +1699,8 @@ impl NamespaceTable {
         self.namespaces.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_namespaces(&self) -> impl Iterator<Item = (NamespaceId, &Namespace)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_namespaces(&self) -> impl Iterator<Item = (NamespaceId, &Namespace)> {
         let base_len = self.namespaces.base_len();
         self.namespaces
             .local_iter()
@@ -1797,8 +1794,8 @@ impl NamespaceTable {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_storage_with(&self, other: &Self) -> bool {
         self.namespaces.shares_base_with(&other.namespaces)
             && self
                 .aggregate_instance_states
@@ -1875,8 +1872,8 @@ impl NamespaceTable {
                 .shares_base_with(&other.canonical_export_contexts)
     }
 
-    #[cfg(test)]
-    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
         let indexes = self
             .aggregate_instance_states
             .shares_base_with(&other.aggregate_instance_states)
@@ -1952,8 +1949,8 @@ impl NamespaceTable {
         [self.namespaces.shares_base_with(&other.namespaces), indexes]
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_family_row_counts_for_test(&self) -> [usize; 2] {
         let indexes = self.aggregate_instance_states.local_len()
             + self.standalone_value_storages.local_len()
             + self.fragments.local_len()
@@ -1987,7 +1984,7 @@ impl NamespaceTable {
         [self.namespaces.local_len(), indexes]
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn primary_rows(&self) -> NamespacePrimaryRows {
         NamespacePrimaryRows {
             namespaces: self.namespaces.iter().cloned().collect(),
@@ -2017,7 +2014,7 @@ impl NamespaceTable {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn reference_rows(&self, local_only: bool) -> NamespaceReferenceRows {
         if !local_only {
             return NamespaceReferenceRows {
@@ -2144,7 +2141,7 @@ impl NamespaceTable {
     }
 
     fn classify(&mut self) -> Result<(), &'static str> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_finalization_classification();
         self.rebuild_local_fragment_declaration_index()?;
         self.rebuild_local_statement_site_indexes()?;
@@ -2221,11 +2218,11 @@ impl NamespaceTable {
             .placements
             .local_iter()
             .map(|(key, participants)| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_finalization_merge_participant_rows(participants.len());
                 // A group holding one declaration merged with nothing. Its row still costs a
                 // placement entry and a merge record; what it must not cost is a second copy.
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if participants.len() == 1 {
                     record_non_merging_participant_rows(participants.len());
                     record_non_merging_merge_record();
@@ -2421,7 +2418,7 @@ impl NamespaceTable {
             })
             .collect::<Vec<_>>();
         for (key, index) in rows {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_finalization_merge_index_row();
             self.merge_indices.insert_local(key, index)?;
         }
@@ -2621,7 +2618,7 @@ impl NamespaceTable {
         let fragment_base = self.fragments.base_len();
         let mut states = vec![NamespaceInstanceState::NonInstantiated; self.fragments.local_len()];
         for fragment in self.fragments.local_iter() {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_continuation_instance_fragment_row();
             for member in fragment
                 .members
@@ -2659,7 +2656,7 @@ impl NamespaceTable {
         loop {
             let mut changed = false;
             for fragment in self.fragments.local_iter() {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_instance_fragment_row();
                 let fragment_index = fragment.id.index() - fragment_base;
                 let mut state = states[fragment_index];
@@ -2669,7 +2666,7 @@ impl NamespaceTable {
                     .filter_map(|member| self.members.get(member.index()))
                     .filter(|member| member.kind == MergeDeclarationKind::Namespace)
                 {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-utils"))]
                     record_continuation_child_fragment_lookup();
                     let child = member
                         .declaration
@@ -2720,7 +2717,7 @@ impl NamespaceTable {
             // Leave each group in the total order classification reads it in, so the merge
             // record can share this vector rather than sort a copy of it. Declaration ids are
             // unique, so the order is total and sorting is idempotent.
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             let before = participants.clone();
             if library_order {
                 participants.sort_by_key(|participant| {
@@ -2739,7 +2736,7 @@ impl NamespaceTable {
                     )
                 });
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             if before != *participants {
                 record_placement_row_reorder();
             }
@@ -2750,7 +2747,7 @@ impl NamespaceTable {
         self.canonical_namespaces
             .local_iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_allocation_namespace_row();
             })
             .copied()
@@ -2885,7 +2882,7 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
         .canonical_namespaces
         .local_iter()
         .inspect(|_| {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_continuation_allocation_namespace_row();
         })
         .copied()
@@ -2935,12 +2932,12 @@ fn ambient_member_union(
 }
 
 impl Binder {
-    pub(crate) fn namespace_fragment_private_scope(
+    pub fn namespace_fragment_private_scope(
         &self,
         module: ScopeId,
         source_start: u32,
     ) -> Option<ScopeId> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_fragment_scope_lookup();
         self.namespaces
             .fragment_private_scopes_by_site
@@ -2948,24 +2945,21 @@ impl Binder {
             .copied()
     }
 
-    pub(crate) fn standalone_namespace_for_storage(
-        &self,
-        storage: ValueStorageId,
-    ) -> Option<NamespaceId> {
+    pub fn standalone_namespace_for_storage(&self, storage: ValueStorageId) -> Option<NamespaceId> {
         self.namespaces
             .standalone_storage_namespaces
             .get(&storage)
             .copied()
     }
 
-    pub(crate) fn local_standalone_namespace_value_attachments(
+    pub fn local_standalone_namespace_value_attachments(
         &self,
     ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
         self.namespaces
             .canonical_namespaces
             .local_iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_attachment_namespace_row();
             })
             .filter_map(|namespace| {
@@ -3057,12 +3051,12 @@ impl Binder {
             .collect()
     }
 
-    pub(crate) fn global_augmentation_scope(
+    pub fn global_augmentation_scope(
         &self,
         module: ScopeId,
         binding_start: u32,
     ) -> Option<ScopeId> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_global_statement_query();
         self.namespaces
             .global_augmentations_by_site
@@ -3071,12 +3065,12 @@ impl Binder {
             .map(|global| global.overlay_scope)
     }
 
-    pub(crate) fn global_augmentation_requires_incomplete(
+    pub fn global_augmentation_requires_incomplete(
         &self,
         module: ScopeId,
         binding_start: u32,
     ) -> bool {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_global_statement_query();
         let Some(global) = self
             .namespaces
@@ -3111,8 +3105,8 @@ impl Binder {
         })
     }
 
-    pub(crate) fn umd_export_requires_incomplete(&self, module: ScopeId, span_start: u32) -> bool {
-        #[cfg(test)]
+    pub fn umd_export_requires_incomplete(&self, module: ScopeId, span_start: u32) -> bool {
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_umd_statement_query();
         self.namespaces
             .umd_exports_by_site
@@ -3121,12 +3115,8 @@ impl Binder {
             .is_some_and(|export| export.context == UmdContext::DeferredValidBacklog15)
     }
 
-    #[cfg(test)]
-    pub(crate) fn library_export_default_reporting_owns(
-        &self,
-        module: ScopeId,
-        span_start: u32,
-    ) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn library_export_default_reporting_owns(&self, module: ScopeId, span_start: u32) -> bool {
         record_continuation_library_source_lookup();
         let source = self.namespaces.source_keys_by_module.get(&module).copied();
         record_continuation_library_reporting_lookup();
@@ -3137,8 +3127,8 @@ impl Binder {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn library_module_reporting_owns(&self, module: ScopeId, source_start: u32) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn library_module_reporting_owns(&self, module: ScopeId, source_start: u32) -> bool {
         record_continuation_library_reporting_lookup();
         self.namespaces
             .library_module_reporting_sites
@@ -3147,7 +3137,7 @@ impl Binder {
 
     /// Return the frozen namespace-side input for one lexical value owner.
     /// Only admitted owners and the exact backlog-42 callable recovery expose members.
-    pub(crate) fn namespace_value_attachment(
+    pub fn namespace_value_attachment(
         &self,
         scope: ScopeId,
         name: &str,
@@ -3161,7 +3151,7 @@ impl Binder {
         self.namespace_value_attachment_for_owner(owner, name)
     }
 
-    pub(crate) fn namespace_value_attachment_for_owner(
+    pub fn namespace_value_attachment_for_owner(
         &self,
         owner: DeclarationOwner,
         name: &str,
@@ -3267,14 +3257,12 @@ impl Binder {
         })
     }
 
-    pub(crate) fn local_ambient_export_alias_failures(
-        &self,
-    ) -> Vec<LocalAmbientExportAliasFailure> {
+    pub fn local_ambient_export_alias_failures(&self) -> Vec<LocalAmbientExportAliasFailure> {
         self.namespaces
             .members
             .local_iter()
             .inspect(|_| {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_ambient_alias_member_row();
             })
             .filter(|member| {
@@ -3320,7 +3308,7 @@ impl Binder {
             .collect()
     }
 
-    pub(crate) fn resolve_qualified_type_path(
+    pub fn resolve_qualified_type_path(
         &self,
         scope: ScopeId,
         segments: &[&str],
@@ -3328,7 +3316,7 @@ impl Binder {
         self.resolve_qualified_type_path_traced(scope, segments, || {}, |_| {})
     }
 
-    pub(crate) fn resolve_qualified_type_path_traced(
+    pub fn resolve_qualified_type_path_traced(
         &self,
         scope: ScopeId,
         segments: &[&str],
@@ -4205,7 +4193,7 @@ impl NamespaceValueAttachmentPlan {
 pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceValueAttachmentPlan {
     let mut targets = Vec::new();
     for record in state.namespaces.local_merges() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_finalization_attachment_merge_row();
         let attached = matches!(
             namespace_value_attachment_disposition(record),
@@ -4508,7 +4496,7 @@ fn bind_selected_namespace_module_body(
 
 fn resolve_local_ambient_export_alias_targets(state: &mut BindState) {
     let member_base = state.namespaces.members.base_len();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     record_finalization_alias_member_rows(state.namespaces.members.local_len());
     let candidates = state
         .namespaces
@@ -6234,7 +6222,7 @@ fn push_placement<'state>(
     // that index is proof of absence rather than a reason to fall back to the scan.
     let index = if entries.len() < PLACEMENT_INDEX_THRESHOLD {
         match entries.iter().position(|entry| {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_placement_row_probe();
             entry.declaration == declaration
         }) {
@@ -6253,14 +6241,14 @@ fn push_placement<'state>(
             .entry(key)
             .or_default();
         for (position, entry) in entries.iter().enumerate().skip(*indexed) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_placement_row_probe();
             state
                 .namespaces
                 .placement_rows
                 .insert((key, entry.declaration), position);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_placement_row_probe();
         let index = match state
             .namespaces
@@ -6296,7 +6284,7 @@ fn push_placement<'state>(
 
 fn placement_syntax(state: &BindState, declaration: DeclId) -> Option<DeclarationSyntaxFacts> {
     let syntax = state.placement_syntax.get(&declaration).copied();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     if syntax.is_some() {
         record_placement_row_probe();
     }
@@ -6612,7 +6600,7 @@ mod tests {
         );
 
         let witness = source
-            .split_once("pub(crate) fn shares_base_storage_with(&self, other: &Self) -> bool {")
+            .split_once("pub fn shares_base_storage_with(&self, other: &Self) -> bool {")
             .and_then(|(_, rest)| rest.split_once("\n    }"))
             .map(|(body, _)| body)
             .expect("namespace base-sharing witness")
@@ -6918,7 +6906,7 @@ mod tests {
         // one module at a time and must never invoke the whole-project finalizer, which
         // belongs after the batch loop that `bind.rs` owns — once for the library batch and
         // once for the project batch. `finalize_namespace_metadata` is `pub(super)`, so
-        // `src/binder/` is the only place a call site can live.
+        // The binder member is the only place a call site can live.
         // The escaped needle never matches itself, so the split isolates production code.
         let namespace_production = include_str!("namespace.rs")
             .split("#[cfg(test)]\nmod tests {")
