@@ -352,6 +352,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped, `Library` base) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
 | `b103_library_merge_refusals/` | backlog `103` guard tier (enabled, `Library` base) | merging an interface/alias/class/namespace into a library-owned name is a recorded refusal, never a panic |
 | `b103_library_merge_refusals_project/` | backlog `103` guard tier (enabled, project-shaped, `Library` base) | split merges in both input orders, the two `full-lib-bench` workload shapes, and the publish/shadow controls |
+| `b103_library_merge_correctness/` | backlog `103` correctness tier (disabled, `Library` base) | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
+| `b103_library_merge_correctness_project/` | backlog `103` correctness tier (disabled, project-shaped, `Library` base) | both input orders, `declare global`, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -418,6 +420,23 @@ producing per-file records, so it is pinned by direct tests instead
 `driver::tests::a_declare_global_project_refuses_the_run_instead_of_panicking`). The refusal
 *sequence* for every panic shape is likewise pinned directly, by
 `binder::bind::tests::frozen_library_merges_are_refused_instead_of_panicking`.
+
+`b103_library_merge_correctness/` and its project sibling are the disabled replacement contract.
+They remove every guard-tier refusal and require the user fragment to be visible alongside the
+unchanged library surface. Every positive read has a wrong-type or missing-member sibling, so an
+error-type recovery cannot satisfy the fixture. The illegal `type Partial` and `class Date`
+collisions deliberately keep the library declaration as the observable winner; typokat's missing
+duplicate-identifier diagnostics remain owned by backlog `18`.
+
+The project half pins Array and `declare global` merges in both file orders, legal
+global-object/`globalThis` contributors, a UMD `export as namespace` route whose existing
+backlog-15 incompletes remain visible, value/type/namespace slot coexistence, and a nested
+destructuring leaf whose bound name—not its property keys—collides with `RegExp`. The
+`classifier_false_negative_candidate` project is consumed by a direct mutation test; marker
+semantics alone cannot prove that a deliberately omitted candidate fails closed before mutation.
+`zz_private_shared_isolation` runs after the augmenting projects and proves that the process-wide
+base did not acquire their members. Direct epoch receipts additionally own immutable-prefix
+sharing, private graph/semantic identity, cache/event isolation, and zero full-source fallback.
 
 `b58_project_scopes/` uses **project fixture subdirectories** (the m29 convention): every
 `.ts` file in a subdirectory is one project checked via `check_project`. Each project's

@@ -253,6 +253,10 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // recorded refusal, never a panic. Checked against `Library`, where the frozen prefix exists.
     ("b103_library_merge_refusals", true, Library),
     ("b103_library_merge_refusals_project", true, Library),
+    // Backlog 103 correctness tier. Disabled until ADR-0020's sparse private epoch replaces the
+    // guard-tier refusals; the existing guard corpora stay enabled until that atomic cutover.
+    ("b103_library_merge_correctness", false, Library),
+    ("b103_library_merge_correctness_project", false, Library),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -273,6 +277,8 @@ const PROJECT_DIRS: &[&str] = &[
     "b102_frozen_prefix_writes_project",
     // Backlog 103 split/benchmark merge refusals, checked against the `Library` base.
     "b103_library_merge_refusals_project",
+    // Backlog 103 successful private-merge acceptance, checked against the `Library` base.
+    "b103_library_merge_correctness_project",
 ];
 
 /// Selected project fixtures enabled before their mixed flat/project corpus closes. Each runs

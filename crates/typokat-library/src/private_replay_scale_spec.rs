@@ -1,4 +1,4 @@
-//! Disabled RED contract for WU5 replay physical-work scaling.
+//! Disabled RED contract for ADR-0020 sparse-epoch physical-work scaling.
 
 use super::base::{PrivateExecutionForTest, UserDeltaProjectInputForTest};
 use super::{FrozenLibraryBase, LibraryBaseProvider};
@@ -14,8 +14,9 @@ const REPLAY_BASE_FAMILIES: &str = concat!(
     "decl-types.slots,published-types.groups,published-types.classes,namespace-terminals,",
     "function-groups.symbols,class.application-parameters,class.parameter-defaults,class.parents,",
     "class.names,class.new-metadata,class.value-identities,class.aliases,semantic-identities,",
-    "root-name-index.entries,next-ids,replay.root-slots,replay.owner-sites,replay.reverse-edges,",
-    "replay.scc-membership,replay.statement-owners,replay.baseline-records",
+    "root-name-index.entries,next-ids,collision-plan.root-slots,collision-plan.owner-sites,",
+    "collision-plan.reverse-edges,collision-plan.statement-owners,",
+    "collision-plan.record-fingerprints",
 );
 
 const SCHEDULER_WORK_FAMILIES: [&str; 10] = [
@@ -57,6 +58,50 @@ fn assert_zero_unaffected_base_work(work: &super::base::PrivateReplayBaseWorkFor
         assert_eq!(ledger.keys().copied().collect::<BTreeSet<_>>(), expected);
         assert!(ledger.values().all(|count| *count == 0), "{ledger:#?}");
     }
+}
+
+fn assert_sparse_epoch_work(work: &super::base::PrivateCombinedWorkForTest) {
+    assert_eq!(work.second_library_compiles, 0);
+    assert_eq!(work.candidate_library_bind_units, 0);
+    assert!(work.candidate_affected_library_parse_units < 82);
+    assert_eq!(work.canonical_manifest_work, 0);
+    assert_eq!(work.rendered_record_digest_work, 0);
+    assert_eq!(work.eager_all_owner_scc_work, 0);
+    assert_eq!(work.full_base_scans, 0);
+    assert_eq!(work.full_source_fallbacks, 0);
+    assert_eq!(work.dependency_edge_escapes, 0);
+    assert_eq!(
+        work.replayed_owner_keys,
+        work.source_plan_expected_reverse_closure
+    );
+    assert_zero_unaffected_base_work(&work.unaffected_base_work);
+}
+
+#[test]
+fn independent_global_counters_reject_a_forced_naive_second_library_compile() {
+    let result = acquire()
+        .run_forced_naive_complete_rebuild_through_sparse_gate_for_test(&[
+            input(
+                "/project/00_augment.ts",
+                "interface Array<T> { wu5NegativeControl(): T; }\n",
+            ),
+            input(
+                "/project/99_consume.ts",
+                "const value: number = [1, 2].wu5NegativeControl();\n",
+            ),
+        ])
+        .expect("forced naive negative control finishes");
+
+    assert!(!result.sparse_gate_admitted);
+    assert!(result.negative_control_fired);
+    assert_eq!(result.global_counters.library_source_compiles, 2);
+    assert_eq!(result.global_counters.second_compile_parse_units, 82);
+    assert_eq!(result.global_counters.second_compile_bind_units, 82);
+    assert!(result.global_counters.second_compile_publication_owners > 0);
+    assert!(
+        result.candidate_receipt_claimed_sparse,
+        "the independent counters must reject even a lying candidate receipt"
+    );
 }
 
 #[test]
@@ -274,14 +319,53 @@ fn exact_locked_production_collision_uses_replay_without_source_fallback() {
 
     assert_eq!(receipt.execution, PrivateExecutionForTest::SelectiveReplay);
     assert!(receipt.workload_lock_verified);
-    assert_eq!(receipt.work.full_source_fallbacks, 0);
+    assert_sparse_epoch_work(&receipt.work);
     assert_eq!(
         receipt.oracle.candidate_semantics_by_source,
         receipt.oracle.full_source_semantics_by_source
     );
+}
+
+#[test]
+fn exact_locked_production_fanout_uses_one_sparse_epoch_without_fallback() {
+    let root =
+        crate::test_support::repository_root().join("tooling/full-lib-bench/workloads/fanout");
+    let mut paths = fs::read_dir(&root)
+        .expect("locked fanout directory")
+        .map(|entry| entry.expect("locked fanout entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ts"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(paths.len(), 32);
+    let owned = paths
+        .iter()
+        .map(|path| {
+            (
+                format!(
+                    "/locked/{}",
+                    path.file_name()
+                        .expect("locked fanout filename")
+                        .to_string_lossy()
+                ),
+                fs::read_to_string(path).expect("locked fanout source"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let inputs = owned
+        .iter()
+        .map(|(path, source)| input(path, source))
+        .collect::<Vec<_>>();
+    let receipt = acquire()
+        .check_routed_user_project_against_full_source_oracle_for_test(&inputs)
+        .expect("locked fanout candidate and oracle finish");
+
+    assert_eq!(receipt.execution, PrivateExecutionForTest::SelectiveReplay);
+    assert!(receipt.workload_lock_verified);
+    assert_sparse_epoch_work(&receipt.work);
+    assert_eq!(receipt.project_file_count, 32);
     assert_eq!(
-        receipt.work.replayed_owner_keys,
-        receipt.work.authenticated_expected_reverse_closure
+        receipt.oracle.candidate_semantics_by_source,
+        receipt.oracle.full_source_semantics_by_source
     );
 }
 
@@ -325,7 +409,13 @@ fn all_colliding_fanout_uses_32_distinct_private_projects_and_one_owned_permit()
     assert!(first
         .route_receipts
         .iter()
-        .all(|receipt| receipt.file_count == 1 && receipt.full_source_fallbacks == 0));
+        .all(|receipt| {
+            receipt.file_count == 1
+                && receipt.full_source_fallbacks == 0
+                && receipt.second_library_compiles == 0
+                && receipt.library_bind_units == 0
+                && receipt.full_base_scans == 0
+        }));
     assert_eq!(first.start_barrier_arrivals, 32);
     assert_eq!(first.private_permit_acquisitions, 32);
     assert!(first.max_private_contenders >= 2);

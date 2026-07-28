@@ -1,7 +1,8 @@
 //! Disabled RED contract for WU5 private combined-universe semantics.
 //!
 //! Candidate replay is always compared with the complete source-backed combined compiler. The
-//! shared base is only the immutable routing oracle; it contributes no state to a private universe.
+//! private epoch may share proven-unaffected immutable rows from the source-compiled base, while
+//! every changed meaning, identity, cache, event, override, and suffix remains private.
 
 use super::base::{
     CollisionRouteForTest, PrivateCombinedReceiptForTest, PrivateExecutionForTest,
@@ -48,47 +49,61 @@ fn assert_private_replay(receipt: &PrivateCombinedReceiptForTest) {
         receipt.oracle.candidate_semantic_identities,
         receipt.oracle.full_source_semantic_identities
     );
-    assert_eq!(receipt.work.candidate_private_snapshot_decodes, 1);
-    assert_eq!(receipt.work.candidate_library_parse_units, 82);
-    assert_eq!(receipt.work.candidate_library_bind_units, 82);
+    assert_eq!(receipt.work.second_library_compiles, 0);
+    assert_eq!(receipt.work.candidate_library_bind_units, 0);
+    assert!(receipt.work.candidate_affected_library_parse_units > 0);
+    assert!(receipt.work.candidate_affected_library_parse_units < 82);
     assert_eq!(receipt.work.oracle_library_parse_units, 82);
     assert_eq!(receipt.work.oracle_library_bind_units, 82);
+    assert_eq!(receipt.work.canonical_manifest_work, 0);
+    assert_eq!(receipt.work.rendered_record_digest_work, 0);
+    assert_eq!(receipt.work.eager_all_owner_scc_work, 0);
+    assert_eq!(receipt.work.full_base_scans, 0);
     assert_eq!(receipt.work.full_source_fallbacks, 0);
     assert_eq!(receipt.work.dependency_edge_escapes, 0);
     assert_eq!(receipt.work.unexpected_library_records, 0);
     assert_eq!(
         receipt.work.replayed_owner_keys,
-        receipt.work.authenticated_expected_reverse_closure
+        receipt.work.source_plan_expected_reverse_closure
     );
-    assert_eq!(
-        receipt.universe.source_binder_prefix_digest,
-        receipt.universe.snapshot_binder_prefix_digest
-    );
-    assert_eq!(
-        receipt.universe.source_root_slot_digest,
-        receipt.universe.snapshot_root_slot_digest
-    );
-    assert_eq!(receipt.universe.user_binder_rows_at_prefix_validation, 0);
-    assert_eq!(
-        receipt
-            .universe
-            .user_event_reservations_at_prefix_validation,
-        0
-    );
-    assert_eq!(
-        receipt.universe.semantic_allocations_at_prefix_validation,
-        0
-    );
-    assert!(
-        receipt
-            .universe
-            .semantic_prefix_authenticated_by_private_decode
-    );
+    assert!(receipt.universe.source_plan_profile_identity_verified);
+    assert!(receipt.universe.reparsed_sites_match_binder_provenance);
+    assert!(receipt.universe.mutation_ledger_contained_by_preflight);
+    assert!(receipt.universe.pending_mask_installed_before_queries);
+    assert!(receipt
+        .universe
+        .semantic_query_mask_precedes_identity_cache_and_cycle);
+    assert_eq!(receipt.universe.provisional_promotions, 0);
     assert!(receipt.universe.new_ids_begin_after_all_nine_prefixes);
-    assert_eq!(receipt.universe.decoded_store_rows_overwritten, 0);
-    assert_eq!(receipt.universe.decoded_interner_keys_overwritten, 0);
+    assert_eq!(receipt.universe.shared_mutable_state_references, 0);
+    assert!(receipt.universe.shared_immutable_prefix_references > 0);
+    assert_eq!(receipt.universe.base_rows_overwritten, 0);
+    assert_eq!(receipt.universe.base_interner_keys_overwritten, 0);
     assert!(receipt.universe.affected_replacements_are_append_only);
-    assert_eq!(receipt.universe.shared_base_storage_references, 0);
+    assert_ne!(
+        receipt.universe.private_tokens.graph,
+        receipt.universe.shared_tokens.graph
+    );
+    assert_ne!(
+        receipt.universe.private_tokens.semantic_identities,
+        receipt.universe.shared_tokens.semantic_identities
+    );
+    assert_ne!(
+        receipt.universe.private_tokens.caches,
+        receipt.universe.shared_tokens.caches
+    );
+    assert_ne!(
+        receipt.universe.private_tokens.events,
+        receipt.universe.shared_tokens.events
+    );
+    assert_ne!(
+        receipt.universe.private_tokens.terminals,
+        receipt.universe.shared_tokens.terminals
+    );
+    assert_ne!(
+        receipt.universe.private_tokens.suffixes,
+        receipt.universe.shared_tokens.suffixes
+    );
     assert_eq!(receipt.universe.reachable_stale_affected_rows, 0);
     assert_eq!(
         receipt.events.user_reservation_cardinality,
@@ -99,7 +114,7 @@ fn assert_private_replay(receipt: &PrivateCombinedReceiptForTest) {
         receipt.events.full_source_user_records_in_four_key_order
     );
     assert_eq!(receipt.events.library_events_in_user_domains, 0);
-    assert_eq!(receipt.events.unvalidated_unaffected_baseline_owners, 0);
+    assert_eq!(receipt.events.unvalidated_affected_record_fingerprints, 0);
     assert_eq!(receipt.events.unmatched_replayed_library_records, 0);
     assert!(receipt.universe.private_state_dropped_after_reports);
 }
@@ -343,9 +358,10 @@ fn private_unavailable_merge_never_falls_back_to_the_frozen_prefix() {
 }
 
 #[test]
-fn private_route_never_forks_or_references_the_shared_base() {
+fn private_epoch_shares_only_immutable_unaffected_prefix_rows() {
     let base = acquire();
     let shared_identity = base.storage_identity_for_test();
+    let shared_tokens = base.epoch_owner_tokens_for_test();
     let shared_projection = base
         .recompute_canonical_projection_for_test()
         .expect("shared projection before private check");
@@ -355,9 +371,24 @@ fn private_route_never_forks_or_references_the_shared_base() {
 
     assert_private_replay(&receipt);
     assert_eq!(receipt.work.shared_delta_forks, 0);
-    assert_eq!(receipt.universe.shared_base_storage_references, 0);
+    assert!(receipt.universe.shared_immutable_prefix_references > 0);
+    assert_eq!(receipt.universe.shared_mutable_state_references, 0);
     assert_ne!(receipt.universe.private_storage_identity, shared_identity);
+    assert_eq!(receipt.universe.shared_tokens, shared_tokens);
+    assert_ne!(receipt.universe.private_tokens.graph, shared_tokens.graph);
+    assert_ne!(
+        receipt.universe.private_tokens.semantic_identities,
+        shared_tokens.semantic_identities
+    );
+    assert_ne!(receipt.universe.private_tokens.caches, shared_tokens.caches);
+    assert_ne!(receipt.universe.private_tokens.events, shared_tokens.events);
+    assert_ne!(
+        receipt.universe.private_tokens.terminals,
+        shared_tokens.terminals
+    );
+    assert_ne!(receipt.universe.private_tokens.suffixes, shared_tokens.suffixes);
     assert_eq!(base.storage_identity_for_test(), shared_identity);
+    assert_eq!(base.epoch_owner_tokens_for_test(), shared_tokens);
     assert_eq!(
         base.recompute_canonical_projection_for_test()
             .expect("shared projection after private check"),
@@ -419,4 +450,110 @@ const mapped: number[] = [1, 2].map((value) => value + 1);
     );
     assert_eq!(isolation.normalized_diagnostics.len(), 1);
     assert!(isolation.normalized_diagnostics[0].contains("TK2339"));
+}
+
+#[test]
+fn two_private_epochs_own_distinct_query_event_terminal_and_suffix_domains() {
+    let base = acquire();
+    let first = base
+        .check_routed_user_project_with_query_order_for_test(&array_project(false), "forward")
+        .expect("first private epoch");
+    let second = base
+        .check_routed_user_project_with_query_order_for_test(&array_project(true), "reverse")
+        .expect("second private epoch");
+
+    assert_private_replay(&first);
+    assert_private_replay(&second);
+    assert_ne!(first.universe.private_tokens.graph, second.universe.private_tokens.graph);
+    assert_ne!(
+        first.universe.private_tokens.semantic_identities,
+        second.universe.private_tokens.semantic_identities
+    );
+    assert_ne!(first.universe.private_tokens.caches, second.universe.private_tokens.caches);
+    assert_ne!(first.universe.private_tokens.events, second.universe.private_tokens.events);
+    assert_ne!(
+        first.universe.private_tokens.terminals,
+        second.universe.private_tokens.terminals
+    );
+    assert_ne!(first.universe.private_tokens.suffixes, second.universe.private_tokens.suffixes);
+    assert!(first.universe.private_owner_tokens_dropped);
+    assert!(second.universe.private_owner_tokens_dropped);
+    assert_eq!(
+        first.normalized_semantics_by_source,
+        second.normalized_semantics_by_source
+    );
+}
+
+#[test]
+fn classifier_false_negative_mutation_fails_closed_before_semantic_state() {
+    let base = acquire();
+    let before = base.storage_identity_for_test();
+    let receipt = base
+        .check_with_omitted_preflight_candidate_for_test(&array_project(false), "Array")
+        .expect("classifier omission is contained");
+
+    assert_private_replay(&receipt);
+    assert_eq!(
+        receipt.preflight.route,
+        CollisionRouteForTest::PrivateCombined
+    );
+    assert!(receipt.preflight.false_negative_guard_fired);
+    assert_eq!(receipt.preflight.semantic_ids_before_route, 0);
+    assert_eq!(receipt.preflight.event_reservations_before_route, 0);
+    assert_eq!(receipt.preflight.cache_entries_before_route, 0);
+    assert_eq!(receipt.work.shared_delta_forks, 0);
+    assert_eq!(receipt.work.full_source_fallbacks, 0);
+    assert_eq!(
+        receipt
+            .normalized_diagnostics
+            .iter()
+            .filter(|line| line.contains("TK2322"))
+            .count(),
+        2
+    );
+    assert_eq!(base.storage_identity_for_test(), before);
+
+    let isolation = base
+        .check_routed_user_project_for_test(&[input(
+            "/project/isolation.ts",
+            "export {};\n[1, 2].wu5Collision;\n",
+        )])
+        .expect("fresh shared isolation project");
+    assert_eq!(isolation.preflight.route, CollisionRouteForTest::SharedDelta);
+    assert_eq!(isolation.normalized_diagnostics.len(), 1);
+    assert!(isolation.normalized_diagnostics[0].contains("TK2339"));
+}
+
+#[test]
+fn declare_global_routes_private_and_matches_the_complete_source_oracle() {
+    let receipt = check(&[
+        input(
+            "/project/00_augment.ts",
+            r#"export {};
+declare global {
+  interface RegExp { wu5GlobalTag(): string; }
+}
+"#,
+        ),
+        input(
+            "/project/99_consume.ts",
+            r#"export {};
+const tag: string = /x/.wu5GlobalTag();
+const wrongTag: number = /x/.wu5GlobalTag();
+const native: boolean = /x/.test("x");
+const wrongNative: string = /x/.test("x");
+"#,
+        ),
+    ]);
+
+    assert_private_replay(&receipt);
+    assert!(receipt.replay_seeds.contains("type:RegExp"));
+    assert_eq!(
+        receipt
+            .normalized_diagnostics
+            .iter()
+            .filter(|line| line.contains("TK2322"))
+            .count(),
+        2
+    );
 }

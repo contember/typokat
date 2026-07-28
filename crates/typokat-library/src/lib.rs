@@ -88,3 +88,7 @@ mod type_group_ordering_spec;
 // Activate after the WU5 replay index and work receipts land.
 // #[cfg(test)]
 // mod private_replay_scale_spec;
+
+// Activate with ADR-0020's source-compiled compact collision plan.
+// #[cfg(test)]
+// mod source_compiled_collision_plan_spec;
