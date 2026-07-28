@@ -8,7 +8,6 @@ use super::compiler::LibraryCompilerWorkScopeForTest;
 use super::provider::shared_library_base_provider_for_test;
 use super::FrozenLibraryBase;
 use crate::check::checker::events::UserEventReservationScopeForTest;
-use crate::check::checker::library_compiler::UserDeltaForkScopeForTest;
 use crate::check::query::QueryCacheWriteScopeForTest;
 use crate::frontend::FileInput;
 use crate::relate::cache::RelationCacheWriteScopeForTest;
@@ -40,7 +39,6 @@ fn route_without_semantic_work(
     base: &FrozenLibraryBase,
     inputs: &[FileInput],
 ) -> RoutedLibraryProject {
-    let delta_forks = UserDeltaForkScopeForTest::start();
     let local_rows = LocalRowAllocationScopeForTest::start();
     let events = UserEventReservationScopeForTest::start();
     let queries = QueryCacheWriteScopeForTest::start();
@@ -50,7 +48,6 @@ fn route_without_semantic_work(
     let compiler = compiler.finish();
     let queries = queries.finish();
 
-    assert_eq!(delta_forks.finish(), 0);
     assert_eq!(local_rows.finish(), 0);
     assert_eq!(events.finish(), 0);
     assert_eq!(queries.evaluator, 0);
