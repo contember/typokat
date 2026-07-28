@@ -33,6 +33,33 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(
             [len(files) for files in bench.workload_lock().values()], [1, 1, 2, 32]
         )
+        self.assertEqual(self.contract["sampling"]["minimum_speedup"], 1.0)
+        self.assertEqual(self.contract["sampling"]["engineering_speedup"], 1.25)
+
+    def test_binding_speedup_threshold_is_strict(self) -> None:
+        def artifact(speedup: float) -> dict[str, object]:
+            summary = {
+                "speedup": speedup,
+                "p95_ratio": speedup,
+                "bootstrap_lower_95": speedup,
+            }
+            return {
+                "windows": [
+                    {"rows": {row: {"summary": summary} for row in bench.ROWS}}
+                ],
+                "memory": {
+                    row: {
+                        "samples": [
+                            {"tool": "typokat", "rss_kib": 100},
+                            {"tool": "tsgo", "rss_kib": 100},
+                        ]
+                    }
+                    for row in bench.ROWS
+                },
+            }
+
+        self.assertFalse(bench.evidence_performance_passes(artifact(1.0), self.contract))
+        self.assertTrue(bench.evidence_performance_passes(artifact(1.000_001), self.contract))
 
     def test_contract_nested_schema_and_flags_are_exact(self) -> None:
         source = bench.CONTRACT_PATH.read_text(encoding="utf-8")
