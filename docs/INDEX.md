@@ -24,6 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-07-28-workspace-crate-split.md`](sprints/sprint-2026-07-28-workspace-crate-split.md) —
+  active: enforce the checker architecture as ten workspace crates behind the root package, with
+  project parsing and import ordering owned by the dedicated frontend layer.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.

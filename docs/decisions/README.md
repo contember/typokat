@@ -34,3 +34,4 @@ a commit message suffices.
 - [`0016`](0016-reason-free-relation-probes.md) — suppress the reason chain on relation probes whose caller discards it — proposed (2026-07-25)
 - [`0017`](0017-compile-the-default-library-from-source.md) — compile the default library from source in every process; retire the shipped snapshot — accepted (2026-07-26)
 - [`0018`](0018-pin-library-owned-records-as-a-named-census.md) — retain no library-owned record at runtime; pin the full set as a named `(code, site)` suite census — accepted (2026-07-27)
+- [`0019`](0019-split-the-checker-into-layered-workspace-crates.md) — split the checker into a root facade over ten acyclic workspace layers — accepted (2026-07-28)
