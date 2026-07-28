@@ -831,6 +831,7 @@ dependencies = [
  "typokat-core",
  "typokat-diagnostics",
  "typokat-relate",
+ "typokat-surface",
  "typokat-types",
 ]
 
@@ -873,6 +874,13 @@ version = "0.1.0"
 dependencies = [
  "rustc-hash",
  "typokat-types",
+]
+
+[[package]]
+name = "typokat-surface"
+version = "0.1.0"
+dependencies = [
+ "oxc_ast",
 ]
 
 [[package]]

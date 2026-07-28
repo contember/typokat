@@ -2,7 +2,8 @@
 
 > **Historical snapshot.** The `file:line` pointers below were read at the WU0 planning HEAD;
 > WU3–WU5 wired emissions at many of these sites, so line numbers have drifted. The live source
-> of truth is `inventory.toml` + `src/surface.rs`; this census stays as the split-gate record.
+> of truth is `inventory.toml` + `crates/typokat-surface/src/surface.rs`; this census
+> stays as the split-gate record.
 
 The bounded census WU0 owes the split gate: every dispatcher **role** and relevant **child
 slot** across the checker, the `oxc 0.137.0` enum-variant counts they dispatch on, where the

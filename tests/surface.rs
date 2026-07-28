@@ -500,7 +500,8 @@ fn validate_completeness(manifest: &Manifest) -> Result<(), Vec<String>> {
         if !surface_roles.contains(&(family, role)) {
             errors.push(format!(
                 "classifier surface family {family:?} has no inventory record under role \
-                 {role:?} (src/surface.rs emits it but tests/surface/inventory.toml lacks a \
+                 {role:?} (crates/typokat-surface/src/surface.rs emits it but \
+                  tests/surface/inventory.toml lacks a \
                  covering record in that role)"
             ));
         }

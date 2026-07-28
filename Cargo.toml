@@ -34,6 +34,7 @@ typokat-types = { path = "crates/typokat-types" }
 typokat-binder = { path = "crates/typokat-binder" }
 typokat-relate = { path = "crates/typokat-relate" }
 typokat-diagnostics = { path = "crates/typokat-diagnostics" }
+typokat-surface = { path = "crates/typokat-surface" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -62,6 +63,7 @@ typokat-types.workspace = true
 typokat-binder.workspace = true
 typokat-relate.workspace = true
 typokat-diagnostics.workspace = true
+typokat-surface.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
 dragonbox_ecma.workspace = true

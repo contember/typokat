@@ -1,0 +1,10 @@
+[package]
+name = "typokat-surface"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+oxc_ast.workspace = true
+
+[lints]
+workspace = true

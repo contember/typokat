@@ -167,3 +167,8 @@ independent reviewer; fixes return to the implementation agent before closure.
   the root no longer names the renderer dependency directly. Its 48 owned tests
   moved intact, and the workspace gate remains 1,287 passed / 16 ignored with
   clean all-target clippy.
+- 2026-07-28: WU2 closed with `typokat-surface` owning the exhaustive Oxc AST
+  classifiers. Its sole dependency is `oxc_ast`; the six root inventory tests
+  continue to pin classifier completeness, and active inventory/census paths now
+  name the member owner. The full gate remains 1,287 passed / 16 ignored with
+  clean all-target clippy.

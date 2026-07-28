@@ -4,10 +4,10 @@
 # `role/surface/slot-or-variant` identity. Dispositions: supported (checker
 # handles it, witness = conformance fixture), unsupported-in (silently dropped
 # but in scope; owner = live backlog file), design-oos (out of scope by design).
-# Compile-time classifiers (src/surface.rs) map every oxc 0.137.0 AST variant to a
-# surface family; this file must carry a record for each. Schema:
-# tests/surface/README.md. Do not hand-desync from src/surface.rs — the
-# validator's classifier-coverage check will reject drift.
+# Compile-time classifiers (crates/typokat-surface/src/surface.rs) map every oxc
+# 0.137.0 AST variant to a surface family; this file must carry a record for each.
+# Schema: tests/surface/README.md. Do not hand-desync from the classifier — the
+# validator's coverage check will reject drift.
 
 [meta]
 oxc_version = "0.137.0"
