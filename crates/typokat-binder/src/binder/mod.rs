@@ -18,6 +18,10 @@ pub use bind::{bind_module_with_prelude, Binder};
 #[cfg(test)]
 mod attach_declaration_scaling_spec;
 
+// Activate with backlog 105's binary fragment-insert implementation.
+// #[cfg(test)]
+// mod type_group_attach_scaling_spec;
+
 #[cfg(test)]
 mod exact_declaration_site_spec;
 

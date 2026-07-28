@@ -23,8 +23,10 @@ what is left: `iface_merge_4000` binds in **31 ms**, and ablating this sort as w
 fixture to **~8 ms**. The fix is the same shape — the list is already almost sorted, so a binary
 insert reproduces a stable sort of the appended list exactly.
 
-`crates/typokat-binder/src/binder/namespace.rs:2393` and `:2405` are the same pattern for namespace fragments and belong
-in the same change.
+The earlier claim that namespace fragments carry the same append-time resort is stale at HEAD.
+`NamespaceTable` appends them and performs one canonical finalization sort, so it is `O(k log k)`
+rather than this `O(k² log k)` family. Namespace ordering remains covered by its existing
+finalization gates and is not part of this item.
 
 ### The ordering divergence
 
@@ -72,15 +74,14 @@ order the profile is defined by, so it is the likely answer), make both builds u
 resulting order on a library-merged interface — `Array`, `String`, `Window` are the large groups.
 Either way `cfg(test)` must stop changing binder output.
 
-*Perf.* Binary-search insert, same as `88`. Acceptance mirrors it: a counter guard showing append
-work grows with fragment count rather than fragments × group size at two group sizes, and
+*Perf.* Binary-search insert, same as `88`. Acceptance mirrors it: a counter guard showing type-group
+append work grows with fragment count rather than fragments × group size at two group sizes, and
 **fragment order byte-identical** — the 72,056-line merge-order dump `88` used covers type-group
 fragment order already and is the right witness.
 
 ## Touch points
 
-`crates/typokat-binder/src/binder/bind.rs` (`declare_type`) and
-`crates/typokat-binder/src/binder/namespace.rs` (the two namespace fragment sorts).
+`crates/typokat-binder/src/binder/bind.rs` (`declare_type`).
 
 <!-- Origin: found by the backlog 88 work unit, 2026-07-27, as the adjacent twin it deliberately
      left alone; the cfg divergence was confirmed by reading and the ablation measured by the leader. -->
