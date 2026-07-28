@@ -45,8 +45,9 @@ fn source_compile_retains_only_the_consumed_direct_plan() {
 }
 
 #[test]
-fn owner_site_capture_uses_dense_ticket_storage_without_losing_coverage() {
+fn owner_site_capture_uses_flat_ticket_storage_without_losing_coverage() {
     const EXACT_OWNER_SITE_ROWS: usize = 47_252;
+    const EXACT_TICKET_SLOTS: usize = 42_496;
 
     let base = LibraryBaseProvider::new()
         .get()
@@ -54,8 +55,35 @@ fn owner_site_capture_uses_dense_ticket_storage_without_losing_coverage() {
     let plan = base.collision_plan_inspection_for_test();
 
     assert_eq!(plan.owner_source_sites, EXACT_OWNER_SITE_ROWS);
+    assert_eq!(plan.ticket_slots, EXACT_TICKET_SLOTS);
+    assert_eq!(plan.ticket_owner_ordered_map_inserts, 0);
+    assert_eq!(plan.owner_site_inner_heap_allocations, 0);
     assert_eq!(plan.owner_site_dense_slot_writes, EXACT_OWNER_SITE_ROWS);
     assert_eq!(plan.owner_site_ordered_map_inserts, 0);
+
+    let nested = super::FrozenLibraryBase::force_nested_owner_site_storage_for_test()
+        .expect("known-broken nested owner-site storage finishes");
+    assert_eq!(nested.owner_source_sites, EXACT_OWNER_SITE_ROWS);
+    assert_eq!(nested.ticket_slots, EXACT_TICKET_SLOTS);
+    assert_eq!(
+        nested.ticket_owner_ordered_map_inserts,
+        EXACT_TICKET_SLOTS
+    );
+    assert_eq!(nested.owner_site_inner_heap_allocations, 33_385);
+    assert_eq!(
+        nested.owner_site_dense_slot_writes,
+        EXACT_OWNER_SITE_ROWS
+    );
+    assert_eq!(nested.owner_site_ordered_map_inserts, 0);
+    assert!(nested
+        .prefix_boundaries
+        .iter()
+        .all(|boundary| boundary.exact && boundary.cardinality > 0));
+    assert_eq!(
+        nested.health,
+        crate::check::checker::replay_index::CollisionReplayPlanHealth::default()
+    );
+    assert!(!nested.admitted);
 
     let broken = super::FrozenLibraryBase::force_ordered_owner_site_storage_for_test()
         .expect("known-broken owner-site storage finishes");
