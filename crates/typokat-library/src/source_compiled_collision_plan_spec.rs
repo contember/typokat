@@ -65,15 +65,9 @@ fn owner_site_capture_uses_flat_ticket_storage_without_losing_coverage() {
         .expect("known-broken nested owner-site storage finishes");
     assert_eq!(nested.owner_source_sites, EXACT_OWNER_SITE_ROWS);
     assert_eq!(nested.ticket_slots, EXACT_TICKET_SLOTS);
-    assert_eq!(
-        nested.ticket_owner_ordered_map_inserts,
-        EXACT_TICKET_SLOTS
-    );
+    assert_eq!(nested.ticket_owner_ordered_map_inserts, EXACT_TICKET_SLOTS);
     assert_eq!(nested.owner_site_inner_heap_allocations, 33_385);
-    assert_eq!(
-        nested.owner_site_dense_slot_writes,
-        EXACT_OWNER_SITE_ROWS
-    );
+    assert_eq!(nested.owner_site_dense_slot_writes, EXACT_OWNER_SITE_ROWS);
     assert_eq!(nested.owner_site_ordered_map_inserts, 0);
     assert!(nested
         .prefix_boundaries
