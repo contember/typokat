@@ -2134,7 +2134,8 @@ fn collect_exports(
             collect_declaration_export(builder, scope, decl, &mut surface);
         } else {
             // `export type { x }` marks the whole statement type-only; mirror the
-            // import side (driver.rs) where the outer kind ORs with each specifier.
+            // import side in `crates/typokat-frontend/src/frontend.rs`, where the
+            // outer kind ORs with each specifier.
             let outer_type_only = export.export_kind == ImportOrExportKind::Type;
             let mut context = ListExportContext {
                 builder,

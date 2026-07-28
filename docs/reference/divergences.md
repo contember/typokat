@@ -360,7 +360,7 @@ backlog `103`'s correctness tier.
   diagnostics for that project are produced at all. Pinned by
   `driver::tests::a_declare_global_project_refuses_the_run_instead_of_panicking`, because a marker
   fixture cannot express a run-level failure.
-  <!-- div: id=library/declare-global-unsupported dir=under scope=b-namespaces owner=../backlog/103-library-merge-panics-and-routing.md witness=../../src/driver.rs -->
+  <!-- div: id=library/declare-global-unsupported dir=under scope=b-namespaces owner=../backlog/103-library-merge-panics-and-routing.md witness=../../crates/typokat-driver/src/driver.rs -->
 
 ### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 

@@ -16,7 +16,8 @@ panic on valid TypeScript, which violates the no-reachable-panic invariant. Seve
 `lexical_events.interface_occurrence_owner(...)` with
 `.expect("interface header has one exact preallocated owner")`. Interface occurrence owners are
 preallocated only for interfaces the lexical-event pass reaches; one nested in a function body is
-not among them, so the `Option` is `None` and the worker panics. `src/driver.rs:185` then
+not among them, so the `Option` is `None` and the worker panics.
+`crates/typokat-driver/src/driver.rs:185` then
 re-panics with `check worker panicked`.
 
 Repro (reproduced on a pristine `933bfd5` build, so it predates the declaration-planner work):
@@ -50,7 +51,7 @@ standalone.
 ## Touch points
 
 `crates/typokat-check/src/check/checker/decls/mod.rs` (`interface_header_owner`), the lexical-event preallocation pass,
-`src/driver.rs` worker error path.
+`crates/typokat-driver/src/driver.rs` worker error path.
 
 <!-- Origin: independent adversarial review of the declaration-surface planner, 2026-07-24
      (finding 6, incidental to that diff). -->

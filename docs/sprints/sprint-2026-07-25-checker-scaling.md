@@ -23,10 +23,12 @@ performance — we had it and lost it, over nine days of active perf work, with 
 `✔` = confirmed live · `⚠` = drift/nuance caught.
 
 - ✔ `check_project` is serial by design — one shared type universe on a single `CHECK_STACK_SIZE`
-  worker — `src/driver.rs:160-187`. `check_files` (`src/driver.rs:143`) is the only `rayon` site and
+  worker — `crates/typokat-driver/src/driver.rs:160-187`. `check_files`
+  (`crates/typokat-driver/src/driver.rs:143`) is the only `rayon` site and
   has no cross-file resolution, so the CLI never reaches it. Measured: every typokat benchmark row is
   exactly 1.00 cores; tsgo uses 6.67 on `modules-100000`.
-- ✔ Import resolution is O(1) per import via a `path_to_index` map (`src/driver.rs:~312-320`), and an
+- ✔ Import resolution is O(1) per import via a `path_to_index` map
+  (`crates/typokat-frontend/src/frontend.rs:105-115`), and an
   **import-free** corpus is equally quadratic — so cross-file resolution is not the problem.
 - ✔ `try_add_library_modules` (`src/binder/bind.rs:1317-1355`) already does the correct thing:
   collect per file, `finalize_namespace_metadata` **once** after the loop, then fill. The project path

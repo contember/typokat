@@ -18,12 +18,14 @@ not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownersh
 - ✔ The public CLI currently accepts only explicit file paths and reads every path before invoking
   the serial project checker; there is no directory or `tsconfig.json` discovery path —
   `src/main.rs:3-4`, `src/main.rs:19`, `src/main.rs:57-64`, `src/main.rs:133-148`.
-- ✔ `driver::check_project` already parses all supplied files and checks them in dependency order
-  through one run-local `Interner`, preserving the correctness-first Stage 0.5 type universe —
-  `src/driver.rs:145-159`, `src/driver.rs:166-225`, `docs/reference/architecture.md:386-391`.
+- ✔ `driver::check_project` already coordinates frontend parsing and dependency ordering with
+  checking through one run-local `Interner`, preserving the correctness-first Stage 0.5 type universe —
+  `crates/typokat-driver/src/driver.rs:145-159`,
+  `crates/typokat-driver/src/driver.rs:166-225`, `docs/reference/architecture.md:386-391`.
 - ⚠ The current resolver scans only local relative named imports. An extensionless specifier gains
   `.ts`, but `./foo.js` remains `foo.js`; default/namespace imports and non-relative specifiers are
-  skipped by the scanner — `src/driver.rs:279-317`, `src/driver.rs:387-400`.
+  skipped by the scanner — `crates/typokat-frontend/src/frontend.rs:190-239`,
+  `crates/typokat-frontend/src/frontend.rs:313-327`.
 - ✔ Project-shaped conformance fixtures already exercise the serial driver, so synthetic config and
   Bundler resolver witnesses can extend an established test seam —
   `tests/conformance.rs:143-154`, `tests/cases/m29_modules/`.
@@ -133,7 +135,8 @@ not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownersh
   disappear cleanly, all files share the existing serial type universe, repeated project runs are
   byte-identical, and the summary matches the pinned schema. The selected real witness has zero
   unresolved modules, skipped/unsupported files or forms, and unclassified diagnostics.
-- **Touch points.** Dependency/configuration, `src/driver.rs`, project result/summary structures,
+- **Touch points.** Dependency/configuration, `crates/typokat-driver/src/driver.rs`,
+  project result/summary structures,
   `src/main.rs`, `tests/cases/b72_real_project_preview/`, `tests/conformance.rs`, and black-box CLI
   snapshots.
 

@@ -8,6 +8,19 @@ workspace = true
 
 [workspace]
 members = ["crates/*"]
+default-members = [
+    ".",
+    "crates/typokat-core",
+    "crates/typokat-surface",
+    "crates/typokat-types",
+    "crates/typokat-binder",
+    "crates/typokat-relate",
+    "crates/typokat-diagnostics",
+    "crates/typokat-frontend",
+    "crates/typokat-check",
+    "crates/typokat-library",
+    "crates/typokat-driver",
+]
 resolver = "2"
 
 [workspace.package]
@@ -29,6 +42,7 @@ smallvec = "1.15.2"
 tikv-jemallocator = "0.7.0"
 toml = "0.8.23"
 rustix = { version = "1.1.4", features = ["fs"] }
+serde_json = "1.0.145"
 typokat-core = { version = "0.1.0", path = "crates/typokat-core" }
 typokat-types = { version = "0.1.0", path = "crates/typokat-types" }
 typokat-binder = { version = "0.1.0", path = "crates/typokat-binder" }
@@ -38,6 +52,7 @@ typokat-surface = { version = "0.1.0", path = "crates/typokat-surface" }
 typokat-frontend = { version = "0.1.0", path = "crates/typokat-frontend" }
 typokat-check = { version = "0.1.0", path = "crates/typokat-check" }
 typokat-library = { version = "0.1.0", path = "crates/typokat-library" }
+typokat-driver = { version = "0.1.0", path = "crates/typokat-driver" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -54,13 +69,6 @@ name = "typokat"
 path = "src/main.rs"
 
 [dependencies]
-# Frontend: oxc parser stack. The AST is allocated in a bumpalo arena owned
-# by `oxc_allocator::Allocator`; all AST borrows live for that arena's lifetime.
-oxc_parser.workspace = true
-oxc_ast.workspace = true
-oxc_ast_visit.workspace = true
-oxc_allocator.workspace = true
-oxc_span.workspace = true
 typokat-core.workspace = true
 typokat-types.workspace = true
 typokat-binder.workspace = true
@@ -70,24 +78,7 @@ typokat-surface.workspace = true
 typokat-frontend.workspace = true
 typokat-check.workspace = true
 typokat-library.workspace = true
-
-# ECMAScript Number::toString formatting for numeric template literal construction.
-dragonbox_ecma.workspace = true
-
-# FxHashMap / FxHashSet for the interner dedup map and the relation cache/stack.
-rustc-hash.workspace = true
-
-# SmallVec for interner dedup buckets (mvp-plan §4.2).
-smallvec.workspace = true
-
-# Data-parallelism for the multi-file driver (architecture §8): each file's whole
-# parse→bind→check pipeline runs on its own worker. The oxc AST is `!Send + !Sync`
-# (pinned to its parsing thread), so the per-file pipeline is the unit of work.
-rayon.workspace = true
-
-# Vendored library profile identity (`crates/typokat-library/src/profile.rs`) and
-# collision replay manifest digest (`crates/typokat-check/src/check/checker/replay_index.rs`).
-sha2.workspace = true
+typokat-driver.workspace = true
 
 # Allocator for the CLI (`src/main.rs` only — the library must not pick its
 # consumers' allocator). Building the default library from source is allocation-churn
@@ -96,12 +87,10 @@ sha2.workspace = true
 tikv-jemallocator.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
+sha2.workspace = true
 toml.workspace = true
 typokat-core = { workspace = true, features = ["test-utils"] }
-typokat-types = { workspace = true, features = ["test-utils"] }
-typokat-binder = { workspace = true, features = ["test-utils"] }
-typokat-relate = { workspace = true, features = ["test-utils"] }
-typokat-check = { workspace = true, features = ["test-utils"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix.workspace = true

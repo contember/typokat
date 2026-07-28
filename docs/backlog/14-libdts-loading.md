@@ -93,7 +93,8 @@ explicit outcomes rather than approximate them.
 
 ## Touch points
 
-`src/driver.rs`, `crates/typokat-check/src/check/checker/mod.rs`, `crates/typokat-check/src/check/checker/decls/`, and the shared prelude/type
+`crates/typokat-driver/src/driver.rs`, `crates/typokat-check/src/check/checker/mod.rs`,
+`crates/typokat-check/src/check/checker/decls/`, and the shared prelude/type
 universe paths selected by its architecture design (parallelism Stage 1 — architecture §8.2). The
 accepted detailed design remains in
 [`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the archived

@@ -87,7 +87,7 @@ proof that no identity of any kind crosses between a private universe and the sh
 
 `src/binder/bind.rs`, `src/binder/namespace.rs`, `crates/typokat-check/src/check/checker/mod.rs`,
 `crates/typokat-library/src/collision_preflight.rs`, `crates/typokat-library/src/base.rs`,
-`src/driver.rs`,
+`crates/typokat-driver/src/driver.rs`,
 `tooling/full-lib-bench/workloads/collision/`, `tooling/full-lib-bench/workloads/fanout/`.
 
 <!-- Origin: found 2026-07-26 when the production-shaped CLI was first pointed at the library base

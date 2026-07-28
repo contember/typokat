@@ -23,8 +23,9 @@ imports/exports. Real Bundler-profile projects also need declaration-aware exten
 and references, and `.d.ts` consumption. Those physical lookup rules are already the domain of
 [`oxc_resolver`](https://docs.rs/oxc_resolver/latest/oxc_resolver/): its
 [`resolve_dts`](https://docs.rs/oxc_resolver/latest/oxc_resolver/struct.ResolverGeneric.html#method.resolve_dts)
-API explicitly targets TypeScript Bundler resolution. Recreating the algorithms in `driver.rs`
-would add a second authority without advancing typokat's type model.
+API explicitly targets TypeScript Bundler resolution. Recreating the algorithms in
+`crates/typokat-frontend/src/frontend.rs` would add a second authority without advancing typokat's
+type model.
 
 Delegating lookup does not build a checker project. The CLI still needs to start from a directory or
 config and enumerate configured `files`/`include`/`exclude` roots where the crate does not provide a

@@ -40,8 +40,10 @@ cheapest first — reach for the narrowest one that answers your question:
 
 ## Architecture (the big picture)
 
-Pipeline in `src/driver.rs`: parse (via `oxc`) → bind → check. Four pillars (details
-in [docs/reference/architecture.md](docs/reference/architecture.md)):
+`crates/typokat-driver/src/driver.rs` coordinates frontend output through checking and
+diagnostics; parsing and project dependency ordering belong to
+`crates/typokat-frontend/src/frontend.rs`. Four pillars (details in
+[docs/reference/architecture.md](docs/reference/architecture.md)):
 
 - **Type store** (`crates/typokat-types/src/types/`) — every type is a hash-consed
   `TypeId(u32)` into an arena (no `Rc<RefCell>`), so structural equality is an integer compare.

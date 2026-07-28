@@ -94,9 +94,10 @@ cycle behavior beyond the pinned slice.
 
 ## Touch points
 
-`src/main.rs`, `src/driver.rs`, `oxc_resolver` configuration, project/config discovery and source-root
-enumeration, deterministic module accounting, the ambient prelude path, a checked-in real-project
-smoke runner/descriptor, and CI. Full Bundler breadth and the later full-stack resolver witness are
+`src/main.rs`, `crates/typokat-frontend/src/frontend.rs` for resolver/config/source discovery,
+`crates/typokat-driver/src/driver.rs` for orchestration/reporting, deterministic module accounting,
+the ambient prelude path, a checked-in real-project smoke runner/descriptor, and CI. Full Bundler
+breadth and the later full-stack resolver witness are
 backlog `15`; full `lib.d.ts` and the later ambient
 witness are backlog `14`; cross-file parallel identity is backlog `16`.
 

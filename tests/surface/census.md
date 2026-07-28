@@ -99,13 +99,11 @@ past a child slot / a `None` degradation to the error type — none of which rec
 
 ## How outputs reach `CheckOutput`
 
-`CheckOutput` (`src/driver.rs:22`) carries only `diagnostics` and `parse_errors`. Binder
-outputs and flow metadata never surface: the binder feeds the checker's reserve/fill and
-scope resolution, and the flow graph is consumed internally by narrowed reads — neither adds a
-channel to `CheckOutput`. So an empty `(diagnostics, parse_errors)` pair is **indistinguishable
-from a genuinely clean check**. That is the false-clean hole: every silent drop above lands in
-this same empty pair. WU2 adds the third `IncompleteSurface` channel so a skipped in-scope
-position is representable end to end.
+`CheckOutput` (`crates/typokat-driver/src/driver.rs:22`) carries `diagnostics`, `parse_errors`, and
+`incomplete`. Binder outputs and flow metadata never surface: the binder feeds the checker's
+reserve/fill and scope resolution, and the flow graph is consumed internally by narrowed reads —
+neither adds a fourth channel. An empty triple is genuinely clean; every skipped in-scope position
+must populate the `IncompleteSurface` channel established by WU2.
 
 ## Official-suite behavior for unexpected exits (read-only confirmation)
 

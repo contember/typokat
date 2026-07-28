@@ -15,8 +15,9 @@ eventually an LSP).
 
 ## Problem
 
-`src/driver.rs` is a batch pipeline: parse → bind → check → `Vec<Diagnostic>`. There is no way to
-ask *"what does this identifier/member access resolve to?"*. Three concrete gaps:
+`crates/typokat-driver/src/driver.rs` is a batch pipeline: parse → bind → check →
+`Vec<Diagnostic>`. There is no way to ask *"what does this identifier/member access resolve to?"*.
+Three concrete gaps:
 
 1. **No span → declaration mapping.** The checker resolves a `PropertyAccessExpression` receiver to
    a type and looks the member up, but nothing records the outcome. A consumer cannot recover it.
@@ -82,8 +83,9 @@ backlog [`15`](./15-modules-imports.md) lands real module resolution and `.d.ts`
 ## Touch points
 
 `src/binder/symbol.rs` (DeclId → site), `crates/typokat-check/src/check/checker/expr.rs` + `calls.rs` (record on
-resolve), `src/types/repr.rs` (side table — **not** the hashed repr), `src/driver.rs` (return the
-map), `docs/reference/invariants.md` (the hash-consing invariant).
+resolve), `src/types/repr.rs` (side table — **not** the hashed repr),
+`crates/typokat-driver/src/driver.rs` (return the map), `docs/reference/invariants.md` (the
+hash-consing invariant).
 
 <!-- Origin: pavouk/typokat integration design session, 2026-07-14 — "does typokat already give us
      what we need for type resolution?" Answer: the type model yes, the query surface no. -->

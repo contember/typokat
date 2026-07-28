@@ -5,9 +5,9 @@
 
 pub use typokat_binder::binder;
 pub use typokat_check::check;
-pub use typokat_diagnostics::diagnostics;
-pub mod driver;
 pub use typokat_core::span;
+pub use typokat_diagnostics::diagnostics;
+pub use typokat_driver::driver;
 pub use typokat_frontend::frontend;
 pub use typokat_library as library;
 pub use typokat_relate::relate;
@@ -52,7 +52,10 @@ mod build_reproducibility_tests {
                     .any(|path| path == &root.join("crates/typokat-check/src/lib.rs"))
                 && sources
                     .iter()
-                    .any(|path| path == &root.join("crates/typokat-library/src/lib.rs")),
+                    .any(|path| path == &root.join("crates/typokat-library/src/lib.rs"))
+                && sources
+                    .iter()
+                    .any(|path| path == &root.join("crates/typokat-driver/src/lib.rs")),
             "reproducibility scan must cover root and workspace-member sources"
         );
         let offenders = sources
@@ -106,23 +109,45 @@ mod build_reproducibility_tests {
 
         assert_absent(
             "crates/typokat-types/src/types",
-            &["crate::diagnostics", "crate::relate", "crate::check"],
+            &[
+                "typokat_binder",
+                "typokat_relate",
+                "typokat_diagnostics",
+                "typokat_frontend",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
+            ],
         );
         assert_absent(
             "crates/typokat-relate/src/relate",
-            &["crate::diagnostics", "crate::check"],
+            &[
+                "typokat_binder",
+                "typokat_diagnostics",
+                "typokat_frontend",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
+            ],
         );
         assert_absent(
             "crates/typokat-binder/src/binder",
-            &["crate::check", "../check/"],
+            &[
+                "typokat_relate",
+                "typokat_diagnostics",
+                "typokat_frontend",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
+            ],
         );
         assert_absent(
             "crates/typokat-diagnostics/src/diagnostics",
             &[
-                "crate::check",
-                "crate::frontend",
-                "crate::library",
-                "crate::driver",
+                "typokat_frontend",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
             ],
         );
         assert_absent(
@@ -133,20 +158,51 @@ mod build_reproducibility_tests {
                 "typokat_binder",
                 "typokat_relate",
                 "typokat_diagnostics",
+                "typokat_frontend",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
             ],
         );
         assert_absent(
             "crates/typokat-frontend/src/frontend.rs",
-            &["crate::check", "crate::library", "crate::driver"],
+            &[
+                "typokat_diagnostics",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
+            ],
         );
         assert_absent(
             "crates/typokat-core/src",
-            &["typokat_types", "typokat_binder", "typokat_check"],
+            &[
+                "typokat_types",
+                "typokat_binder",
+                "typokat_relate",
+                "typokat_diagnostics",
+                "typokat_surface",
+                "typokat_frontend",
+                "typokat_check",
+                "typokat_library",
+                "typokat_driver",
+            ],
         );
-        assert_absent("crates/typokat-library/src", &["crate::driver"]);
+        assert_absent(
+            "crates/typokat-library/src",
+            &["typokat_driver", "crate::driver"],
+        );
         assert_absent(
             "crates/typokat-check/src/check",
-            &["crate::library", "crate::driver"],
+            &[
+                "typokat_library",
+                "typokat_driver",
+                "crate::library",
+                "crate::driver",
+            ],
+        );
+        assert_absent(
+            "crates/typokat-driver/src",
+            &["typokat::", "crate::main", "../src/"],
         );
     }
 }

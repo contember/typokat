@@ -194,3 +194,13 @@ independent reviewer; fixes return to the implementation agent before closure.
   declarations and notices byte-verified, 60 member tests passed / 5 ignored
   plus the compile-fail doctest, workspace 1,288 passed / 16 ignored, zero
   build scripts or source mutations, clean all-target clippy.
+- 2026-07-28: WU3 closed with the byte-identical 2,203-line driver and all 27
+  driver tests owned by `typokat-driver`. Its normal dependencies are exactly
+  `check`, `diagnostics`, `frontend`, `library`, `types`, and `rayon`; lower-layer
+  test instrumentation remains dev-only. The root now contains only its facade
+  and CLI sources, while explicit default members make bare Cargo commands cover
+  the root plus all ten members. The enabled metadata witness pins the exact 11
+  workspace/default package identities, exact normal graph, downward normal/dev
+  edges, zero internal build edges, and an independent acyclic traversal. Both
+  bare and explicit-workspace test gates pass at 1,290 passed / 14 ignored;
+  all-target all-feature check and clippy are clean.

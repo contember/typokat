@@ -62,9 +62,11 @@ all stale; the values below supersede them.)
   `validate_snapshot_primary_for_classification` (`:1229`), `validate_snapshot_canonical`
   (`:1318`). This makes `classify`'s ordering load-bearing for snapshot canonicality and adds
   its own slice to the WU5 split.
-- ✔ `module_export_name` is still duplicated verbatim in `src/driver.rs:389-395` and
-  `src/check/checker/mod.rs:1646-1652`; `metadata_name` (`src/binder/namespace.rs:5138`)
-  covers the same match with a richer return type.
+- ✔ `module_export_name` is still duplicated verbatim in
+  `crates/typokat-frontend/src/frontend.rs:234-240` and
+  `crates/typokat-check/src/check/checker/mod.rs:2436-2442`; `metadata_name`
+  (`crates/typokat-binder/src/binder/namespace.rs:5138`) covers the same match with a richer return
+  type.
 - ✔ The 12-variant "plain runtime statement" guard list is duplicated between
   `src/binder/namespace.rs:3502-3514` and `src/check/checker/namespace_values.rs:2151-2163`
   (re-diffed at HEAD: same 12 variants, same order).
@@ -168,25 +170,27 @@ all stale; the values below supersede them.)
   explicitly, not just the ordering ones.
 - **Touch points.** `src/binder/namespace.rs`.
 
-### WU4 — shared small helpers across binder/checker/driver (effort S)
+### WU4 — shared small helpers across binder/checker/frontend (effort S)
 
 - **Problem.** Two verbatim cross-file duplications: `module_export_name`
-  (`src/driver.rs:389`, `src/check/checker/mod.rs:1646`) and the 12-variant plain-runtime-
-  statement guard (`src/binder/namespace.rs:3502`, `src/check/checker/namespace_values.rs:2151`).
+  (`crates/typokat-frontend/src/frontend.rs:234`,
+  `crates/typokat-check/src/check/checker/mod.rs:2436`) and the 12-variant
+  plain-runtime-statement guard (`crates/typokat-binder/src/binder/namespace.rs:3502`,
+  `crates/typokat-check/src/check/checker/namespace_values.rs:2151`).
 - **Verify first.** Confirm both guard lists are the same 12 variants and both
-  `module_export_name` bodies are identical (re-done at HEAD); pick the host module (no
-  `src/util` exists — a small `src/ast_util.rs` or a `pub(crate)` home in `src/binder/` —
-  decide in review, do not add a grab-bag module beyond these two functions). ⚠ `src/source.rs`
-  now exists as a small shared-primitives module (`CompilationOrigin`, `OriginalModuleOrdinal`);
-  it is a *source-identity* module, not an AST-helper one — do not widen it into the grab-bag
-  this WU is trying to avoid.
-- **Scope.** One `module_export_name` (the namespace-local `metadata_name` may stay — it
-  returns `MetadataName`, a different contract) and one
-  `is_plain_runtime_statement(&Statement) -> bool` predicate used by both call sites.
+  `module_export_name` bodies are identical (re-done at HEAD). Make an explicit cross-crate
+  ownership decision: frontend is the lower owner for `module_export_name`, binder is the lower
+  owner for the statement classifier, and `pub(crate)` cannot serve either consumer across a crate
+  boundary. Do not add a root utility module or widen source-identity modules into AST grab bags.
+- **Scope.** One frontend-owned `module_export_name` consumed by check (the namespace-local
+  `metadata_name` may stay — it returns `MetadataName`, a different contract) and one binder-owned
+  `is_plain_runtime_statement(&Statement) -> bool` predicate consumed by check.
 - **Acceptance / witness.** Same gates; jscpd re-run reports zero production cross-file
   clones touching `binder/namespace.rs`.
-- **Touch points.** `src/driver.rs`, `src/check/checker/mod.rs`,
-  `src/check/checker/namespace_values.rs`, `src/binder/namespace.rs`, one new small module.
+- **Touch points.** `crates/typokat-frontend/src/frontend.rs`,
+  `crates/typokat-check/src/check/checker/mod.rs`,
+  `crates/typokat-check/src/check/checker/namespace_values.rs`,
+  `crates/typokat-binder/src/binder/namespace.rs`.
 
 ### WU5 — split `binder/namespace.rs` into a submodule directory (effort M)
 

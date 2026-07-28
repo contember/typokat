@@ -34,7 +34,7 @@ and the cross-tool gate.
   canonical archive is packaged. The decoder/user-route feasibility oracle remains `#[cfg(test)]`;
   ordinary `check_source` still creates `Interner::with_intrinsics()` and calls the prelude-backed
   checker. There is no production base/provider yet — `src/library/`,
-  `src/check/checker/library_snapshot_feasibility/`, `src/driver.rs`.
+  `src/check/checker/library_snapshot_feasibility/`, `crates/typokat-driver/src/driver.rs`.
 - ✔ The production compiler parses all 82 units and returns an AST-free owned runtime product plus
   exact evidence. Its feasibility follow-up route remains valid only for a caller-certified
   non-colliding source; it is neither the production base/provider nor WU5's private collision
@@ -270,7 +270,8 @@ the claim to the easy fast path.
   counters, unrelated runs cannot observe each other's rows, and single/parallel/project user
   checks retain deterministic diagnostics. Warm inspectors show zero library parse/bind/check work,
   zero base-sized clone/remap, and per-check allocation independent of base size.
-- **Touch points.** `src/types/`, `src/binder/`, `src/check/checker/`, `src/driver.rs`, direct tests.
+- **Touch points.** `src/types/`, `src/binder/`, `src/check/checker/`,
+  `crates/typokat-driver/src/driver.rs`, direct tests.
 
 ### WU5 — collision routing and fast private semantics (effort XL)
 
@@ -293,7 +294,7 @@ the claim to the easy fast path.
   completion. Do not relabel the collision row out of scope or accept the unaugmented snapshot as
   success.
 - **Touch points.** `src/library/`, binder preflight/classifier, checker/compiler pipeline,
-  `src/driver.rs`, B14 project fixtures, routing/readiness manifests.
+  `crates/typokat-driver/src/driver.rs`, B14 project fixtures, routing/readiness manifests.
 
 ### WU6 — identity-selected bridges and full library corpus (effort L)
 
@@ -334,7 +335,8 @@ the claim to the easy fast path.
   `the_cli_prints_no_record_for_a_clean_file` is a weak witness while the CLI still runs
   `src/prelude.ts` — it must be re-read after the cutover, when it finally has 875 records to
   suppress.
-- **Touch points.** `src/library/`, `src/driver.rs`, `src/check/checker/mod.rs`, `src/lib.rs`,
+- **Touch points.** `src/library/`, `crates/typokat-driver/src/driver.rs`,
+  `src/check/checker/mod.rs`, `src/lib.rs`,
   `src/main.rs`, API call sites, official-suite protocol, deletion of `src/prelude.ts`.
 
 ### WU8 — authoritative 2× gate and optimization loop (effort XL)
@@ -896,7 +898,8 @@ totals as ±20% and the *shares* as the result. The two passes agree on every sh
   `finish_semantic_effects` 83 ms, `construct_pending_interface_sccs` 65 ms, `load_strict_profile`
   26 ms, publication 22 ms, bind 19 ms, `check_statements` 16 ms, parse 14 ms.
 - **The run is single-threaded** — `cpu_us/wall_us = 0.994`, one core of 16. `rayon` is used in
-  exactly one place, `src/driver.rs:143` (`check_files`), which this path never reaches. The only
+  exactly one place, `crates/typokat-driver/src/driver.rs:143` (`check_files`), which this path
+  never reaches. The only
   embarrassingly parallel phases here are parse (14 ms) and per-file bind (20 ms), so the parallel
   ceiling on this workload is **≤30 ms of 1.85 s**. Parallelism is not the lever for the library
   profile; it may still be for multi-file user projects.
@@ -1060,13 +1063,15 @@ Production still runs `src/prelude.ts`.
   single check while the library path forks an already-checked base. The 291 ms base is paid once per
   process. Conformance 3.9 s → 7.1 s in debug, entirely the one-time publication.
 - **Two hazards not previously recorded.** The collision preflight parses and walks user source on
-  the **caller's 8 MB stack**, outside the `CHECK_STACK_SIZE` worker (`driver.rs:68`) that exists for
-  exactly that reason — it overflowed on a 471-file census. And a route census over the corpus gives
+  the **caller's 8 MB stack**, outside the `CHECK_STACK_SIZE` worker
+  (`crates/typokat-driver/src/driver.rs:68`) that exists for exactly that reason — it overflowed on
+  a 471-file census. And a route census over the corpus gives
   **shared 285 / private 185 / rejected 1**: script-mode `var`/`function` are global-object
   contributors and route private, so **39 % of the corpus needs WU5's private-combined path**. That
   puts WU5 on the critical path for the suite, not in the tail.
-- **WU7's "initialize the provider before rayon" is vacuous.** `check_files` (`driver.rs:141`) is the
-  crate's only rayon site and has **no production caller** — `main.rs:148` uses `check_project`, and
+- **WU7's "initialize the provider before rayon" is vacuous.** `check_files`
+  (`crates/typokat-driver/src/driver.rs:141`) is the crate's only rayon site and has **no production
+  caller** — `main.rs:148` uses `check_project`, and
   grep finds `check_files` only in its own two unit tests. The checker is single-threaded in
   production today; architecture §8.2 Stage 1 is not wired to the CLI.
 - **The 265 library-owned diagnostics cannot reach user output**, before or after a cutover: each

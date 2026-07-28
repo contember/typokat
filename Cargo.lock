@@ -643,6 +643,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
+]
+
+[[package]]
 name = "serde_spanned"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -814,23 +827,16 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 name = "typokat"
 version = "0.1.0"
 dependencies = [
- "dragonbox_ecma",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_parser",
- "oxc_span",
- "rayon",
- "rustc-hash",
  "rustix",
+ "serde_json",
  "sha2",
- "smallvec",
  "tikv-jemallocator",
  "toml",
  "typokat-binder",
  "typokat-check",
  "typokat-core",
  "typokat-diagnostics",
+ "typokat-driver",
  "typokat-frontend",
  "typokat-library",
  "typokat-relate",
@@ -887,6 +893,21 @@ dependencies = [
  "rustc-hash",
  "typokat-binder",
  "typokat-core",
+ "typokat-relate",
+ "typokat-types",
+]
+
+[[package]]
+name = "typokat-driver"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "typokat-binder",
+ "typokat-check",
+ "typokat-core",
+ "typokat-diagnostics",
+ "typokat-frontend",
+ "typokat-library",
  "typokat-relate",
  "typokat-types",
 ]
@@ -1013,3 +1034,9 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

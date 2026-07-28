@@ -126,7 +126,7 @@ values — none of which the implementation's own tests surfaced.
 
 ```
 src/
-  driver.rs, main.rs                            orchestration and CLI
+  lib.rs, main.rs                               root facade and CLI
 crates/
   typokat-core/                                 spans and shared source identities
   typokat-types/                                type store, interning, representation, substitution
@@ -141,6 +141,7 @@ crates/
   typokat-library/
     src/typescript-6.0.3/                       pinned default-library sources and notices
     src/{base,compiler,profile,provider}.rs      frozen library base and source compiler
+  typokat-driver/src/driver.rs                  parse/check orchestration and reports
 tests/
   conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m33 + bug-fix corpora)
   cases/mN_*/           the conformance corpus (the spec)
