@@ -62,6 +62,14 @@ fn owner_site_capture_uses_dense_ticket_storage_without_losing_coverage() {
     assert_eq!(broken.owner_source_sites, EXACT_OWNER_SITE_ROWS);
     assert_eq!(broken.owner_site_dense_slot_writes, 0);
     assert_eq!(broken.owner_site_ordered_map_inserts, EXACT_OWNER_SITE_ROWS);
+    assert!(broken
+        .prefix_boundaries
+        .iter()
+        .all(|boundary| boundary.exact && boundary.cardinality > 0));
+    assert_eq!(
+        broken.health,
+        crate::check::checker::replay_index::CollisionReplayPlanHealth::default()
+    );
     assert!(!broken.admitted);
 }
 
@@ -102,7 +110,15 @@ fn compact_plan_matches_every_independent_coverage_projection() {
     assert!(comparison.binder_source_census_complete);
     assert!(comparison.binder_provenance_complete);
     assert!(comparison.lexical_event_site_audit_complete);
+    assert!(comparison.independent_lexical_event_site_audit_complete);
+    assert!(comparison.injected_event_capture_corruption_rejected);
     assert!(comparison.global_source_site_audit_complete);
+    assert!(comparison.trace_domain_sealed_before_binder_reporting);
+    assert!(comparison.injected_late_owner_reservation_rejected);
+    assert!(comparison.owner_site_order_is_total);
+    assert!(comparison.injected_equal_coordinate_reordering_rejected);
+    assert!(comparison.duplicate_owner_site_write_rejected);
+    assert!(comparison.first_owner_site_write_preserved);
     assert!(comparison.source_access_manifest_complete);
     assert!(comparison.injected_raw_bypass_rejected);
     assert!(comparison.forbidden_projection_callsite_audit_complete);
