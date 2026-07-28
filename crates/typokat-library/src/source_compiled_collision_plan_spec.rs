@@ -1,4 +1,4 @@
-//! Disabled RED contract for ADR-0020's process-local collision plan.
+//! RED contract for ADR-0020's process-local collision plan.
 //!
 //! The plan is retained from the one ordinary source compilation. It is compact runtime data, not
 //! a serialized artifact or a second full replay-index generation pass.
@@ -18,6 +18,10 @@ fn source_compile_retains_only_the_consumed_direct_plan() {
     assert_eq!(plan.rendered_record_digest_bytes, 0);
     assert_eq!(plan.transitive_terminal_owner_entries, 0);
     assert_eq!(plan.eager_all_owner_scc_memberships, 0);
+    assert_eq!(plan.namespace_snapshot_rows, 0);
+    assert_eq!(plan.runtime_snapshot_rows, 0);
+    assert_eq!(plan.canonical_terminal_rows, 0);
+    assert_eq!(plan.full_semantic_projection_rows, 0);
     assert!(plan.root_slot_seeds > 0);
     assert!(plan.owner_source_sites > 0);
     assert!(plan.direct_reverse_edges > 0);
@@ -89,10 +93,16 @@ fn every_plan_gate_has_a_known_broken_negative_control() {
         "drop-statement-owner",
         "drop-record-fingerprint",
         "change-record-cardinality",
+        "change-record-elaboration",
         "change-prefix-boundary",
         "drop-binder-provenance",
+        "change-owner-site-kind",
+        "change-owner-site-span-end",
+        "duplicate-owner-and-drop-dense-id",
+        "out-of-range-root-owner",
         "drop-typed-reference",
         "add-raw-semantic-access",
+        "perform-forbidden-projection",
     ] {
         let rejected = base
             .admit_mutated_collision_plan_for_test(mutation)
