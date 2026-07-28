@@ -19,53 +19,93 @@ with no comparator analogue, leaving the checking pipeline itself at parity. The
 compiled from source in every process (ADR-0017), and the remaining work is the production cutover
 and the cross-tool gate.
 
-## Refs re-verified at HEAD (2026-07-21)
+## Refs re-verified at HEAD (2026-07-28)
 
-`✔` = confirmed live · `⚠` = drift/nuance caught.
+`✔` = confirmed live · `⚠` = drift/nuance caught. Re-read against HEAD after the workspace crate
+split (`0c88b25`..`21e1f1e`); the 07-21 list had only had its *paths* rewritten (`11a0da4`), not its
+facts re-checked, and four of its bullets described things that no longer exist.
 
+- ✔ The tree is a **ten-crate workspace under `crates/`** — `typokat-{core,surface,types,binder,
+  relate,diagnostics,frontend,check,library,driver}` (`Cargo.toml:9-24`,
+  [`ADR-0019`](../decisions/0019-split-the-checker-into-layered-workspace-crates.md),
+  `tests/workspace_layout.rs:8-21`). `src/lib.rs` and `src/main.rs` stay at the repo root as the
+  `typokat` binary/facade package (`Cargo.toml:1-4`); they are **not** stale paths.
 - ✔ The sole 1.0 library profile remains TypeScript 6.0.3's 82-file
   `lib.es2025.full.d.ts` closure: 2,936,611 bytes, 58,349 LF bytes, registry identity
   `ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d` —
-  `tests/lib_es2025_full_profile.rs:9-18`, `tests/lib_es2025_full_profile.rs:92-105`.
-- ✔ Production still parses and checks `crates/typokat-check/src/prelude.ts` inside every run through
-  `PRELUDE_SOURCE` and `bootstrap_trusted_prelude`; there is no production `FrozenLibraryBase` —
-  `crates/typokat-check/src/check/checker/mod.rs:139-149`, `crates/typokat-check/src/check/checker/mod.rs:210-224`.
-- ⚠ The exact profile and source-backed `LibraryCompiler` are now production modules, and the
-  canonical archive is packaged. The decoder/user-route feasibility oracle remains `#[cfg(test)]`;
-  ordinary `check_source` still creates `Interner::with_intrinsics()` and calls the prelude-backed
-  checker. There is no production base/provider yet — `crates/typokat-library/src/`,
-  the now-retired `library_snapshot_codec` prototype, and
-  `crates/typokat-driver/src/driver.rs`.
-- ✔ The production compiler parses all 82 units and returns an AST-free owned runtime product plus
-  exact evidence. Its feasibility follow-up route remains valid only for a caller-certified
-  non-colliding source; it is neither the production base/provider nor WU5's private collision
-  route — `crates/typokat-check/src/check/checker/library_compiler.rs`.
-- ✔ The obsolete 8.45 MB WU0D evidence projection and its release coordinator were removed after
-  the canonical ten-section snapshot superseded them. ADR-0012 records the accepted snapshot
-  artifact identity; the archived predecessor sprint retains the historical WU0D measurements.
-- ✔ The B14 single-file and project corpora remain disabled — `tests/conformance.rs:175-179`.
-- ⚠ Before the obsolete WU0D projection was removed, the exact release WU0B profile completed
-  rather than hanging: one fresh run measured
-  10,784,008 us internally / 10.94 s externally / 72,904 KiB RSS. The phase split was registry
-  36,618 us, parse 17,087 us, bind 27,650 us, reserve/fill 793,025 us,
-  publication/validation 68,090 us, and statement-check/evidence 9,833,246 us. The historical WU0D
-  5-second gate therefore reported NO-GO; ADR-0012's decoded-snapshot route supersedes that gate.
-- ✔ The current stable comparator is `typescript@7.0.2`; npm reports integrity
-  `sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==`.
-  Exploratory direct-native runs on this host checked the normal 83-file ES2025 graph in
-  0.34-0.37 s and the explicit pinned TypeScript 6.0.3 82-file graph in 0.32-0.33 s. These are
-  planning observations only; WU0 owns the frozen binary identity and authoritative interleaved
-  distributions.
+  `tests/lib_es2025_full_profile.rs:9-18`, `tests/lib_es2025_full_profile.rs:92-105`. The sources
+  sit at `crates/typokat-library/src/typescript-6.0.3/` (`tests/lib_es2025_full_profile.rs:9`).
+- ✔ **WU7 has not started.** The production CLI still parses and checks the 47-line
+  `crates/typokat-check/src/prelude.ts` in every run: `src/main.rs:155` calls `check_project`, and
+  `check_source_inner` builds `Interner::with_intrinsics()` (`crates/typokat-driver/src/driver.rs:80`)
+  and hands off to the prelude-backed checker. `PRELUDE_SOURCE` is
+  `crates/typokat-check/src/check/checker/mod.rs:147`; `bootstrap_trusted_prelude` is `:491`, called
+  at `:706` and `:1891`. The CLI exposes one subcommand, `check` (`src/main.rs:26`, `:64-70`).
+- ⚠ **A production base/provider now exists — the old "there is no production base/provider yet" is
+  drifted — but nothing in production calls it.** `LibraryBaseProvider`
+  (`crates/typokat-library/src/provider.rs:55`) publishes one process-wide `FrozenLibraryBase` with
+  `OnceLock` failure caching; `crates/typokat-driver/src/driver.rs:178` wraps it in a `LazyLock`, and
+  `check_source_with_library` (`:207`) / `check_project_with_library` (`:246`) fork user deltas from
+  it. Both are labelled temporary backlog-14 scaffolding (`crates/typokat-driver/src/driver.rs:168-173`)
+  and their only callers are `tests/conformance.rs:714,723,755` and
+  `tests/library_owned_records.rs:124,158`.
+- ⚠ **`LibraryCompiler` is not in the checker module the old bullet pointed at.** The authoritative
+  source-backed compiler is `crates/typokat-library/src/compiler.rs:169-184`; it wraps the
+  injected-profile machinery in `crates/typokat-check/src/check/checker/library_compiler.rs`, whose
+  own module doc still reads "Measurement-only compiler for injected declaration-library profiles"
+  (`:1`). The production route is `FrozenLibraryBase::compile_packaged_profile` →
+  `compile_owned_library_runtime` (`crates/typokat-library/src/base.rs:694-717`,
+  `crates/typokat-library/src/compiler.rs:274`), which parses all 82 units and returns an AST-free
+  owned runtime product and **no evidence** — evidence generation left the cold path on 2026-07-26
+  (`a0977ea`) and survives only as `canonical_library_evidence_for_test`
+  (`library_compiler.rs:2303`).
+- ⚠ **Backlog [`103`](../backlog/103-library-merge-panics-and-routing.md)'s guard tier shipped; its
+  correctness tier did not, so there is still no collision route.**
+  `crates/typokat-library/src/collision_preflight.rs` is a complete classifier, but its only
+  production entry point is `issue_caller_certified_capability()` (`:19-25`), which runs
+  `preflight_project` over an **empty** input set and therefore always answers
+  `CollisionRoute::SharedDelta`; outside tests the whole module is
+  `allow(dead_code, reason = "activated by the WU5 private-route cutover")` (`:3-6`).
+  `FrozenLibraryBase::fork_user_delta` (`crates/typokat-library/src/base.rs:483-492`) takes its
+  capability from exactly that call. This is what blocks WU7.
+- ⚠ **The B14 corpora are not simply "disabled" — the old bullet is wrong.** Both directories are
+  `false` in `MILESTONE_DIRS` (`tests/conformance.rs:245-246`), but an admitted slice runs fixture by
+  fixture: **9 of the 14** flat fixtures through `ENABLED_FIXTURES` (`tests/conformance.rs:310-327`)
+  and **1 of the 12** projects, `duplicate_global_deferred`, through `ENABLED_PROJECT_FIXTURES`
+  (`:283`). Both corpora check against the `Library` base — i.e. against
+  `check_source_with_library`/`check_project_with_library` (`tests/conformance.rs:40-42`). The five
+  flat fixtures still off are `dom_intl`, `global_this_undefined`, `intrinsic_aliases`,
+  `native_member_composites`, `unsupported_surfaces`.
+- ✔ Every shipped-snapshot artifact is gone from the tree (ADR-0017, `0497550`): no
+  `canonical.snapshot`, no `library_snapshot_codec/`, no `artifact_spec`, no `artifact.rs`/
+  `snapshot.rs`, and `tooling/full-lib-snapshot/`/`tooling/library-base/` deleted.
+  [`ADR-0012`](../decisions/0012-ship-the-canonical-default-library-snapshot.md) and the archived
+  predecessor sprint remain the record of the retired artifact's identity and of the WU0D
+  measurements. `tooling/wu0d-release/` survives only as an empty, untracked directory.
+- ✔ `tests/library_package_assets.rs` is the surviving fail-closed package gate: it pins
+  `profile_sha256=ea59b3e…`, `dts_sources=82`, `licenses=2`, `source_mutations=0` (`:5-10`) and is
+  `#[ignore]`d (`:13`) because it packages two clean roots, extracts them, and `cargo check`s them.
+  The `artifact_spec` module WU2 paired it with no longer exists.
+- ✔ The pinned comparator is still `typescript@7.0.2`, npm integrity
+  `sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==`
+  — `tooling/full-lib-bench/contract.toml:24-25`. ⚠ The exploratory 0.32-0.37 s direct-native
+  figures the old bullet carried are superseded for planning purposes by the production-shaped
+  measurement of 2026-07-27: tsgo **289.6 ms** against typokat **260 ms**, i.e. **1.12-1.14×**.
+  WU8 still owns the frozen binary identity and the authoritative interleaved distributions.
+- ⚠ **WU8 has never run.** `tooling/full-lib-bench/evidence/` holds exactly one file, WU0A's
+  `wu0a-red.json` (2026-07-21). The runner cannot execute against the CLI as it stands: its
+  `provider_probe` requires `typokat library-info --format json`
+  (`tooling/full-lib-bench/contract.toml:7-10`) and no such subcommand exists, and the probe schema
+  still carries the retired `snapshot_schema`/`snapshot_product_sha256` fields
+  (`tooling/full-lib-bench/full_lib_bench.py:135-139`, `:1659-1660`).
 - ✔ ADR-0011 accepts the exact embedded profile, one immutable AST-free base, identity-preserving
-  private deltas, a conservative preflight, and a correctness-first same-pipeline private rebuild.
-  It also says the first initialization performs real semantic compilation, so replacing that
-  work with a shipped snapshot requires a superseding decision before implementation —
+  private deltas, a conservative preflight, and a correctness-first same-pipeline private rebuild —
   `docs/decisions/0011-freeze-pinned-default-library-base.md:286-315`,
-  `docs/decisions/0011-freeze-pinned-default-library-base.md:317-339`.
-- ⚠ The superseded ignored WU0 readiness bundle was removed when WU2 introduced its exact
-  production artifact spec and fail-closed package gate. Production runtime readiness is still
-  unproven until WU3–WU8 — the now-retired `artifact_spec` module,
-  `tests/library_package_assets.rs`.
+  `docs/decisions/0011-freeze-pinned-default-library-base.md:317-322`. ⚠ Its "the first
+  initialization remains real semantic work" clause (`:338`) is the **live** design again:
+  ADR-0012 shipped the snapshot that superseded it, and ADR-0017 retired that snapshot and returned
+  production to source compilation. (ADR-0011 `:322`/`:325` still name `src/prelude.ts`; ADRs are
+  immutable and keep their historical paths.)
 
 ## Binding performance claim
 
@@ -93,7 +133,11 @@ record.** The 2× target was written when a shipped semantic snapshot was the pl
 cold start is what made 2× reachable.
 [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md) retires that snapshot
 because precomputing one pinned profile does nothing for arbitrary user code, and source compilation
-costs 277 ms against the comparator's 289 ms. The claim this sprint can honestly support is
+cost 277 ms against the comparator's 289 ms. Those two numbers were *in-process* phase sums, not
+end-to-end walls, and were retracted on 2026-07-27; they are kept here because they are what the
+restatement was decided on, and must not be re-cited as an end-to-end figure. The production-shaped
+figure is **260 ms against 289.6 ms, i.e. 1.12-1.14×** (2026-07-27), and WU8 remains the sole
+authoritative gate. The claim this sprint can honestly support is
 therefore "faster, proven statistically", not "twice as fast". This is a **weakened** gate; it is
 recorded as such rather than presented as equivalent. Every other control below — same library
 bytes, no `--skipLibCheck`, fresh process per sample, identical binaries for semantics and timing,
@@ -281,7 +325,8 @@ the claim to the easy fast path.
 ### WU5 — collision routing and fast private semantics (effort XL)
 
 - **Problem.** User scripts and `declare global` can merge with the library. ADR-0011's private
-  full rebuild is sound but the current source compiler cannot satisfy the 2× collision row.
+  full rebuild is sound but the current source compiler cannot satisfy the collision row's gate in
+  the **Binding performance claim** (this line read `2×` until the 2026-07-26 restatement).
 - **Verify first.** Re-run the exact binder classifier over every committed conformance and
   official-suite input; freeze route incidence before optimizing. Measure which library
   declaration SCCs actually depend on each collision family and whether a snapshot-derived replay
@@ -1214,3 +1259,76 @@ census is identical and all six integration targets stay green, and those are `n
 the deletion is live in them. That does not exonerate it; it means **no gate this project has can
 see the second sort at all**. Fourth time this sprint a behaviour turned out to be untested by
 construction, after `92`, `94`, and the whole reason `96` exists.
+
+### 2026-07-28 — the crate split, and what re-verifying the refs turned up
+
+The workspace crate split landed (`0c88b25`..`21e1f1e`, archived as
+`../archive/sprint-2026-07-28-workspace-crate-split.md`, `d8f689b`) and **this sprint never logged
+it**. The split has its own record, so what belongs here is only what it changed *for this sprint*:
+
+- **WU7's scope names files that now live in three different crates.** The atomic cutover deletes
+  `PRELUDE_SOURCE`/`bootstrap_trusted_prelude` from `crates/typokat-check/`, rewrites the three
+  driver modes in `crates/typokat-driver/`, and publishes from `crates/typokat-library/` — a
+  cross-crate edit where it used to be three modules of one crate. The touch-point lists survived
+  (`11a0da4` rewrote them and every path still resolves), and `src/lib.rs`/`src/main.rs` are
+  genuinely still at the repo root.
+- **The refs section was verified against a pre-split tree and was never re-checked** — `11a0da4`
+  rewrote path *spelling* only. Re-verified today; the section header is re-dated and the drift is
+  below.
+- **`file:line` citations in run-log entries before this one are pre-split coordinates** and mostly
+  no longer resolve (spot-checked: `store.rs:690`, `bind.rs:2179`, `checker/mod.rs:1195-1207`,
+  `driver.rs:68`/`:141`/`:143`, `main.rs:148`). They are dated evidence and are left as written;
+  only the refs section is a living statement of current fact.
+
+**Work-unit position, precisely.** WU0A, WU0B, WU1, WU2, WU3 and WU4 are done. **WU5 shipped only
+its guard tier** — the exhaustive classifier and the authenticated replay index are built and green,
+but the merge itself does not exist, which is backlog
+[`103`](../backlog/103-library-merge-panics-and-routing.md)'s correctness tier and the one thing
+blocking WU7. **WU6's corpus is committed but mostly gated**: 9 of 14 flat fixtures and 1 of 12
+projects run. **WU7, WU8 and WU9 have never run** — the CLI is still on the prelude, and
+`tooling/full-lib-bench/evidence/` still holds only WU0A's RED baseline.
+
+**What re-verification contradicted.** Each of these was asserted by the document and is not true at
+HEAD:
+
+- "The B14 single-file and project corpora remain disabled." **Wrong.** 9/14 flat and 1/12 project
+  fixtures are enabled through `ENABLED_FIXTURES`/`ENABLED_PROJECT_FIXTURES`; only the directory
+  rows are `false`. The matching comment in `tests/conformance.rs` said "the other **six** flat
+  fixtures still fail" — correct when written at `2a85492` (13 fixtures, 7 on), stale since
+  `9e01c3b` added `native_array_annotation_identity.ts` and two more were enabled. Corrected to
+  five. The neighbouring "other eleven projects" comment was re-checked and **is** right (12 − 1).
+- "There is no production base/provider yet." **Wrong.** `LibraryBaseProvider` and the two
+  `*_with_library` driver entry points are ordinary production code. What is true — and is the fact
+  WU7 actually turns on — is that nothing outside the test binaries calls them.
+- "The production compiler … returns an AST-free owned runtime product **plus exact evidence**."
+  Half wrong: the runtime product is right, the evidence is not. Evidence left the cold path in
+  `a0977ea` and is now `#[cfg(test)]`. The bullet also pointed at
+  `crates/typokat-check/src/check/checker/library_compiler.rs` for `LibraryCompiler`, which has
+  lived in `crates/typokat-library/src/compiler.rs` since well before the split — the path rewrite
+  preserved a citation that was already aimed at the wrong module.
+- Three bullets described artifacts that no longer exist as if they were current observations: the
+  packaged canonical archive, the `library_snapshot_codec` prototype, and the `artifact_spec`
+  module. All were deleted by ADR-0017's `0497550`. Restated as removals.
+- The 07-21 WU0B measurement bullet (10,784,008 µs internal / 10.94 s external / 72,904 KiB RSS)
+  was dropped from the refs section — it measures a code path that no longer exists. Its full phase
+  split is preserved here, since the planning-baseline entry only carried two of the six numbers:
+  **registry 36,618 µs, parse 17,087 µs, bind 27,650 µs, reserve/fill 793,025 µs,
+  publication/validation 68,090 µs, statement-check/evidence 9,833,246 µs.** For scale, the same
+  work is now 296 ms of base publication and a 260 ms end-to-end CLI.
+- WU5's **Problem** line still read "the 2× collision row" after the 2026-07-26 restatement and the
+  07-27 bookkeeping pass that repointed WU5's and WU8's other bullets. Repointed at the binding
+  claim. The claim itself still cited 277 ms / 289 ms as though it were the current cost basis; that
+  in-process pair was retracted on 07-27 and is now labelled as such, with the production-shaped
+  260 ms / 289.6 ms named alongside it. **No threshold was touched.**
+
+One more stale threshold went with this pass: `docs/sprints/README.md` still advertised the sprint
+as "a fail-closed fresh-process target of at least 2× native TypeScript 7", retired on 2026-07-26.
+
+**Left for the leader, not edited.** WU8's heading still reads "authoritative 2× gate" — renaming a
+work unit is more than a record correction. The `MILESTONE_DIRS` comment claiming "Five project
+fixtures currently PANIC" predates backlog `103`'s guard tier (`b223817`), which converted all five
+frozen-prefix `.expect` sites into recorded refusals; it is probably stale, but proving it needs the
+disabled fixtures actually run, so it was left alone. Several immutable ADRs carry pre-split paths
+(`0011`, `0012` and `0004` say `src/prelude.ts`; `0018` says `src/library/compiler.rs`; `0016` says
+`src/relate/…`; `0002` says `src/types/repr.rs`) — by convention they keep their historical
+references.

@@ -26,7 +26,8 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   caught them. Runs alongside the full-lib sprint — different files.
 - [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprint-2026-07-21-full-lib-performance-cutover.md) —
   active backlog `14` delivery sprint: exact TypeScript 6.0.3 full-host base, production cutover,
-  and a fail-closed fresh-process target of at least 2× native TypeScript 7 on every approved row.
+  and a fail-closed fresh-process gate — statistically faster than native TypeScript 7 on every
+  approved row (restated from `≥2.00` to `>1.00` on 2026-07-26 with ADR-0017).
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
