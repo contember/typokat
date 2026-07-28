@@ -58,3 +58,19 @@ toml = "0.8.23"
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
+
+# The test suite is checker-bound, not compile-bound: at `opt-level = 0` the libtest
+# run is 63.8 s, at `opt-level = 2` it is 4.95 s (conformance 7.84 s → 1.23 s). The
+# optimisation is free — `line-tables-only` debuginfo saves more link/codegen time
+# than opt-2 costs, so incremental `cargo test --no-run` *drops* 8.9 s → 7.5 s.
+# Backtraces and line numbers survive; only debugger variable inspection is lost.
+# (Optimising dependencies alone was measured and rejected: no effect — the time is
+# in typokat's own code, not oxc.)
+[profile.dev]
+opt-level = 2
+debug = "line-tables-only"
+split-debuginfo = "off"
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false

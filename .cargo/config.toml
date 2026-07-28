@@ -1,0 +1,11 @@
+# Profile settings in a config file override the ones in `Cargo.toml`, so a
+# machine-global `[profile.dev] split-debuginfo = "unpacked"` (a common local
+# build-speed tweak) silently defeats the manifest's `"off"`. This repo cannot
+# afford it: cargo never garbage-collects `.dwo` files, and one developer machine
+# had accumulated 1,659,084 of them (84 GB) in `target/debug/deps`, which doubled
+# every cargo invocation — `cargo test --no-run` 8.9 s → 18.1 s.
+#
+# This file exists only to win that precedence fight. Everything else about the
+# dev profile lives in `Cargo.toml`.
+[profile.dev]
+split-debuginfo = "off"
