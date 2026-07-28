@@ -26,6 +26,18 @@ cargo clippy --all-targets -- -D warnings   # must stay clean
 The conformance corpus is a single `#[test]` that runs every *enabled* milestone
 directory — toggle scope via the `MILESTONE_DIRS` table in `tests/conformance.rs`.
 
+Rough incremental costs after one edit in `check/` (median of 3, quiet machine),
+cheapest first — reach for the narrowest one that answers your question:
+
+| | |
+|---|---|
+| `cargo check --lib` | 1.5 s — does it still type-check |
+| `cargo build --lib` / `cargo check --all-targets` | 3.0 s / 3.3 s |
+| `cargo clippy --lib` | 4.5 s — inner-loop lint |
+| `cargo test --no-run` | 6.5 s |
+| `cargo clippy --all-targets -- -D warnings` | 10 s — the gate |
+| `cargo test` | 12 s — whole suite, so just run it |
+
 ## Architecture (the big picture)
 
 Pipeline in `src/driver.rs`: parse (via `oxc`) → bind → check. Four pillars (details
