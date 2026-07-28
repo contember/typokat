@@ -53,7 +53,8 @@ reusing the relation engine for TK2367 comparability. Cross-check tsc 6.0.3 --st
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/expr.rs` (binary/unary typing), `src/diagnostics.rs` (new codes),
-`src/relate/` (comparability entry for TK2367).
+`crates/typokat-check/src/check/checker/expr.rs` (binary/unary typing),
+`crates/typokat-diagnostics/src/diagnostics/mod.rs` (new codes),
+`crates/typokat-relate/src/relate/` (comparability entry for TK2367).
 
 <!-- Origin: completion-roadmap review (2026-07-07); probe: "x" - 1 and non-overlapping === both silent. -->

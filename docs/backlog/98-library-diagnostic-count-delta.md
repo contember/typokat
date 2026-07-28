@@ -29,9 +29,9 @@ removal re-pinned it to source truth on 2026-07-26:
 Bytes per record went 335 → 473. Incompletes did not move at all, which argues against a broad
 regression in what the library reaches.
 
-The 07-24 sprint entry recorded that "**Regeneration and the pin family in
-`crates/typokat-library/src/artifact.rs` remain open**", so the staleness was known and deferred; it
-was never attributed.
+The 07-24 sprint entry recorded that "**Regeneration and the pin family in the artifact module
+remain open**", so the staleness was known and deferred; it was never attributed. That module was
+later removed with the shipped snapshot under ADR-0017.
 
 **What has been ruled out.** `243a878` ("report a nested contextual error once, not `2^depth`
 times") was the obvious suspect, since it removed 2,008 duplicate diagnostics from user corpora with

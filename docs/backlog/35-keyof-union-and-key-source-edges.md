@@ -26,8 +26,8 @@ the remaining probes above go clean and the README divergence entries are delete
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/eval.rs` (mapped key iteration),
-`src/relate/relation.rs` if pattern index signatures land.
+`crates/typokat-check/src/check/checker/eval/` (mapped key iteration),
+`crates/typokat-relate/src/relate/relation/mod.rs` if pattern index signatures land.
 
 **Follow-up (2026-07-10, completeness-accounting sprint WU5):** an ALIASED keyof as a
 non-homomorphic key source (`type Keys = keyof Obj; { [K in Keys]: Obj[K] }`) collapses

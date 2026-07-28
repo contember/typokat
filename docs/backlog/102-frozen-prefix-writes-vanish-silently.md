@@ -44,8 +44,8 @@ is rejected — a dropped write becoming three false positives at a distance.
 ## Root cause
 
 Every frozen binder table is a `LayeredVec<T>`: an immutable `base: Arc<[T]>` plus a mutable
-`local: Vec<T>` (`src/types/layered.rs:288`). The only mutating accessor is `get_mut_local`
-(`src/types/layered.rs:343`):
+`local: Vec<T>` (`crates/typokat-types/src/types/layered.rs:288`). The only mutating accessor is `get_mut_local`
+(`crates/typokat-types/src/types/layered.rs:343`):
 
 ```rust
 pub(crate) fn get_mut_local(&mut self, index: usize) -> Option<&mut T> {
@@ -57,14 +57,14 @@ Any id below the boundary is unwritable and yields `None`. The layering is doing
 [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md) requires that base rows are never
 mutated by a delta. The defect is that these five callers treat the refusal as "nothing to do":
 
-- `src/binder/scope.rs:147` — `ScopeGraph::declare`. Publishing a name into the frozen
+- `crates/typokat-binder/src/binder/scope.rs:147` — `ScopeGraph::declare`. Publishing a name into the frozen
   `compilation_global` scope silently does nothing. This is the `TK2304` mechanism.
-- `src/binder/bind.rs:867` — `attach_symbol_declaration`. The declaration is never linked to the
+- `crates/typokat-binder/src/binder/bind.rs:867` — `attach_symbol_declaration`. The declaration is never linked to the
   symbol, which is why the `TK2403`/`TK2451`-class diagnostics above are *structurally* unreachable
   rather than merely unimplemented.
-- `src/binder/bind.rs:2111` — `declare_value`.
-- `src/binder/bind.rs:2133` — `declare_function_value`.
-- `src/binder/bind.rs:2293` — `bind_import`.
+- `crates/typokat-binder/src/binder/bind.rs:2111` — `declare_value`.
+- `crates/typokat-binder/src/binder/bind.rs:2133` — `declare_function_value`.
+- `crates/typokat-binder/src/binder/bind.rs:2293` — `bind_import`.
 
 The sibling sites that hit the same boundary with `.expect(...)` panic instead
 ([`103`](./103-library-merge-panics-and-routing.md)). Same cause, opposite failure mode; a silent
@@ -91,7 +91,9 @@ rather than merging. Cross-check every marker against `tsc 6.0.3 --strict`.
 
 ## Touch points
 
-`src/binder/scope.rs`, `src/binder/bind.rs`, `src/types/layered.rs`,
+`crates/typokat-binder/src/binder/scope.rs`,
+`crates/typokat-binder/src/binder/bind.rs`,
+`crates/typokat-types/src/types/layered.rs`,
 `tests/cases/b14_full_lib_loading/`.
 
 <!-- Origin: found 2026-07-26 by the family-1 diagnosis work unit while characterising the

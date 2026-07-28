@@ -72,8 +72,9 @@ Each entry: fixture pinning tsc behavior, fix, or an explicit divergence-ledger 
 ## Touch points
 
 `crates/typokat-check/src/check/checker/eval/` and `crates/typokat-check/src/check/checker/annotations/` (a-c),
-`src/relate/relation/` (d-e), `crates/typokat-check/src/check/checker/flowgraph/` and
-`crates/typokat-check/src/check/checker/calls.rs` (f-h), `src/diagnostics/` (i), parser/lowering depth guard (k), and
+`crates/typokat-relate/src/relate/relation/` (d-e), `crates/typokat-check/src/check/checker/flowgraph/` and
+`crates/typokat-check/src/check/checker/calls.rs` (f-h),
+`crates/typokat-diagnostics/src/diagnostics/` (i), parser/lowering depth guard (k), and
 `crates/typokat-check/src/check/checker/decls/interface.rs` for ES5 heritage cardinality (m).
 
 <!-- Origin: cross-cutting soundness review 2026-07-07, low-severity batch. -->

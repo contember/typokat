@@ -62,7 +62,7 @@ private-member redeclaration) and `TS2417` (static-side override).
 ## Touch points
 
 The override-compat check in the class-completeness path (`crates/typokat-check/src/check/checker/…`), the
-nominal relation guard (`src/relate/…`), `b06_class_completeness/` corpus,
+nominal relation guard (`crates/typokat-relate/src/relate/…`), `b06_class_completeness/` corpus,
 `tests/conformance.rs`, `docs/reference/divergences.md`.
 
 <!-- Origin: 2026-07-07 divergence-ledger audit (verified vs tsc 6.0.3). Was a

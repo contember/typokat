@@ -7,7 +7,8 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
 
 ## 1. Invariants you must NOT break
 
-- **Semantic query and relation boundary** (`crates/typokat-check/src/check/query/`, `src/relate/relation/mod.rs`):
+- **Semantic query and relation boundary** (`crates/typokat-check/src/check/query/`,
+  `crates/typokat-relate/src/relate/relation/mod.rs`):
   production assignability enters only through `SemanticQueryCoordinator`; raw `Relater`
   construction/`is_assignable` is test-only. Each query uses fresh projection/evaluation overlays,
   and `Relater` applies present overlay mappings **before** identity, the 3×`u32`
@@ -31,12 +32,13 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   provisional and must not be committed. Poison, an exhausted planner/evaluator budget or cycle, or any other
   taint promotes **none** of the pending evaluator, projection, or relation-cache writes. A
   regression here causes order-dependent dropped errors — the sharpest bug class in the project.
-- **Type store** (`src/types/`): every type is a hash-consed `TypeId`; structural equality is `==`.
+- **Type store** (`crates/typokat-types/src/types/`): every type is a hash-consed `TypeId`;
+  structural equality is `==`.
   Property metadata that is part of *identity* — `visibility`, `declaring_class`, `readonly`,
   `is_accessor`, index signatures — is folded into the structural hash + `object_props_eq`, but the
   **relation engine ignores `readonly`/`is_accessor`** for assignability (they only gate access /
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
-- **Immutable class publication and lexical effects** (`src/class_semantics.rs`,
+- **Immutable class publication and lexical effects** (`crates/typokat-types/src/class_semantics.rs`,
   `crates/typokat-check/src/check/checker/classes/`, `crates/typokat-check/src/check/checker/events.rs`): every class application is an
   immutable `ClassInstance` with a syntactically valid, semantically available, complete ordered
   vector of real argument `TypeId`s; never fabricate error/`unknown`/`never` or a partial vector.
@@ -73,7 +75,8 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   intersections must report `TK2313` and clear the recorded constraint before any relation query can
   treat the cycle as assignable. Structural indirection such as `{ self: T }` is legal recursion and
   must terminate through the relation engine instead.
-- **Narrowing** (`crates/typokat-check/src/check/flow.rs` ops + the **flow-node CFG** in `crates/typokat-check/src/check/checker/flowgraph.rs`):
+- **Narrowing** (`crates/typokat-check/src/check/flow.rs` ops + the **flow-node CFG** in
+  `crates/typokat-check/src/check/checker/flowgraph/`):
   keyed on `SymbolId`, never escapes its branch, unknown guard narrows nothing, resets at function
   boundaries. The flow-node CFG (M23) is the **single** narrowing model — `if`/`else`/`switch` *and*
   unstructured flow (early `return`/`throw`, `&&`/`||`/ternary, `while` back/exit/`break`/`continue`
@@ -101,6 +104,6 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   NOT part of the interned type's identity) is unaffected by this split.
 - **Stable structural hash (blake3) is reserved but uncomputed** — needed for incrementality (Phase 5)
   and for parallelism Stage 2 (cross-file export identity, architecture §8.2). The interner is already
-  shaped for it (`src/types/hash.rs`).
+  shaped for it (`crates/typokat-types/src/types/hash.rs`).
 - **Per-argument call errors over-report** vs `tsc` (which stops at the first bad arg) — safe
   direction, documented.

@@ -43,6 +43,6 @@ make structurally identical types hash differently across workers. (Peer-reviewe
 ## Touch points
 
 The type universe (shared prelude + cross-file identity); `driver::check_files`; the stable structural
-hash (`src/types/hash.rs`).
+hash (`crates/typokat-types/src/types/hash.rs`).
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term scale + IDE; architecture §8). -->

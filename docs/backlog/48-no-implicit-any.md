@@ -31,7 +31,8 @@ omitted and leave an empty, permissive relation target.
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/decls.rs` (param/var lowering), `crates/typokat-check/src/check/checker/expr.rs` (element
-access), `src/diagnostics.rs`.
+`crates/typokat-check/src/check/checker/decls/` (param/var lowering),
+`crates/typokat-check/src/check/checker/expr.rs` (element
+access), `crates/typokat-diagnostics/src/diagnostics/mod.rs`.
 
 <!-- Origin: completion-roadmap review (2026-07-07); scope.md Tier A. -->

@@ -12,14 +12,15 @@ Latent today, a hard cliff at the ADR-0012 library-base cutover. One-line fix, e
 
 ## Problem
 
-`src/types/intern/mod.rs:147-154` resets `self.base = Arc::new(FxHashMap::default())` whenever the
-semantic graph mutates. Its sibling `DerivedGraphCache::align_with` (`src/types/intern/mod.rs:98-104`)
+`crates/typokat-types/src/types/intern/mod.rs:147-154` resets `self.base = Arc::new(FxHashMap::default())` whenever the
+semantic graph mutates. Its sibling `DerivedGraphCache::align_with` (`crates/typokat-types/src/types/intern/mod.rs:98-104`)
 clears only `local`, which is the correct behaviour: `base` is populated exclusively by
 `freeze_as_base` over an **immutable sealed prefix**, so a mutation of the local delta cannot
 invalidate it.
 
-The mutations that trigger it are ordinary: `set_type_param_constraint` (`src/types/store.rs:592`) —
-once per constrained generic binder — and `fill_reserved_type_batch` (`src/types/intern/mod.rs:682`) —
+The mutations that trigger it are ordinary: `set_type_param_constraint` (`crates/typokat-types/src/types/store.rs:592`) —
+once per constrained generic binder — and `fill_reserved_type_batch`
+(`crates/typokat-types/src/types/intern/mod.rs:682`) —
 once per interface SCC.
 
 **Why it is invisible right now:** the production CLI still bootstraps `crates/typokat-check/src/prelude.ts` rather than a
@@ -42,7 +43,7 @@ one.
 
 ## Touch points
 
-`src/types/intern/mod.rs` (`FreeParamSummaryCache::align_with`, `DerivedGraphCache::align_with`),
-`src/types/substitute/mod.rs` (`compute_application_summaries`), the library base cutover path.
+`crates/typokat-types/src/types/intern/mod.rs` (`FreeParamSummaryCache::align_with`, `DerivedGraphCache::align_with`),
+`crates/typokat-types/src/types/substitute/mod.rs` (`compute_application_summaries`), the library base cutover path.
 
 <!-- Origin: type-store complexity hunt, 2026-07-25 (finding 3, latent). -->

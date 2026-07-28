@@ -30,17 +30,18 @@ performance — we had it and lost it, over nine days of active perf work, with 
 - ✔ Import resolution is O(1) per import via a `path_to_index` map
   (`crates/typokat-frontend/src/frontend.rs:105-115`), and an
   **import-free** corpus is equally quadratic — so cross-file resolution is not the problem.
-- ✔ `try_add_library_modules` (`src/binder/bind.rs:1317-1355`) already does the correct thing:
+- ✔ `try_add_library_modules` (`crates/typokat-binder/src/binder/bind.rs:1317-1355`) already does the correct thing:
   collect per file, `finalize_namespace_metadata` **once** after the loop, then fill. The project path
   does not. It is the in-repo template for WU2.
 - ✔ `ecb179e` "perf: index lexical owner lookups" (2026-07-23) is the in-repo template for the
   index-don't-rebuild fixes: maintain `by_source` indexes incrementally at reservation time.
-- ⚠ `src/types/layered.rs:332` instruments `iter()` with `record_full_view_base_scan_for_test` — the
+- ⚠ `crates/typokat-types/src/types/layered.rs:332` instruments `iter()` with `record_full_view_base_scan_for_test` — the
   **sealed library base**. `local_iter()` at `:339`, the growing user-project layer that every one of
   these quadratics scans, has **no probe**. This is why six instances landed unseen.
 - ⚠ ADR-0008 authorized the compilation-wide `LexicalReservations` table with **no** complexity or
   scaling consideration recorded.
-- ⚠ The packaged `src/library/typescript-6.0.3/canonical.snapshot` was last regenerated at `90ff28d`,
+- ⚠ The packaged `canonical.snapshot` artifact (since retired by ADR-0017) was last regenerated at
+  `90ff28d`,
   before the 2026-07-24 optimization batch. Four `library::*` specs fail at HEAD as a result; this is
   a known open item, not a regression from this sprint.
 
@@ -48,7 +49,7 @@ performance — we had it and lost it, over nine days of active perf work, with 
 
 ### WU1 — indexed placement-syntax lookups (effort M)
 
-- **Problem.** `set_placement_syntax` (`src/binder/namespace.rs:6036`) and `placement_syntax` (`:6053`)
+- **Problem.** `set_placement_syntax` (`crates/typokat-binder/src/binder/namespace.rs:6036`) and `placement_syntax` (`:6053`)
   scan every placement bucket and participant in the project to find the participant
   `push_placement` inserted one line earlier; `DeclId` is already a dense index. A third scan of the
   same shape sits at `:5020` (the `namespace_fragment` back-patch). Θ(D²).
@@ -60,11 +61,11 @@ performance — we had it and lost it, over nine days of active perf work, with 
 - **Acceptance / witness.** The guard's durable bound (≤ 4 probes per declaration) holds; conformance
   green; before/after wall clock on `shape-100000.ts` (15.7 s, of which 13.9 s is this) and a 624-file
   `modules-10000`.
-- **Touch points.** `src/binder/namespace.rs`, possibly `src/binder/bind.rs`.
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`, possibly `crates/typokat-binder/src/binder/bind.rs`.
 
 ### WU2 — hoist project namespace finalization out of the per-module loop (effort M)
 
-- **Problem.** `NamespaceTable::classify` (`src/binder/namespace.rs:2023`) clears and rebuilds every
+- **Problem.** `NamespaceTable::classify` (`crates/typokat-binder/src/binder/namespace.rs:2023`) clears and rebuilds every
   canonical index over the **whole accumulated project**, and runs once per module via
   `add_module` → `bind_namespace_metadata` → `finalize_namespace_metadata`. Instrumented on the
   6,249-file corpus: **177.43 s of 189.73 s (93.5%)**, 195,243,775 placements re-processed for ~62,495
@@ -79,12 +80,14 @@ performance — we had it and lost it, over nine days of active perf work, with 
   and current callers rely on the rebuild as a freshness barrier.
 - **Acceptance / witness.** A guard on the constant-size/varying-split shape; conformance green;
   `modules-100000` before/after. Projection with WU1: ~190 s → ~5.5 s.
-- **Touch points.** `src/binder/namespace.rs`, `src/binder/bind.rs`, `src/check/checker/mod.rs`
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`,
+  `crates/typokat-binder/src/binder/bind.rs`,
+  `crates/typokat-check/src/check/checker/mod.rs`
   (the per-unit loop).
 
 ### WU3 — working-set-local query transactions (effort L)
 
-- **Problem.** `SemanticQueryState::fork` is `self.clone()` (`src/check/query/mod.rs:400`), deep-copying
+- **Problem.** `SemanticQueryState::fork` is `self.clone()` (`crates/typokat-check/src/check/query/mod.rs:400`), deep-copying
   seven monotonically growing tables on every transaction, at five call sites. Θ(N²) in time and the
   cause of roughly half the peak RSS. On `generics-100000`: fork 28.5% + drop 23.4%, **only 7.14% real
   work** — ~19 s of a 37 s run copying and freeing a memo.
@@ -92,15 +95,17 @@ performance — we had it and lost it, over nine days of active perf work, with 
   `c58b6ca`. Doubling the program doubles transactions and planner visits but **quadruples** copied
   entries (339,226 → 1,358,526).
 - **Scope.** Undo journal for six maps (layering them would push `&FxHashMap` lifetime churn through
-  `eval/`); internally layered `RelationCache` in `src/relate/cache.rs` for the seventh, which is 39.6%
-  of the copy volume and whose writes are invisible from `src/check/query/`. Signatures stay identical
-  so `src/relate/relation/*.rs` needs no edits.
+  `eval/`); internally layered `RelationCache` in `crates/typokat-relate/src/relate/cache.rs` for the seventh, which is 39.6%
+  of the copy volume and whose writes are invisible from `crates/typokat-check/src/check/query/`. Signatures stay identical
+  so `crates/typokat-relate/src/relate/relation/*.rs` needs no edits.
 - **Acceptance / witness.** Guard passes; conformance green; `generics-100000` before/after (37.09 s /
   558 MB baseline); **plus** observed max/median `RelationCache` chain depth and lookup throughput
   before/after — §6.1 calls this cache possibly the largest single perf element, so a chain walk must be
   measured, not assumed.
-- **Touch points.** `src/check/query/`, `src/check/checker/expr.rs`, `calls.rs`, `src/check/infer/`,
-  `src/relate/cache.rs`.
+- **Touch points.** `crates/typokat-check/src/check/query/`,
+  `crates/typokat-check/src/check/checker/expr.rs`,
+  `crates/typokat-check/src/check/checker/calls.rs`, `crates/typokat-check/src/check/infer/`,
+  `crates/typokat-relate/src/relate/cache.rs`.
 
 ### WU4 — reason-free relation probes (effort M) → [ADR-0016](../decisions/0016-reason-free-relation-probes.md)
 
@@ -116,13 +121,14 @@ performance — we had it and lost it, over nine days of active perf work, with 
 - **Acceptance / witness.** Guard passes, four reporting pins byte-identical, conformance green,
   arm-sweep and Redux-shape re-measured. Amend architecture §6.1/§6.4 and `invariants.md` §1;
   flip ADR-0016 to accepted.
-- **Touch points.** `src/relate/` except `cache.rs`, `docs/reference/architecture.md`,
+- **Touch points.** `crates/typokat-relate/src/relate/` except
+  `crates/typokat-relate/src/relate/cache.rs`, `docs/reference/architecture.md`,
   `docs/reference/invariants.md`.
 
 ### WU5 — local-layer scan probe + declaration owner ranges (effort M)
 
 - **Problem.** Two things, deliberately paired: the missing `local_iter()` probe (see Refs), and
-  `attach_type_decl_owners` (`src/check/checker/mod.rs:2441`), which filters **all** project
+  `attach_type_decl_owners` (`crates/typokat-check/src/check/checker/mod.rs:2441`), which filters **all** project
   declarations once per module — Θ(modules × declarations). The latter is ~0.5% today but projects to
   ~33% of the residual once WU1–WU3 land.
 - **Verify first.** The probe must fail on the real offender, not a synthetic one.
@@ -132,11 +138,11 @@ performance — we had it and lost it, over nine days of active perf work, with 
   site needs.
 - **Acceptance / witness.** A deliberately re-introduced per-item project scan is caught by the probe
   assertions, not by wall clock.
-- **Touch points.** `src/types/layered.rs`, `src/check/checker/mod.rs`.
+- **Touch points.** `crates/typokat-types/src/types/layered.rs`, `crates/typokat-check/src/check/checker/mod.rs`.
 
 ### WU6 — memoize the contextual argument re-walk (effort M)
 
-- **Problem.** `infer_contextual_source_after_walked` (`src/check/checker/expr.rs:821`) re-walks the
+- **Problem.** `infer_contextual_source_after_walked` (`crates/typokat-check/src/check/checker/expr.rs:821`) re-walks the
   whole argument expression under a contextual type with no memo, three times per call level, plus once
   per overload candidate and rest-arity alternative. Measured **×2.97 per nesting level** — depth 12 is
   1.35 s and depth 14 is **11.98 s on a 14-line file**. The control pins the exponent precisely:
@@ -147,7 +153,7 @@ performance — we had it and lost it, over nine days of active perf work, with 
   the enclosing call check, so the inference re-walk, the committed re-walk and each candidate trial
   reuse one result. Collapses base 3 → base 1.
 - **Acceptance / witness.** Guard passes; conformance green; the depth sweep flat.
-- **Touch points.** `src/check/checker/expr.rs`, `src/check/checker/calls.rs`.
+- **Touch points.** `crates/typokat-check/src/check/checker/expr.rs`, `crates/typokat-check/src/check/checker/calls.rs`.
 
 ## Out of scope (explicit)
 
@@ -174,7 +180,8 @@ performance — we had it and lost it, over nine days of active perf work, with 
 - **Fix forward, do not revert.** The curve is non-monotone — 0.031 s → 0.24 s (07-14) → 23.3 s (07-16)
   → 0.94 s at HEAD on the 624-file corpus. This is a recurring pattern across many commits, not one bad
   change, and `a7923b6`'s own defect was already fixed by `ecb179e`.
-- **`src/relate/cache.rs` belongs to WU3**, the rest of `src/relate/` to WU4, so the two run
+- **`crates/typokat-relate/src/relate/cache.rs` belongs to WU3**, the rest of
+  `crates/typokat-relate/src/relate/` to WU4, so the two run
   concurrently. WU3 keeps `RelationCache`'s method signatures identical; that property is what makes the
   split safe and must not be traded away.
 - **Soundness outranks the target.** Where a change would let a transaction's speculative entry survive
@@ -185,12 +192,12 @@ performance — we had it and lost it, over nine days of active perf work, with 
 
 | WU | files | may run with |
 |---|---|---|
-| WU1 | `binder/namespace.rs`, `binder/bind.rs` | WU3, WU4, WU5 |
+| WU1 | `crates/typokat-binder/src/binder/namespace.rs`, `crates/typokat-binder/src/binder/bind.rs` | WU3, WU4, WU5 |
 | WU2 | same as WU1 | after WU1 |
-| WU3 | `check/query/`, `expr.rs`, `calls.rs`, `infer/`, `relate/cache.rs` | WU1, WU4, WU5 |
-| WU4 | `relate/` except `cache.rs` | WU1, WU3, WU5 |
-| WU5 | `types/layered.rs`, `checker/mod.rs` | WU1, WU3, WU4 |
-| WU6 | `expr.rs`, `calls.rs` | after WU3 |
+| WU3 | `crates/typokat-check/src/check/query/`, `crates/typokat-check/src/check/checker/expr.rs`, `crates/typokat-check/src/check/checker/calls.rs`, `crates/typokat-check/src/check/infer/`, `crates/typokat-relate/src/relate/cache.rs` | WU1, WU4, WU5 |
+| WU4 | `crates/typokat-relate/src/relate/` except `crates/typokat-relate/src/relate/cache.rs` | WU1, WU3, WU5 |
+| WU5 | `crates/typokat-types/src/types/layered.rs`, `checker/mod.rs` | WU1, WU3, WU4 |
+| WU6 | `crates/typokat-check/src/check/checker/expr.rs`, `crates/typokat-check/src/check/checker/calls.rs` | after WU3 |
 
 Every WU is spec-first: the RED guard is committed on its own before the fix, per
 [dev-method](../reference/dev-method.md) §1.
@@ -215,11 +222,11 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
 - RED guards committed: `53b7916` (WU1), `c58b6ca` (WU3), `0a0733c` (WU4 + ADR-0016). Each reproduced by
   the leader before committing.
 - WU3 hit a scope boundary and stopped rather than working around it: `relation_cache` is 39.6% of the
-  copy volume and its writes are invisible from `src/check/query/` because the coordinator hands the
+  copy volume and its writes are invisible from `crates/typokat-check/src/check/query/` because the coordinator hands the
   cache to the relater by value and `RelationCache` exposes no iterator. Resolved by granting
-  `src/relate/cache.rs` to WU3. The agent declined the available shortcut — letting relation-cache
+  `crates/typokat-relate/src/relate/cache.rs` to WU3. The agent declined the available shortcut — letting relation-cache
   entries survive rollback — on the grounds that `invariants.md` §1 forbids it, and flagged that
-  `src/check/query/mod.rs:1478` assigns the cache back **unconditionally**, which does not obviously
+  `crates/typokat-check/src/check/query/mod.rs:1478` assigns the cache back **unconditionally**, which does not obviously
   agree with that invariant. Routed to WU4 for a verdict; if it is a real hole it gets its own item.
 - Second RED pair committed: `9638cb8` (WU2), `5704075` (WU6), both reproduced by the leader first.
   Two exact laws replaced the sprint's estimates. **WU2**: at constant program size, every
@@ -245,7 +252,8 @@ Every WU is spec-first: the RED guard is committed on its own before the fix, pe
   retaining walk from a memo needs effect replay, which `CheckerEffects` (not `Clone`) and
   ticket uniqueness (invariants §1) both block. A base-2 prototype exists — 70–83× at depth 14,
   byte-identical diagnostics over 465 fixtures × 2 formats and 8 bench corpora — held back because
-  its memo state is a production `thread_local!` that belongs on `Pass` (`checker/mod.rs`, owned by
+  its memo state is a production `thread_local!` that belongs on `Pass`
+  (`crates/typokat-check/src/check/checker/mod.rs`, owned by
   WU2 until it lands).
 - The WU6 guard as first written would have gone **green** on that base-2 prototype (`510/30 = 17`
   against a bound of 512). Agent caught it against its own work and reported rather than shipping.

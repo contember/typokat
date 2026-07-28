@@ -43,17 +43,17 @@ The pipeline (`crates/typokat-check/src/check/checker/mod.rs:60`, `:159`) runs f
 with an independent fallback. A silent drop is a wildcard `_ => {}` / `_ => None` / a `continue`
 past a child slot / a `None` degradation to the error type — none of which record a diagnostic.
 
-### Role `bind` — `src/binder/bind.rs`
+### Role `bind` — `crates/typokat-binder/src/binder/bind.rs`
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|
-| type-predeclaration (statement) | `bind_type_declaration_statement` | `bind.rs:250` `_ => {}` |
-| type-predeclaration (in export) | `bind_type_declaration` | `bind.rs:270` `_ => {}` |
-| statement | `bind_statement` | `bind.rs:364` `_ => {}` |
-| declaration (in export) | `bind_declaration` | `bind.rs:381` `_ => {}` |
-| class element | `bind_class` | `bind.rs:527` `_ => {}` (static-block / accessor / index-sig) |
-| expression | `bind_expression` | `bind.rs:646` `_ => {}` — **narrower than `infer_expr`** |
-| binding pattern | `binding_name` | `bind.rs:746` `_ => None` (destructuring patterns) |
+| type-predeclaration (statement) | `bind_type_declaration_statement` | `crates/typokat-binder/src/binder/bind.rs:250` `_ => {}` |
+| type-predeclaration (in export) | `bind_type_declaration` | `crates/typokat-binder/src/binder/bind.rs:270` `_ => {}` |
+| statement | `bind_statement` | `crates/typokat-binder/src/binder/bind.rs:364` `_ => {}` |
+| declaration (in export) | `bind_declaration` | `crates/typokat-binder/src/binder/bind.rs:381` `_ => {}` |
+| class element | `bind_class` | `crates/typokat-binder/src/binder/bind.rs:527` `_ => {}` (static-block / accessor / index-sig) |
+| expression | `bind_expression` | `crates/typokat-binder/src/binder/bind.rs:646` `_ => {}` — **narrower than `infer_expr`** |
+| binding pattern | `binding_name` | `crates/typokat-binder/src/binder/bind.rs:746` `_ => None` (destructuring patterns) |
 
 ### Role `flow` — `crates/typokat-check/src/check/checker/flowgraph/`
 
@@ -74,10 +74,10 @@ past a child slot / a `None` degradation to the error type — none of which rec
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|
-| expression | `infer_expr` | `expr.rs` explicit incomplete arms retain child diagnostics for the deferred expression tail; the remaining `_ => None` is design-OOS only |
-| object-literal member kind | `infer_object_literal` | `expr.rs:263` (SpreadProperty skipped) |
-| object-literal key | `infer_object_literal` | `expr.rs:265` (computed key skipped via `static_name`) |
-| array-literal element | `infer_array_literal` | `expr.rs:290` (spread / elision skipped via `as_expression`) |
+| expression | `infer_expr` | `crates/typokat-check/src/check/checker/expr.rs` explicit incomplete arms retain child diagnostics for the deferred expression tail; the remaining `_ => None` is design-OOS only |
+| object-literal member kind | `infer_object_literal` | `crates/typokat-check/src/check/checker/expr.rs:263` (SpreadProperty skipped) |
+| object-literal key | `infer_object_literal` | `crates/typokat-check/src/check/checker/expr.rs:265` (computed key skipped via `static_name`) |
+| array-literal element | `infer_array_literal` | `crates/typokat-check/src/check/checker/expr.rs:290` (spread / elision skipped via `as_expression`) |
 | member / element access base | `infer_member_access` / `infer_element_access` | non-object/array/tuple base → error type, no diagnostic |
 
 ### Role `annotation-lower` — `crates/typokat-check/src/check/checker/annotations/`
@@ -92,7 +92,7 @@ past a child slot / a `None` degradation to the error type — none of which rec
 
 | Role | Dispatch fn | Silent drop |
 |---|---|---|
-| call | argument collection | `calls.rs:736`, `:1086`, `:1307` `_ => None` (spread args, non-expression args) |
+| call | argument collection | `crates/typokat-check/src/check/checker/calls.rs:736`, `:1086`, `:1307` `_ => None` (spread args, non-expression args) |
 | decl (reserve/fill) | `decls/mod.rs` | `:63`, `:113` `continue`; `:285`, `:309`, `:468` `_ => {}`; `:499`/`:501` `_ => None` |
 | class (member collection) | `classes/mod.rs` | `:561`, `:847`, `:931` `_ => {}`; computed keys skipped at `:365`, `:502`, `:553`, `:892`, `:920` |
 | signature (interface members) | `decls/interface.rs` | `:67`, `:111` computed keys skipped via `static_name` |

@@ -36,7 +36,7 @@ tsc 6.0.3 --strict.
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/flowgraph.rs` (loop edges, path keys), `crates/typokat-check/src/check/flow.rs`
+`crates/typokat-check/src/check/checker/flowgraph/` (loop edges, path keys), `crates/typokat-check/src/check/flow.rs`
 (environment keying, invalidation), `for`/`for-of`/`do-while` statement checking.
 
 <!-- Origin: completion-roadmap review (2026-07-07); M23 deferral list (README known limitations). -->

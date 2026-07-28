@@ -31,10 +31,10 @@ not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownersh
   `tests/conformance.rs:143-154`, `tests/cases/m29_modules/`.
 - ✔ The prelude is one checked source unit in the same type universe and currently exposes only the
   admitted utility aliases plus bounded `console` and numeric `Math` values; no project-only ambient
-  shim is needed or allowed — `src/check/checker/mod.rs:42-43`,
-  `src/check/checker/mod.rs:80-126`, `src/prelude.ts:1-41`.
+  shim is needed or allowed — `crates/typokat-check/src/check/checker/mod.rs:42-43`,
+  `crates/typokat-check/src/check/checker/mod.rs:80-126`, `crates/typokat-check/src/prelude.ts:1-41`.
 - ✔ Incomplete surfaces are a separate deterministic, deduplicated channel and aggregate per project
-  file, while exit `3` outranks ordinary diagnostics — `src/diagnostics/incomplete.rs:59-103`,
+  file, while exit `3` outranks ordinary diagnostics — `crates/typokat-diagnostics/src/diagnostics/incomplete.rs:59-103`,
   `tests/incomplete_outcome.rs:127-178`, `src/main.rs:170-195`.
 - ✔ The executable completion manifest still marks `D-real-project-preview` incomplete with backlog
   `72` as its owner; the surface-accounting prerequisite and minimal prelude are complete —

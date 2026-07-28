@@ -16,7 +16,7 @@ every consumer; this only makes them fast.
 ## Problem
 
 `crates/typokat-driver/src/driver.rs` has one mode: full check. But the relation engine is, by our
-own architecture doc, "the CPU-heavy core" (`src/relate/`, architecture §6) — and a consumer
+own architecture doc, "the CPU-heavy core" (`crates/typokat-relate/src/relate/`, architecture §6) — and a consumer
 building a code graph never asks it a single question. It wants: bind, type the receiver of each member access enough to look the
 member up, record the declaration it landed on. Assignability, excess-property checks, narrowing
 for *diagnostic* purposes, and the whole `ReasonChain` reporting path are dead weight.
@@ -52,7 +52,7 @@ same profiling-gate discipline as [`ADR-0001`](../decisions/0001-type-level-vm-i
 
 `crates/typokat-driver/src/driver.rs` (second entry point),
 `crates/typokat-check/src/check/checker/` (a resolve-only path through member access and calls),
-profiling harness. No changes to `src/relate/`.
+profiling harness. No changes to `crates/typokat-relate/src/relate/`.
 
 <!-- Origin: pavouk/typokat integration design session, 2026-07-14. Explicitly ranked below 79/80:
      capability first, speed later. -->

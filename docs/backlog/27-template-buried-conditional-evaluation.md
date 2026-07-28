@@ -6,7 +6,7 @@ title: Evaluate conditionals buried in named alias / interface / class bodies
 # 27 — Evaluate template-buried conditionals
 
 **Summary.** `evaluate_type` fires only on a top-level Conditional/Instantiation/Union
-demand (`crates/typokat-check/src/check/checker/eval.rs`, phase-1 annotation path). A conditional buried
+demand (`crates/typokat-check/src/check/checker/eval/`, phase-1 annotation path). A conditional buried
 inside a named template body — `type W = { foo: IsString<string> }`, an interface
 member, a class field — lowers under `building_template` and is never demanded, so it
 stays a deferred node and relates conservatively (M25 review, probe `a1_alias_object.ts`;
@@ -24,8 +24,10 @@ member, class field, tuple/array element inside an alias), cross-checked vs tsc.
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/eval.rs` (structural demand), `decls.rs` (template instantiation),
-possibly `relate/relation.rs` (lazy-eval hook). Watch invariants: never evaluate inside
+`crates/typokat-check/src/check/checker/eval/` (structural demand),
+`crates/typokat-check/src/check/checker/decls/` (template instantiation),
+possibly `crates/typokat-relate/src/relate/relation/mod.rs` (lazy-eval hook). Watch invariants:
+never evaluate inside
 the relation engine's immutable-store phase without a plan — evaluation interns new
 types (`&mut Interner`), which the two-phase split exists to separate.
 

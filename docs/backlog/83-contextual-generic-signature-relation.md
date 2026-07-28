@@ -42,7 +42,8 @@ results in both relation orders.
 
 ## Touch points
 
-`src/relate/relation/objects.rs`, `src/relate/relation/mod.rs`, relation cache/context tests,
+`crates/typokat-relate/src/relate/relation/objects.rs`,
+`crates/typokat-relate/src/relate/relation/mod.rs`, relation cache/context tests,
 interface heritage validation, and the official-suite ratchet.
 
 <!-- Origin: post-WU7 official-suite adjudication at a3fc116. -->

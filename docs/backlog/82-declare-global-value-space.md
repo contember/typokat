@@ -40,7 +40,7 @@ replace an augmented callable/class surface.
 
 ## Touch points
 
-Global value binding and storage in `src/binder/`; class/function namespace staging and immutable
+Global value binding and storage in `crates/typokat-binder/src/binder/`; class/function namespace staging and immutable
 publication in `crates/typokat-check/src/check/checker/`; focused cross-file conformance and direct publication tests.
 
 <!-- Origin: WU5 architecture review, sprint-2026-07-15 namespace/declaration merging. -->

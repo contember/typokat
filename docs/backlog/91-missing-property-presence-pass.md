@@ -12,7 +12,7 @@ first and reports `TS2741`. Effort M.
 
 ## Problem
 
-`src/relate/relation/objects.rs:170-261` walks the target's properties in canonical name order and
+`crates/typokat-relate/src/relate/relation/objects.rs:170-261` walks the target's properties in canonical name order and
 relates each value as it goes. `tsc` runs `getUnmatchedProperty` over all required target properties
 **before** any value relation, so a genuinely missing property wins over a value mismatch on a
 property that happens to sort earlier.
@@ -56,7 +56,7 @@ intersection-target paths, which also enumerate target properties.
 
 ## Touch points
 
-`src/relate/relation/objects.rs` (`relate_objects`), `tests/cases/`,
+`crates/typokat-relate/src/relate/relation/objects.rs` (`relate_objects`), `tests/cases/`,
 `docs/reference/divergences.md`.
 
 <!-- Origin: independent adversarial review of ADR-0016, 2026-07-25 (Finding 1, fix option 2). -->

@@ -17,13 +17,13 @@ perf half is mechanical, the ordering half needs a decision first.
 
 ### The perf twin
 
-`src/binder/bind.rs:2433-2467` runs a full `fragments.sort_by_key(...)` after every
+`crates/typokat-binder/src/binder/bind.rs:2433-2467` runs a full `fragments.sort_by_key(...)` after every
 `append_fragment`, so a group merged `k` times costs `O(k² log k)`. With backlog `88` fixed, this is
 what is left: `iface_merge_4000` binds in **31 ms**, and ablating this sort as well takes the same
 fixture to **~8 ms**. The fix is the same shape — the list is already almost sorted, so a binary
 insert reproduces a stable sort of the appended list exactly.
 
-`src/binder/namespace.rs:2393` and `:2405` are the same pattern for namespace fragments and belong
+`crates/typokat-binder/src/binder/namespace.rs:2393` and `:2405` are the same pattern for namespace fragments and belong
 in the same change.
 
 ### The ordering divergence
@@ -79,7 +79,8 @@ fragment order already and is the right witness.
 
 ## Touch points
 
-`src/binder/bind.rs` (`declare_type`), `src/binder/namespace.rs` (the two namespace fragment sorts).
+`crates/typokat-binder/src/binder/bind.rs` (`declare_type`) and
+`crates/typokat-binder/src/binder/namespace.rs` (the two namespace fragment sorts).
 
 <!-- Origin: found by the backlog 88 work unit, 2026-07-27, as the adjacent twin it deliberately
      left alone; the cfg divergence was confirmed by reading and the ablation measured by the leader. -->

@@ -10,22 +10,24 @@ each layer to its owning crate, and preserves all behavior and repository gates.
 ## Refs re-verified at HEAD (2026-07-28)
 
 - ✔ `check`, `binder`, `types`, `relate`, `diagnostics`, and `library` remain the
-  dominant source layers — `src/check/`, `src/binder/`, `src/types/`,
-  `src/relate/`, `src/diagnostics/`, `src/library/`.
+  dominant source layers — `crates/typokat-check/src/check/`,
+  `crates/typokat-binder/src/binder/`, `crates/typokat-types/src/types/`,
+  `crates/typokat-relate/src/relate/`, `crates/typokat-diagnostics/src/diagnostics/`,
+  `crates/typokat-library/src/`.
 - ⚠ The measured idea missed a production `check ⇄ driver` cycle:
   `continue_library_project_binder` calls `run_project_frontend`, while the driver
-  imports the checker — `src/check/checker/library_compiler.rs:4131`,
-  `src/driver.rs:6`.
+  imports the checker — `crates/typokat-check/src/check/checker/library_compiler.rs:4131`,
+  `crates/typokat-driver/src/driver.rs:6`.
 - ✔ The other production tangles remain narrow: the collision capability points
   from `check` to `library`, and library provider/base code names driver-owned
-  inputs — `src/check/checker/library_compiler.rs:607`,
-  `src/library/provider.rs:155`, `src/library/base.rs:939`.
+  inputs — `crates/typokat-check/src/check/checker/library_compiler.rs:607`,
+  `crates/typokat-library/src/provider.rs:155`, `crates/typokat-library/src/base.rs:939`.
 - ⚠ `snapshot_codec` has been removed; the neutral core now consists of source
   identity, spans, the workspace test helper, and other dependency-free records —
-  `src/source.rs`, `src/span.rs`.
+  `crates/typokat-core/src/source.rs`, `crates/typokat-core/src/span.rs`.
 - ⚠ Source-introspecting tests and path manifests now include replay-index,
   library-package, full-lib benchmark, binder, checker, and library paths in
-  addition to the two examples in the idea — `src/check/checker/replay_index.rs`,
+  addition to the two examples in the idea — `crates/typokat-check/src/check/checker/replay_index.rs`,
   `tooling/library-package/verify.py`, `tooling/full-lib-bench/full_lib_bench.py`.
 - ✔ The binding architecture and soundness rules remain unchanged; this refactor
   must not alter semantic-query, relation-cache, publication, event, evaluator, or
@@ -58,8 +60,9 @@ each layer to its owning crate, and preserves all behavior and repository gates.
   workspace-root test helper. Keep this stage inside the root crate.
 - **Acceptance / witness.** `cargo test` and clippy pass, and an active layering
   tripwire finds no known upward source edge.
-- **Touch points.** `src/frontend.rs`, `src/driver.rs`, `src/check/`,
-  `src/library/`, affected unit specs and `src/lib.rs`.
+- **Touch points.** `crates/typokat-frontend/src/frontend.rs`,
+  `crates/typokat-driver/src/driver.rs`, `crates/typokat-check/src/check/`,
+  `crates/typokat-library/src/`, affected unit specs and `src/lib.rs`.
 
 ### WU2 — split the lower workspace layers (effort L)
 
@@ -204,3 +207,15 @@ independent reviewer; fixes return to the implementation agent before closure.
   edges, zero internal build edges, and an independent acyclic traversal. Both
   bare and explicit-workspace test gates pass at 1,290 passed / 14 ignored;
   all-target all-feature check and clippy are clean.
+- 2026-07-28: WU4 documentation review found 217 exact stale references across
+  41 living files (31 backlog, 2 reference, 1 idea, 5 active sprints, and 2 test
+  docs). Review also repaired pre-existing module-shape or retired-artifact
+  references in 8 additional backlog files; README's driver description was
+  separately corrected from parse/check to frontend/check ownership, for 50
+  changed documents total. The fix migrated all stale references and relabelled
+  retired snapshot/artifact modules instead of inventing current files. Parsing,
+  import resolution, and dependency ordering remain with `frontend`; driver
+  references describe orchestration/reporting. Review evidence: the exact stale
+  path and singular-module scans are empty apart from the intentional README
+  tree entries; all Markdown links and every repository path introduced on
+  changed lines resolve; `docs/decisions/` and `docs/archive/` have zero diff.

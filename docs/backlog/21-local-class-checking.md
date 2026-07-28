@@ -29,7 +29,8 @@ them in the binder — verify). Acceptance: fixtures with a local class exercisi
 
 ## Touch points
 
-Class fill entry points (`crates/typokat-check/src/check/checker/classes.rs`, `decls.rs`), statement walk for
+Class fill entry points (`crates/typokat-check/src/check/checker/classes/`,
+`crates/typokat-check/src/check/checker/decls/`), statement walk for
 function bodies.
 
 <!-- Origin: b06/b20 adversarial reviews (sprint 2026-07-04-class-completeness). -->

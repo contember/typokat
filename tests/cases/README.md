@@ -2,7 +2,7 @@
 
 This is the spec corpus. Per the MVP plan (§6), correctness is the whole game — these files
 define, milestone by milestone, exactly what typokat accepts and what it must reject. The
-harness (`tests/harness.rs`, built in M0) runs the checker over each `.ts` file and diffs the
+harness (`tests/conformance.rs`, built in M0) runs the checker over each `.ts` file and diffs the
 produced diagnostics against the inline markers below.
 
 This file is **test tooling**: how to write and read these fixtures. The substantive record of
@@ -54,7 +54,7 @@ Rules the harness enforces:
 Exact column spans are validated separately by dedicated M0 snapshot tests, not by every
 fixture (keeps fixtures robust to author miscounting). Those tests live in
 `crates/typokat-core/src/span.rs`
-(`LineIndex` byte-column mapping) and `src/diagnostics/tests.rs` (compact/rich renderer
+(`LineIndex` byte-column mapping) and `crates/typokat-diagnostics/src/diagnostics/tests.rs` (compact/rich renderer
 columns): exact start/end columns, same-line distinction, and multiline / tab / UTF-8 /
 EOF spans.
 
@@ -587,7 +587,7 @@ diagnostic that exists today.
 Markers cannot express the other half of the contract: a marker substring is trimmed, so it
 cannot assert indentation, and the harness has no notion of a byte budget. The line count,
 the total byte count, the clamped indent, and the collapse of a deep declared *recipe*
-chain are therefore pinned directly in `src/diagnostics/tests.rs`
+chain are therefore pinned directly in `crates/typokat-diagnostics/src/diagnostics/tests.rs`
 (`reason_chain_*`, `type_display_bounds_a_deep_declared_*`), which mirrors the cap as its
 own literal rather than importing the implementation's constant.
 

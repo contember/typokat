@@ -50,8 +50,10 @@ inputs, no candidates, so it always answers `CollisionRoute::SharedDelta`. The w
 ## What already exists
 
 The binder half of the private route is **built and green**. `LibraryBinderCheckpoint`
-(`bind.rs:161`) is an *unfrozen* library binder; `continue_library_project_binder`
-(`library_compiler.rs:4086`) binds user files onto it, and because nothing is frozen the merge
+(`crates/typokat-binder/src/binder/bind.rs:161`) is an *unfrozen* library binder;
+`continue_library_project_binder`
+(`crates/typokat-check/src/check/checker/library_compiler.rs:4086`) binds user files onto it, and
+because nothing is frozen the merge
 succeeds. The committed test at `collision_replay_index_spec.rs:355` feeds it exactly the failing
 `collision` workload and asserts the augmented type group keeps its identity.
 
@@ -85,7 +87,9 @@ proof that no identity of any kind crosses between a private universe and the sh
 
 ## Touch points
 
-`src/binder/bind.rs`, `src/binder/namespace.rs`, `crates/typokat-check/src/check/checker/mod.rs`,
+`crates/typokat-binder/src/binder/bind.rs`,
+`crates/typokat-binder/src/binder/namespace.rs`,
+`crates/typokat-check/src/check/checker/mod.rs`,
 `crates/typokat-library/src/collision_preflight.rs`, `crates/typokat-library/src/base.rs`,
 `crates/typokat-driver/src/driver.rs`,
 `tooling/full-lib-bench/workloads/collision/`, `tooling/full-lib-bench/workloads/fanout/`.

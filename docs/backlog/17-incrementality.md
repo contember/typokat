@@ -31,13 +31,13 @@ Two stages (peer-reviewed 2026-07-09; see `docs/ideas/phpstan-architecture-lesso
   same signature machinery).
 
 Either way this finally **computes the blake3 stable structural hash** (the interner is already
-shaped for it — `src/types/hash.rs`; see [`../reference/invariants.md`](../reference/invariants.md)
+shaped for it — `crates/typokat-types/src/types/hash.rs`; see [`../reference/invariants.md`](../reference/invariants.md)
 §2). Acceptance: an edit to one file re-checks only the affected work, with results identical to a
 full check.
 
 ## Touch points
 
-The stable structural hash (`src/types/hash.rs`); the Stage A result cache (file hashes, inverted
+The stable structural hash (`crates/typokat-types/src/types/hash.rs`); the Stage A result cache (file hashes, inverted
 import graph, export-surface hashes); a Salsa-style query/recompute layer over the pipeline.
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term — formerly Phase 4 before real-project scale was split out). -->

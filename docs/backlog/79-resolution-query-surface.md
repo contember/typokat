@@ -15,8 +15,9 @@ eventually an LSP).
 
 ## Problem
 
-`crates/typokat-driver/src/driver.rs` is a batch pipeline: parse → bind → check →
-`Vec<Diagnostic>`. There is no way to ask *"what does this identifier/member access resolve to?"*.
+`crates/typokat-driver/src/driver.rs` is a batch facade: it coordinates frontend output through
+binding and checking into `Vec<Diagnostic>`. There is no way to ask *"what does this
+identifier/member access resolve to?"*.
 Three concrete gaps:
 
 1. **No span → declaration mapping.** The checker resolves a `PropertyAccessExpression` receiver to
@@ -27,10 +28,12 @@ Three concrete gaps:
 3. **Members of interfaces and object literals have no declaration backref.**
    `types::repr::PropertyType` carries `declaring_class: Option<ClassId>`, which is `None` for every
    member that "did not come from a class declaration (object literals, interfaces, type ...)"
-   (`repr.rs:294-299`). So an interface method's declaration site is currently unnameable.
+   (`crates/typokat-types/src/types/repr.rs:294-299`). So an interface method's declaration site is
+   currently unnameable.
 
 ⚠️ **The invariant this must not break.** `PropertyType` is hash-consed and identity-bearing
-property metadata is folded into the type hash (architecture §3; `types/hash.rs`). Adding a
+property metadata is folded into the type hash (architecture §3;
+`crates/typokat-types/src/types/hash.rs`). Adding a
 `decl: DeclId` field to `PropertyType` would make two **structurally identical** types declared in
 different files unequal — destroying structural typing, the core of the checker. The declaration
 backref therefore **must live in a side table**, keyed outside the hashed representation, never in
@@ -54,8 +57,9 @@ alongside diagnostics. Do not fork a second traversal.
 
 - A `ResolutionMap`: `Span -> Resolved { decl: DeclId, kind, via }`, where `via` distinguishes
   direct binding, import alias chain, member lookup on a receiver type, and heritage-inherited
-  member. Populated at the points that already resolve (`check/checker/expr.rs` member access,
-  `calls.rs`, the binder's identifier resolution).
+  member. Populated at the points that already resolve
+  (`crates/typokat-check/src/check/checker/expr.rs` member access,
+  `crates/typokat-check/src/check/checker/calls.rs`, the binder's identifier resolution).
 - A `DeclTable`: `DeclId -> DeclSite { file, span, name, kind, exported }`. The binder already
   allocates `DeclId` per declaration site; this exposes it.
 - A **property → declaration side table** for members that `declaring_class` cannot name
@@ -82,8 +86,10 @@ backlog [`15`](./15-modules-imports.md) lands real module resolution and `.d.ts`
 
 ## Touch points
 
-`src/binder/symbol.rs` (DeclId → site), `crates/typokat-check/src/check/checker/expr.rs` + `calls.rs` (record on
-resolve), `src/types/repr.rs` (side table — **not** the hashed repr),
+`crates/typokat-binder/src/binder/symbol.rs` (DeclId → site),
+`crates/typokat-check/src/check/checker/expr.rs` +
+`crates/typokat-check/src/check/checker/calls.rs` (record on
+resolve), `crates/typokat-types/src/types/repr.rs` (side table — **not** the hashed repr),
 `crates/typokat-driver/src/driver.rs` (return the map), `docs/reference/invariants.md` (the
 hash-consing invariant).
 

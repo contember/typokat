@@ -4,7 +4,8 @@ Which `tsc` diagnostics typokat is *meant* to cover, and which whole categories
 are out of scope **by design**. This is a description of the checker's shape — the
 boundary of the type model — not a schedule. The authoritative **live** coverage
 (the codes actually emitted today) is the `DiagnosticCode` enum in
-[`src/diagnostics/mod.rs`](../../src/diagnostics/mod.rs) and the coverage table in
+[`crates/typokat-diagnostics/src/diagnostics/mod.rs`](../../crates/typokat-diagnostics/src/diagnostics/mod.rs)
+and the coverage table in
 [`README.md`](../../README.md); the roadmap is [`backlog/`](../backlog/README.md).
 
 Codes use the `TK` prefix; the number mirrors `tsc` exactly (`TK2322` ≡ `TS2322`).
@@ -222,7 +223,8 @@ separates today's supported slice, planned resolver capability, and diagnostics 
 **`2xxx` module-resolution codes — partly in scope since M29.** The **local-relative `.ts`
 slice** (M29, backlog `15` slice 1) resolves imports, so it **emits** `TK2307` *Cannot find
 module…* and `TK2305` *Module has no exported member…* for that slice — both are live codes in
-`src/diagnostics/mod.rs` and the README diagnostics list. Package/`node_modules`/tsconfig project
+`crates/typokat-diagnostics/src/diagnostics/mod.rs` and the README diagnostics list.
+Package/`node_modules`/tsconfig project
 resolution is **currently unsupported but planned** for the Bundler-only preview/full slices
 (`72`/`15`) through `oxc_resolver`. Resolver and import/export diagnostics for admitted Bundler
 forms are in scope as those slices land. Alternate profiles (including NodeNext/Node16), `TK2792`,

@@ -40,7 +40,9 @@ markers in `conditional_positions.ts` flip to tsc-exact and the
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/eval.rs` (`eval_conditional`/`decide_conditional`,
-`operand_undecidable`), possibly template-build in `annotations.rs`/`decls.rs`.
+`crates/typokat-check/src/check/checker/eval/` (`eval_conditional`/`decide_conditional`,
+`operand_undecidable`), possibly template-build in
+`crates/typokat-check/src/check/checker/annotations/` and
+`crates/typokat-check/src/check/checker/decls/`.
 
 <!-- Origin: M28 review round 2 + leader arbitration probe m28_arb2.ts (2026-07-05). -->

@@ -27,18 +27,19 @@ and the cross-tool gate.
   `lib.es2025.full.d.ts` closure: 2,936,611 bytes, 58,349 LF bytes, registry identity
   `ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d` —
   `tests/lib_es2025_full_profile.rs:9-18`, `tests/lib_es2025_full_profile.rs:92-105`.
-- ✔ Production still parses and checks `src/prelude.ts` inside every run through
+- ✔ Production still parses and checks `crates/typokat-check/src/prelude.ts` inside every run through
   `PRELUDE_SOURCE` and `bootstrap_trusted_prelude`; there is no production `FrozenLibraryBase` —
-  `src/check/checker/mod.rs:139-149`, `src/check/checker/mod.rs:210-224`.
+  `crates/typokat-check/src/check/checker/mod.rs:139-149`, `crates/typokat-check/src/check/checker/mod.rs:210-224`.
 - ⚠ The exact profile and source-backed `LibraryCompiler` are now production modules, and the
   canonical archive is packaged. The decoder/user-route feasibility oracle remains `#[cfg(test)]`;
   ordinary `check_source` still creates `Interner::with_intrinsics()` and calls the prelude-backed
-  checker. There is no production base/provider yet — `src/library/`,
-  `src/check/checker/library_snapshot_feasibility/`, `crates/typokat-driver/src/driver.rs`.
+  checker. There is no production base/provider yet — `crates/typokat-library/src/`,
+  the now-retired `library_snapshot_codec` prototype, and
+  `crates/typokat-driver/src/driver.rs`.
 - ✔ The production compiler parses all 82 units and returns an AST-free owned runtime product plus
   exact evidence. Its feasibility follow-up route remains valid only for a caller-certified
   non-colliding source; it is neither the production base/provider nor WU5's private collision
-  route — `src/check/checker/library_compiler.rs`.
+  route — `crates/typokat-check/src/check/checker/library_compiler.rs`.
 - ✔ The obsolete 8.45 MB WU0D evidence projection and its release coordinator were removed after
   the canonical ten-section snapshot superseded them. ADR-0012 records the accepted snapshot
   artifact identity; the archived predecessor sprint retains the historical WU0D measurements.
@@ -63,7 +64,8 @@ and the cross-tool gate.
   `docs/decisions/0011-freeze-pinned-default-library-base.md:317-339`.
 - ⚠ The superseded ignored WU0 readiness bundle was removed when WU2 introduced its exact
   production artifact spec and fail-closed package gate. Production runtime readiness is still
-  unproven until WU3–WU8 — `src/library/wu2_spec.rs`, `tests/library_package_assets.rs`.
+  unproven until WU3–WU8 — the now-retired `artifact_spec` module,
+  `tests/library_package_assets.rs`.
 
 ## Binding performance claim
 
@@ -169,7 +171,7 @@ the claim to the easy fast path.
     forbidden flags, warm-state reuse, malformed output, renamed fixtures, and partial schedules;
   - the exact target formula, matrix, memory gates, and artifact schema in the tooling README.
 - **Acceptance / witness.** The comparator-only self-tests and TypeScript oracles pass; the
-  typokat production assertions are demonstrably RED because the CLI still uses `src/prelude.ts`.
+  typokat production assertions are demonstrably RED because the CLI still uses `crates/typokat-check/src/prelude.ts`.
   The runner cannot emit GO without all rows, three complete trials, semantic parity, memory
   evidence, and exact binary/profile identities.
 - **Touch points.** `tooling/full-lib-bench/`, `tests/cases/b14_full_lib_loading/`,
@@ -196,7 +198,8 @@ the claim to the easy fast path.
 - **Stop/falsifier.** If the real decoded-base path cannot plausibly achieve the cross-tool gate,
   or the archive cannot represent the complete AST-free base without a second semantic authority,
   record NO-GO and stop. Do not begin WU1, weaken 2×, or substitute a lazy surface slice.
-- **Touch points.** `src/check/checker/wu0b_library.rs`, a test-only snapshot decoder module,
+- **Touch points.** `crates/typokat-check/src/check/checker/library_compiler.rs`, the proposed
+  test-only snapshot decoder module,
   `tooling/library-profile/`, `tooling/full-lib-bench/`, full-profile fixtures.
 
 ### WU1 — decide and pin the shipped snapshot architecture (effort M)
@@ -234,8 +237,8 @@ the claim to the easy fast path.
   mutation invalidates verification; package extraction contains exact assets and notices; the
   generated semantic identity matches a fresh source compilation. No production call can select a
   different library pipeline.
-- **Touch points.** New `src/library/` production modules, existing WU0 modules, profile tooling,
-  `Cargo.toml`, package tests, `src/library/typescript-6.0.3/`.
+- **Touch points.** New `crates/typokat-library/src/` production modules, existing WU0 modules, profile tooling,
+  `Cargo.toml`, package tests, `crates/typokat-library/src/typescript-6.0.3/`.
 
 ### WU3 — strict decoder and immutable FrozenLibraryBase (effort XL)
 
@@ -253,7 +256,8 @@ the claim to the easy fast path.
   direct inspectors prove the source-compiled and decoded bases have identical canonical semantic
   projections; 1, 2, and 32 callers receive one pointer-identical base; repeated fresh processes
   produce the same identity. The WU0B performance headroom survives on the production decoder.
-- **Touch points.** `src/library/`, `src/types/`, `src/binder/`, `src/check/checker/`, driver-facing
+- **Touch points.** `crates/typokat-library/src/`, `crates/typokat-types/src/types/`,
+  `crates/typokat-binder/src/binder/`, `crates/typokat-check/src/check/checker/`, driver-facing
   typed provider API.
 
 ### WU4 — identity-preserving user delta (effort XL)
@@ -270,7 +274,8 @@ the claim to the easy fast path.
   counters, unrelated runs cannot observe each other's rows, and single/parallel/project user
   checks retain deterministic diagnostics. Warm inspectors show zero library parse/bind/check work,
   zero base-sized clone/remap, and per-check allocation independent of base size.
-- **Touch points.** `src/types/`, `src/binder/`, `src/check/checker/`,
+- **Touch points.** `crates/typokat-types/src/types/`,
+  `crates/typokat-binder/src/binder/`, `crates/typokat-check/src/check/checker/`,
   `crates/typokat-driver/src/driver.rs`, direct tests.
 
 ### WU5 — collision routing and fast private semantics (effort XL)
@@ -293,7 +298,7 @@ the claim to the easy fast path.
 - **Stop/falsifier.** A collision row below the binding threshold means no claim and no sprint
   completion. Do not relabel the collision row out of scope or accept the unaugmented snapshot as
   success.
-- **Touch points.** `src/library/`, binder preflight/classifier, checker/compiler pipeline,
+- **Touch points.** `crates/typokat-library/src/`, binder preflight/classifier, checker/compiler pipeline,
   `crates/typokat-driver/src/driver.rs`, B14 project fixtures, routing/readiness manifests.
 
 ### WU6 — identity-selected bridges and full library corpus (effort L)
@@ -311,7 +316,7 @@ the claim to the easy fast path.
   TypeScript 6.0.3. No `TK2304` remains for a present standard-library declaration, no unsupported
   surface becomes `any`/error/empty success, and module-local same-name declarations cannot hijack
   native identities.
-- **Touch points.** `src/check/checker/`, evaluator/annotation bridges, B14 corpora,
+- **Touch points.** `crates/typokat-check/src/check/checker/`, evaluator/annotation bridges, B14 corpora,
   official-suite gates, bridge/ledger/readiness manifests.
 
 ### WU7 — production provider, CLI cutover, and batch protocol (effort XL)
@@ -323,7 +328,7 @@ the claim to the easy fast path.
 - **Scope.** Add the process-wide typed provider/singleton, initialize before rayon, and migrate all
   three driver modes to Result-bearing APIs. Cache deterministic init failure, map it to stable CLI
   exit 2 without partial user output, add the isolated same-process official-suite protocol, and
-  atomically remove `PRELUDE_SOURCE`, `bootstrap_trusted_prelude`, and `src/prelude.ts` only after
+  atomically remove `PRELUDE_SOURCE`, `bootstrap_trusted_prelude`, and `crates/typokat-check/src/prelude.ts` only after
   every path uses the full base.
 - **Acceptance / witness.** The normal release CLI—not a libtest—uses the decoded base for all
   benchmark and conformance sources. Initial/middle-case failure, crash, timeout, malformed frames,
@@ -333,11 +338,11 @@ the claim to the easy fast path.
   residual of the deleted backlog `99`: [ADR-0018](../decisions/0018-pin-library-owned-records-as-a-named-census.md)
   proved containment through `check_project_with_library`, but
   `the_cli_prints_no_record_for_a_clean_file` is a weak witness while the CLI still runs
-  `src/prelude.ts` — it must be re-read after the cutover, when it finally has 875 records to
+  `crates/typokat-check/src/prelude.ts` — it must be re-read after the cutover, when it finally has 875 records to
   suppress.
-- **Touch points.** `src/library/`, `crates/typokat-driver/src/driver.rs`,
-  `src/check/checker/mod.rs`, `src/lib.rs`,
-  `src/main.rs`, API call sites, official-suite protocol, deletion of `src/prelude.ts`.
+- **Touch points.** `crates/typokat-library/src/`, `crates/typokat-driver/src/driver.rs`,
+  `crates/typokat-check/src/check/checker/mod.rs`, `src/lib.rs`,
+  `src/main.rs`, API call sites, official-suite protocol, deletion of `crates/typokat-check/src/prelude.ts`.
 
 ### WU8 — authoritative 2× gate and optimization loop (effort XL)
 
@@ -552,7 +557,7 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   tree and archive handling, exact profile/notice inventory, and mutation/custom-build rejection.
   Its sole MEDIUM finding—package verification absent from CI—was fixed by `263f9ab` before the
   clean-tree gate.
-- WU2 does not change the ordinary user route: `src/prelude.ts` remains production and the decoded
+- WU2 does not change the ordinary user route: `crates/typokat-check/src/prelude.ts` remains production and the decoded
   snapshot is not published. WU3 must now replace the test oracle with a typed, fail-closed,
   pointer-identical `FrozenLibraryBase` provider before any CLI cutover.
 
@@ -821,7 +826,7 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   the commit: hand-rolled `free_params` diverged from the canonical derivation on `Application` and
   the zero-argument arms and was guarded only by `debug_assert_eq!` — in release an under-reported
   vector silently drops the specialization mapper in `intern_declared` (the derivation is memoized
-  and now runs once per committed row, measured neutral, and `src/types/intern/declared.rs` returned
+  and now runs once per committed row, measured neutral, and `crates/typokat-types/src/types/intern/declared.rs` returned
   to byte-identical with HEAD); the commit-time dependency check was provably dead code, since
   `Binder::resolve_type` *is* `resolve_type_traced(…, || {})`; and the `RawAccessAllowance` reason
   claimed authentication where only replay happens. The review reported the diff byte-identical to
@@ -856,7 +861,8 @@ supervises agents, re-runs the final gates, and commits explicit paths only.
   `--all-targets -D warnings` clean, and every integration target green (conformance 14, divergences,
   manifest, surface, incomplete-outcome, class-id-exhaustion). The four remaining failures are the
   packaged `canonical.snapshot`, last regenerated at `90ff28d` and therefore stale since before this
-  batch. **Regeneration and the pin family in `src/library/artifact.rs` remain open**, and must run
+  batch. **Regeneration and the pin family in the then-current `artifact` module remain open**,
+  and must run
   from a clean committed tree via `tooling/library-package/verify.py`.
 
 ### 2026-07-25 — cold source-compile attribution and the checker/generator split
@@ -925,7 +931,8 @@ does nothing for arbitrary user code. Recorded as
   showed that span was 96% not statement checking; real `check_statements` is 19.8 ms, the checking
   pipeline is 277 ms against the comparator's 289 ms, and the rest was generation. The decision was
   correct on 07-21 evidence and is not correct on today's.
-- Two preparatory commits. `4483560` moved the five binder-level items `library_compiler.rs` reached
+- Two preparatory commits. `4483560` moved the five binder-level items
+  `crates/typokat-check/src/check/checker/library_compiler.rs` reached
   into the codec for — `RootNameRow`, `collect_root_rows`, `encode_root_index`, and the source
   checkpoint digests — out of it, and retargeted the test-only `load_strict_profile` sites to
   `ExactLibraryProfile`; that made the codec a leaf with no non-snapshot consumers, at
@@ -961,7 +968,7 @@ does nothing for arbitrary user code. Recorded as
   materially snapshot-coupled — four lines of `provider_probe` schema (`snapshot_schema`,
   `snapshot_product_sha256`) go when WU7 builds the `library-info` subcommand, which does not exist.
 - Remaining critical path is unchanged in shape: WU6 corpus, WU7 production provider + CLI cutover +
-  deletion of `src/prelude.ts`, WU8 the gate, WU9 review. The 1,152 ms of generation the 07-25 entry
+  deletion of `crates/typokat-check/src/prelude.ts`, WU8 the gate, WU9 review. The 1,152 ms of generation the 07-25 entry
   attributed is still on the from-source path — deleting the codec did not delete it, because
   `canonical_library_evidence` and `build_collision_replay_index` live in
   `compile_owned_injected_frontend`, not in the codec. That cut is the next work unit.
@@ -1032,7 +1039,7 @@ Phase attribution before → after (in-place probes, medians of 3, since removed
 
 A throwaway spike wired `check_source`/`check_project` to a published base in a scratch worktree and
 measured what a cutover actually costs. `2a85492` then landed the behaviour-neutral half of it.
-Production still runs `src/prelude.ts`.
+Production still runs `crates/typokat-check/src/prelude.ts`.
 
 - **Nobody had ever run this code.** Seven `#[cfg(test)]` gates stood between non-test code and a
   published `FrozenLibraryBase` — `resume_frozen_library`, `finish_frozen_library_continuation`,
@@ -1046,11 +1053,14 @@ Production still runs `src/prelude.ts`.
   the base publishes no `globalThis`, no cross-file script globals and no UMD globals.
 - **b14 enabled: 7 of 13 flat green, 1 of 12 project green.** Those eight are now on. The rest reduce
   to **five named defect families**, which is the work list for the loader:
-  1. **`declare global` continuation and collision merge *panic*** — `bind.rs:2179` (4 projects) and
-     `mod.rs:1267` (1). Everything else is a wrong answer; this is no answer. Highest priority.
+  1. **`declare global` continuation and collision merge *panic*** —
+     `crates/typokat-binder/src/binder/bind.rs:2179` (4 projects) and
+     `crates/typokat-check/src/check/checker/mod.rs:1267` (1). Everything else is a wrong answer;
+     this is no answer. Highest priority.
   2. **native↔library identity** — `Array<T>`, `ReadonlyArray<T>`, `String` as *annotations* lower to
      the library interface's structural expansion instead of the intrinsic type. Member access is
-     bridged (`library_identities.rs:286`); annotation lowering is not. A 15-surface probe shows
+     bridged (`crates/typokat-check/src/check/checker/library_identities.rs:286`); annotation
+     lowering is not. A 15-surface probe shows
      `Promise`, `Math`, `JSON`, `Date`, `Map`, `Set`, `RegExp`, `keyof string` all work.
   3. **`globalThis`, cross-file script globals, UMD globals** are not published from the base.
   4. **function-shaped constraint satisfaction** — an object type with a call signature fails
@@ -1075,7 +1085,8 @@ Production still runs `src/prelude.ts`.
   grep finds `check_files` only in its own two unit tests. The checker is single-threaded in
   production today; architecture §8.2 Stage 1 is not wired to the CLI.
 - **The 265 library-owned diagnostics cannot reach user output**, before or after a cutover: each
-  user check builds a fresh `EventStore` reserving only user programs (`mod.rs:1195-1207`), confirmed
+  user check builds a fresh `EventStore` reserving only user programs
+  (`crates/typokat-check/src/check/checker/mod.rs:1195-1207`), confirmed
   empirically by 381/410 byte-identical fixtures and a zero-incomplete probe. Backlog
   `99` (shipped 2026-07-27 as [ADR-0018](../decisions/0018-pin-library-owned-records-as-a-named-census.md))'s risk is therefore the **inverse** of
   what WU7 states — not leakage, but that the set is invisible and unmeasurable, exactly as
@@ -1113,9 +1124,10 @@ number for the shape WU8 will eventually gate on, rather than for an in-process 
 - **The 2.0× gate is therefore not reachable single-threaded.** The measured best case for the whole
   single-threaded stack — every optimization identified, including ones not yet built — is ~181 ms,
   i.e. ~1.6×. Closing to 2× requires parallelism, and parallelism is blocked on type identity, not on
-  effort: `TypeId(self.tag.len())` is insertion-ordered (`types/store.rs:690`) and unions canonicalize
-  by sorting raw `TypeId` (`types/intern/operators.rs`), so any reordering changes rendered
-  diagnostic text. `StableHash` (`types/hash.rs`) "reserves the future cross-run content hash slot
+  effort: `TypeId(self.tag.len())` is insertion-ordered
+  (`crates/typokat-types/src/types/store.rs:690`) and unions canonicalize
+  by sorting raw `TypeId` (`crates/typokat-types/src/types/intern/operators.rs`), so any reordering changes rendered
+  diagnostic text. `StableHash` (`crates/typokat-types/src/types/hash.rs`) "reserves the future cross-run content hash slot
   and deliberately returns a zero digest today". That is backlog `16`, blocked on `14` and `15`.
   **Correction to this entry as first written:** it said WU8's 2× target needed re-scoping. The
   binding gate had *already* been restated to `>1.00` on 2026-07-26, before any result was seen —

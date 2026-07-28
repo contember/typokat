@@ -18,7 +18,7 @@ then landed **repeatedly** — `owner_at`, `set_placement_syntax`, the `namespac
 *scan a whole-project collection once per item*. Nothing in the test suite or the benchmark could see
 any of them.
 
-**Gap 1 — the scan probe covers the wrong layer.** `src/types/layered.rs:332` instruments `iter()`
+**Gap 1 — the scan probe covers the wrong layer.** `crates/typokat-types/src/types/layered.rs:332` instruments `iter()`
 with `record_full_view_base_scan_for_test(self.base.len())`, guarding scans of the frozen *library*
 base. But `local_iter()` at `:339` — the user-project delta, which is exactly what every one of the
 quadratics above scans — has **no probe at all**. The guard rail watches the layer that is sealed and
@@ -50,7 +50,7 @@ the new probe assertions, not just by wall clock.
 
 ## Touch points
 
-`src/types/layered.rs` (the `local_iter` probe), binder/checker scaling specs, `tooling/bench/`
+`crates/typokat-types/src/types/layered.rs` (the `local_iter` probe), binder/checker scaling specs, `tooling/bench/`
 gating, `docs/decisions/` template or checklist.
 
 <!-- Origin: bisect of the multi-file regression, 2026-07-25 (findings 6-8). -->

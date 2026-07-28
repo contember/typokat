@@ -31,7 +31,7 @@ out of the current model — document, don't guess.
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/flowgraph.rs` (exit reachability), function-body checking in
-`crates/typokat-check/src/check/checker/`, `src/diagnostics.rs`.
+`crates/typokat-check/src/check/checker/flowgraph/` (exit reachability), function-body checking in
+`crates/typokat-check/src/check/checker/`, `crates/typokat-diagnostics/src/diagnostics/mod.rs`.
 
 <!-- Origin: completion-roadmap review (2026-07-07); probe: (): number with no return is silent. -->

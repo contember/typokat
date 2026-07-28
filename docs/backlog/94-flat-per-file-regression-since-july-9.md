@@ -111,8 +111,11 @@ Ranked by measured MB, not by effort:
    already holds that vector. Worth more on real code than on the bench corpus, which uses
    all-distinct names and has **zero** merges, so every declaration pays the full singleton price.
    Note singleton records cannot simply be dropped: five production loops iterate the record set
-   (`namespace_values.rs:2398`, `library_compiler.rs:3045`, three sites in `bind.rs`,
-   `snapshot.rs:808`), so synthesising them on demand is a behaviour change, not a representation
+   (`crates/typokat-check/src/check/checker/namespace_values.rs:2398`,
+   `crates/typokat-check/src/check/checker/library_compiler.rs:3045`, three sites in
+   `crates/typokat-binder/src/binder/bind.rs`,
+   `crates/typokat-binder/src/binder/references.rs:808`), so synthesising them on demand is a
+   behaviour change, not a representation
    change, and is deliberately deferred.
 5. **Collapse the layered indirection when `base_len() == 0`** — time only.
 6. Re-measure. The diffuse ~7.7 KB/file tail from 07-16 onward needs its own pass if still short.
@@ -123,9 +126,11 @@ ratchet at 0 regressions. Do not weaken ADR-0008's replay determinism to get the
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/lexical_events.rs`, `crates/typokat-check/src/check/checker/events.rs`, `src/binder/declaration.rs`
-(`DeclarationTable`), `src/binder/namespace.rs` (`MergeKey`, `MergeParticipant`,
-`collect_project_namespace_metadata`), `src/types/layered.rs`.
+`crates/typokat-check/src/check/checker/lexical_events.rs`,
+`crates/typokat-check/src/check/checker/events.rs`,
+`crates/typokat-binder/src/binder/declaration.rs`
+(`DeclarationTable`), `crates/typokat-binder/src/binder/namespace.rs` (`MergeKey`, `MergeParticipant`,
+`collect_project_namespace_metadata`), `crates/typokat-types/src/types/layered.rs`.
 
 <!-- Origin: complexity hunt of the modules knee, 2026-07-25, which closed the exponent question and
      exposed this underneath. Bisected 2026-07-26 on peak RSS over f065e89..a0a5a6c with build-input

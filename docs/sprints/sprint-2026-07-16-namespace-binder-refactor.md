@@ -1,8 +1,8 @@
 # Sprint — namespace binder refactor: split & dedup (2026-07-16)
 
-**Goal.** Mechanically restructure `src/binder/namespace.rs` (8 480 lines) into a
-`src/binder/namespace/` submodule tree and remove measured duplication, with bit-identical
-checker behavior.
+**Goal.** Mechanically restructure `crates/typokat-binder/src/binder/namespace.rs` (8 480 lines)
+into a proposed `binder::namespace` submodule tree and remove measured duplication, with
+bit-identical checker behavior.
 
 **Theme.** The shipped namespace sprint left one 5.1k-line implementation file (plus 3.3k lines of in-file
 tests) mixing seven concerns, four parallel AST walkers with mirrored `Statement`/`Declaration`
@@ -12,8 +12,10 @@ sprint is a pure refactor: no semantics, no diagnostics, no new capability. Succ
 scoreboard movement, and the duplication findings below gone.
 
 **Status: planned, not started.** No WU has landed. The plan was written on 2026-07-16 and the
-file has since absorbed the full-library/snapshot work (`+1 040` lines in `namespace.rs`,
-`+1 467` in `bind.rs`, `+757` in `namespace_values.rs` between `547a433` and HEAD), so every
+file has since absorbed the full-library/snapshot work (`+1 040` lines in
+`crates/typokat-binder/src/binder/namespace.rs`, `+1 467` in
+`crates/typokat-binder/src/binder/bind.rs`, `+757` in
+`crates/typokat-check/src/check/checker/namespace_values.rs` between `547a433` and HEAD), so every
 line ref below was re-measured on 2026-07-22.
 
 ## Refs re-verified at HEAD (2026-07-22, `36c3695`)
@@ -21,39 +23,39 @@ line ref below was re-measured on 2026-07-22.
 `✔` = confirmed live · `⚠` = drift/nuance caught. (Line numbers from the 2026-07-16 plan are
 all stale; the values below supersede them.)
 
-- ⚠ `src/binder/namespace.rs` is now 8 480 lines (was 7 954); `mod tests` starts at
-  `src/binder/namespace.rs:5153` (~3 327 test lines, ~5 152 implementation lines). The growth is
+- ⚠ `crates/typokat-binder/src/binder/namespace.rs` is now 8 480 lines (was 7 954); `mod tests` starts at
+  `crates/typokat-binder/src/binder/namespace.rs:5153` (~3 327 test lines, ~5 152 implementation lines). The growth is
   the snapshot round-trip layer (below), not new duplication.
-- ✔ `walk_statement`'s `Declaration`-carrying arms (`src/binder/namespace.rs:3311-3424`)
-  are token-identical to `walk_declaration` (`src/binder/namespace.rs:3532-3645`) — re-diffed
+- ✔ `walk_statement`'s `Declaration`-carrying arms (`crates/typokat-binder/src/binder/namespace.rs:3311-3424`)
+  are token-identical to `walk_declaration` (`crates/typokat-binder/src/binder/namespace.rs:3532-3645`) — re-diffed
   at HEAD with the variant prefix normalized; the only difference is the trailing brace.
-- ✔ `record_deferred_statement` (`src/binder/namespace.rs:4368-4549`) mirrors
-  `record_deferred_declaration` (`src/binder/namespace.rs:4551-4656`) the same way.
-- ✔ `reserve_statement_header` (`src/binder/namespace.rs:4088-4141`) mirrors
-  `reserve_declaration_header` (`src/binder/namespace.rs:4143-4183`).
-- ✔ `bind_selected_namespace_value_statements` (`src/binder/namespace.rs:3044-3095`) mirrors
-  `bind_selected_namespace_value_declaration` (`src/binder/namespace.rs:3097-3131`).
+- ✔ `record_deferred_statement` (`crates/typokat-binder/src/binder/namespace.rs:4368-4549`) mirrors
+  `record_deferred_declaration` (`crates/typokat-binder/src/binder/namespace.rs:4551-4656`) the same way.
+- ✔ `reserve_statement_header` (`crates/typokat-binder/src/binder/namespace.rs:4088-4141`) mirrors
+  `reserve_declaration_header` (`crates/typokat-binder/src/binder/namespace.rs:4143-4183`).
+- ✔ `bind_selected_namespace_value_statements` (`crates/typokat-binder/src/binder/namespace.rs:3044-3095`) mirrors
+  `bind_selected_namespace_value_declaration` (`crates/typokat-binder/src/binder/namespace.rs:3097-3131`).
 - ✔ The same statement/declaration mirroring exists in the ordinary binder:
-  `bind_type_declaration_statement` (`src/binder/bind.rs:936-978`) vs `bind_type_declaration`
-  (`src/binder/bind.rs:980-1016`), and in the checker's namespace body walk
-  (`src/check/checker/namespace_values.rs:2133-2150`).
+  `bind_type_declaration_statement` (`crates/typokat-binder/src/binder/bind.rs:936-978`) vs `bind_type_declaration`
+  (`crates/typokat-binder/src/binder/bind.rs:980-1016`), and in the checker's namespace body walk
+  (`crates/typokat-check/src/check/checker/namespace_values.rs:2133-2150`).
 - ✔ `oxc_ast` 0.137.0 (pinned in `Cargo.toml:24`) generates `Statement::as_declaration()` via
   `inherit_variants!` (`oxc_ast-0.137.0/src/ast/macros.rs:790`); the codebase still does not use
   it anywhere (`grep as_declaration() src/` is empty).
 - ⚠ `declaration_owner_scope` still exists three times with identical match logic:
-  `src/binder/namespace.rs:2304` (on `Binder`), `src/binder/namespace.rs:3793`
-  (free fn over `&BindState`), `src/check/checker/namespace_values.rs:2812` (free fn over
+  `crates/typokat-binder/src/binder/namespace.rs:2304` (on `Binder`), `crates/typokat-binder/src/binder/namespace.rs:3793`
+  (free fn over `&BindState`), `crates/typokat-check/src/check/checker/namespace_values.rs:2812` (free fn over
   `&Pass`, **now generic over `Ticket: Copy + PartialEq`** — new since the plan).
   The 2026-07-16 ⚠ is **resolved**: `Binder::compilation_global` is `ScopeId`
-  (`src/binder/bind.rs:51`), `NamespaceTable::compilation_global` is `Option<ScopeId>`
-  (`src/binder/namespace.rs:858`) and is set to `Some(compilation_global)` at
-  `src/binder/namespace.rs:2847` at the start of metadata binding — same scope; the `Option`
+  (`crates/typokat-binder/src/binder/bind.rs:51`), `NamespaceTable::compilation_global` is `Option<ScopeId>`
+  (`crates/typokat-binder/src/binder/namespace.rs:858`) and is set to `Some(compilation_global)` at
+  `crates/typokat-binder/src/binder/namespace.rs:2847` at the start of metadata binding — same scope; the `Option`
   only encodes "not yet bound". A unified host must therefore still return `Option`.
-- ⚠ `NamespaceTable::classify` (`src/binder/namespace.rs:1326-1534`) has grown: **seven**
+- ⚠ `NamespaceTable::classify` (`crates/typokat-binder/src/binder/namespace.rs:1326-1534`) has grown: **seven**
   canonical-ordering blocks (`canonical_namespaces`, `canonical_globals`,
   `canonical_deferred_modules`, `canonical_source_units`, `canonical_deferred_children`,
   `canonical_umd_exports`, `canonical_export_contexts`), and each is now **doubled** by a
-  `library_order` branch (`src/binder/namespace.rs:1328`, from `uses_library_shared_globals()`)
+  `library_order` branch (`crates/typokat-binder/src/binder/namespace.rs:1328`, from `uses_library_shared_globals()`)
   whose key flips component order — `(origin, start, source)` vs `(source, start, origin)`.
   That is 14 sort sites, plus two more `library_order`-branched in-place sorts
   (`namespace.fragments` at `:1331`/`:1343`, merge `declarations` at `:1394`/`:1402`).
@@ -68,22 +70,30 @@ all stale; the values below supersede them.)
   (`crates/typokat-binder/src/binder/namespace.rs:5138`) covers the same match with a richer return
   type.
 - ✔ The 12-variant "plain runtime statement" guard list is duplicated between
-  `src/binder/namespace.rs:3502-3514` and `src/check/checker/namespace_values.rs:2151-2163`
+  `crates/typokat-binder/src/binder/namespace.rs:3502-3514` and
+  `crates/typokat-check/src/check/checker/namespace_values.rs:2151-2163`
   (re-diffed at HEAD: same 12 variants, same order).
-- ⚠ jscpd 5.0.12 (`-k 60 -l 8 --skip-comments`, `--ignore '**/*.d.ts'` — `src/library/` now
+- ⚠ jscpd 5.0.12 (`-k 60 -l 8 --skip-comments`, `--ignore '**/*.d.ts'` — `crates/typokat-library/src/` now
   vendors TypeScript 6.0.3 `.d.ts`) over `src/`: **295** rust clones repo-wide (was 203), still
-  **9** touching `binder/namespace.rs`, and still exactly **one** production cross-file clone —
-  the guard list above (`namespace.rs:3502-3514` ↔ `namespace_values.rs:2151-2163`). The
+  **9** touching `crates/typokat-binder/src/binder/namespace.rs`, and still exactly **one** production cross-file clone —
+  the guard list above (`crates/typokat-binder/src/binder/namespace.rs:3502-3514` ↔
+  `crates/typokat-check/src/check/checker/namespace_values.rs:2151-2163`). The
   dominant duplication remains intra-file (four of the nine clones are the mirrored walkers).
 - ⚠ External consumers of the namespace module have expanded well past the plan's three files:
-  ~20 files now name `binder::namespace::…`, including `src/binder/symbol.rs`,
-  `src/binder/declaration.rs`, `src/diagnostics/mod.rs`, `src/check/checker/library_reporting.rs`,
-  `src/check/checker/wu0b_library.rs`, `src/check/checker/function_groups.rs`,
-  `src/check/checker/decls/*`, `src/check/checker/classes/*`. **`src/binder/snapshot.rs` (test-only)
+  ~20 files now name `binder::namespace::…`, including `crates/typokat-binder/src/binder/symbol.rs`,
+  `crates/typokat-binder/src/binder/declaration.rs`,
+  `crates/typokat-diagnostics/src/diagnostics/mod.rs`,
+  `crates/typokat-check/src/check/checker/library_reporting.rs`,
+  `crates/typokat-check/src/check/checker/library_compiler.rs`,
+  `crates/typokat-check/src/check/checker/function_groups.rs`,
+  `crates/typokat-check/src/check/checker/decls/*`,
+  `crates/typokat-check/src/check/checker/classes/*`.
+  **`crates/typokat-binder/src/binder/references.rs` (test-only)
   does `use super::namespace::*`** — a glob, so WU5's `mod.rs` re-export must be exhaustive or
   that module breaks.
 - ⚠ The dormant-substrate count has shrunk as the full-library work started consuming the
-  metadata layer: at HEAD, **17 of 39** top-level `pub` items in `namespace.rs` have no
+  metadata layer: at HEAD, **17 of 39** top-level `pub` items in
+  `crates/typokat-binder/src/binder/namespace.rs` have no
   production consumer outside the file (`AliasContext`, `AliasSpaceIntent`, `DeclarationSpaces`,
   `DeclarationSyntaxFacts`, `DeferredChildKind`, `DeferredModuleKind`, `ImportBindingForm`,
   `ImportSyntaxFacts`, `Merge{Classification,Composition,CompositionKind,Record}`,
@@ -102,8 +112,8 @@ all stale; the values below supersede them.)
   (114), `record_deferred_statement`/`record_deferred_declaration` (106),
   `reserve_statement_header`/`reserve_declaration_header` (41),
   `bind_selected_namespace_value_statements`/`bind_selected_namespace_value_declaration` (35)
-  (all `src/binder/namespace.rs`), and `bind_type_declaration_statement`/
-  `bind_type_declaration` (`src/binder/bind.rs`, 37). Any new declaration form must be added in
+  (all `crates/typokat-binder/src/binder/namespace.rs`), and `bind_type_declaration_statement`/
+  `bind_type_declaration` (`crates/typokat-binder/src/binder/bind.rs`, 37). Any new declaration form must be added in
   two places per walker — a drift trap.
 - **Verify first.** Diff each pair arm-by-arm to confirm exact behavioral equality
   (re-done at HEAD for all five — the only statement-side extras are statement-only forms:
@@ -115,38 +125,39 @@ all stale; the values below supersede them.)
   walker and delete the mirrored arms. Keep statement-only arms exactly as they are. One
   nuance: `record_deferred_statement` must pass `exported: false` when delegating (its
   current inline arms all use `OrdinaryDeclaration`). Also collapse the mirrored export arm
-  in `src/check/checker/namespace_values.rs:2133-2150` by delegating to the same per-kind
+  in `crates/typokat-check/src/check/checker/namespace_values.rs:2133-2150` by delegating to the same per-kind
   helpers.
 - **Acceptance / witness.** `cargo test` (unit + conformance) and
   `tooling/official-suite` `run --check` pass with zero change; `git diff --stat` shows
   namespace.rs shrinking by roughly 300 lines with no test file edits; the four mirrored-walker
-  clones drop out of the jscpd report (9 → 5 clones touching `binder/namespace.rs`).
-- **Touch points.** `src/binder/namespace.rs`, `src/binder/bind.rs`,
-  `src/check/checker/namespace_values.rs`.
+  clones drop out of the jscpd report (9 → 5 clones touching `crates/typokat-binder/src/binder/namespace.rs`).
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`, `crates/typokat-binder/src/binder/bind.rs`,
+  `crates/typokat-check/src/check/checker/namespace_values.rs`.
 
 ### WU2 — single `declaration_owner_scope` (effort S)
 
 - **Problem.** Three identical implementations (binder ×2, checker ×1) of owner→scope
   projection; a future `DeclarationOwner` variant must be handled three times.
 - **Verify first.** *Done at HEAD* — `Binder::compilation_global: ScopeId`
-  (`src/binder/bind.rs:51`) and `NamespaceTable::compilation_global: Option<ScopeId>`
-  (`src/binder/namespace.rs:858`) denote the same scope; the table's field is filled at
-  `src/binder/namespace.rs:2847` and the `Option` only encodes "not yet bound". So the unified
+  (`crates/typokat-binder/src/binder/bind.rs:51`) and `NamespaceTable::compilation_global: Option<ScopeId>`
+  (`crates/typokat-binder/src/binder/namespace.rs:858`) denote the same scope; the table's field is filled at
+  `crates/typokat-binder/src/binder/namespace.rs:2847` and the `Option` only encodes "not yet bound". So the unified
   method returns `Option<ScopeId>` and the two `Some(binder.compilation_global)` call sites
   keep working unchanged.
 - **Scope.** One method on `NamespaceTable` (it owns namespaces, fragments, and the
-  compilation-global field); the `Binder` method (`src/binder/namespace.rs:2304`), the
+  compilation-global field); the `Binder` method (`crates/typokat-binder/src/binder/namespace.rs:2304`), the
   `BindState` free fn (`:3793`), and the checker free fn
-  (`src/check/checker/namespace_values.rs:2812`, generic over `Ticket`) become delegating
+  (`crates/typokat-check/src/check/checker/namespace_values.rs:2812`, generic over `Ticket`) become delegating
   one-liners or are inlined away. The checker's `Ticket` generic is incidental — it only reaches
   `pass.binder`, so delegation drops the generic entirely.
 - **Acceptance / witness.** Same gates as WU1; exactly one match over `DeclarationOwner`
   variants remains in the tree (grep witness).
-- **Touch points.** `src/binder/namespace.rs`, `src/check/checker/namespace_values.rs`.
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`,
+  `crates/typokat-check/src/check/checker/namespace_values.rs`.
 
 ### WU3 — canonical-ordering helper in `classify` (effort S)
 
-- **Problem.** `NamespaceTable::classify` (`src/binder/namespace.rs:1326-1534`) repeats the
+- **Problem.** `NamespaceTable::classify` (`crates/typokat-binder/src/binder/namespace.rs:1326-1534`) repeats the
   "build 0..n id vector, then sort under a `library_order` branch" block **seven** times
   (`:1357`, `:1454`, `:1468`, `:1482`, `:1494`, `:1506`, `:1518`) — 14 sort sites in all.
 - **Verify first.** Confirm all fourteen keys are strict total orders and that the two branches
@@ -165,10 +176,10 @@ all stale; the values below supersede them.)
   (`standalone_namespace_storage_order_uses_stable_source_keys`,
   `namespace_public_type_groups_are_source_ordered_across_global_reopenings`) stay untouched
   and green. Since the snapshot layer landed, `NamespaceTable::validate_snapshot_canonical`
-  (`src/binder/namespace.rs:1318`) is an additional, sharper witness: it re-derives ordering
+  (`crates/typokat-binder/src/binder/namespace.rs:1318`) is an additional, sharper witness: it re-derives ordering
   from a decoded snapshot and fails closed on any drift — run the snapshot round-trip tests
   explicitly, not just the ordering ones.
-- **Touch points.** `src/binder/namespace.rs`.
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`.
 
 ### WU4 — shared small helpers across binder/checker/frontend (effort S)
 
@@ -186,23 +197,24 @@ all stale; the values below supersede them.)
   `metadata_name` may stay — it returns `MetadataName`, a different contract) and one binder-owned
   `is_plain_runtime_statement(&Statement) -> bool` predicate consumed by check.
 - **Acceptance / witness.** Same gates; jscpd re-run reports zero production cross-file
-  clones touching `binder/namespace.rs`.
+  clones touching `crates/typokat-binder/src/binder/namespace.rs`.
 - **Touch points.** `crates/typokat-frontend/src/frontend.rs`,
   `crates/typokat-check/src/check/checker/mod.rs`,
   `crates/typokat-check/src/check/checker/namespace_values.rs`,
   `crates/typokat-binder/src/binder/namespace.rs`.
 
-### WU5 — split `binder/namespace.rs` into a submodule directory (effort M)
+### WU5 — split `crates/typokat-binder/src/binder/namespace.rs` into a submodule directory (effort M)
 
 - **Problem.** One file hosts seven concerns plus 3.3k lines of tests; navigation and
-  review-scoping suffer (the checker side is already split into `check/checker/` submodules).
+  review-scoping suffer (the checker side is already split into `crates/typokat-check/src/check/checker/` submodules).
 - **Verify first.** Confirm all external consumers import via `crate::binder::namespace::…`
   so a `mod.rs` with `pub use` re-exports keeps every consumer path unchanged; confirm
   in-file tests only need `super::` access (they do — they exercise private items, so tests
-  must stay inside the module tree). ⚠ `src/binder/snapshot.rs` glob-imports
+  must stay inside the module tree). ⚠ `crates/typokat-binder/src/binder/references.rs` glob-imports
   (`use super::namespace::*`), so the re-export list must be exhaustive — a missing `pub use`
   fails only under `cfg(test)`; build with `cargo test --no-run` before trusting `cargo build`.
-- **Scope.** Move-only split into `src/binder/namespace/`:
+- **Scope.** Move-only split beneath the current
+  `crates/typokat-binder/src/binder/namespace.rs` module:
   - `mod.rs` — id newtypes, `SourceFileKind`/`ModuleBindingContext`/`CompilationUnit`,
     `has_external_module_indicator`, and `pub use` re-exports (public API unchanged);
   - `metadata.rs` — the record/enum layer (`Namespace`, `NamespaceFragment`,
@@ -225,12 +237,13 @@ all stale; the values below supersede them.)
   - `tests.rs` — the existing `mod tests` moved verbatim.
   Exact file boundaries may shift at implementation time; the rule is move + minimal
   visibility adjustments (`pub(super)`/`pub(crate)`) only — no logic edits in this WU.
-- **Acceptance / witness.** Same gates; `git diff` outside `src/binder/namespace*` is empty
-  except `src/binder/mod.rs`; no file in the new directory exceeds ~1 500 lines
+- **Acceptance / witness.** Same gates; `git diff` outside `crates/typokat-binder/src/binder/namespace*` is empty
+  except `crates/typokat-binder/src/binder/mod.rs`; no file in the new directory exceeds ~1 500 lines
   (tests excluded — ~4 800 post-WU1 implementation lines over nine files leaves comfortable
   headroom).
-- **Touch points.** `src/binder/namespace.rs` → `src/binder/namespace/*`,
-  `src/binder/mod.rs`. ⚠ `src/binder/snapshot.rs` may need its glob import narrowed.
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs` → the proposed submodule tree,
+  `crates/typokat-binder/src/binder/mod.rs`.
+  ⚠ `crates/typokat-binder/src/binder/references.rs` may need its glob import narrowed.
 
 ## Out of scope (explicit)
 
@@ -243,7 +256,7 @@ all stale; the values below supersede them.)
   untouched — no re-encoding, no schema change, no ordering change. It belongs to the active
   full-library sprint; this refactor only moves it.
 - **Perf cleanups** (linear scans in `standalone_merge_record` at
-  `src/binder/namespace.rs:1666` and `root_merge_record` at `:2320`, and the linear `.find`
+  `crates/typokat-binder/src/binder/namespace.rs:1666` and `root_merge_record` at `:2320`, and the linear `.find`
   cluster at `:1585`/`:1678`/`:1779`/`:1896`/`:1994`): O(n²) patterns that are harmless at
   current sizes; index them only with profiling evidence, per the ADR-0001 profiling-gate
   spirit. ⚠ The full-library work has raised the input sizes these scans see — if profiling
@@ -254,8 +267,8 @@ all stale; the values below supersede them.)
   sprint's theme.
 - **Other cross-file clones** found by jscpd outside the namespace theme — the repo-wide count
   has grown from 203 to 295 rust clones as the full-library work landed, and the new
-  `check/checker/wu0b_*` / `*_spec.rs` modules carry much of it. Cleaning those up is a separate
-  sprint; this one is scoped to the nine clones touching `binder/namespace.rs`.
+  `crates/typokat-check/src/check/checker/wu0b_*` / `*_spec.rs` modules carry much of it. Cleaning those up is a separate
+  sprint; this one is scoped to the nine clones touching `crates/typokat-binder/src/binder/namespace.rs`.
 
 ## Decisions
 
@@ -273,8 +286,11 @@ all stale; the values below supersede them.)
    this refactor starts.
 2. ⚠ **New blocking gate:** do not start while
    [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprint-2026-07-21-full-lib-performance-cutover.md)
-   is active. It is rewriting the exact three files this refactor touches (`namespace.rs`,
-   `bind.rs`, `namespace_values.rs` took `+2 852/-412` lines between the plan and HEAD), and a
+   is active. It is rewriting the exact three files this refactor touches
+   (`crates/typokat-binder/src/binder/namespace.rs`,
+   `crates/typokat-binder/src/binder/bind.rs`, and
+   `crates/typokat-check/src/check/checker/namespace_values.rs` took `+2 852/-412` lines between
+   the plan and HEAD), and a
    whole-file split landing mid-flight turns every one of its edits into a conflict. This sprint
    waits for that one to close, then re-verifies the ref block again before WU1.
 3. WU1 → WU2 → WU3 → WU4 (independent of each other after WU1; may be one subagent run,
@@ -296,8 +312,9 @@ all stale; the values below supersede them.)
   `NamespaceTable` (WU5 gains a `snapshot.rs` slice); the checker's `declaration_owner_scope`
   became generic over `Ticket`; the `compilation_global` ⚠ from 2026-07-16 is resolved (same
   scope, `Option` only means "not yet bound"); the namespace module's consumer set expanded from
-  three files to ~20, one of them (`src/binder/snapshot.rs`) glob-importing it; and the
+  three files to ~20, one of them (`crates/typokat-binder/src/binder/references.rs`)
+  glob-importing it; and the
   `OriginalModuleOrdinal` out-of-scope note is obsolete — that copy was consolidated into
-  `src/source.rs`, so the bullet is dropped. Measured removable duplication in WU1 is ~335 lines
+  `crates/typokat-core/src/source.rs`, so the bullet is dropped. Measured removable duplication in WU1 is ~335 lines
   (the plan's ~430 was an over-estimate). Added a blocking sequencing gate on the active
   full-lib performance sprint.

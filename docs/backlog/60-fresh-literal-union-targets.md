@@ -10,7 +10,8 @@ title: Fresh literals vs union targets — excess and assignability silently ski
 
 - **Excess-property check skipped** for `A | null` and multi-shape unions:
   `const u: A | B = { a: "s", extra: 1 }` and `const v: A | null = { a: "s", extra: 1 }`
-  pass (only `A | undefined` works). `contextual_literal_target` (`expr.rs:841-856`)
+  pass (only `A | undefined` works). `contextual_literal_target`
+  (`crates/typokat-check/src/check/checker/expr.rs:841-856`)
   unwraps a union only when every non-shape member is exactly `Undefined`, and
   `check_object_excess_properties` no-ops on a non-object target.
 - **Assignability miss on unions of optional-member objects:**
@@ -35,7 +36,8 @@ multi-shape, discriminated unions must stay working); cross-check tsc 6.0.3 --st
 ## Touch points
 
 `crates/typokat-check/src/check/checker/expr.rs` (`contextual_literal_target`),
-`crates/typokat-check/src/check/checker/assignment.rs` (excess against unions), `src/relate/relation.rs`
+`crates/typokat-check/src/check/checker/assignment.rs` (excess against unions),
+`crates/typokat-relate/src/relate/relation/mod.rs`
 (fresh-literal union-target rule), m30 corpus extension.
 
 <!-- Origin: cross-cutting soundness review 2026-07-07 (modules reviewer #3 + evaluator observation), leader-verified. -->
