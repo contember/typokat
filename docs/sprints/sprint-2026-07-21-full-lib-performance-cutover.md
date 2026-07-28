@@ -389,8 +389,16 @@ the claim to the easy fast path.
   `crates/typokat-check/src/check/checker/mod.rs`, `src/lib.rs`,
   `src/main.rs`, API call sites, official-suite protocol, deletion of `crates/typokat-check/src/prelude.ts`.
 
-### WU8 — authoritative 2× gate and optimization loop (effort XL)
+### WU8 — authoritative performance gate and optimization loop (effort XL)
 
+- **Blocked by two things this WU does not itself describe.** (a) Backlog
+  [`103`](../backlog/103-library-merge-panics-and-routing.md)'s correctness tier: `collision` and
+  `fanout` exit 3 by design under the guard tier, so two of the four rows cannot produce a time —
+  WU8 is *hard-blocked* on `103`, not merely sequenced after it. (b) The runner cannot invoke the
+  CLI as it stands: its `provider_probe` requires a `library-info --format json` subcommand that
+  does not exist, and the probe schema still validates the retired `snapshot_schema` /
+  `snapshot_product_sha256` fields. Both are recorded with citations in the refs section; fix them
+  before treating any WU8 result as evidence.
 - **Problem.** Prototype timing cannot support a production performance claim, and optimizing only
   the easiest row would violate the contract.
 - **Verify first.** Freeze the exact release commit and binaries; run semantic, identity, route,
@@ -1324,8 +1332,15 @@ HEAD:
 One more stale threshold went with this pass: `docs/sprints/README.md` still advertised the sprint
 as "a fail-closed fresh-process target of at least 2× native TypeScript 7", retired on 2026-07-26.
 
-**Left for the leader, not edited.** WU8's heading still reads "authoritative 2× gate" — renaming a
-work unit is more than a record correction. The `MILESTONE_DIRS` comment claiming "Five project
+**Leader decisions on what the re-verification surfaced.** WU8's heading read "authoritative 2× gate"
+four weeks after that threshold was restated, so a reader scanning headings got the wrong contract;
+renamed to "authoritative performance gate". WU8 also now names its own two blockers, which were
+documented in the refs section and nowhere near the work unit itself: `103`'s correctness tier (two
+of four rows cannot produce a time at all, so this is a hard block, not a sequence) and the missing
+`library-info` subcommand its runner probes for. Neither edit touches scope, acceptance or the
+threshold.
+
+**Still open, not verified.** The `MILESTONE_DIRS` comment claiming "Five project
 fixtures currently PANIC" predates backlog `103`'s guard tier (`b223817`), which converted all five
 frozen-prefix `.expect` sites into recorded refusals; it is probably stale, but proving it needs the
 disabled fixtures actually run, so it was left alone. Several immutable ADRs carry pre-split paths
