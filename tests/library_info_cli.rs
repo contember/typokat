@@ -5,11 +5,10 @@ use std::process::Command;
 use serde_json::Value;
 
 const BIN: &str = env!("CARGO_BIN_EXE_typokat");
-const PROFILE_SHA256: &str =
-    "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
+const PROFILE_SHA256: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 
 #[test]
-fn library_info_reports_the_source_compiled_production_profile() {
+fn library_info_reports_the_embedded_profile_and_current_prelude_route() {
     let output = Command::new(BIN)
         .args(["library-info", "--format", "json"])
         .output()
@@ -26,7 +25,7 @@ fn library_info_reports_the_source_compiled_production_profile() {
             "schema": 1,
             "profile_sha256": PROFILE_SHA256,
             "file_count": 82,
-            "provider_route": "production-default-library"
+            "provider_route": "prelude"
         })
     );
 }

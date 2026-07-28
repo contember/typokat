@@ -259,6 +259,16 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.ContractError, "provider route differs"):
             bench.validate_provider_observation(observed, self.contract)
 
+    def test_boolean_provider_schema_is_rejected(self) -> None:
+        observed = {
+            "schema": True,
+            "profile_sha256": self.contract["profile"]["length_framed_sha256"],
+            "file_count": 82,
+            "provider_route": self.contract["provider_probe"]["provider_route"],
+        }
+        with self.assertRaisesRegex(bench.ContractError, "not bool"):
+            bench.validate_provider_observation(observed, self.contract)
+
     def test_timing_windows_require_real_sixty_second_gap(self) -> None:
         previous = datetime(2026, 1, 1, tzinfo=timezone.utc)
         with self.assertRaisesRegex(bench.ContractError, "at least 60 seconds"):
