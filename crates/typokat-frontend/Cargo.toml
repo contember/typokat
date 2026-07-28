@@ -1,0 +1,16 @@
+[package]
+name = "typokat-frontend"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+typokat-binder.workspace = true
+typokat-core.workspace = true
+typokat-types.workspace = true
+
+[lints]
+workspace = true

@@ -22,42 +22,42 @@ pub struct FileInput {
 }
 
 /// One parsed project unit handed to the serial project checker.
-pub(crate) struct ProjectProgram<'ast> {
-    pub(crate) module_ordinal: ModuleOrdinal,
-    pub(crate) unit_slot: UnitSlot,
-    pub(crate) normalized_path: String,
+pub struct ProjectProgram<'ast> {
+    pub module_ordinal: ModuleOrdinal,
+    pub unit_slot: UnitSlot,
+    pub normalized_path: String,
     pub program: &'ast Program<'ast>,
-    pub(crate) compilation_unit: CompilationUnit,
-    pub(crate) imports: Vec<ProjectImport>,
+    pub compilation_unit: CompilationUnit,
+    pub imports: Vec<ProjectImport>,
 }
 
 /// One named import after the frontend has resolved its module specifier.
-pub(crate) struct ProjectImport {
-    pub(crate) local: String,
-    pub(crate) imported: String,
-    pub(crate) module: String,
-    pub(crate) source: ProjectImportSource,
-    pub(crate) type_only: bool,
+pub struct ProjectImport {
+    pub local: String,
+    pub imported: String,
+    pub module: String,
+    pub source: ProjectImportSource,
+    pub type_only: bool,
     /// Exact local binding-name span used to attach binder identity.
-    pub(crate) local_span: Span,
+    pub local_span: Span,
     /// Full import-specifier span used for diagnostics.
-    pub(crate) span: Span,
+    pub span: Span,
     /// Owning import-declaration start reserved before project binding.
-    pub(crate) owner_start: u32,
+    pub owner_start: u32,
 }
 
-pub(crate) enum ProjectImportSource {
+pub enum ProjectImportSource {
     Resolved(usize),
     Missing(String),
 }
 
-pub(crate) struct SourceFrontendRun<Product> {
-    pub(crate) parse_errors: Vec<String>,
-    pub(crate) product: Option<Product>,
+pub struct SourceFrontendRun<Product> {
+    pub parse_errors: Vec<String>,
+    pub product: Option<Product>,
 }
 
 /// Parse one TypeScript source and keep its borrowed AST inside `consume`.
-pub(crate) fn run_source_frontend<Product>(
+pub fn run_source_frontend<Product>(
     source: &str,
     consume: impl for<'ast> FnOnce(&Program<'ast>) -> Product,
 ) -> SourceFrontendRun<Product> {
@@ -71,20 +71,20 @@ pub(crate) fn run_source_frontend<Product>(
     }
 }
 
-pub(crate) struct ProjectFrontendRun<Product> {
-    pub(crate) inputs: Vec<FileInput>,
-    pub(crate) parse_errors: Vec<Vec<String>>,
-    pub(crate) product: Product,
+pub struct ProjectFrontendRun<Product> {
+    pub inputs: Vec<FileInput>,
+    pub parse_errors: Vec<Vec<String>>,
+    pub product: Product,
 }
 
 impl<Product> ProjectFrontendRun<Product> {
-    pub(crate) fn into_product(self) -> Product {
+    pub fn into_product(self) -> Product {
         self.product
     }
 }
 
 /// Parse, resolve, and dependency-order a local relative-module project.
-pub(crate) fn run_project_frontend<Product>(
+pub fn run_project_frontend<Product>(
     inputs: Vec<FileInput>,
     consume: impl for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Product,
 ) -> ProjectFrontendRun<Product> {

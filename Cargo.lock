@@ -830,6 +830,7 @@ dependencies = [
  "typokat-binder",
  "typokat-core",
  "typokat-diagnostics",
+ "typokat-frontend",
  "typokat-relate",
  "typokat-surface",
  "typokat-types",
@@ -865,6 +866,19 @@ dependencies = [
  "typokat-binder",
  "typokat-core",
  "typokat-relate",
+ "typokat-types",
+]
+
+[[package]]
+name = "typokat-frontend"
+version = "0.1.0"
+dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_span",
+ "typokat-binder",
+ "typokat-core",
  "typokat-types",
 ]
 

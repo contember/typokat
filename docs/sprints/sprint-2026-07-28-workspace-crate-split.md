@@ -172,3 +172,8 @@ independent reviewer; fixes return to the implementation agent before closure.
   continue to pin classifier completeness, and active inventory/census paths now
   name the member owner. The full gate remains 1,287 passed / 16 ignored with
   clean all-target clippy.
+- 2026-07-28: WU3 started with `typokat-frontend` owning source inputs, parser
+  arenas, project programs, import resolution, and dependency ordering. Its
+  seven normal dependencies are limited to `core`, `types`, `binder`, and the
+  Oxc allocator/AST/parser/span stack; it has no semantic-checker or reporting
+  edge. The full gate remains 1,287 passed / 16 ignored with clean clippy.

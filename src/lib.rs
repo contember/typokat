@@ -8,7 +8,7 @@ pub mod check;
 pub use typokat_diagnostics::diagnostics;
 pub(crate) use typokat_types::class_semantics;
 pub mod driver;
-pub mod frontend;
+pub use typokat_frontend::frontend;
 pub mod library;
 pub(crate) use typokat_core::source;
 pub use typokat_core::span;
@@ -45,7 +45,10 @@ mod build_reproducibility_tests {
                     .any(|path| path == &root.join("crates/typokat-diagnostics/src/lib.rs"))
                 && sources
                     .iter()
-                    .any(|path| path == &root.join("crates/typokat-surface/src/lib.rs")),
+                    .any(|path| path == &root.join("crates/typokat-surface/src/lib.rs"))
+                && sources
+                    .iter()
+                    .any(|path| path == &root.join("crates/typokat-frontend/src/lib.rs")),
             "reproducibility scan must cover root and workspace-member sources"
         );
         let offenders = sources
@@ -129,7 +132,7 @@ mod build_reproducibility_tests {
             ],
         );
         assert_absent(
-            "src/frontend.rs",
+            "crates/typokat-frontend/src/frontend.rs",
             &["crate::check", "crate::library", "crate::driver"],
         );
         assert_absent(
