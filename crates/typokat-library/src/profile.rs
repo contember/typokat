@@ -568,7 +568,30 @@ pub struct ExactLibraryProfile {
     sources: Vec<ExactLibrarySource>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExactLibraryProfileMetadata {
+    profile_identity: &'static str,
+    file_count: usize,
+}
+
+impl ExactLibraryProfileMetadata {
+    pub(crate) const fn profile_identity(self) -> &'static str {
+        self.profile_identity
+    }
+
+    pub(crate) const fn file_count(self) -> usize {
+        self.file_count
+    }
+}
+
 impl ExactLibraryProfile {
+    pub(crate) const fn packaged_metadata() -> ExactLibraryProfileMetadata {
+        ExactLibraryProfileMetadata {
+            profile_identity: PROFILE_IDENTITY,
+            file_count: EXPECTED_SOURCES.len(),
+        }
+    }
+
     pub fn load_packaged() -> Result<Self, LibraryProfileError> {
         let profile = Self::embedded();
         profile.verify_packaged_assets()?;

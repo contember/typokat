@@ -38,6 +38,28 @@ pub use records::{
     LibraryRecordCensus, LibraryRecordCensusDifference, LibraryRecordEntry, LibraryRecordKind,
 };
 
+/// Stable public identity of the packaged default-library source profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EmbeddedLibraryProfileMetadata {
+    profile: profile::ExactLibraryProfileMetadata,
+}
+
+impl EmbeddedLibraryProfileMetadata {
+    pub const fn profile_identity(self) -> &'static str {
+        self.profile.profile_identity()
+    }
+
+    pub const fn file_count(self) -> usize {
+        self.profile.file_count()
+    }
+}
+
+pub const fn embedded_library_profile_metadata() -> EmbeddedLibraryProfileMetadata {
+    EmbeddedLibraryProfileMetadata {
+        profile: profile::ExactLibraryProfile::packaged_metadata(),
+    }
+}
+
 #[cfg(test)]
 mod user_delta_spec;
 

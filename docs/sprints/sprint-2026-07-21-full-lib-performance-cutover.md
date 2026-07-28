@@ -93,11 +93,10 @@ facts re-checked, and four of its bullets described things that no longer exist.
   measurement of 2026-07-27: tsgo **289.6 ms** against typokat **260 ms**, i.e. **1.12-1.14×**.
   WU8 still owns the frozen binary identity and the authoritative interleaved distributions.
 - ⚠ **WU8 has never run.** `tooling/full-lib-bench/evidence/` holds exactly one file, WU0A's
-  `wu0a-red.json` (2026-07-21). The runner cannot execute against the CLI as it stands: its
-  `provider_probe` requires `typokat library-info --format json`
-  (`tooling/full-lib-bench/contract.toml:7-10`) and no such subcommand exists, and the probe schema
-  still carries the retired `snapshot_schema`/`snapshot_product_sha256` fields
-  (`tooling/full-lib-bench/full_lib_bench.py:135-139`, `:1659-1660`).
+  `wu0a-red.json` (2026-07-21). The public `typokat library-info --format json` plumbing now exists
+  and the contract no longer carries retired snapshot fields. Until WU7 performs the atomic CLI
+  cutover, the probe truthfully reports `provider_route: "prelude"` while the benchmark requires
+  `production-default-library`, so collection fails closed before timing.
 - ✔ ADR-0011 accepts the exact embedded profile, one immutable AST-free base, identity-preserving
   private deltas, a conservative preflight, and a correctness-first same-pipeline private rebuild —
   `docs/decisions/0011-freeze-pinned-default-library-base.md:286-315`,
@@ -391,14 +390,12 @@ the claim to the easy fast path.
 
 ### WU8 — authoritative performance gate and optimization loop (effort XL)
 
-- **Blocked by two things this WU does not itself describe.** (a) Backlog
+- **Blocked by backlog `103` and the subsequent WU7 cutover.** Backlog
   [`103`](../backlog/103-library-merge-panics-and-routing.md)'s correctness tier: `collision` and
   `fanout` exit 3 by design under the guard tier, so two of the four rows cannot produce a time —
-  WU8 is *hard-blocked* on `103`, not merely sequenced after it. (b) The runner cannot invoke the
-  CLI as it stands: its `provider_probe` requires a `library-info --format json` subcommand that
-  does not exist, and the probe schema still validates the retired `snapshot_schema` /
-  `snapshot_product_sha256` fields. Both are recorded with citations in the refs section; fix them
-  before treating any WU8 result as evidence.
+  WU8 is *hard-blocked* on `103`, not merely sequenced after it. The runner plumbing is complete,
+  but its route probe deliberately rejects the current prelude-backed CLI until WU7 switches both
+  checking and attestation to the production default-library provider.
 - **Problem.** Prototype timing cannot support a production performance claim, and optimizing only
   the easiest row would violate the contract.
 - **Verify first.** Freeze the exact release commit and binaries; run semantic, identity, route,
@@ -1347,3 +1344,11 @@ passes unchanged and is now the second enabled project fixture; the other ten re
 mismatches or typed refusals. Several immutable ADRs carry pre-split paths (`0011`, `0012` and
 `0004` say `src/prelude.ts`; `0018` says `src/library/compiler.rs`; `0016` says `src/relate/…`;
 `0002` says `src/types/repr.rs`) — by convention they keep their historical references.
+
+**WU8's independent plumbing is complete.** The CLI exposes a source-profile `library-info` JSON
+probe, the benchmark contract and evidence validator no longer know about the retired snapshot,
+and the restated strict `>1.00` / `1.25×` thresholds are executable. Adversarial review caught two
+Python `bool == 1` schema holes and, more importantly, rejected an initial probe that claimed the
+production route while `check` still used the prelude. Both contract and observed schema types now
+fail closed; the current probe reports `prelude`, and WU7 must change routing and attestation
+atomically.

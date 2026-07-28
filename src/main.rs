@@ -1,7 +1,6 @@
 //! typokat CLI entry point.
 //!
-//! Implements `typokat check [--format rich|compact] <file.ts>...`, checking the
-//! inputs as one local-relative project and rendering diagnostics to stderr.
+//! Implements project checking and default-library provider introspection.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -24,6 +23,9 @@ const EXIT_USAGE: u8 = 2;
 /// Takes precedence over [`EXIT_ERRORS`] even when ordinary diagnostics also exist.
 const EXIT_INCOMPLETE: u8 = 3;
 const USAGE: &str = "usage: typokat check [--format rich|compact] <file.ts>...";
+const LIBRARY_INFO_USAGE: &str = "usage: typokat library-info --format json";
+const LIBRARY_INFO_SCHEMA: u32 = 1;
+const CURRENT_LIBRARY_ROUTE: &str = "prelude";
 
 /// The outcome of a well-formed `check` invocation. Distinct from a usage/IO error
 /// (which is `Err` and maps to exit `2`). Incomplete outranks diagnostics: a run that
@@ -69,9 +71,56 @@ fn run(args: &[String]) -> Result<CheckStatus, String> {
             let check_args = parse_check_args(&args[2..])?;
             check_paths(&check_args.paths, check_args.format)
         }
+        Some("library-info") => {
+            parse_library_info_args(&args[2..])?;
+            write_library_info()?;
+            Ok(CheckStatus::Clean)
+        }
         Some(other) => Err(format!("unknown command '{other}'\n{USAGE}")),
         None => Err(USAGE.to_string()),
     }
+}
+
+fn parse_library_info_args(args: &[String]) -> Result<(), String> {
+    let format = match args {
+        [option, value] if option == "--format" => value.as_str(),
+        [option] if option == "--format" => {
+            return Err(format!("missing value for --format\n{LIBRARY_INFO_USAGE}"));
+        }
+        [option] => option
+            .strip_prefix("--format=")
+            .ok_or_else(|| format!("unknown option '{option}'\n{LIBRARY_INFO_USAGE}"))?,
+        [] => return Err(format!("missing --format argument\n{LIBRARY_INFO_USAGE}")),
+        _ => {
+            return Err(format!(
+                "unexpected library-info arguments\n{LIBRARY_INFO_USAGE}"
+            ));
+        }
+    };
+    if format != "json" {
+        return Err(format!(
+            "unknown library-info format '{format}'; expected 'json'\n{LIBRARY_INFO_USAGE}"
+        ));
+    }
+    Ok(())
+}
+
+fn write_library_info() -> Result<(), String> {
+    let metadata = typokat::library::embedded_library_profile_metadata();
+    let stdout = std::io::stdout();
+    let mut handle = std::io::BufWriter::new(stdout.lock());
+    writeln!(
+        handle,
+        "{{\"schema\":{},\"profile_sha256\":\"{}\",\"file_count\":{},\"provider_route\":\"{}\"}}",
+        LIBRARY_INFO_SCHEMA,
+        metadata.profile_identity(),
+        metadata.file_count(),
+        CURRENT_LIBRARY_ROUTE,
+    )
+    .map_err(|error| format!("failed to write library info: {error}"))?;
+    handle
+        .flush()
+        .map_err(|error| format!("failed to flush library info: {error}"))
 }
 
 struct CheckArgs {

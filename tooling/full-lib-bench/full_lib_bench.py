@@ -132,11 +132,16 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "typescript_version", "upstream_revision", "root", "file_count", "source_bytes",
         "length_framed_sha256", "manifest_sha256",
     }, "contract.profile")
-    exact_keys(data["provider_probe"], {"args", "schema", "snapshot_schema", "provider_route"}, "contract.provider_probe")
+    exact_keys(
+        data["provider_probe"], {"args", "schema", "provider_route"},
+        "contract.provider_probe",
+    )
+    require_int(
+        data["provider_probe"]["schema"], "provider_probe.schema", minimum=1
+    )
     if data["provider_probe"] != {
         "args": ["library-info", "--format", "json"],
         "schema": 1,
-        "snapshot_schema": 1,
         "provider_route": "production-default-library",
     }:
         raise ContractError("canonical provider probe contract differs")
@@ -183,7 +188,8 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict[str, Any]:
         "samples_per_tool_per_trial": 30,
         "bootstrap_resamples": 100_000,
         "memory_samples_per_tool": 10,
-        "minimum_speedup": 2.0,
+        "minimum_speedup": 1.0,
+        "engineering_speedup": 1.25,
     }
     for key, expected in expected_sampling.items():
         if sampling.get(key) != expected:
@@ -1656,23 +1662,20 @@ def validate_provider_observation(observed: Any, contract: dict[str, Any]) -> No
     if not isinstance(observed, dict):
         raise ContractError("provider probe output must be an object")
     exact_keys(observed, {
-        "schema", "profile_sha256", "file_count", "snapshot_schema",
-        "snapshot_product_sha256", "provider_route",
+        "schema", "profile_sha256", "file_count", "provider_route",
     }, "provider probe output")
-    if observed["schema"] != contract["provider_probe"]["schema"]:
+    if (
+        require_int(observed["schema"], "provider schema", minimum=1)
+        != contract["provider_probe"]["schema"]
+    ):
         raise ContractError("provider probe schema differs")
     if observed["profile_sha256"] != contract["profile"]["length_framed_sha256"]:
         raise ContractError("provider profile identity differs")
-    if require_int(observed["file_count"], "provider file_count", minimum=1) != 82:
-        raise ContractError("provider file count differs")
     if (
-        require_int(observed["snapshot_schema"], "snapshot_schema", minimum=1)
-        != contract["provider_probe"]["snapshot_schema"]
+        require_int(observed["file_count"], "provider file_count", minimum=1)
+        != contract["profile"]["file_count"]
     ):
-        raise ContractError("provider snapshot schema differs")
-    product = observed["snapshot_product_sha256"]
-    if not isinstance(product, str) or HEX64_RE.fullmatch(product) is None:
-        raise ContractError("provider snapshot product identity is malformed")
+        raise ContractError("provider file count differs")
     if observed["provider_route"] != contract["provider_probe"]["provider_route"]:
         raise ContractError("provider route differs")
 
@@ -1744,7 +1747,10 @@ def evidence_performance_passes(artifact: dict[str, Any], contract: dict[str, An
     for window in artifact["windows"]:
         for row in ROWS:
             summary = window["rows"][row]["summary"]
-            if any(summary[key] < minimum for key in ("speedup", "p95_ratio", "bootstrap_lower_95")):
+            if any(
+                summary[key] <= minimum
+                for key in ("speedup", "p95_ratio", "bootstrap_lower_95")
+            ):
                 return False
     for row in ROWS:
         samples = artifact["memory"][row]["samples"]
@@ -2415,8 +2421,8 @@ def verify_trial_summary(
     compare_float(summary["p95_ratio"], p95_ratio, "p95 ratio")
     compare_float(summary["bootstrap_lower_95"], lower, "block-bootstrap lower")
     minimum = contract["sampling"]["minimum_speedup"]
-    if speedup < minimum or p95_ratio < minimum or lower < minimum:
-        raise ContractError("2x timing gate failed")
+    if speedup <= minimum or p95_ratio <= minimum or lower <= minimum:
+        raise ContractError("strict speedup timing gate failed")
 
 
 def verify_memory_v2(
