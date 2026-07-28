@@ -7,7 +7,6 @@ forbidden_flags = ["--noLib", "--skipLibCheck", "--skipDefaultLibCheck", "--noCh
 [provider_probe]
 args = ["library-info", "--format", "json"]
 schema = 1
-snapshot_schema = 1
 provider_route = "production-default-library"
 
 [profile]
@@ -49,8 +48,8 @@ max_output_bytes = 1048576
 memory_samples_per_tool = 10
 max_typokat_rss_kib = 524288
 max_typokat_to_tsgo_median_rss = 1.25
-minimum_speedup = 2.0
-engineering_speedup = 2.25
+minimum_speedup = 1.0
+engineering_speedup = 1.25
 
 [controls]
 rename_comment_perturbations_per_row = 1

@@ -227,8 +227,6 @@ class ContractTests(unittest.TestCase):
             "schema": 1,
             "profile_sha256": self.contract["profile"]["length_framed_sha256"],
             "file_count": 82,
-            "snapshot_schema": 1,
-            "snapshot_product_sha256": "a" * 64,
             "provider_route": "test-only-provider",
         }
         with self.assertRaisesRegex(bench.ContractError, "provider route differs"):

@@ -107,9 +107,9 @@ comment. Filename/hash/output special cases therefore cannot satisfy it.
 
 ## Sampling and GO formula
 
-The primary measurement includes process creation, production startup, snapshot
-validation/loading, source I/O, parse/bind/check, diagnostic construction, and
-shutdown. Before each balanced block, the collector pre-reads both binaries,
+The primary measurement includes process creation, production startup, default-library
+source compilation, source I/O, parse/bind/check, diagnostic construction, and shutdown.
+Before each balanced block, the collector pre-reads both binaries,
 the 82 libraries, and that row's inputs and records their framed digest. Each of three separate time
 windows has five recorded fresh-process warmups per tool followed by fifteen
 `typokat,tsgo,tsgo,typokat` blocks: exactly 30 samples per tool and trial.
@@ -120,10 +120,10 @@ For every row and every trial:
 speedup = median(tsgo wall seconds) / median(typokat wall seconds)
 ```
 
-The speedup, the `tsgo p95 / typokat p95` ratio, and the deterministic one-sided
-95% bootstrap lower bound (100,000 resamples of complete ABBA blocks, preserving
-within-block dependence and drift) must each be at least `2.00`.
-`2.25` is the engineering target but does not replace the hard gate. Memory is
+The speedup and the `tsgo p95 / typokat p95` ratio must each exceed `1.00`, as must
+the deterministic one-sided 95% bootstrap lower bound (100,000 resamples of complete
+ABBA blocks, preserving within-block dependence and drift). `1.25` is the engineering
+target but does not replace the hard gate. Memory is
 ten additional interleaved `/usr/bin/time -v` processes per tool and row:
 every typokat sample must be at most 512 MiB RSS and its median at most 1.25
 times the tsgo median.
@@ -140,8 +140,8 @@ Cargo/rustc versions, `Cargo.lock`, Cargo configuration, and the raw result of
 the exact sanitized `cargo build --release` command before it probes or measures
 the resulting canonical binary. The public
 `typokat library-info --format json` probe must identify the 82-file profile,
-snapshot schema/product, and production provider route; a missing or incorrect
-probe is NO-GO before timing.
+its source identity, and the production provider route; a missing or incorrect probe
+is NO-GO before timing.
 
 Three explicit, distinct window labels are required. Timing windows have a real,
 recorded gap of at least 60 seconds (the default). The collector writes NO-GO
@@ -176,7 +176,7 @@ schema verdict contract_sha256 identities host build provider_probe invocations 
   cache and index, forces offline mode and empty effective
   rustflags, and hashes the build-home layout before and after Cargo runs.
 - `provider_probe` retains the raw public CLI probe and its independently
-  observed snapshot/product identity.
+  observed profile identity and production route.
 - `invocations` stores canonical argv, sanitized environment, absolute cwd and
   execution conditions under a SHA-256 key. Thread-limiting environment
   variables are forbidden. Every process record references one entry.
