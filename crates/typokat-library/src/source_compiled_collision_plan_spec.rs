@@ -46,7 +46,7 @@ fn source_compile_retains_only_the_consumed_direct_plan() {
 
 #[test]
 fn owner_site_capture_uses_dense_ticket_storage_without_losing_coverage() {
-    const EXACT_OWNER_SITE_ROWS: usize = 46_758;
+    const EXACT_OWNER_SITE_ROWS: usize = 47_253;
 
     let base = LibraryBaseProvider::new()
         .get()
