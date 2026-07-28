@@ -45,6 +45,30 @@ fn source_compile_retains_only_the_consumed_direct_plan() {
 }
 
 #[test]
+fn owner_site_capture_uses_dense_ticket_storage_without_losing_coverage() {
+    const EXACT_OWNER_SITE_ROWS: usize = 46_758;
+
+    let base = LibraryBaseProvider::new()
+        .get()
+        .expect("source-compiled frozen base");
+    let plan = base.collision_plan_inspection_for_test();
+
+    assert_eq!(plan.owner_source_sites, EXACT_OWNER_SITE_ROWS);
+    assert_eq!(plan.owner_site_dense_slot_writes, EXACT_OWNER_SITE_ROWS);
+    assert_eq!(plan.owner_site_ordered_map_inserts, 0);
+
+    let broken = super::FrozenLibraryBase::force_ordered_owner_site_storage_for_test()
+        .expect("known-broken owner-site storage finishes");
+    assert_eq!(broken.owner_source_sites, EXACT_OWNER_SITE_ROWS);
+    assert_eq!(broken.owner_site_dense_slot_writes, 0);
+    assert_eq!(
+        broken.owner_site_ordered_map_inserts,
+        EXACT_OWNER_SITE_ROWS
+    );
+    assert!(!broken.admitted);
+}
+
+#[test]
 fn compact_plan_matches_every_independent_coverage_projection() {
     let base = LibraryBaseProvider::new()
         .get()
@@ -54,7 +78,10 @@ fn compact_plan_matches_every_independent_coverage_projection() {
         .expect("all plan projections compare");
 
     assert_eq!(comparison.compact_owner_sites, comparison.full_owner_sites);
-    assert_eq!(comparison.compact_direct_edges, comparison.full_direct_edges);
+    assert_eq!(
+        comparison.compact_direct_edges,
+        comparison.full_direct_edges
+    );
     assert_eq!(
         comparison.compact_root_slot_consumers,
         comparison.full_root_slot_consumers
@@ -77,6 +104,11 @@ fn compact_plan_matches_every_independent_coverage_projection() {
     );
     assert!(comparison.binder_source_census_complete);
     assert!(comparison.binder_provenance_complete);
+    assert!(comparison.lexical_event_site_audit_complete);
+    assert!(comparison.global_source_site_audit_complete);
+    assert!(comparison.source_access_manifest_complete);
+    assert!(comparison.injected_raw_bypass_rejected);
+    assert!(comparison.forbidden_projection_callsite_audit_complete);
     assert!(comparison.typed_reference_coverage_complete);
     assert!(comparison.raw_semantic_access_guard_complete);
 }
