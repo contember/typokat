@@ -830,6 +830,7 @@ dependencies = [
  "toml",
  "typokat-binder",
  "typokat-core",
+ "typokat-relate",
  "typokat-types",
 ]
 
@@ -852,6 +853,14 @@ name = "typokat-core"
 version = "0.1.0"
 dependencies = [
  "oxc_span",
+]
+
+[[package]]
+name = "typokat-relate"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash",
+ "typokat-types",
 ]
 
 [[package]]

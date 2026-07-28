@@ -34,32 +34,36 @@ pub(super) struct RelationMeasure {
     pub completed_contextual_yes_admissions: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RelationSourceColdMeasure {
-    pub(crate) durable_true_cache_hits: u64,
-    pub(crate) durable_false_reason_rebuilds: u64,
+pub struct RelationSourceColdMeasure {
+    pub durable_true_cache_hits: u64,
+    pub durable_false_reason_rebuilds: u64,
     /// The same fall-through, but on a `false` this query itself just wrote. The
     /// durable counter is blind to it (a planned query writes to `pending_cache`),
     /// which is exactly where a failing OR probe re-derives its subtree.
-    pub(crate) pending_false_reason_rebuilds: u64,
-    pub(crate) uncached_relation_frames: u64,
+    pub pending_false_reason_rebuilds: u64,
+    pub uncached_relation_frames: u64,
 }
 
 #[cfg(test)]
 thread_local! {
     static RELATION_MEASURE: std::cell::RefCell<RelationMeasure> = std::cell::RefCell::new(RelationMeasure::default());
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
     static RELATION_SOURCE_COLD_MEASURE: std::cell::RefCell<RelationSourceColdMeasure> =
         std::cell::RefCell::new(RelationSourceColdMeasure::default());
     static RELATION_SOURCE_COLD_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-#[cfg(test)]
-pub(crate) struct RelationSourceColdMeasureGuard {
+#[cfg(any(test, feature = "test-utils"))]
+pub struct RelationSourceColdMeasureGuard {
     _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for RelationSourceColdMeasureGuard {
     fn drop(&mut self) {
         RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
@@ -74,8 +78,8 @@ impl Drop for RelationSourceColdMeasureGuard {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn start_relation_source_cold_measure() -> RelationSourceColdMeasureGuard {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn start_relation_source_cold_measure() -> RelationSourceColdMeasureGuard {
     RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
         assert!(
             !enabled.get(),
@@ -90,8 +94,8 @@ pub(crate) fn start_relation_source_cold_measure() -> RelationSourceColdMeasureG
     }
 }
 
-#[cfg(test)]
-pub(crate) fn relation_source_cold_measure() -> Option<RelationSourceColdMeasure> {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn relation_source_cold_measure() -> Option<RelationSourceColdMeasure> {
     RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
         enabled
             .get()
@@ -99,7 +103,7 @@ pub(crate) fn relation_source_cold_measure() -> Option<RelationSourceColdMeasure
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn measure_relation_source_cold(update: impl FnOnce(&mut RelationSourceColdMeasure)) {
     RELATION_SOURCE_COLD_ENABLED.with(|enabled| {
         if enabled.get() {
@@ -216,7 +220,7 @@ pub struct ReasonChain {
 }
 
 impl ReasonChain {
-    pub(crate) fn leaf(src: TypeId, tgt: TypeId) -> ReasonChain {
+    pub fn leaf(src: TypeId, tgt: TypeId) -> ReasonChain {
         ReasonChain {
             head: Reason::Leaf { src, tgt },
         }
@@ -264,7 +268,7 @@ pub enum Relation {
 /// Projection/evaluation exhaustion remains an explicit third semantic outcome
 /// and has no boolean helper.
 #[derive(Clone, Debug)]
-pub(crate) enum RelationOutcome {
+pub enum RelationOutcome {
     Yes,
     No(Arc<ReasonChain>),
     Exhausted(Exhaustion),
@@ -274,7 +278,7 @@ pub(crate) enum RelationOutcome {
 /// decide the enclosing query. The mutable query coordinator expands it and
 /// retries with a larger immutable overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RelationDemand {
+pub enum RelationDemand {
     ClassProjection(TypeId),
     Evaluation(TypeId),
 }
@@ -282,7 +286,7 @@ pub(crate) enum RelationDemand {
 /// Internal coordinator protocol. A demand never crosses the checker/reporting
 /// boundary; public consumers still see only yes/no/exhausted.
 #[derive(Clone, Debug)]
-pub(crate) enum RelationAttempt {
+pub enum RelationAttempt {
     Decided(RelationOutcome),
     Needs(RelationDemand),
 }
@@ -291,7 +295,7 @@ pub(crate) enum RelationAttempt {
 ///
 /// Implementations expose immutable projection/evaluation overlays and typed
 /// frontiers. Relation consults this before identity, cache, or cycle handling.
-pub(crate) trait RelationNormalization {
+pub trait RelationNormalization {
     fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion>;
 
     /// Return the next unresolved semantic operation for lazy relation planning.
@@ -318,7 +322,7 @@ impl Relation {
 
 /// The relation engine. Borrows the store immutably (relation checking never
 /// mutates the arena) and owns the cache + cycle stack.
-pub(crate) struct Relater<'a> {
+pub struct Relater<'a> {
     store: &'a Store,
     well_known: WellKnown,
     cache: RelationCache,
@@ -503,7 +507,7 @@ impl<'a> Relater<'a> {
 
     /// Build the read-only relation phase of one coordinator-owned transaction.
     /// The supplied durable cache is returned by [`Relater::finish_planned`].
-    pub(crate) fn planned(
+    pub fn planned(
         store: &'a Store,
         well_known: WellKnown,
         cache: RelationCache,
@@ -530,7 +534,7 @@ impl<'a> Relater<'a> {
     }
 
     /// Run a planned assignability query without collapsing exhaustion into `No`.
-    pub(crate) fn is_assignable_outcome(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
+    pub fn is_assignable_outcome(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
         self.allow_relation_demand = false;
         self.query_exhaustion = None;
         let mut assumed = FxHashSet::default();
@@ -546,7 +550,7 @@ impl<'a> Relater<'a> {
 
     /// Run one lazy coordinator attempt. The first unresolved semantic node stops
     /// this pass so ordering against a later mismatch remains observable.
-    pub(crate) fn is_assignable_attempt(&mut self, src: TypeId, tgt: TypeId) -> RelationAttempt {
+    pub fn is_assignable_attempt(&mut self, src: TypeId, tgt: TypeId) -> RelationAttempt {
         self.allow_relation_demand = true;
         self.query_exhaustion = None;
         self.query_demand = None;
@@ -567,7 +571,7 @@ impl<'a> Relater<'a> {
 
     /// Finish a planned query and return its durable cache. `commit` is false for
     /// any planner/evaluator taint, even when relation found an earlier `No`.
-    pub(crate) fn finish_planned(mut self, commit: bool) -> RelationCache {
+    pub fn finish_planned(mut self, commit: bool) -> RelationCache {
         if commit && self.query_exhaustion.is_none() && !self.query_demand_observed {
             self.cache.promote(self.pending_cache);
         }
@@ -703,7 +707,7 @@ impl<'a> Relater<'a> {
         // missing-vs-mismatch reason (the cache stores only the bool verdict —
         // architecture §6.1 — not the reason) — but only when someone will read
         // that reason (`want_reason`; see the reason-free short-circuit below).
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         let (cached, durable_cached, pending_cached) = {
             let pending_cached = cacheable.then(|| self.pending_cache.get(key)).flatten();
             let durable_cached = cacheable
@@ -720,12 +724,12 @@ impl<'a> Relater<'a> {
                 pending_cached,
             )
         };
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-utils")))]
         let cached = cacheable
             .then(|| self.pending_cache.get(key).or_else(|| self.cache.get(key)))
             .flatten();
         if cached == Some(true) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             if durable_cached == Some(true) {
                 measure_relation_source_cold(|measure| measure.durable_true_cache_hits += 1);
             }
@@ -742,13 +746,13 @@ impl<'a> Relater<'a> {
 
         // Both rebuild counters sit below the short-circuit so they keep meaning
         // "a cached failure this frame actually re-derived".
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         if durable_cached == Some(false) {
             measure_relation_source_cold(|measure| {
                 measure.durable_false_reason_rebuilds += 1;
             });
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         if pending_cached == Some(false) {
             measure_relation_source_cold(|measure| {
                 measure.pending_false_reason_rebuilds += 1;
@@ -760,7 +764,7 @@ impl<'a> Relater<'a> {
         // keys (including, possibly, this frame's own key) they assumed true.
         let mut frame_assumed: AssumedSet = FxHashSet::default();
         let frame_specialization_epoch = self.source_specialization_epoch;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_relation_source_cold(|measure| measure.uncached_relation_frames += 1);
         // Publish this frame's reporting mode so the structural helpers can inherit it
         // (they pass `self.want_reason` down).

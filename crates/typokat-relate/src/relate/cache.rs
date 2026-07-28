@@ -8,24 +8,28 @@ use crate::types::store::TypeId;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static RELATION_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
     static RELATION_CACHE_DEPTH: std::cell::RefCell<RelationCacheDepthMeasure> =
         std::cell::RefCell::new(RelationCacheDepthMeasure::new());
     static RELATION_CACHE_DEPTH_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Layer walk observed by `get`, so "depth stays bounded" is measured, not claimed.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug)]
-pub(crate) struct RelationCacheDepthMeasure {
-    pub(crate) lookups: u64,
-    pub(crate) max_depth: u32,
-    pub(crate) histogram: Vec<u64>,
+pub struct RelationCacheDepthMeasure {
+    pub lookups: u64,
+    pub max_depth: u32,
+    histogram: Vec<u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl RelationCacheDepthMeasure {
     const BUCKETS: usize = 33;
 
@@ -38,7 +42,7 @@ impl RelationCacheDepthMeasure {
     }
 
     /// Depth at or below which half the lookups resolved.
-    pub(crate) fn median_depth(&self) -> usize {
+    pub fn median_depth(&self) -> usize {
         let mut seen = 0;
         for (depth, count) in self.histogram.iter().enumerate() {
             seen += count;
@@ -50,11 +54,11 @@ impl RelationCacheDepthMeasure {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-utils")))]
 #[inline(always)]
 fn record_relation_cache_depth(_depth: u32) {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_relation_cache_depth(depth: u32) {
     if !RELATION_CACHE_DEPTH_ENABLED.with(std::cell::Cell::get) {
         return;
@@ -68,19 +72,19 @@ fn record_relation_cache_depth(depth: u32) {
     });
 }
 
-#[cfg(test)]
-pub(crate) fn start_relation_cache_depth_measure() {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn start_relation_cache_depth_measure() {
     RELATION_CACHE_DEPTH.with(|measure| *measure.borrow_mut() = RelationCacheDepthMeasure::new());
     RELATION_CACHE_DEPTH_ENABLED.set(true);
 }
 
-#[cfg(test)]
-pub(crate) fn finish_relation_cache_depth_measure() -> RelationCacheDepthMeasure {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn finish_relation_cache_depth_measure() -> RelationCacheDepthMeasure {
     RELATION_CACHE_DEPTH_ENABLED.set(false);
     RELATION_CACHE_DEPTH.with(|measure| measure.borrow().clone())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_relation_cache_writes_for_test(count: usize) {
     RELATION_CACHE_WRITES.set(
         RELATION_CACHE_WRITES
@@ -89,36 +93,36 @@ fn record_relation_cache_writes_for_test(count: usize) {
     );
 }
 
-#[cfg(test)]
-pub(crate) struct RelationCacheWriteScopeForTest(u64);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct RelationCacheWriteScopeForTest(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl RelationCacheWriteScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(RELATION_CACHE_WRITES.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         RELATION_CACHE_WRITES.get().saturating_sub(self.0)
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RelationCacheWriteCalibrationForTest {
-    pub(crate) insert: u64,
-    pub(crate) promote: u64,
+pub struct RelationCacheWriteCalibrationForTest {
+    insert: u64,
+    promote: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl RelationCacheWriteCalibrationForTest {
-    pub(crate) fn total(self) -> u64 {
+    pub fn total(self) -> u64 {
         self.insert.saturating_add(self.promote)
     }
 }
 
-#[cfg(test)]
-pub(crate) fn calibrate_relation_cache_writes_for_test() -> RelationCacheWriteCalibrationForTest {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn calibrate_relation_cache_writes_for_test() -> RelationCacheWriteCalibrationForTest {
     let insert_scope = RelationCacheWriteScopeForTest::start();
     let mut cache = RelationCache::new();
     cache.insert(
@@ -205,7 +209,7 @@ impl RelationCache {
 
     #[inline]
     pub fn insert(&mut self, key: RelationKey, verdict: bool) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_relation_cache_writes_for_test(1);
         self.entries.insert(key, verdict);
     }
@@ -213,7 +217,7 @@ impl RelationCache {
     /// Promote a completed query's local decisions into this durable cache.
     /// Exhausted or otherwise tainted queries drop their local cache instead.
     pub(crate) fn promote(&mut self, pending: RelationCache) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_relation_cache_writes_for_test(pending.entries.len());
         debug_assert!(
             pending.base.is_none(),
@@ -223,20 +227,20 @@ impl RelationCache {
     }
 
     /// Open a speculative layer. O(1): the settled entries become a shared base.
-    pub(crate) fn savepoint(&mut self) {
+    pub fn savepoint(&mut self) {
         let settled = std::mem::take(self);
         self.base = Some(Arc::new(settled));
     }
 
     /// Fold the speculative layer into the layer below it. O(this layer).
-    pub(crate) fn commit(&mut self) {
+    pub fn commit(&mut self) {
         let mut settled = self.take_savepoint_base();
         settled.entries.extend(self.entries.drain());
         *self = settled;
     }
 
     /// Drop the speculative layer, restoring the cache to its savepoint. O(1).
-    pub(crate) fn rollback(&mut self) {
+    pub fn rollback(&mut self) {
         *self = self.take_savepoint_base();
     }
 

@@ -5,6 +5,6 @@ pub mod cache;
 pub mod relation;
 
 pub use relation::{Reason, ReasonChain, Relation, RelationKind};
-pub(crate) use relation::{
+pub use relation::{
     Relater, RelationAttempt, RelationDemand, RelationNormalization, RelationOutcome,
 };

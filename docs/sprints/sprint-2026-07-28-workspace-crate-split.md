@@ -156,3 +156,8 @@ independent reviewer; fixes return to the implementation agent before closure.
   `rustc-hash`; higher-layer test introspection is feature-gated. Workspace gate:
   1,287 tests passed / 16 ignored across unit, integration, and doc targets;
   all-target clippy is clean.
+- 2026-07-28: `typokat-relate` now owns structural relations, their transactional
+  cache, cycle guards, reason chains, and relation-owned tests. It depends only
+  on `types` and `rustc-hash`; higher-layer cache and source-cold measurements
+  are feature-gated without enabling relation test modules. Workspace gate stays
+  at 1,287 passed / 16 ignored, with all-target clippy clean.

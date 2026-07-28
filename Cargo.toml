@@ -32,6 +32,7 @@ rustix = { version = "1.1.4", features = ["fs"] }
 typokat-core = { path = "crates/typokat-core" }
 typokat-types = { path = "crates/typokat-types" }
 typokat-binder = { path = "crates/typokat-binder" }
+typokat-relate = { path = "crates/typokat-relate" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -58,6 +59,7 @@ oxc_span.workspace = true
 typokat-core.workspace = true
 typokat-types.workspace = true
 typokat-binder.workspace = true
+typokat-relate.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
 dragonbox_ecma.workspace = true
@@ -91,6 +93,7 @@ toml.workspace = true
 typokat-core = { workspace = true, features = ["test-utils"] }
 typokat-types = { workspace = true, features = ["test-utils"] }
 typokat-binder = { workspace = true, features = ["test-utils"] }
+typokat-relate = { workspace = true, features = ["test-utils"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix.workspace = true

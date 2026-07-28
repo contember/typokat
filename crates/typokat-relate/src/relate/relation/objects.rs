@@ -889,7 +889,7 @@ impl<'a> Relater<'a> {
         true
     }
 
-    pub(crate) fn overload_implementation_compatible_attempt(
+    pub fn overload_implementation_compatible_attempt(
         &mut self,
         overload_ty: TypeId,
         implementation_ty: TypeId,

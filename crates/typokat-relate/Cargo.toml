@@ -1,0 +1,14 @@
+[package]
+name = "typokat-relate"
+version.workspace = true
+edition.workspace = true
+
+[features]
+test-utils = []
+
+[dependencies]
+rustc-hash.workspace = true
+typokat-types.workspace = true
+
+[lints]
+workspace = true
