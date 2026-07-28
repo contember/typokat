@@ -305,7 +305,7 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 /// full. Keep this list path-sorted so execution and failure aggregation stay
 /// deterministic. Each runs against the base its directory declares in `MILESTONE_DIRS`.
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
-    // Backlog 14 (`Library` base). The other six flat fixtures still fail; see the corpus
+    // Backlog 14 (`Library` base). The other five flat fixtures still fail; see the corpus
     // entry in `MILESTONE_DIRS`.
     (
         "b14_full_lib_loading",
