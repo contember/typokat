@@ -61,10 +61,7 @@ fn owner_site_capture_uses_dense_ticket_storage_without_losing_coverage() {
         .expect("known-broken owner-site storage finishes");
     assert_eq!(broken.owner_source_sites, EXACT_OWNER_SITE_ROWS);
     assert_eq!(broken.owner_site_dense_slot_writes, 0);
-    assert_eq!(
-        broken.owner_site_ordered_map_inserts,
-        EXACT_OWNER_SITE_ROWS
-    );
+    assert_eq!(broken.owner_site_ordered_map_inserts, EXACT_OWNER_SITE_ROWS);
     assert!(!broken.admitted);
 }
 
