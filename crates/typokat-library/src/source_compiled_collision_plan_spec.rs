@@ -113,7 +113,7 @@ fn compact_plan_matches_every_independent_coverage_projection() {
     assert!(comparison.independent_lexical_event_site_audit_complete);
     assert!(comparison.injected_event_capture_corruption_rejected);
     assert!(comparison.global_source_site_audit_complete);
-    assert!(comparison.trace_domain_sealed_before_binder_reporting);
+    assert!(comparison.trace_domain_sealed_after_binder_reporting);
     assert!(comparison.injected_late_owner_reservation_rejected);
     assert!(comparison.owner_site_order_is_total);
     assert!(comparison.injected_equal_coordinate_reordering_rejected);
