@@ -18,4 +18,4 @@ decided work or status.
   the `14`–`17` scale era and profiling-gated relation/evaluator ideas.
 *Shipped/graduated: `benchmark-harness` → `tooling/bench/`; `minimal-prelude-slice` →
 the shipped backlog `38` sprint; `workspace-crate-split` →
-[`sprint-2026-07-28-workspace-crate-split.md`](../sprints/sprint-2026-07-28-workspace-crate-split.md).*
+[`sprint-2026-07-28-workspace-crate-split.md`](../archive/sprint-2026-07-28-workspace-crate-split.md).*

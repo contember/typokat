@@ -1,3 +1,26 @@
+> **OUTCOME — shipped 2026-07-28.** The monolithic checker is now ten enforced,
+> acyclic workspace members behind the root facade and CLI: core, types, binder,
+> relate, diagnostics, surface, frontend, check, library, and driver. Ownership
+> follows the architecture, with parsing/import ordering in frontend and
+> orchestration/reporting in driver; checker behavior and CLI output remain exact.
+>
+> **Commit map:** topology `d058383`; pre-split frontend boundary `7f13bc5`; core
+> `0c88b25`; types `bd49c56`; binder `daf73d4`; relate `ccc1ebe`; diagnostics
+> `109bc27`; surface `dbecdce`; frontend `c342bf6`; check `a27b518`; library
+> `2403066`; driver/root facade `21e1f1e`; documentation migration and final
+> re-review `11a0da4`.
+>
+> **Verification:** root facade/CLI plus all ten members passed the bare and
+> explicit-workspace gates at 1,290 passed / 14 ignored; the 874-case official
+> suite reported zero regressions; the exact 106-file library package, including
+> all 82 declarations, verified offline in two clean clones with no source
+> mutations; CLI behavior remained exact; the final documentation re-review
+> passed.
+>
+> **Deferrals:** any finer internal split of `typokat-check` remains
+> profiling-gated. Publishing the members and public-API stability are out of
+> scope.
+
 # Sprint — workspace crate split (2026-07-28)
 
 **Goal.** Turn the single `typokat` library into a root facade over an enforced,
@@ -219,3 +242,6 @@ independent reviewer; fixes return to the implementation agent before closure.
   path and singular-module scans are empty apart from the intentional README
   tree entries; all Markdown links and every repository path introduced on
   changed lines resolve; `docs/decisions/` and `docs/archive/` have zero diff.
+- 2026-07-28: Final WU4 independent documentation re-review at `11a0da4` is
+  **PASS**: the exact stale-owner scan is empty, all moved references resolve,
+  and no immutable history or source file changed.
