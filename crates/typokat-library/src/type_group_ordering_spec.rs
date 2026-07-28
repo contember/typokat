@@ -47,7 +47,10 @@ fn every_merged_library_group_has_one_exact_order_under_both_keys() {
         .iter()
         .map(|group| group.name.as_str())
         .collect::<BTreeSet<_>>();
-    for witness in ["Array", "String", "Window"] {
-        assert!(names.contains(witness), "{witness} is a merged profile witness");
+    for witness in ["Array", "String", "Date"] {
+        assert!(
+            names.contains(witness),
+            "{witness} is a merged profile witness; found {names:?}"
+        );
     }
 }

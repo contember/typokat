@@ -35,9 +35,7 @@ fn measure(fragments: usize) -> TypeGroupFragmentAttachWorkForTest {
     let type_groups = type_scope.finish();
 
     let symbol = binder
-        .graph
-        .get(binder.compilation_global)
-        .and_then(|scope| scope.lookup_local("Merged"))
+        .resolve_type(binder.module, "Merged")
         .expect("merged symbol");
     assert_eq!(
         binder

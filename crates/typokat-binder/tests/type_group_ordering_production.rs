@@ -13,7 +13,6 @@ use typokat_binder::binder::namespace::{
 use typokat_core::source::{CompilationOrigin, LibraryFileOrdinal};
 
 #[test]
-#[ignore = "backlog 105 RED: production currently overwrites library-ordinal fragment order"]
 fn crossed_source_keys_still_publish_library_fragments_in_registry_order() {
     let prelude_allocator = Allocator::default();
     let first_allocator = Allocator::default();

@@ -64,7 +64,7 @@ way there — its syntax gates flip OOS→IN as features land — not a numeric 
 
 ## Roadmap at a glance
 
-The active backlog has **51 items**. The release classification comes from
+The active backlog has **50 items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -160,7 +160,6 @@ Checker scaling (from sprint-2026-07-25):
 - **M** · [`94`](94-flat-per-file-regression-since-july-9.md) — a flat 3x per-file regression sitting under the modules exponent.
 - **M** · [`85`](85-owner-closure-representation.md) — replay owner closure is quadratic on an accumulating chain.
 - **M** · [`86`](86-free-param-summary-base-reset.md) — the free-param summary cache discards its sealed base on any mutation.
-- **M** · [`105`](105-type-group-fragment-resort.md) — type-group fragments are re-sorted on every append, and a `cfg(not(test))` second sort makes test and production order library fragments by different keys.
 - **M** · [`89`](89-scaling-guards-for-project-state.md) — nothing guards against per-item scans of whole-project state.
 
 **D. Scale + IDE — the §12 phase ladder.**

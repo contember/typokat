@@ -33,6 +33,7 @@ use std::fmt;
 #[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static SYMBOL_DECLARATION_ROW_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TYPE_GROUP_FRAGMENT_ROW_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Declaration rows [`BindState::attach_symbol_declaration`] reads to place one declaration —
@@ -69,6 +70,42 @@ impl SymbolDeclarationAttachWorkScopeForTest {
     pub fn finish(self) -> SymbolDeclarationAttachWorkForTest {
         let end = symbol_declaration_attach_work_for_test();
         SymbolDeclarationAttachWorkForTest {
+            row_probes: end.row_probes.saturating_sub(self.0.row_probes),
+        }
+    }
+}
+
+/// Fragment rows inspected while finding the insertion point for reopened type groups.
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TypeGroupFragmentAttachWorkForTest {
+    pub(crate) row_probes: u64,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn type_group_fragment_attach_work_for_test() -> TypeGroupFragmentAttachWorkForTest {
+    TypeGroupFragmentAttachWorkForTest {
+        row_probes: TYPE_GROUP_FRAGMENT_ROW_PROBES.get(),
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_type_group_fragment_row_probe() {
+    TYPE_GROUP_FRAGMENT_ROW_PROBES.set(TYPE_GROUP_FRAGMENT_ROW_PROBES.get().saturating_add(1));
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct TypeGroupFragmentAttachWorkScopeForTest(TypeGroupFragmentAttachWorkForTest);
+
+#[cfg(any(test, feature = "test-utils"))]
+impl TypeGroupFragmentAttachWorkScopeForTest {
+    pub fn start() -> Self {
+        Self(type_group_fragment_attach_work_for_test())
+    }
+
+    pub fn finish(self) -> TypeGroupFragmentAttachWorkForTest {
+        let end = type_group_fragment_attach_work_for_test();
+        TypeGroupFragmentAttachWorkForTest {
             row_probes: end.row_probes.saturating_sub(self.0.row_probes),
         }
     }
@@ -236,6 +273,45 @@ pub struct LibraryBinderCheckpointInspectionForTest<'checkpoint> {
     pub array_type_group: TypeGroupId,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+pub struct TypeGroupFragmentOrderingUnitForTest {
+    pub library_ordinal: LibraryFileOrdinal,
+    pub source_key: SourceUnitKey,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypeGroupFragmentOrderingIdentityForTest {
+    pub source_key: SourceUnitKey,
+    pub declaration_start: u32,
+    pub declaration: DeclId,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct TypeGroupFragmentOrderingGroupForTest {
+    pub name: String,
+    pub fragments_in_binder: Vec<TypeGroupFragmentOrderingIdentityForTest>,
+    pub fragments_by_library_ordinal: Vec<TypeGroupFragmentOrderingIdentityForTest>,
+    pub fragments_by_source_key: Vec<TypeGroupFragmentOrderingIdentityForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct TypeGroupFragmentOrderingForTest {
+    pub units: Vec<TypeGroupFragmentOrderingUnitForTest>,
+    pub groups: Vec<TypeGroupFragmentOrderingGroupForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn type_group_fragment_ordering_identity_for_test(
+    fragment: &TypeGroupFragment,
+) -> TypeGroupFragmentOrderingIdentityForTest {
+    TypeGroupFragmentOrderingIdentityForTest {
+        source_key: fragment.source,
+        declaration_start: fragment.site.declaration_span.start,
+        declaration: fragment.declaration,
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
 impl LibraryBinderCheckpoint {
     pub fn new(binder: Binder, library_units: Vec<LibraryBinderUnit>) -> Self {
@@ -271,6 +347,73 @@ impl LibraryBinderCheckpoint {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn type_group_fragment_ordering_for_test(&self) -> TypeGroupFragmentOrderingForTest {
+        let library_ordinals = self
+            .library_units
+            .iter()
+            .map(|unit| (unit.module, unit.ordinal))
+            .collect::<FxHashMap<_, _>>();
+        let mut units = self
+            .library_units
+            .iter()
+            .map(|unit| TypeGroupFragmentOrderingUnitForTest {
+                library_ordinal: unit.ordinal,
+                source_key: unit.source,
+            })
+            .collect::<Vec<_>>();
+        units.sort_by_key(|unit| unit.library_ordinal);
+
+        let groups = self
+            .binder
+            .type_groups
+            .iter()
+            .filter(|group| {
+                group
+                    .fragments
+                    .iter()
+                    .all(|fragment| library_ordinals.contains_key(&fragment.site.module))
+            })
+            .map(|group| {
+                let fragments_in_binder = group
+                    .fragments
+                    .iter()
+                    .map(type_group_fragment_ordering_identity_for_test)
+                    .collect::<Vec<_>>();
+                let mut fragments_by_library_ordinal = group.fragments.clone();
+                fragments_by_library_ordinal.sort_by_key(|fragment| {
+                    (
+                        library_ordinals.get(&fragment.site.module).copied(),
+                        fragment.site.declaration_span.start,
+                        fragment.declaration.0,
+                    )
+                });
+                let mut fragments_by_source_key = group.fragments.clone();
+                fragments_by_source_key.sort_by_key(|fragment| {
+                    (
+                        fragment.source,
+                        fragment.site.declaration_span.start,
+                        fragment.declaration.0,
+                    )
+                });
+                TypeGroupFragmentOrderingGroupForTest {
+                    name: group.name.clone(),
+                    fragments_in_binder,
+                    fragments_by_library_ordinal: fragments_by_library_ordinal
+                        .iter()
+                        .map(type_group_fragment_ordering_identity_for_test)
+                        .collect(),
+                    fragments_by_source_key: fragments_by_source_key
+                        .iter()
+                        .map(type_group_fragment_ordering_identity_for_test)
+                        .collect(),
+                }
+            })
+            .collect();
+
+        TypeGroupFragmentOrderingForTest { units, groups }
+    }
+
     pub fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
         self.ends
     }
@@ -281,6 +424,10 @@ impl LibraryBinderCheckpoint {
             library_units,
             ..
         } = self;
+        let type_group_library_ordinals = library_units
+            .iter()
+            .map(|unit| (unit.module, unit.ordinal))
+            .collect();
         let Binder {
             graph,
             symbols,
@@ -310,6 +457,7 @@ impl LibraryBinderCheckpoint {
                     namespaces,
                     module_sources,
                     library_module_ordinals: FxHashMap::default(),
+                    type_group_library_ordinals,
                     fn_scopes,
                     fn_decl_ids,
                     block_scopes,
@@ -781,6 +929,8 @@ pub(crate) struct BindState {
     module_sources: LayeredMap<ScopeId, SourceUnitKey>,
     next_source_key: SourceUnitKey,
     library_module_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
+    /// Library provenance needed to keep fragment order canonical after binding mode changes.
+    type_group_library_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
@@ -1143,6 +1293,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             namespaces: NamespaceTable::default(),
             module_sources: LayeredMap::default(),
             library_module_ordinals: FxHashMap::default(),
+            type_group_library_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
@@ -1468,6 +1619,9 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             self.state
                 .library_module_ordinals
                 .insert(module, file_ordinal);
+            self.state
+                .type_group_library_ordinals
+                .insert(module, file_ordinal);
             self.state.record_source_declarations(program);
             let ordinary_scope = if unit.binding.external_module {
                 module
@@ -1589,6 +1743,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     namespaces,
                     module_sources,
                     library_module_ordinals: FxHashMap::default(),
+                    type_group_library_ordinals: FxHashMap::default(),
                     fn_scopes: FxHashMap::default(),
                     fn_decl_ids: FxHashMap::default(),
                     block_scopes: FxHashMap::default(),
@@ -2388,6 +2543,25 @@ fn declare_function_value(
     state.attach_symbol_declaration(symbol_id, declaration);
 }
 
+type TypeGroupFragmentOrderKey = (bool, u64, u32, u32);
+
+fn type_group_fragment_order_key(
+    fragment: TypeGroupFragment,
+    library_ordinals: &FxHashMap<ScopeId, LibraryFileOrdinal>,
+) -> TypeGroupFragmentOrderKey {
+    let (user_fragment, unit) = library_ordinals
+        .get(&fragment.site.module)
+        .map_or((true, u64::from(fragment.source.0)), |ordinal| {
+            (false, u64::try_from(ordinal.index()).unwrap_or(u64::MAX))
+        });
+    (
+        user_fragment,
+        unit,
+        fragment.site.declaration_span.start,
+        fragment.declaration.0,
+    )
+}
+
 /// Retain one source fragment in its stable production type group.
 pub(super) fn declare_type(
     state: &mut BindState,
@@ -2432,35 +2606,18 @@ pub(super) fn declare_type(
             .get_mut(group)
             .map(|row| &mut row.fragments)
         {
-            if !state.library_module_ordinals.is_empty() {
-                fragments.sort_by_key(|fragment| {
-                    (
-                        state
-                            .library_module_ordinals
-                            .get(&fragment.site.module)
-                            .copied()
-                            .expect("library type fragment has an exact file ordinal"),
-                        fragment.site.declaration_span.start,
-                        fragment.declaration.0,
-                    )
+            if let Some(appended) = fragments.last().copied() {
+                let appended_index = fragments.len().saturating_sub(1);
+                let key =
+                    type_group_fragment_order_key(appended, &state.type_group_library_ordinals);
+                let at = fragments[..appended_index].partition_point(|fragment| {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    record_type_group_fragment_row_probe();
+                    type_group_fragment_order_key(*fragment, &state.type_group_library_ordinals)
+                        <= key
                 });
-            } else {
-                fragments.sort_by_key(|fragment| {
-                    (
-                        fragment.source,
-                        fragment.site.declaration_span.start,
-                        fragment.declaration.0,
-                    )
-                });
+                fragments[at..].rotate_right(1);
             }
-            #[cfg(not(any(test, feature = "test-utils")))]
-            fragments.sort_by_key(|fragment| {
-                (
-                    fragment.source,
-                    fragment.site.declaration_span.start,
-                    fragment.declaration.0,
-                )
-            });
         }
         let lexical = state
             .declarations

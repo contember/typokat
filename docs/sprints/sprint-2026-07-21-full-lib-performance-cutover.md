@@ -330,7 +330,7 @@ the claim to the easy fast path.
   official-suite input; freeze route incidence before optimizing. Measure which library
   declaration SCCs actually depend on each collision family and whether ADR-0020's source-derived
   sparse replay can preserve same-universe identity without becoming a second publication
-  authority. Resolve backlog `105`'s test/production fragment-order split before enabling replay.
+  authority. Consume the now-pinned library-registry fragment order in both test and production.
 - **Scope.** Implement the exhaustive preflight before any semantic mutation. Keep the shared fast
   path for provably non-colliding inputs. For collisions, implement
   [ADR-0020](../decisions/0020-build-source-native-sparse-collision-epochs.md)'s source-native
@@ -1354,3 +1354,13 @@ Python `bool == 1` schema holes and, more importantly, rejected an initial probe
 production route while `check` still used the prelude. Both contract and observed schema types now
 fail closed; the current probe reports `prelude`, and WU7 must change routing and attestation
 atomically.
+
+**Backlog 105's ordering prerequisite shipped before the private epoch.** Read-only construction
+proved that the pinned profile's registry ordinal `i` maps to source key `i + 1`, so both keys agree
+for all 82 sources, while a crossed-key production integration test proved the old `cfg` split was
+real. Library registry ordinal is now the one fragment key in every build, append-time full resorts
+are replaced by stable binary insertion, and exact `(source, span, declaration)` projections pin
+every merged group. The namespace half of the original backlog report was disproved at HEAD: that
+path appends and performs one final canonical sort, so it was removed from the item rather than
+“optimized” without a failing guard. Independent review initially rejected a source-only projection
+that could not see same-file reordering; the exact identity projection passed the final review.

@@ -1,7 +1,7 @@
 ---
 id: 103
 title: A merge into a library-owned name is refused, not performed; there is no collision route
-blocked-by: [./105-type-group-fragment-resort.md]
+blocked-by: []
 ---
 
 # 103 — A merge into a library-owned name is refused, not performed; there is no collision route
@@ -99,8 +99,8 @@ numeric IDs are deliberately shared.
 `crates/typokat-driver/src/driver.rs`,
 `tooling/full-lib-bench/workloads/collision/`, `tooling/full-lib-bench/workloads/fanout/`.
 
-Backlog [`105`](105-type-group-fragment-resort.md)'s ordering half is an evidence prerequisite:
-test and production must use one pinned fragment order before replay is enabled.
+Backlog `105`'s ordering prerequisite shipped first: test and production now use the pinned
+library-registry order, with an exact full-profile projection and a production crossed-key witness.
 
 <!-- Origin: found 2026-07-26 when the production-shaped CLI was first pointed at the library base
      and two of four benchmark rows exited 101; characterised by the family-1 diagnosis work unit. -->

@@ -82,9 +82,8 @@ mod collision_epoch_scheduler_spec;
 #[cfg(test)]
 mod compiler_profile_spec;
 
-// Activate with backlog 105's canonical fragment-order implementation.
-// #[cfg(test)]
-// mod type_group_ordering_spec;
+#[cfg(test)]
+mod type_group_ordering_spec;
 
 // Activate after the WU5 replay index and work receipts land.
 // #[cfg(test)]
