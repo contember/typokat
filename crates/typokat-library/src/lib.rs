@@ -69,6 +69,9 @@ mod user_delta_project_scale_spec;
 #[cfg(test)]
 mod collision_preflight_spec;
 
+#[cfg(test)]
+mod private_route_receipt_spec;
+
 // Activate after the WU5 private combined-universe implementation lands.
 // #[cfg(test)]
 // mod private_combined_universe_spec;
