@@ -4,14 +4,16 @@
 dirty repository and clones the committed revision into two distinct clean
 roots.
 
-Each clean root is then packaged independently. The coordinator validates
-the source and normalized package manifests plus Cargo metadata, requires zero
-custom-build targets, and compares the exact regular-file archive inventory with
-`cargo package --list`. Duplicate archive paths, links, special files, and path
-escapes are rejected. The gate validates the complete pinned profile manifest,
-all 82 declaration sources and reference edges, and all upstream notices before
-byte-comparing the extracted assets with their inputs. It then runs
-`cargo check --locked --offline --all-targets` against each crate.
+Each clean root then packages the `typokat-library` workspace member independently.
+The coordinator validates the source and normalized package manifests plus Cargo
+metadata, requires zero custom-build targets, and compares the exact regular-file
+archive inventory with `cargo package --list`. Duplicate archive paths, links,
+special files, and path escapes are rejected. The gate validates the complete
+pinned profile manifest, all 82 declaration sources and reference edges, and all
+upstream notices before byte-comparing the extracted assets with their inputs. It then runs
+`cargo check --locked --offline --all-targets` against each extracted member,
+resolving the unpublished lower workspace crates from the corresponding clean clone
+through explicit Cargo patches.
 
 Every Cargo subprocess is enclosed by a no-follow inventory of the whole source
 tree, including tracked, untracked, ignored, directory, file-mode, size, and byte

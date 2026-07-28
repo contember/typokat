@@ -483,7 +483,8 @@ impl FrozenLibraryBase {
     /// The caller certifies collision-freedom (see `issue_caller_certified_capability`); the
     /// source-driven routing that would reject a colliding suffix is WU5's. The base itself is
     /// never mutated — the returned runtime owns every row a user check may write.
-    pub(crate) fn fork_user_delta(
+    #[doc(hidden)]
+    pub fn fork_user_delta(
         &self,
     ) -> Result<crate::check::checker::library_compiler::OwnedLibraryRuntimeState, &'static str>
     {

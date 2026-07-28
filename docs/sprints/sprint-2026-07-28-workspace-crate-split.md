@@ -184,3 +184,13 @@ independent reviewer; fixes return to the implementation agent before closure.
   and a new replay-scanner regression pins exclusion of feature-gated support
   code from the production manifest. Workspace gate: 1,288 passed / 16 ignored,
   unchanged replay/profile digests, clean all-target clippy.
+- 2026-07-28: `typokat-library` now owns the default-library compiler, frozen
+  base, collision routing support, and the complete pinned TypeScript 6.0.3
+  profile. Its normal dependencies are exactly `core`, `binder`, `frontend`,
+  `check`, the Oxc parser trio, and `sha2`; test-only lower-layer
+  instrumentation remains in dev dependencies. The package gate now verifies
+  the exact 106-file member archive in two clean clones and checks each
+  extracted crate offline through explicit local patches. Gate: all 82
+  declarations and notices byte-verified, 60 member tests passed / 5 ignored
+  plus the compile-fail doctest, workspace 1,288 passed / 16 ignored, zero
+  build scripts or source mutations, clean all-target clippy.

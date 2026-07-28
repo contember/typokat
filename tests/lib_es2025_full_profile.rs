@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use toml::{Table, Value};
 
-const PROFILE_RELATIVE_PATH: &str = "src/library/typescript-6.0.3";
+const PROFILE_RELATIVE_PATH: &str = "crates/typokat-library/src/typescript-6.0.3";
 const ROOT_NAME: &str = "lib.es2025.full.d.ts";
 const TYPESCRIPT_VERSION: &str = "6.0.3";
 const UPSTREAM_REVISION: &str = "050880ce59e30b356b686bd3144efe24f875ebc8";

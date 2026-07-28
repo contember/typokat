@@ -22,17 +22,17 @@ third_party_notice_bytes = 37824
 third_party_notice_sha256 = "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
 gitattributes_bytes = 165
 gitattributes_sha256 = "3f9153093b34fc664e5b6e0670710f9aed8f64c5f17b8a2b79fba1ae8e17b9f9"
-profile_readme_bytes = 1139
-profile_readme_sha256 = "24aa82ab23727c49d933a5e597fbcbcf9a6792cc6902c74f1d7af38c2bb45bc7"
+profile_readme_bytes = 1163
+profile_readme_sha256 = "93caed2f2cb291f00b7ab64e17a7f8f0d58b2d1619a0c9e2ea0e18b79c2057e4"
 profile_notice_bytes = 1036
 profile_notice_sha256 = "401062e3feb78e115fabc467683d92574b1a99d776ce8b4962bdf422cfe7a5cc"
 required_package_assets = [
-  "src/library/typescript-6.0.3/.gitattributes",
-  "src/library/typescript-6.0.3/README.md",
-  "src/library/typescript-6.0.3/profile.toml",
-  "src/library/typescript-6.0.3/LICENSE.txt",
-  "src/library/typescript-6.0.3/ThirdPartyNoticeText.txt",
-  "src/library/typescript-6.0.3/THIRD_PARTY_NOTICE.md",
+  "src/typescript-6.0.3/.gitattributes",
+  "src/typescript-6.0.3/README.md",
+  "src/typescript-6.0.3/profile.toml",
+  "src/typescript-6.0.3/LICENSE.txt",
+  "src/typescript-6.0.3/ThirdPartyNoticeText.txt",
+  "src/typescript-6.0.3/THIRD_PARTY_NOTICE.md",
 ]
 cargo_checks = 2
 build_scripts = 0

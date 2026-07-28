@@ -16,7 +16,7 @@ Generate the checked-in subtree:
 python3 tooling/library-profile/profile.py \
   --typescript-package /absolute/path/to/node_modules/typescript \
   --typescript-git-dir /absolute/path/to/typescript.git \
-  --output src/library/typescript-6.0.3
+  --output crates/typokat-library/src/typescript-6.0.3
 ```
 
 Verify it by regenerating into a temporary directory and byte-comparing every path:
@@ -25,7 +25,7 @@ Verify it by regenerating into a temporary directory and byte-comparing every pa
 python3 tooling/library-profile/profile.py \
   --typescript-package /absolute/path/to/node_modules/typescript \
   --typescript-git-dir /absolute/path/to/typescript.git \
-  --output src/library/typescript-6.0.3 \
+  --output crates/typokat-library/src/typescript-6.0.3 \
   --check
 ```
 

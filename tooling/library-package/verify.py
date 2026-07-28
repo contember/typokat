@@ -19,9 +19,20 @@ from typing import Any, Iterable
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+PACKAGE_RELATIVE_ROOT = Path("crates/typokat-library")
+PACKAGE_ROOT = ROOT / PACKAGE_RELATIVE_ROOT
 CONTRACT_PATH = HERE / "contract.toml"
-PROFILE_PREFIX = "src/library/typescript-6.0.3/"
+PROFILE_PREFIX = "src/typescript-6.0.3/"
 LIB_PREFIX = PROFILE_PREFIX + "lib/"
+INTERNAL_PACKAGES = (
+    "typokat-binder",
+    "typokat-check",
+    "typokat-core",
+    "typokat-diagnostics",
+    "typokat-frontend",
+    "typokat-relate",
+    "typokat-types",
+)
 HEX = frozenset("0123456789abcdef")
 PROFILE_ROOT_KEYS = {
     "schema", "typescript_version", "upstream_revision", "root", "file_count",
@@ -148,7 +159,7 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         "license_bytes": 9_197,
         "third_party_notice_bytes": 37_824,
         "gitattributes_bytes": 165,
-        "profile_readme_bytes": 1_139,
+        "profile_readme_bytes": 1_163,
         "profile_notice_bytes": 1_036,
         "cargo_checks": 2,
         "build_scripts": 0,
@@ -182,7 +193,7 @@ def validate_contract(contract: Any) -> dict[str, Any]:
             "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
         ),
         "gitattributes_sha256": "3f9153093b34fc664e5b6e0670710f9aed8f64c5f17b8a2b79fba1ae8e17b9f9",
-        "profile_readme_sha256": "24aa82ab23727c49d933a5e597fbcbcf9a6792cc6902c74f1d7af38c2bb45bc7",
+        "profile_readme_sha256": "93caed2f2cb291f00b7ab64e17a7f8f0d58b2d1619a0c9e2ea0e18b79c2057e4",
         "profile_notice_sha256": "401062e3feb78e115fabc467683d92574b1a99d776ce8b4962bdf422cfe7a5cc",
     }
     for key, expected in expected_digests.items():
@@ -284,7 +295,7 @@ def validate_package_inventory(
     expected = (
         expected_profile_assets
         if expected_profile_assets is not None
-        else _profile_asset_inventory(ROOT / PROFILE_PREFIX, contract)
+        else _profile_asset_inventory(PACKAGE_ROOT / PROFILE_PREFIX, contract)
     )
     missing = sorted(expected - normalized)
     if missing:
@@ -599,7 +610,7 @@ def _profile_asset_inventory(profile_dir: Path, contract: dict[str, Any]) -> set
     )
     for name, size_key, digest_key, line_facts in (
         (".gitattributes", "gitattributes_bytes", "gitattributes_sha256", (6, 0, True)),
-        ("README.md", "profile_readme_bytes", "profile_readme_sha256", (19, 0, True)),
+        ("README.md", "profile_readme_bytes", "profile_readme_sha256", (20, 0, True)),
         ("THIRD_PARTY_NOTICE.md", "profile_notice_bytes", "profile_notice_sha256", (19, 0, True)),
     ):
         _exact_text_asset(
@@ -901,11 +912,13 @@ def _run_observed(
     source_root: Path,
     observations: dict[str, int],
     require_git_clean: bool,
+    additional_source_roots: tuple[Path, ...] = (),
     timeout: int = 1_200,
 ) -> subprocess.CompletedProcess[str]:
     if require_git_clean:
         _require_git_clean_all(source_root, "subprocess source root")
-    before = _tree_snapshot(source_root)
+    source_roots = (source_root, *additional_source_roots)
+    before = {root: _tree_snapshot(root) for root in source_roots}
     process_error: ContractError | None = None
     result: subprocess.CompletedProcess[str] | None = None
     try:
@@ -917,8 +930,12 @@ def _run_observed(
         )
     except ContractError as error:
         process_error = error
-    after = _tree_snapshot(source_root)
-    mutations = _snapshot_mutations(before, after)
+    after = {root: _tree_snapshot(root) for root in source_roots}
+    mutations = [
+        f"{root}:{path}"
+        for root in source_roots
+        for path in _snapshot_mutations(before[root], after[root])
+    ]
     observations["source_mutations"] += len(mutations)
     if require_git_clean:
         _require_git_clean_all(source_root, "subprocess source root after command")
@@ -997,6 +1014,8 @@ def _cargo_metadata(
     observations: dict[str, int],
     *,
     require_git_clean: bool,
+    cargo_config: tuple[str, ...] = (),
+    additional_source_roots: tuple[Path, ...] = (),
 ) -> int:
     result = _run_observed(
         [
@@ -1007,12 +1026,14 @@ def _cargo_metadata(
             "1",
             "--locked",
             "--offline",
+            *cargo_config,
         ],
         cwd=root,
         environment=environment,
         source_root=root,
         observations=observations,
         require_git_clean=require_git_clean,
+        additional_source_roots=additional_source_roots,
     )
     try:
         metadata = json.loads(result.stdout)
@@ -1042,15 +1063,17 @@ def _clone_clean_root(destination: Path, revision: str) -> None:
 
 
 def _package_list(
-    root: Path,
+    package_root: Path,
+    source_root: Path,
     environment: dict[str, str],
     observations: dict[str, int],
+    cargo_config: tuple[str, ...],
 ) -> set[str]:
     result = _run_observed(
-        ["cargo", "package", "--locked", "--offline", "--list"],
-        cwd=root,
+        ["cargo", "package", "--locked", "--offline", "--list", *cargo_config],
+        cwd=package_root,
         environment=environment,
-        source_root=root,
+        source_root=source_root,
         observations=observations,
         require_git_clean=True,
     )
@@ -1058,6 +1081,16 @@ def _package_list(
     if len(paths) != len(set(paths)):
         raise ContractError("cargo package --list emitted duplicate paths")
     return set(paths)
+
+
+def _cargo_patch_config(repository_root: Path) -> tuple[str, ...]:
+    arguments: list[str] = []
+    for package in INTERNAL_PACKAGES:
+        path = (repository_root / "crates" / package).resolve()
+        arguments.extend(
+            ["--config", f'patch.crates-io.{package}.path="{path}"']
+        )
+    return tuple(arguments)
 
 
 def _extract_crate(
@@ -1161,7 +1194,8 @@ def _verify_extracted_assets(
 
 
 def _package_and_check(
-    root: Path,
+    package_root: Path,
+    repository_root: Path,
     run_root: Path,
     ordinal: int,
     cargo_home: Path,
@@ -1170,8 +1204,13 @@ def _package_and_check(
 ) -> None:
     target = run_root / f"package-target-{ordinal}"
     environment = _clean_environment(target, cargo_home)
-    expected_profile_assets = _profile_asset_inventory(root / PROFILE_PREFIX, contract)
-    inventory = _package_list(root, environment, observations)
+    cargo_config = _cargo_patch_config(repository_root)
+    expected_profile_assets = _profile_asset_inventory(
+        package_root / PROFILE_PREFIX, contract
+    )
+    inventory = _package_list(
+        package_root, repository_root, environment, observations, cargo_config
+    )
     validate_package_inventory(
         inventory,
         contract,
@@ -1181,20 +1220,27 @@ def _package_and_check(
         PurePosixPath(path).name == "build.rs" for path in inventory
     )
     _run_observed(
-        ["cargo", "package", "--locked", "--offline", "--no-verify"],
-        cwd=root,
+        [
+            "cargo",
+            "package",
+            "--locked",
+            "--offline",
+            "--no-verify",
+            *cargo_config,
+        ],
+        cwd=package_root,
         environment=environment,
-        source_root=root,
+        source_root=repository_root,
         observations=observations,
         require_git_clean=True,
     )
-    archives = list((target / "package").glob("typokat-*.crate"))
+    archives = list((target / "package").glob("typokat-library-*.crate"))
     if len(archives) != 1:
         raise ContractError(f"cargo package produced {len(archives)} crate archives")
     extracted = _extract_crate(
         archives[0], run_root / f"extracted-{ordinal}", inventory
     )
-    _verify_extracted_assets(root, extracted, contract)
+    _verify_extracted_assets(package_root, extracted, contract)
     observations["build_scripts"] += _validate_manifest_build_surface(
         extracted / "Cargo.toml"
     )
@@ -1211,14 +1257,24 @@ def _package_and_check(
         check_environment,
         observations,
         require_git_clean=False,
+        cargo_config=cargo_config,
+        additional_source_roots=(repository_root,),
     )
     _run_observed(
-        ["cargo", "check", "--locked", "--offline", "--all-targets"],
+        [
+            "cargo",
+            "check",
+            "--locked",
+            "--offline",
+            "--all-targets",
+            *cargo_config,
+        ],
         cwd=extracted,
         environment=check_environment,
         source_root=extracted,
         observations=observations,
         require_git_clean=False,
+        additional_source_roots=(repository_root,),
     )
     observations["cargo_checks"] += 1
 
@@ -1258,12 +1314,13 @@ def coordinate(contract: dict[str, Any]) -> dict[str, Any]:
         for ordinal, (root, cargo_home) in enumerate(
             zip(roots, cargo_homes, strict=True), 1
         ):
+            package_root = root / PACKAGE_RELATIVE_ROOT
             observations["build_scripts"] += _validate_manifest_build_surface(
-                root / "Cargo.toml"
+                package_root / "Cargo.toml"
             )
-            _profile_asset_inventory(root / PROFILE_PREFIX, contract)
+            _profile_asset_inventory(package_root / PROFILE_PREFIX, contract)
             _cargo_metadata(
-                root,
+                package_root,
                 _clean_environment(
                     run_root / f"metadata-target-{ordinal}", cargo_home
                 ),
@@ -1274,6 +1331,7 @@ def coordinate(contract: dict[str, Any]) -> dict[str, Any]:
             zip(roots, cargo_homes, strict=True), 1
         ):
             _package_and_check(
+                root / PACKAGE_RELATIVE_ROOT,
                 root,
                 run_root,
                 ordinal,

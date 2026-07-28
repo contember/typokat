@@ -48,6 +48,15 @@ fn binder_source(relative: &str) -> String {
     .expect("binder source")
 }
 
+fn checker_source(relative: &str) -> String {
+    std::fs::read_to_string(
+        crate::test_support::repository_root()
+            .join("crates/typokat-check/src/check/checker")
+            .join(relative),
+    )
+    .expect("checker source")
+}
+
 fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
     let declaration_offset = source.find(declaration).expect("struct declaration");
     let body_offset = source[declaration_offset..]
@@ -90,7 +99,7 @@ fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
 
 #[test]
 fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
-    let source = include_str!("../../crates/typokat-check/src/check/checker/replay_index.rs");
+    let source = checker_source("replay_index.rs");
     let wire_fields = [
         "schema",
         "owner_partition",
@@ -107,7 +116,7 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
         "typed_reference_coverage_misses",
     ];
     assert_eq!(
-        exact_struct_field_names(source, "pub struct CollisionReplayIndex"),
+        exact_struct_field_names(&source, "pub struct CollisionReplayIndex"),
         [
             wire_fields.as_slice(),
             &["canonical_manifest_bytes", "canonical_manifest_sha256",],
@@ -116,7 +125,7 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
     );
 
     let admitted_fields =
-        exact_struct_field_names(source, "pub struct AdmittedCollisionReplayIndex");
+        exact_struct_field_names(&source, "pub struct AdmittedCollisionReplayIndex");
     assert_eq!(
         admitted_fields
             .iter()
@@ -177,7 +186,7 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
 
 #[test]
 fn singleton_scc_owner_rows_use_inline_storage_without_changing_the_wire_model() {
-    let source = include_str!("../../crates/typokat-check/src/check/checker/replay_index.rs");
+    let source = checker_source("replay_index.rs");
     let declaration = source
         .split_once("pub struct ReplayScc")
         .expect("replay SCC declaration")
@@ -1008,8 +1017,7 @@ if (condition) {
 #[test]
 fn library_binder_checkpoint_is_unforgeable_and_resumes_only_through_the_continuation() {
     let binder = binder_source("bind.rs");
-    let private_compiler =
-        include_str!("../../crates/typokat-check/src/check/checker/library_compiler.rs");
+    let private_compiler = checker_source("library_compiler.rs");
     let library_compiler = include_str!("compiler.rs");
     let checkpoint_offset = binder
         .find("pub struct LibraryBinderCheckpoint {")

@@ -29,14 +29,15 @@ smallvec = "1.15.2"
 tikv-jemallocator = "0.7.0"
 toml = "0.8.23"
 rustix = { version = "1.1.4", features = ["fs"] }
-typokat-core = { path = "crates/typokat-core" }
-typokat-types = { path = "crates/typokat-types" }
-typokat-binder = { path = "crates/typokat-binder" }
-typokat-relate = { path = "crates/typokat-relate" }
-typokat-diagnostics = { path = "crates/typokat-diagnostics" }
-typokat-surface = { path = "crates/typokat-surface" }
-typokat-frontend = { path = "crates/typokat-frontend" }
-typokat-check = { path = "crates/typokat-check" }
+typokat-core = { version = "0.1.0", path = "crates/typokat-core" }
+typokat-types = { version = "0.1.0", path = "crates/typokat-types" }
+typokat-binder = { version = "0.1.0", path = "crates/typokat-binder" }
+typokat-relate = { version = "0.1.0", path = "crates/typokat-relate" }
+typokat-diagnostics = { version = "0.1.0", path = "crates/typokat-diagnostics" }
+typokat-surface = { version = "0.1.0", path = "crates/typokat-surface" }
+typokat-frontend = { version = "0.1.0", path = "crates/typokat-frontend" }
+typokat-check = { version = "0.1.0", path = "crates/typokat-check" }
+typokat-library = { version = "0.1.0", path = "crates/typokat-library" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -68,6 +69,7 @@ typokat-diagnostics.workspace = true
 typokat-surface.workspace = true
 typokat-frontend.workspace = true
 typokat-check.workspace = true
+typokat-library.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
 dragonbox_ecma.workspace = true
@@ -83,8 +85,8 @@ smallvec.workspace = true
 # (pinned to its parsing thread), so the per-file pipeline is the unit of work.
 rayon.workspace = true
 
-# Vendored library profile identity (`library/profile.rs`) and the collision replay
-# manifest digest (`crates/typokat-check/src/check/checker/replay_index.rs`).
+# Vendored library profile identity (`crates/typokat-library/src/profile.rs`) and
+# collision replay manifest digest (`crates/typokat-check/src/check/checker/replay_index.rs`).
 sha2.workspace = true
 
 # Allocator for the CLI (`src/main.rs` only — the library must not pick its

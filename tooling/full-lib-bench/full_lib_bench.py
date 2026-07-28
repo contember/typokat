@@ -31,7 +31,7 @@ from typing import Any, Iterable
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-PROFILE = ROOT / "src/library/typescript-6.0.3"
+PROFILE = ROOT / "crates/typokat-library/src/typescript-6.0.3"
 WORKLOADS = HERE / "workloads"
 CONTRACT_PATH = HERE / "contract.toml"
 LIBRARIES_LOCK = HERE / "expected-libraries.txt"

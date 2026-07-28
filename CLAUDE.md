@@ -43,21 +43,24 @@ cheapest first — reach for the narrowest one that answers your question:
 Pipeline in `src/driver.rs`: parse (via `oxc`) → bind → check. Four pillars (details
 in [docs/reference/architecture.md](docs/reference/architecture.md)):
 
-- **Type store** (`src/types/`) — every type is a hash-consed `TypeId(u32)` into an
-  arena (no `Rc<RefCell>`), so structural equality is an integer compare.
+- **Type store** (`crates/typokat-types/src/types/`) — every type is a hash-consed
+  `TypeId(u32)` into an arena (no `Rc<RefCell>`), so structural equality is an integer compare.
   Substitution-aware; identity-bearing property metadata is folded into the hash.
-- **Binder** (`src/binder/`) — a scope graph with **multi-slot symbols** (value /
-  type / namespace spaces), which is what lets a class be both a type and a value,
-  and what nominal classes key on.
-- **Relation engine** (`src/relate/`) — `is_assignable`, the CPU-heavy core. A 3×`u32`
-  cache, an **assume-true-until-disproven cycle stack** for recursive types, and
-  `Relation::No(ReasonChain)` (never a bare `bool`) so reporting runs the same path.
+- **Binder** (`crates/typokat-binder/src/binder/`) — a scope graph with **multi-slot
+  symbols** (value / type / namespace spaces), which is what lets a class be both a
+  type and a value, and what nominal classes key on.
+- **Relation engine** (`crates/typokat-relate/src/relate/`) — `is_assignable`, the
+  CPU-heavy core. A 3×`u32` cache, an **assume-true-until-disproven cycle stack** for
+  recursive types, and `Relation::No(ReasonChain)` (never a bare `bool`) so reporting
+  runs the same path.
   Carries a cache-soundness fix (architecture §6.3) — regressing it drops errors
   order-dependently, the sharpest bug class in the project.
-- **Statement checker** (`crates/typokat-check/src/check/`) — a flow-sensitive interpreter (a narrowing
-  environment that forks at `if`/`else`/`switch`) plus the generic **inference
-  engine** (`infer`, a separate machine from the relation engine). Split into
-  `checker/` submodules.
+- **Statement checker** (`crates/typokat-check/src/check/`) — a flow-sensitive
+  interpreter (a narrowing environment that forks at `if`/`else`/`switch`) plus the
+  generic **inference engine** (`infer`, a separate machine from the relation engine).
+  Split into `checker/` submodules.
+- **Default library** (`crates/typokat-library/src/`) — the pinned TypeScript profile,
+  source-backed compiler, frozen shared base, and package-verification assets.
 
 **Soundness > completeness**: when in doubt, over-report (the safe direction). Every
 deliberate `tsc` divergence is documented in

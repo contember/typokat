@@ -330,7 +330,7 @@ fn thirty_two_concurrent_runs_share_one_base_but_no_user_names() {
 #[test]
 fn delta_construction_stays_private_and_test_receipts_stay_test_only() {
     let base_source = include_str!("base.rs");
-    let module_source = include_str!("mod.rs");
+    let module_source = include_str!("lib.rs");
     assert!(!module_source.lines().any(|line| {
         line.trim_start().starts_with("pub use") && line.to_ascii_lowercase().contains("delta")
     }));

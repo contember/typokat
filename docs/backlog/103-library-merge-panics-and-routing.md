@@ -10,10 +10,10 @@ blocked-by: []
 `namespace Intl`, `class Date`, `declare global` — does not merge. **The guard tier shipped**
 (`f1c7d7e`/`b223817`): those shapes used to panic and are now typed refusals, so `collision` and
 `fanout` run for the first time. What remains is the correctness tier: making the merge actually
-happen. The classifier exists (`src/library/collision_preflight.rs`) but is never called on real
-input, and the private-rebuild route ADR-0011 mandates is not implemented. Effort XL. **Blocks the
-WU7 CLI cutover**, because refusing every `declare global` is a product regression against
-`crates/typokat-check/src/prelude.ts`.
+happen. The classifier exists (`crates/typokat-library/src/collision_preflight.rs`) but is never
+called on real input, and the private-rebuild route ADR-0011 mandates is not implemented. Effort XL.
+**Blocks the WU7 CLI cutover**, because refusing every `declare global` is a product regression
+against `crates/typokat-check/src/prelude.ts`.
 
 ## Problem
 
@@ -56,7 +56,7 @@ succeeds. The committed test at `collision_replay_index_spec.rs:355` feeds it ex
 `collision` workload and asserts the augmented type group keeps its identity.
 
 What is missing is everything downstream: type reservation/publication, checking, and driver routing.
-`src/library/mod.rs:38` and `:47` still have `private_combined_universe_spec` and
+`crates/typokat-library/src/lib.rs:38` and `:47` still have `private_combined_universe_spec` and
 `private_replay_scale_spec` commented out.
 
 ## Approach / acceptance
@@ -86,7 +86,8 @@ proof that no identity of any kind crosses between a private universe and the sh
 ## Touch points
 
 `src/binder/bind.rs`, `src/binder/namespace.rs`, `crates/typokat-check/src/check/checker/mod.rs`,
-`src/library/collision_preflight.rs`, `src/library/base.rs`, `src/driver.rs`,
+`crates/typokat-library/src/collision_preflight.rs`, `crates/typokat-library/src/base.rs`,
+`src/driver.rs`,
 `tooling/full-lib-bench/workloads/collision/`, `tooling/full-lib-bench/workloads/fanout/`.
 
 <!-- Origin: found 2026-07-26 when the production-shaped CLI was first pointed at the library base

@@ -27,7 +27,7 @@ class PackageCoordinatorContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.contract = verify.load_contract(ROOT / "contract.toml")
         cls.profile_assets = verify._profile_asset_inventory(
-            verify.ROOT / verify.PROFILE_PREFIX, cls.contract
+            verify.PACKAGE_ROOT / verify.PROFILE_PREFIX, cls.contract
         )
 
     def setUp(self) -> None:
@@ -78,7 +78,7 @@ class PackageCoordinatorContractTests(unittest.TestCase):
     def test_package_inventory_is_exact(self) -> None:
         verify.validate_package_inventory(self.inventory, self.contract)
         missing = set(self.inventory)
-        missing.remove("src/library/typescript-6.0.3/profile.toml")
+        missing.remove("src/typescript-6.0.3/profile.toml")
         with self.assertRaises(verify.ContractError):
             verify.validate_package_inventory(missing, self.contract)
         extra = set(self.inventory)

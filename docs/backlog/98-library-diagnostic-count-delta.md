@@ -29,8 +29,9 @@ removal re-pinned it to source truth on 2026-07-26:
 Bytes per record went 335 → 473. Incompletes did not move at all, which argues against a broad
 regression in what the library reaches.
 
-The 07-24 sprint entry recorded that "**Regeneration and the pin family in `src/library/artifact.rs`
-remain open**", so the staleness was known and deferred; it was never attributed.
+The 07-24 sprint entry recorded that "**Regeneration and the pin family in
+`crates/typokat-library/src/artifact.rs` remain open**", so the staleness was known and deferred; it
+was never attributed.
 
 **What has been ruled out.** `243a878` ("report a nested contextual error once, not `2^depth`
 times") was the obvious suspect, since it removed 2,008 duplicate diagnostics from user corpora with
@@ -70,8 +71,9 @@ retention gap named as the reason it is impossible, so nobody re-opens it a thir
 
 ## Touch points
 
-`src/library/compiler.rs` (the evidence pins), `crates/typokat-check/src/check/checker/library_compiler.rs`
-(`canonical_library_evidence`), `docs/reference/divergences.md`.
+`crates/typokat-library/src/compiler.rs` (the evidence pins),
+`crates/typokat-check/src/check/checker/library_compiler.rs` (`canonical_library_evidence`),
+`docs/reference/divergences.md`.
 
 <!-- Origin: surfaced by the snapshot removal, 2026-07-26, which forced the stale pins to be
      rewritten to source truth. The delta predates the removal; it is not caused by it. -->

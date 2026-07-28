@@ -5,13 +5,27 @@ pub mod profile;
 mod provider;
 pub mod records;
 
+pub(crate) use typokat_binder::binder;
+pub(crate) use typokat_check::check;
+pub(crate) use typokat_core::{source, span};
+pub(crate) use typokat_frontend::frontend;
+
+#[cfg(test)]
+pub(crate) use typokat_core::test_support;
+#[cfg(test)]
+pub(crate) use typokat_diagnostics::diagnostics;
+#[cfg(test)]
+pub(crate) use typokat_relate::relate;
+#[cfg(test)]
+pub(crate) use typokat_types::types;
+
 pub use crate::source::LibraryFileOrdinal;
 /// Immutable canonical library state shared by user checks.
 ///
 /// The mutable user delta is deliberately not part of the library API.
 ///
 /// ```compile_fail
-/// use typokat::library::LayeredUserDelta;
+/// use typokat_library::LayeredUserDelta;
 /// ```
 pub use base::FrozenLibraryBase;
 pub use provider::{

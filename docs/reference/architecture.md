@@ -552,7 +552,9 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   workers, with an identity-preserving private type/binder delta for each non-colliding run. A
   conservative preflight routes any possible library-global collision or global-object
   contribution to a correctness-first private rebuild of library + project in one universe; the
-  shared base is never mutated or partially overlaid. Production still uses `crates/typokat-check/src/prelude.ts`. The
+  shared base is never mutated or partially overlaid. The implementation and pinned profile live
+  in `crates/typokat-library/src/`; production still uses
+  `crates/typokat-check/src/prelude.ts`. The
   [2026-07-16 feasibility sprint](../archive/sprint-2026-07-16-full-lib-loading.md) ended at WU0
   NO-GO after its unchanged 5-second cold gate exited 143; no cutover shipped. The active
   [performance-cutover sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now

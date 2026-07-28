@@ -737,7 +737,7 @@ fn collision_free_capability_is_issued_only_for_a_shared_receipt() {
     assert!(shared.capability_issued);
     assert!(!private.capability_issued);
 
-    let library_root = crate::test_support::repository_root().join("src/library");
+    let library_root = crate::test_support::repository_root().join("crates/typokat-library/src");
     let constructor = ["CollisionFreeUserDelta", "Capability(())"].concat();
     let issuer = ["CollisionFreeUserDelta", "Capability::issue"].concat();
     let mut owners = Vec::new();
