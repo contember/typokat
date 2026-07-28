@@ -1,7 +1,7 @@
 ---
 id: 103
 title: A merge into a library-owned name is refused, not performed; there is no collision route
-blocked-by: []
+blocked-by: [./105-type-group-fragment-resort.md]
 ---
 
 # 103 — A merge into a library-owned name is refused, not performed; there is no collision route
@@ -63,27 +63,32 @@ What is missing is everything downstream: type reservation/publication, checking
 
 ## Approach / acceptance
 
-The guard is done. What is left is [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)'s
-private full rebuild, built on the checkpoint continuation that already works, plus the routing that
-selects it.
+The guard is done. What is left is
+[ADR-0020](../decisions/0020-build-source-native-sparse-collision-epochs.md)'s source-native sparse
+epoch: typed binder-prefix overrides, selective affected-site replay through the ordinary checker,
+and the routing that selects it. The complete checkpoint continuation remains the correctness
+oracle and fail-closed fallback.
 
 *Route it.* Give the preflight a production entry point taking real `FileInput`s and the base's
 `root_names`, and call it before `fork_user_delta`. Run it **inside** the large-stack worker — the
 run log records the preflight overflowing the caller's 8 MB stack on a 471-file census.
 
-*Cost.* A colliding project repeats compile and publication in a fresh universe, so ~0.25 s → ~0.5 s.
-Fine for one project, ruinous for a batch: route incidence over the official-suite corpus is
-**shared 285 / private 185 / rejected 1**, so ~341 cases × ~0.25 s ≈ 85 s added to one process under
-ADR-0011's one-permit bound. That is why the replay-index machinery
-(`AdmittedCollisionReplayIndex`, 47,253 owner sites) is specced as the optimization *over* the naive
-rebuild. Treat that as a separate item; do not fold it in.
+*Cost.* A naive private rebuild repeats compile and publication in a fresh universe, so ~0.25 s →
+~0.5 s and the binding `collision` row would fail. Route incidence over the official-suite corpus is
+**shared 285 / private 185 / rejected 1**, so it is also ruinous for a batch. The active sprint
+forbids relabelling that row out of scope. [ADR-0020](../decisions/0020-build-source-native-sparse-collision-epochs.md)
+therefore makes the source-derived replay plan and sparse private epoch part of this correctness
+tier: the complete combined source rebuild remains the oracle/fallback, but is not an acceptable
+benchmark result.
 
 *Corpus.* `tests/cases/b103_library_merge_refusals/` and its project sibling already pin every shape
 and both input orders — the acceptance is that their refusals become correct merges while the
 controls (fresh globals publish, module scope shadows) stay exactly as they are. Add the cases the
 guard could not reach: `globalThis`, UMD globals, value/type/namespace-slot collisions,
 destructuring, a classifier false-negative mutation that must route private rather than shared, and
-proof that no identity of any kind crosses between a private universe and the shared base.
+proof that graph/semantic identity objects, mutable terminals, caches, events, and suffix state do
+not cross between a private epoch and the shared base. Unaffected immutable prefix rows and their
+numeric IDs are deliberately shared.
 
 ## Touch points
 
@@ -93,6 +98,9 @@ proof that no identity of any kind crosses between a private universe and the sh
 `crates/typokat-library/src/collision_preflight.rs`, `crates/typokat-library/src/base.rs`,
 `crates/typokat-driver/src/driver.rs`,
 `tooling/full-lib-bench/workloads/collision/`, `tooling/full-lib-bench/workloads/fanout/`.
+
+Backlog [`105`](105-type-group-fragment-resort.md)'s ordering half is an evidence prerequisite:
+test and production must use one pinned fragment order before replay is enabled.
 
 <!-- Origin: found 2026-07-26 when the production-shaped CLI was first pointed at the library base
      and two of four benchmark rows exited 101; characterised by the family-1 diagnosis work unit. -->

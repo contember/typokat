@@ -328,13 +328,15 @@ the claim to the easy fast path.
   the **Binding performance claim** (this line read `2×` until the 2026-07-26 restatement).
 - **Verify first.** Re-run the exact binder classifier over every committed conformance and
   official-suite input; freeze route incidence before optimizing. Measure which library
-  declaration SCCs actually depend on each collision family and whether a snapshot-derived replay
-  can preserve same-universe identity without becoming a second publication authority.
+  declaration SCCs actually depend on each collision family and whether ADR-0020's source-derived
+  sparse replay can preserve same-universe identity without becoming a second publication
+  authority. Resolve backlog `105`'s test/production fragment-order split before enabling replay.
 - **Scope.** Implement the exhaustive preflight before any semantic mutation. Keep the shared fast
-  path for provably non-colliding inputs. For collisions, use the same `LibraryCompiler` authority;
-  optimize only through a separately specified and reviewed mechanism that reconstructs the exact
-  merged universe. If the accepted solution differs from ADR-0011's private full rebuild, supersede
-  that clause before implementation. Retain one-process-wide containment for expensive fallbacks.
+  path for provably non-colliding inputs. For collisions, implement
+  [ADR-0020](../decisions/0020-build-source-native-sparse-collision-epochs.md)'s source-native
+  private epoch: share only proven-unaffected immutable rows, replay every affected owner through
+  the same `LibraryCompiler`/checker `Pass`, and retain one-process-wide containment for complete
+  source fallbacks.
 - **Acceptance / witness.** False-negative classifier mutations route private; legal merge,
   `globalThis`, UMD/namespace, value/type/namespace-slot, destructuring, and opposite-order cases
   match tsc. The collision and fanout benchmark rows each satisfy the binding confidence/p95 gate,

@@ -29,7 +29,7 @@ decisions → reference → archive.
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
 - [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) —
   active backlog `14` delivery sprint: production full-library cutover with a hard, fail-closed
-  fresh-process target of at least 2× native TypeScript 7 on the approved semantic matrix.
+  fresh-process target strictly faster than native TypeScript 7 on every approved semantic row.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
@@ -58,6 +58,10 @@ decisions → reference → archive.
   comparator's 289.6 ms, 1.12–1.14×**; WU8 is the authoritative gate. The earlier
   [`archived feasibility sprint`](archive/sprint-2026-07-16-full-lib-loading.md) removed the
   first substitution and rendering barriers.
+  [`ADR-0020`](decisions/0020-build-source-native-sparse-collision-epochs.md) resolves the remaining
+  collision-path conflict: a private epoch may share proven-unaffected immutable rows from that
+  source-compiled base, while every affected meaning, identity, event, cache, and suffix stays
+  private and republishes through the ordinary checker.
   [`ADR-0018`](decisions/0018-pin-library-owned-records-as-a-named-census.md) settles what happens
   to the 875 records the library reports against itself: no process retains one, and the suite pins
   the complete set as a named `(code, site)` multiset
