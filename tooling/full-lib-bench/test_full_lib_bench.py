@@ -72,6 +72,17 @@ class ContractTests(unittest.TestCase):
             flags.write_text(source.replace('"--strict"', '"--STRICT"', 1), encoding="utf-8")
             with self.assertRaisesRegex(bench.ContractError, "canonical compiler flag arrays"):
                 bench.load_contract(flags)
+            boolean_schema = Path(temporary) / "boolean-schema.toml"
+            boolean_schema.write_text(
+                source.replace(
+                    'args = ["library-info", "--format", "json"]\nschema = 1',
+                    'args = ["library-info", "--format", "json"]\nschema = true',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(bench.ContractError, "not bool/other"):
+                bench.load_contract(boolean_schema)
 
     def test_library_lock_header_is_not_an_83rd_entry(self) -> None:
         lines = bench.LIBRARIES_LOCK.read_text(encoding="utf-8").splitlines()
