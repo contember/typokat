@@ -3,7 +3,7 @@
 //! checks, and abstract member implementation. Fixture acceptance lives in
 //! `m15_accessors/`.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every diagnostic,
 /// keyed on its primary-span start line.

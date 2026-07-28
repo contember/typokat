@@ -1,6 +1,6 @@
 //! WU1 regression tests for persistent generic signature lowering.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 fn diagnostic_codes(source: &str) -> Vec<String> {
     let result = check_source(source);

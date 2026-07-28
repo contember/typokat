@@ -3089,7 +3089,7 @@ mod tests {
     use crate::check::checker::events_library::LibraryEventLedger;
     use crate::check::checker::lexical_events::LexicalReservations;
     use crate::check::query::reset_query_demand_measure;
-    use crate::driver::check_source;
+    use crate::check::test_support::check_source;
     use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
     use crate::types::{Interner, TypeId};
     use oxc_allocator::Allocator;

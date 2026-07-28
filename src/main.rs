@@ -7,7 +7,8 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use typokat::diagnostics::{self, DiagnosticFormat};
-use typokat::driver::{check_project, FileInput};
+use typokat::driver::check_project;
+use typokat::frontend::FileInput;
 
 // jemalloc: the run is allocation-churn heavy (building the default library from
 // source), and glibc malloc costs ~20 ms of it. Declared here, not in the library:

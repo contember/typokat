@@ -20,6 +20,7 @@ use crate::check::query::SemanticQueryCoordinator;
 use crate::check::query::SemanticQueryState;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
+use crate::frontend::{ProjectImport, ProjectImportSource, ProjectProgram};
 use crate::relate::RelationOutcome;
 use crate::source::{
     CompilationOrigin, ModuleOrdinal, OriginalModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot,
@@ -53,6 +54,8 @@ mod decls;
 pub(in crate::check) mod eval;
 pub(crate) mod events;
 pub(crate) mod events_library;
+#[cfg(test)]
+mod exact_declaration_site_cutover_spec;
 mod expr;
 mod flowgraph;
 mod function_groups;
@@ -939,16 +942,6 @@ pub(in crate::check::checker) fn final_identity_inspector_calls_for_test() -> u6
     FINAL_IDENTITY_INSPECTOR_CALLS.with(std::cell::Cell::get)
 }
 
-/// One parsed project unit handed to the serial M29 project checker.
-pub struct ProjectProgram<'ast> {
-    pub(crate) module_ordinal: ModuleOrdinal,
-    pub(crate) unit_slot: UnitSlot,
-    pub(crate) normalized_path: String,
-    pub program: &'ast Program<'ast>,
-    pub(crate) compilation_unit: CompilationUnit,
-    pub imports: Vec<ProjectImport>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProjectSourceBindingRow {
     pub(crate) normalized_path: String,
@@ -1135,26 +1128,6 @@ pub(crate) fn merge_project_binding_thread_receipt_for_test(
     });
 }
 
-/// One named import after the driver has resolved its module specifier.
-pub struct ProjectImport {
-    pub local: String,
-    pub imported: String,
-    pub module: String,
-    pub source: ProjectImportSource,
-    pub type_only: bool,
-    /// Exact local binding-name span used to attach binder identity.
-    pub local_span: Span,
-    /// Full import-specifier span used for diagnostics.
-    pub span: Span,
-    /// Owning import-declaration start reserved before project binding.
-    pub owner_start: u32,
-}
-
-pub enum ProjectImportSource {
-    Resolved(usize),
-    Missing(String),
-}
-
 #[derive(Clone, Copy)]
 struct ExportedSlots {
     value: Option<ValueStorageId>,
@@ -1170,7 +1143,7 @@ type ExportSurface = BTreeMap<String, ExportedSlots>;
 
 /// Check a dependency-ordered project in one serial type universe. Returns one
 /// [`CheckResult`] per unit, indexed like `units`.
-pub fn check_project_programs<'ast>(
+pub(crate) fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
 ) -> Vec<CheckResult> {

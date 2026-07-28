@@ -25,8 +25,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use typokat::driver::{
-    check_project, check_project_with_library, check_source, check_source_with_library, FileInput,
+    check_project, check_project_with_library, check_source, check_source_with_library,
 };
+use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
 
 use FixtureBase::{Library, Prelude};

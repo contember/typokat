@@ -8,6 +8,7 @@ pub mod check;
 mod class_semantics;
 pub mod diagnostics;
 pub mod driver;
+pub mod frontend;
 pub mod library;
 pub mod relate;
 mod source;
@@ -16,50 +17,15 @@ pub mod surface;
 pub mod types;
 
 #[cfg(test)]
-pub(crate) fn test_repository_root() -> std::path::PathBuf {
-    let root = std::env::current_dir().expect("test process current directory");
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("repository Cargo.toml");
-    assert!(
-        manifest.starts_with("[package]\nname = \"typokat\"\n"),
-        "tests must run from the typokat repository root"
-    );
-    assert!(
-        root.join("Cargo.lock").is_file() && root.join("src/lib.rs").is_file(),
-        "repository root sentinels must exist"
-    );
-    root
-}
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod build_reproducibility_tests {
-    use std::path::{Path, PathBuf};
-
-    fn rust_sources(root: &Path) -> Vec<PathBuf> {
-        let mut pending = vec![root.to_path_buf()];
-        let mut sources = Vec::new();
-        while let Some(directory) = pending.pop() {
-            let mut entries = std::fs::read_dir(directory)
-                .expect("source directory")
-                .map(|entry| entry.expect("source entry").path())
-                .collect::<Vec<_>>();
-            entries.sort();
-            for path in entries {
-                if path.is_dir() {
-                    pending.push(path);
-                } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-                    sources.push(path);
-                }
-            }
-        }
-        sources.sort();
-        sources
-    }
-
     #[test]
     fn libtest_sources_do_not_capture_the_compile_time_repository_root() {
-        let root = super::test_repository_root();
+        let root = crate::test_support::repository_root();
         let forbidden = concat!("env!", "(\"CARGO_MANIFEST_DIR\")");
-        let offenders = rust_sources(&root.join("src"))
+        let offenders = crate::test_support::rust_sources(&root.join("src"))
             .into_iter()
             .filter(|path| {
                 std::fs::read_to_string(path)
@@ -74,5 +40,46 @@ mod build_reproducibility_tests {
             })
             .collect::<Vec<_>>();
         assert!(offenders.is_empty(), "{offenders:#?}");
+    }
+
+    #[test]
+    fn source_layers_have_no_known_upward_edges() {
+        let root = crate::test_support::repository_root();
+        let assert_absent = |directory: &str, forbidden: &[&str]| {
+            let offenders = crate::test_support::rust_sources(&root.join(directory))
+                .into_iter()
+                .filter_map(|path| {
+                    let source = std::fs::read_to_string(&path).expect("Rust source");
+                    let hits = forbidden
+                        .iter()
+                        .filter(|needle| source.contains(**needle))
+                        .copied()
+                        .collect::<Vec<_>>();
+                    (!hits.is_empty()).then(|| {
+                        (
+                            path.strip_prefix(&root)
+                                .expect("source under repository root")
+                                .display()
+                                .to_string(),
+                            hits,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert!(offenders.is_empty(), "{directory}: {offenders:#?}");
+        };
+
+        assert_absent(
+            "src/types",
+            &["crate::diagnostics", "crate::relate", "crate::check"],
+        );
+        assert_absent("src/relate", &["crate::diagnostics", "crate::check"]);
+        assert_absent("src/binder", &["crate::check", "../check/"]);
+        assert_absent(
+            "src/frontend.rs",
+            &["crate::check", "crate::library", "crate::driver"],
+        );
+        assert_absent("src/library", &["crate::driver"]);
+        assert_absent("src/check", &["crate::library", "crate::driver"]);
     }
 }

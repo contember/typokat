@@ -1503,9 +1503,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
 #[cfg(test)]
 mod qualified_name_tests {
+    use crate::check::test_support::{check_project, check_source, CheckOutput};
     use crate::class_semantics::{ClassConstructionState, Exhaustion};
     use crate::diagnostics::DiagnosticCode;
-    use crate::driver::{check_project, check_source, CheckOutput, FileInput};
+    use crate::frontend::FileInput;
     use crate::types::repr::ClassId;
     use crate::types::Interner;
 

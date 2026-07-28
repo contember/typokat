@@ -1515,6 +1515,4 @@ impl<'a> Relater<'a> {
 }
 
 #[cfg(test)]
-mod failing_relation_scaling_spec;
-#[cfg(test)]
 mod tests;

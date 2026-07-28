@@ -3379,7 +3379,7 @@ interface Combined extends First, Second {
     #[test]
     fn interface_and_alias_qualified_errors_replay_at_their_declaration_owners() {
         let source = "interface First { value: ns.One } type Second = ns.Two;";
-        let output = crate::driver::check_source(source);
+        let output = crate::check::test_support::check_source(source);
         assert_eq!(output.diagnostics.len(), 2);
         assert_eq!(
             output

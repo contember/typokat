@@ -152,7 +152,7 @@ impl LibraryBaseProvider {
     pub fn continue_library_project_binder(
         &self,
         checkpoint: crate::binder::bind::LibraryBinderCheckpoint,
-        inputs: Vec<crate::driver::FileInput>,
+        inputs: Vec<crate::frontend::FileInput>,
     ) -> Result<LibraryProjectBinderContinuation, LibraryInitError> {
         let library_unit_count = checkpoint.library_unit_count();
         let bound = crate::check::checker::library_compiler::continue_library_project_binder(
@@ -205,7 +205,7 @@ impl LibraryBaseProvider {
         );
         let compiler_inputs = inputs
             .iter()
-            .map(|input| crate::driver::FileInput {
+            .map(|input| crate::frontend::FileInput {
                 name: input.path.to_owned(),
                 source: input.source.to_owned(),
             })

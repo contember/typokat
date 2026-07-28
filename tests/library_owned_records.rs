@@ -11,7 +11,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use typokat::driver::{check_project_with_library, check_source_with_library, FileInput};
+use typokat::driver::{check_project_with_library, check_source_with_library};
+use typokat::frontend::FileInput;
 use typokat::library::LibraryRecordCensus;
 
 /// The committed multiset. Relative to the repository root, which is the test working directory.

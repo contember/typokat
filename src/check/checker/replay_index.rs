@@ -1935,6 +1935,7 @@ mod tests {
         "src/check/checker/declaration_owner_scaling_spec.rs",
         "src/check/checker/declaration_surface_lazy_spec.rs",
         "src/check/checker/declaration_surface_measure.rs",
+        "src/check/checker/exact_declaration_site_cutover_spec.rs",
         "src/check/checker/decls/cycle_tainted_application_cache_spec.rs",
         "src/check/checker/decls/eager_application_cache_spec.rs",
         "src/check/checker/decls/heritage_base_merge_scan_spec.rs",
@@ -1948,6 +1949,7 @@ mod tests {
         "src/check/query/demand_identity_spec.rs",
         "src/check/query/dom_source_cold_spec.rs",
         "src/check/query/event_listener_union_scaling_spec.rs",
+        "src/check/query/failing_relation_scaling_spec.rs",
         "src/check/query/identity_memo_spec.rs",
         "src/check/query/instantiation_root_lazy_spec.rs",
         "src/check/query/relation_root_lazy_spec.rs",
@@ -2353,7 +2355,7 @@ mod tests {
 
     #[test]
     fn semantic_replay_accesses_have_an_exact_source_allowlist() {
-        let root = crate::test_repository_root();
+        let root = crate::test_support::repository_root();
         let sources = discover_production_rust_sources(&root);
         let allowed = [
             RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "self.class_parents.iter()", count: 1, reason: "snapshot projection" },

@@ -92,6 +92,15 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
+/// Sealed authority for one collision-preflighted frozen-prefix fork.
+pub(crate) struct CollisionFreeUserDeltaCapability(());
+
+impl CollisionFreeUserDeltaCapability {
+    pub(crate) fn issue() -> Self {
+        Self(())
+    }
+}
+
 pub(crate) struct OwnedLibraryRuntimeState {
     interner: Interner,
     binder: Binder,
@@ -604,7 +613,7 @@ impl OwnedLibraryRuntimeState {
 
     pub(crate) fn fork_collision_free_user_delta(
         &self,
-        _capability: crate::library::CollisionFreeUserDeltaCapability,
+        _capability: CollisionFreeUserDeltaCapability,
     ) -> Result<Self, &'static str> {
         self.fork_user_delta()
     }
@@ -1012,7 +1021,7 @@ pub(crate) struct OwnedBaseUserRun {
 
 #[cfg(test)]
 pub(crate) struct OwnedBaseUserProjectRun {
-    pub(crate) reports: Vec<crate::driver::FileReport>,
+    pub(crate) reports: Vec<crate::check::test_support::FileReport>,
     pub(crate) final_identity: OwnedBaseFinalIdentityWitness,
     pub(crate) cross_file: OwnedBaseCrossFileWitness,
 }
@@ -3602,8 +3611,8 @@ pub(crate) fn compile_owned_injected_base_profile(
 
 /// Compile a profile for its own records alone, then drop the semantic product.
 ///
-/// The deliberate inspection route behind [`crate::library::LibraryRecordCensus`]: it costs a
-/// full source compilation and answers only to a caller that asked (ADR-0018).
+/// The deliberate record-inspection route costs a full source compilation and answers only to a
+/// caller that explicitly requested retained records (ADR-0018).
 pub(crate) fn compile_owned_injected_records(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<Vec<(LibraryEventKey, CheckerRecord)>, InjectedProfileError> {
@@ -4130,9 +4139,9 @@ impl LibraryBinderContinuationForTest {
 
 pub(crate) fn continue_library_project_binder(
     checkpoint: LibraryBinderCheckpoint,
-    inputs: Vec<crate::driver::FileInput>,
+    inputs: Vec<crate::frontend::FileInput>,
 ) -> Result<super::BoundProjectBinder, String> {
-    crate::driver::run_project_frontend(inputs, |_, units| {
+    crate::frontend::run_project_frontend(inputs, |_, units| {
         #[cfg(test)]
         record_user_source_parses_for_test(units.len());
         let bound = super::bind_library_checkpoint_project_programs(checkpoint, units)?;
@@ -4234,7 +4243,7 @@ pub(crate) fn continuation_receipt_for_test(
 #[cfg(test)]
 pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
     state: OwnedLibraryRuntimeState,
-    inputs: Vec<crate::driver::FileInput>,
+    inputs: Vec<crate::frontend::FileInput>,
     expected_base: &OwnedLibraryRuntimeState,
 ) -> Result<OwnedBaseUserProjectRun, String> {
     let base_ends = state.identity_ends_for_test();
@@ -4246,77 +4255,77 @@ pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
     let final_identity = std::cell::RefCell::new(None);
     let state = std::cell::RefCell::new(Some(state));
     super::decls::reset_class_allocation_events_for_test();
-    let reports = crate::driver::check_project_with_owned_checker_for_test(inputs, |units| {
-        let state = state
-            .borrow_mut()
-            .take()
-            .expect("owned project delta is consumed once");
-        super::check_project_programs_with_owned_library(
-            state,
-            units,
-            |binder, module_scopes| {
-                let producer = module_scopes
-                    .iter()
-                    .copied()
-                    .find_map(|scope| {
-                        let ty = binder
-                            .resolve_type(scope, "SharedShape")
-                            .and_then(|symbol| binder.symbols.get(symbol))?
-                            .ty?;
-                        let value = binder
-                            .resolve_value(scope, "sharedValue")
-                            .and_then(|symbol| binder.symbols.get(symbol))?
-                            .value?;
-                        Some((scope, ty, value))
-                    })
-                    .expect("project producer exports both test bindings");
-                let consumer = module_scopes
-                    .iter()
-                    .copied()
-                    .filter(|scope| *scope != producer.0)
-                    .find_map(|scope| {
-                        let ty = binder
-                            .resolve_type(scope, "SharedShape")
-                            .and_then(|symbol| binder.symbols.get(symbol))?
-                            .ty?;
-                        let value = binder
-                            .resolve_value(scope, "sharedValue")
-                            .and_then(|symbol| binder.symbols.get(symbol))?
-                            .value?;
-                        Some((ty, value))
-                    })
-                    .expect("project consumer imports both test bindings");
-                cross_file.replace(Some(OwnedBaseCrossFileWitness {
-                    producer_type_group: producer.1,
-                    consumer_type_group: consumer.0,
-                    producer_value_storage: producer.2,
-                    consumer_value_storage: consumer.1,
-                }));
-            },
-            |pass, final_next_class_id| {
-                final_identity.replace(Some(final_identity_witness(FinalIdentityInspection {
-                    base_store_len: base_ends.store,
-                    base_value_storage_len: base_ends.value_storages,
-                    base_type_group_len: base_ends.type_groups,
-                    base_namespace_len: base_ends.namespaces,
-                    binder: pass.binder,
-                    published: pass.type_environment.published(),
-                    interner: pass.interner,
-                    decl_types: &pass.decl_types,
-                    next_type_param: pass.next_type_param,
-                    next_class_id: final_next_class_id,
-                    actual_class_ids: super::decls::class_allocation_events_for_test(),
-                    references: final_reference_summary(pass, &base_ends),
-                    base_row_clone_counts: expected_base
-                        .final_base_family_clone_counts_for_test(pass, final_next_class_id),
-                    local_rows_written: OwnedLibraryRuntimeState::final_local_rows_written_for_test(
-                        pass,
-                    ),
-                })));
-            },
-        )
-        .expect("the owned-base project route's continuation binds")
-    });
+    let reports =
+        crate::check::test_support::check_project_with_owned_checker_for_test(inputs, |units| {
+            let state = state
+                .borrow_mut()
+                .take()
+                .expect("owned project delta is consumed once");
+            super::check_project_programs_with_owned_library(
+                state,
+                units,
+                |binder, module_scopes| {
+                    let producer = module_scopes
+                        .iter()
+                        .copied()
+                        .find_map(|scope| {
+                            let ty = binder
+                                .resolve_type(scope, "SharedShape")
+                                .and_then(|symbol| binder.symbols.get(symbol))?
+                                .ty?;
+                            let value = binder
+                                .resolve_value(scope, "sharedValue")
+                                .and_then(|symbol| binder.symbols.get(symbol))?
+                                .value?;
+                            Some((scope, ty, value))
+                        })
+                        .expect("project producer exports both test bindings");
+                    let consumer = module_scopes
+                        .iter()
+                        .copied()
+                        .filter(|scope| *scope != producer.0)
+                        .find_map(|scope| {
+                            let ty = binder
+                                .resolve_type(scope, "SharedShape")
+                                .and_then(|symbol| binder.symbols.get(symbol))?
+                                .ty?;
+                            let value = binder
+                                .resolve_value(scope, "sharedValue")
+                                .and_then(|symbol| binder.symbols.get(symbol))?
+                                .value?;
+                            Some((ty, value))
+                        })
+                        .expect("project consumer imports both test bindings");
+                    cross_file.replace(Some(OwnedBaseCrossFileWitness {
+                        producer_type_group: producer.1,
+                        consumer_type_group: consumer.0,
+                        producer_value_storage: producer.2,
+                        consumer_value_storage: consumer.1,
+                    }));
+                },
+                |pass, final_next_class_id| {
+                    final_identity.replace(Some(final_identity_witness(FinalIdentityInspection {
+                        base_store_len: base_ends.store,
+                        base_value_storage_len: base_ends.value_storages,
+                        base_type_group_len: base_ends.type_groups,
+                        base_namespace_len: base_ends.namespaces,
+                        binder: pass.binder,
+                        published: pass.type_environment.published(),
+                        interner: pass.interner,
+                        decl_types: &pass.decl_types,
+                        next_type_param: pass.next_type_param,
+                        next_class_id: final_next_class_id,
+                        actual_class_ids: super::decls::class_allocation_events_for_test(),
+                        references: final_reference_summary(pass, &base_ends),
+                        base_row_clone_counts: expected_base
+                            .final_base_family_clone_counts_for_test(pass, final_next_class_id),
+                        local_rows_written:
+                            OwnedLibraryRuntimeState::final_local_rows_written_for_test(pass),
+                    })));
+                },
+            )
+            .expect("the owned-base project route's continuation binds")
+        });
     Ok(OwnedBaseUserProjectRun {
         reports,
         final_identity: final_identity
@@ -4922,27 +4931,12 @@ impl ReleaseOutcomeLine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::check::checker::type_groups::PublishedTypeGroup;
-    use crate::driver::check_source;
-    use crate::library::profile::ExactLibraryProfile;
+    use crate::check::test_support::check_source;
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
-
-    /// Borrows the packaged 82-file profile as injected sources, the shape the compiler consumes.
-    fn injected_packaged_sources(profile: &ExactLibraryProfile) -> Vec<InjectedLibrarySource<'_>> {
-        profile
-            .sources()
-            .iter()
-            .map(|source| InjectedLibrarySource {
-                file_ordinal: source.ordinal(),
-                name: source.name(),
-                source: std::str::from_utf8(source.bytes())
-                    .expect("packaged library sources are UTF-8"),
-            })
-            .collect()
-    }
 
     const TINY_SOURCE: &str = "export const typokatLibraryProbe: number = 1;\n";
     const PRODUCT_SEMANTIC_LIBRARY: &str = r#"
@@ -6559,36 +6553,27 @@ mod tests {
         );
     }
 
-    #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "full-profile reservation closure is release-only"
-    )]
-    fn exact_profile_interner_has_no_pending_reservations() {
-        let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
-        let (_, state) = compile_owned_injected_profile(&injected_packaged_sources(&profile))
-            .expect("source-compiled full-library profile");
+    pub(crate) fn assert_exact_profile_interner_has_no_pending_reservations(
+        injected: &[InjectedLibrarySource<'_>],
+    ) {
+        let (_, state) =
+            compile_owned_injected_profile(injected).expect("source-compiled full-library profile");
         state
             .interner
             .strict_terminal_state_for_test()
             .expect("full profile must close every reserved type");
     }
 
-    #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "full-profile replay-index generation is release-only"
-    )]
-    fn exact_profile_replay_index_is_complete_and_deterministic() {
-        let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
-        let injected = injected_packaged_sources(&profile);
+    pub(crate) fn assert_exact_profile_replay_index_is_complete_and_deterministic(
+        injected: &[InjectedLibrarySource<'_>],
+    ) {
         let started = Instant::now();
         let (_, first_state) =
-            compile_owned_injected_profile(&injected).expect("first exact replay index generation");
+            compile_owned_injected_profile(injected).expect("first exact replay index generation");
         let first_elapsed = started.elapsed();
         let started = Instant::now();
-        let (_, second_state) = compile_owned_injected_profile(&injected)
-            .expect("second exact replay index generation");
+        let (_, second_state) =
+            compile_owned_injected_profile(injected).expect("second exact replay index generation");
         let second_elapsed = started.elapsed();
         let first = first_state
             .replay_index()
@@ -6961,15 +6946,10 @@ mod tests {
         );
     }
 
-    #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "full-profile semantic selection is release-only"
-    )]
-    fn exact_profile_selects_complete_native_bridge_identities() {
-        let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
-        let run = run_injected_profile(&injected_packaged_sources(&profile))
-            .expect("source-compiled full-library profile");
+    pub(crate) fn assert_exact_profile_selects_complete_native_bridge_identities(
+        injected: &[InjectedLibrarySource<'_>],
+    ) {
+        let run = run_injected_profile(injected).expect("source-compiled full-library profile");
         let identities = run.semantic_identities();
         assert!(identities.all_ready());
         assert_eq!(
@@ -7046,9 +7026,11 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore = "release-only cold-process library measurement"]
-    fn library_release_probe_once() {
+    pub(crate) fn run_library_release_probe(
+        injected: &[InjectedLibrarySource<'_>],
+        registry_validation: Duration,
+        total_started: Instant,
+    ) {
         let process = std::env::var("TYPOKAT_WU0B_PROCESS")
             .expect("TYPOKAT_WU0B_PROCESS must identify release process 1..5")
             .parse::<usize>()
@@ -7058,13 +7040,7 @@ mod tests {
             "TYPOKAT_WU0B_PROCESS must be in 1..5"
         );
 
-        let total_started = Instant::now();
-        let registry_started = Instant::now();
-        let profile =
-            ExactLibraryProfile::load_packaged().expect("packaged library registry validation");
-        let registry_validation = registry_started.elapsed();
-        let injected = injected_packaged_sources(&profile);
-        let run = run_injected_profile(&injected).expect("exact library profile execution");
+        let run = run_injected_profile(injected).expect("exact library profile execution");
 
         assert_eq!(run.phase_counts.parse_units, 82);
         assert_eq!(run.phase_counts.bind_units, 82);
@@ -7963,17 +7939,11 @@ const inheritedBad: number = local.elementMarker;
         );
     }
 
-    #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "full-profile owned-base semantic selection is release-only"
-    )]
-    fn exact_full_profile_owned_base_checks_caller_certified_collision_free_suffix_fast_clean_and_create_element(
+    pub(crate) fn assert_exact_full_profile_owned_base_checks_caller_certified_suffix(
+        injected: &[InjectedLibrarySource<'_>],
     ) {
-        let profile = ExactLibraryProfile::load_packaged().expect("exact pinned full profile");
         let (compiled, state) =
-            compile_owned_injected_profile(&injected_packaged_sources(&profile))
-                .expect("exact source-compiled owned library");
+            compile_owned_injected_profile(injected).expect("exact source-compiled owned library");
         eprintln!(
             "owned-base compile timings: parse={:?} bind={:?} reserve_fill={:?} publication={:?} statements={:?} total={:?}",
             compiled.phase_timings.parse,
@@ -7994,7 +7964,7 @@ const inheritedBad: number = local.elementMarker;
             run.timings.parse, run.timings.bind, run.timings.check
         );
 
-        let (_, state) = compile_owned_injected_profile(&injected_packaged_sources(&profile))
+        let (_, state) = compile_owned_injected_profile(injected)
             .expect("second exact source-compiled owned library");
         let focused = check_caller_certified_collision_free_source_with_owned_library(
             state,

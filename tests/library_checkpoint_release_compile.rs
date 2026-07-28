@@ -1,5 +1,5 @@
 use typokat::binder::namespace::SourceFileKind;
-use typokat::driver::FileInput;
+use typokat::frontend::FileInput;
 use typokat::library::compiler::LibraryCompiler;
 use typokat::library::profile::ExactLibraryProfile;
 use typokat::library::LibraryBaseProvider;

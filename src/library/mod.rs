@@ -24,8 +24,6 @@ pub use records::{
     LibraryRecordCensus, LibraryRecordCensusDifference, LibraryRecordEntry, LibraryRecordKind,
 };
 
-pub(crate) use collision_preflight::CollisionFreeUserDeltaCapability;
-
 #[cfg(test)]
 mod user_delta_spec;
 
@@ -44,6 +42,9 @@ mod collision_replay_index_spec;
 
 #[cfg(test)]
 mod collision_epoch_scheduler_spec;
+
+#[cfg(test)]
+mod compiler_profile_spec;
 
 // Activate after the WU5 replay index and work receipts land.
 // #[cfg(test)]

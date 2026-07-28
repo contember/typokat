@@ -657,7 +657,8 @@ fn project_inputs(directory: &Path) -> Vec<(String, String)> {
 
 #[test]
 fn b14_routing_matrix_is_exactly_two_shared_and_ten_private() {
-    let root = crate::test_repository_root().join("tests/cases/b14_full_lib_loading_project");
+    let root =
+        crate::test_support::repository_root().join("tests/cases/b14_full_lib_loading_project");
     let mut observed = Vec::new();
     for entry in fs::read_dir(root).expect("B14 routing corpus") {
         let path = entry.expect("B14 project entry").path();
@@ -736,9 +737,11 @@ fn collision_free_capability_is_issued_only_for_a_shared_receipt() {
     assert!(shared.capability_issued);
     assert!(!private.capability_issued);
 
-    let library_root = crate::test_repository_root().join("src/library");
+    let library_root = crate::test_support::repository_root().join("src/library");
     let constructor = ["CollisionFreeUserDelta", "Capability(())"].concat();
+    let issuer = ["CollisionFreeUserDelta", "Capability::issue"].concat();
     let mut owners = Vec::new();
+    let mut issuers = Vec::new();
     for entry in fs::read_dir(library_root).expect("library source directory") {
         let path = entry.expect("library source entry").path();
         if path.extension().and_then(|value| value.to_str()) != Some("rs") {
@@ -753,7 +756,32 @@ fn collision_free_capability_is_issued_only_for_a_shared_receipt() {
                     .to_owned(),
             );
         }
+        if source.contains(&issuer) {
+            issuers.push(
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("UTF-8 source name")
+                    .to_owned(),
+            );
+        }
     }
     owners.sort();
-    assert_eq!(owners, ["collision_preflight.rs"]);
+    issuers.sort();
+    assert!(
+        owners.is_empty(),
+        "the lower checker layer owns the sealed capability"
+    );
+
+    let checker_owner = fs::read_to_string(
+        crate::test_support::repository_root().join("src/check/checker/library_compiler.rs"),
+    )
+    .expect("checker library compiler source");
+    assert_eq!(checker_owner.matches(&constructor).count(), 1);
+    assert_eq!(
+        checker_owner
+            .matches("pub(crate) fn issue() -> Self")
+            .count(),
+        1
+    );
+    assert_eq!(issuers, ["collision_preflight.rs"]);
 }

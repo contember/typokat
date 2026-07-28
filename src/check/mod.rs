@@ -6,8 +6,8 @@ pub mod checker;
 pub mod flow;
 pub mod infer;
 pub(crate) mod query;
+#[cfg(test)]
+pub(crate) mod test_support;
 
-pub use checker::{
-    check_program, check_project_programs, CheckResult, ProjectImport, ProjectImportSource,
-    ProjectProgram,
-};
+pub(crate) use checker::check_project_programs;
+pub use checker::{check_program, CheckResult};

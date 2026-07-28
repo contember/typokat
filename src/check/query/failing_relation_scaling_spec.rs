@@ -43,11 +43,11 @@
 //!
 //! The pins below fix the reporting behaviour the change had to preserve byte for byte.
 
-use super::{
-    relation_source_cold_measure, start_relation_source_cold_measure, RelationSourceColdMeasure,
-};
 use crate::check::checker::check_program;
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
+use crate::relate::relation::{
+    relation_source_cold_measure, start_relation_source_cold_measure, RelationSourceColdMeasure,
+};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;

@@ -722,8 +722,8 @@ pub(super) fn merge_intersection_objects(
 
 #[cfg(test)]
 mod qualified_heritage_tests {
+    use crate::check::test_support::{check_source, CheckOutput};
     use crate::diagnostics::DiagnosticCode;
-    use crate::driver::{check_source, CheckOutput};
     use crate::span::Span;
 
     fn checked(source: &str) -> CheckOutput {

@@ -2,8 +2,8 @@
 
 use super::{query_source_cold_measure, start_query_source_cold_measure, QuerySourceColdMeasure};
 use crate::check::checker::check_program;
+use crate::check::test_support::CheckOutput;
 use crate::diagnostics::DiagnosticCode;
-use crate::driver::CheckOutput;
 use crate::relate::relation::{relation_source_cold_measure, RelationSourceColdMeasure};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;

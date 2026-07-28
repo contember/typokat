@@ -133,3 +133,9 @@ independent reviewer; fixes return to the implementation agent before closure.
 - 2026-07-28: Re-verification found the proposal's missed production
   `check ⇄ driver` edge. User approved a clean architecture without public-API
   compatibility; the dedicated frontend crate is now the accepted boundary.
+- 2026-07-28: WU1 cut every known upward source edge while still in one crate.
+  Project inputs, parsing, import resolution, source identity, and dependency
+  ordering now belong to `frontend`; the collision capability belongs to
+  `check`. Wrong-layer specs moved to their consumers, and an active source scan
+  pins the boundary. Gate: 1,227 libtests passed, 13 ignored; every integration
+  test and doctest passed; all-target clippy is warning-free.

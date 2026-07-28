@@ -7,9 +7,10 @@ use crate::check::checker::type_groups::{
     PublishedTypeParameterDefault,
 };
 use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
+use crate::check::test_support::{check_project, check_source};
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::DiagnosticCode;
-use crate::driver::{check_project, check_source, FileInput};
+use crate::frontend::FileInput;
 use crate::source::ModuleOrdinal;
 use crate::span::Span;
 use crate::types::repr::{ClassId, LiteralValue, TypeParamId, TypeTag};

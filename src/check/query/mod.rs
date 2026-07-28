@@ -2703,6 +2703,9 @@ mod dom_source_cold_spec;
 mod event_listener_union_scaling_spec;
 
 #[cfg(test)]
+mod failing_relation_scaling_spec;
+
+#[cfg(test)]
 mod deferred_indexed_lazy_spec;
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 //! Type assertions retain their asserted value type while unimplemented overlap
 //! validation remains explicit and lexically ordered.
 
-use crate::driver::{check_project, check_source, FileInput};
+use crate::check::test_support::{check_project, check_source};
+use crate::frontend::FileInput;
 
 fn incomplete_ids(source: &str) -> Vec<String> {
     let output = check_source(source);

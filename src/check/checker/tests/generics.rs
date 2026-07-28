@@ -2,7 +2,7 @@
 //! Pins substitution through instantiated signatures/bodies, stable interning,
 //! type-parameter scoping, and graceful wrong-arity handling.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance

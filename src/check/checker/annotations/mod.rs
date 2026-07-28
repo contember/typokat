@@ -277,8 +277,8 @@ pub(super) fn modifier_op(op: Option<TSMappedTypeModifierOperator>) -> ModifierO
 
 #[cfg(test)]
 mod multi_child_recovery_tests {
+    use crate::check::test_support::check_source;
     use crate::diagnostics::DiagnosticCode;
-    use crate::driver::check_source;
 
     fn starts(source: &str, needle: &str) -> Vec<u32> {
         source

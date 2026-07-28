@@ -4,7 +4,7 @@
 //! `for-of`/`do` bodies plus `throw` operands are bound and checked. Fixture
 //! acceptance lives in `sr_wu1_expressions/`.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Sorted `(1-based line, code)` of every diagnostic, keyed on its primary-span
 /// start line (matching the conformance harness's mapping).

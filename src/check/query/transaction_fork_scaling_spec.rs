@@ -2,7 +2,7 @@
 
 use super::{query_source_cold_measure, start_query_source_cold_measure, QuerySourceColdMeasure};
 use crate::check::checker::check_program;
-use crate::driver::CheckOutput;
+use crate::check::test_support::CheckOutput;
 use crate::relate::cache::{
     finish_relation_cache_depth_measure, start_relation_cache_depth_measure,
 };

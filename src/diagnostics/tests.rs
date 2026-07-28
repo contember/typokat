@@ -2,8 +2,8 @@ use super::*;
 use crate::relate::Reason;
 use crate::span::Span;
 use crate::types::repr::{
-    FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
-    TupleRestType, TupleType, TypeParamId,
+    ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, ObjectType,
+    ParameterType, PropertyType, TupleRestType, TupleType, TypeParamId,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -14,6 +14,60 @@ fn prop(name: &str, ty: TypeId) -> PropertyType {
 
 fn display_len(rendered: &str) -> usize {
     rendered.chars().count()
+}
+
+#[test]
+fn identity_bearing_and_deferred_types_render_their_structure() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = interner.intern_class_instance(ClassId(1), vec![wk.number, wk.string]);
+    let access = interner.intern_deferred_indexed_access(wk.number, wk.string);
+
+    assert_eq!(
+        render_type(interner.store(), class, false),
+        "class#1<number, string>"
+    );
+    assert_eq!(
+        render_type(interner.store(), access, false),
+        "number[string]"
+    );
+}
+
+#[test]
+fn deferred_indexed_access_parenthesizes_low_precedence_objects() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let key = interner.intern_literal(LiteralValue::String("value".into()));
+    let union = interner.union(vec![wk.number, wk.string]);
+    let intersection = interner.intersection(vec![wk.number, wk.string]);
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: wk.number,
+    });
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: wk.number,
+        extends_ty: wk.number,
+        true_branch: wk.string,
+        false_branch: wk.boolean,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+
+    for (object, expected) in [
+        (union, "(number | string)[\"value\"]"),
+        (intersection, "(number & string)[\"value\"]"),
+        (function, "(() => number)[\"value\"]"),
+        (
+            conditional,
+            "(number extends number ? string : boolean)[\"value\"]",
+        ),
+    ] {
+        let access = interner.intern_deferred_indexed_access(object, key);
+        assert_eq!(render_type(interner.store(), access, false), expected);
+    }
 }
 
 /// A shared acyclic subtree is not a cycle, but its exponential display must

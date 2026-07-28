@@ -1,5 +1,4 @@
 use super::*;
-use crate::diagnostics::render_type;
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
     ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId,
@@ -432,10 +431,6 @@ fn class_instances_hash_by_class_and_ordered_arguments() {
     assert_ne!(a, reordered);
     assert_eq!(interner.store().tag(a), TypeTag::ClassInstance);
     assert!(interner.store().instantiation_type(a).is_none());
-    assert_eq!(
-        render_type(interner.store(), a, false),
-        "class#1<number, string>"
-    );
 }
 
 #[test]
@@ -450,44 +445,6 @@ fn deferred_indexed_access_hashes_ordered_operands() {
     assert_eq!(a, equal);
     assert_ne!(a, reordered);
     assert_eq!(interner.store().tag(a), TypeTag::DeferredIndexedAccess);
-    assert_eq!(render_type(interner.store(), a, false), "number[string]");
-}
-
-#[test]
-fn deferred_indexed_access_parenthesizes_low_precedence_objects() {
-    let mut interner = Interner::with_intrinsics();
-    let wk = interner.well_known();
-    let key = interner.intern_literal(LiteralValue::String("value".into()));
-    let union = interner.union(vec![wk.number, wk.string]);
-    let intersection = interner.intersection(vec![wk.number, wk.string]);
-    let function = interner.intern_function(FunctionType {
-        type_params: Vec::new(),
-        receiver: None,
-        params: Vec::new(),
-        ret: wk.number,
-    });
-    let conditional = interner.intern_conditional(crate::types::repr::ConditionalType {
-        check: wk.number,
-        extends_ty: wk.number,
-        true_branch: wk.string,
-        false_branch: wk.boolean,
-        infer_count: 0,
-        distributive: false,
-        poisoned: false,
-    });
-
-    for (object, expected) in [
-        (union, "(number | string)[\"value\"]"),
-        (intersection, "(number & string)[\"value\"]"),
-        (function, "(() => number)[\"value\"]"),
-        (
-            conditional,
-            "(number extends number ? string : boolean)[\"value\"]",
-        ),
-    ] {
-        let access = interner.intern_deferred_indexed_access(object, key);
-        assert_eq!(render_type(interner.store(), access, false), expected);
-    }
 }
 
 /// Object hash-consing + canonicalization (mvp-plan §3.3, M2): two object

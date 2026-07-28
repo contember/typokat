@@ -19,7 +19,7 @@ use crate::check::checker::library_compiler::{
 use crate::check::checker::replay_index::ReplayOwnerSite;
 use crate::check::checker::AuthoritativeProjectBindingWorkScopeForTest;
 use crate::check::query::QueryCacheWriteScopeForTest;
-use crate::driver::FileInput;
+use crate::frontend::FileInput;
 use crate::relate::cache::RelationCacheWriteScopeForTest;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -553,7 +553,8 @@ fn ordinary_check_and_checkpoint_continuation_share_one_project_binding_core() {
         .compile_binder_checkpoint(&profile)
         .expect("production opaque binder-checkpoint product");
     let project_work = AuthoritativeProjectBindingWorkScopeForTest::start();
-    let ordinary_reports = crate::driver::check_project(authoritative_driver_inputs(false));
+    let ordinary_reports =
+        crate::check::test_support::check_project(authoritative_driver_inputs(false));
     let continuation = shared_library_base_provider_for_test()
         .continue_library_project_binder(checkpoint, authoritative_driver_inputs(false))
         .expect("checkpoint project continuation");

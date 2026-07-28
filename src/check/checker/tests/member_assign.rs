@@ -3,7 +3,7 @@
 //! readonly write carve-out. Fixture acceptance lives in `m14_readonly/`; relation
 //! pins cover that `readonly` does not affect assignability.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line.

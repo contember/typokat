@@ -9,7 +9,7 @@ use super::super::context::{
 };
 use super::super::type_groups::{PublishedTypeEnvironment, TypeEnvironmentState};
 use crate::binder::Binder;
-use crate::driver::{check_source, CheckOutput};
+use crate::check::test_support::{check_source, CheckOutput};
 use crate::types::repr::{
     FunctionType, GenericTypeParam, MappedType, ModifierOp, ObjectType, ParameterType,
     PropertyType, TypeParamId,

@@ -43,8 +43,8 @@ use super::super::type_groups::{
 };
 use crate::binder::declaration::TypeGroupId;
 use crate::binder::Binder;
+use crate::check::test_support::{check_source, CheckOutput};
 use crate::diagnostics::DiagnosticCode;
-use crate::driver::{check_source, CheckOutput};
 use crate::span::Span;
 use crate::types::repr::{
     ConditionalType, MappedType, ModifierOp, ObjectType, PropertyType, TypeParamId,

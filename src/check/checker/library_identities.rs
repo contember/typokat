@@ -633,8 +633,8 @@ mod tests {
     use super::*;
     use crate::binder::bind_module_with_prelude;
     use crate::check::checker::{build_pass, context::DeclTypes};
+    use crate::check::test_support::check_source;
     use crate::diagnostics::DiagnosticCode;
-    use crate::driver::check_source;
     use crate::types::repr::{ObjectType, PropertyType};
     use crate::types::Interner;
     use oxc_allocator::Allocator;

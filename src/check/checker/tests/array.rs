@@ -3,7 +3,7 @@
 //! `length`, `Array<T>` equivalence, and covariant assignability. Fixture
 //! acceptance lives in `m17_arrays/`.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance

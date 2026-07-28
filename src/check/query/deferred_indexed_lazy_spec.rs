@@ -2,7 +2,7 @@
 
 use super::{query_source_cold_measure, start_query_source_cold_measure, QuerySourceColdMeasure};
 use crate::check::checker::check_program;
-use crate::driver::CheckOutput;
+use crate::check::test_support::CheckOutput;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;

@@ -9,8 +9,8 @@ use super::declaration_surface_measure::{
 use super::eval::DEFAULT_STEP_BUDGET;
 use super::library_compiler::{compile_owned_injected_profile, InjectedLibrarySource};
 use super::reporting_record::CheckerRecord;
+use crate::check::test_support::CheckOutput;
 use crate::diagnostics::DiagnosticCode;
-use crate::driver::CheckOutput;
 use crate::source::LibraryFileOrdinal;
 use crate::types::repr::DeclaredRecipeNode;
 use crate::types::store::TypeId;

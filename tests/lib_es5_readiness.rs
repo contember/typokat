@@ -2,7 +2,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Value;
-use typokat::driver::{check_project, CheckOutput, FileInput};
+use typokat::driver::{check_project, CheckOutput};
+use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
 
 const FIXTURE_DIR: &str = "tests/fixtures/lib-es5-6.0.3";

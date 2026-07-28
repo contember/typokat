@@ -2,7 +2,7 @@
 //! Pins branch scoping, symbol isolation, reassignment resets, and unrecognized
 //! guard behavior; per-operation math is unit-tested in `flow.rs`.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance

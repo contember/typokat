@@ -14,14 +14,7 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Sealed authority for one frozen-prefix fork.
-pub(crate) struct CollisionFreeUserDeltaCapability(());
-
-impl CollisionFreeUserDeltaCapability {
-    fn issue() -> Self {
-        CollisionFreeUserDeltaCapability(())
-    }
-}
+use crate::check::checker::library_compiler::CollisionFreeUserDeltaCapability;
 
 /// Certify a fork whose user sources the caller has already vouched for.
 ///

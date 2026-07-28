@@ -936,7 +936,7 @@ impl FrozenLibraryBase {
         let discarded_witness = delta.discarded_witness();
         let driver_inputs = inputs
             .iter()
-            .map(|input| crate::driver::FileInput {
+            .map(|input| crate::frontend::FileInput {
                 name: input.path.to_owned(),
                 source: input.source.to_owned(),
             })

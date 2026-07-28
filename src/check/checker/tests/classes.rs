@@ -3,7 +3,7 @@
 //! instance assignability, and no-crash handling for deferred features.
 //! Fixture acceptance lives in `m11_classes/`.
 
-use crate::driver::check_source;
+use crate::check::test_support::check_source;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance

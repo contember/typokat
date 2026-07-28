@@ -5,7 +5,8 @@ use super::{
     check_project_programs_with_binding_inspector, check_project_programs_with_owned_library,
     DeclarationOwnerScanScopeForTest,
 };
-use crate::driver::{check_project_with_owned_checker_for_test, run_project_frontend, FileInput};
+use crate::check::test_support::check_project_with_owned_checker_for_test;
+use crate::frontend::{run_project_frontend, FileInput};
 use crate::source::LibraryFileOrdinal;
 use crate::types::layered::LocalFullViewScanScopeForTest;
 use std::cell::{Cell, RefCell};

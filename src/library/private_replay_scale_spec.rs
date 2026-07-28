@@ -260,7 +260,8 @@ fn dom_listener_map_replays_the_exact_reverse_closure_in_linear_physical_work() 
 
 #[test]
 fn exact_locked_production_collision_uses_replay_without_source_fallback() {
-    let root = crate::test_repository_root().join("tooling/full-lib-bench/workloads/collision");
+    let root =
+        crate::test_support::repository_root().join("tooling/full-lib-bench/workloads/collision");
     let augment = fs::read_to_string(root.join("00_augment.ts")).expect("locked augmentation");
     let consume = fs::read_to_string(root.join("99_consume.ts")).expect("locked consumer");
     let inputs = [
