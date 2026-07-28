@@ -30,6 +30,7 @@ tikv-jemallocator = "0.7.0"
 toml = "0.8.23"
 rustix = { version = "1.1.4", features = ["fs"] }
 typokat-core = { path = "crates/typokat-core" }
+typokat-types = { path = "crates/typokat-types" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -54,6 +55,7 @@ oxc_ast_visit.workspace = true
 oxc_allocator.workspace = true
 oxc_span.workspace = true
 typokat-core.workspace = true
+typokat-types.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
 dragonbox_ecma.workspace = true
@@ -85,6 +87,7 @@ tikv-jemallocator.workspace = true
 [dev-dependencies]
 toml.workspace = true
 typokat-core = { workspace = true, features = ["test-utils"] }
+typokat-types = { workspace = true, features = ["test-utils"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix.workspace = true

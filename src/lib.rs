@@ -5,7 +5,7 @@
 
 pub mod binder;
 pub mod check;
-mod class_semantics;
+pub(crate) use typokat_types::class_semantics;
 pub mod diagnostics;
 pub mod driver;
 pub mod frontend;
@@ -14,7 +14,7 @@ pub mod relate;
 pub(crate) use typokat_core::source;
 pub use typokat_core::span;
 pub mod surface;
-pub mod types;
+pub use typokat_types::types;
 
 #[cfg(test)]
 pub(crate) use typokat_core::test_support;
@@ -30,7 +30,10 @@ mod build_reproducibility_tests {
             sources.iter().any(|path| path == &root.join("src/lib.rs"))
                 && sources
                     .iter()
-                    .any(|path| path == &root.join("crates/typokat-core/src/lib.rs")),
+                    .any(|path| path == &root.join("crates/typokat-core/src/lib.rs"))
+                && sources
+                    .iter()
+                    .any(|path| path == &root.join("crates/typokat-types/src/lib.rs")),
             "reproducibility scan must cover root and workspace-member sources"
         );
         let offenders = sources
@@ -54,7 +57,12 @@ mod build_reproducibility_tests {
     fn source_layers_have_no_known_upward_edges() {
         let root = crate::test_support::repository_root();
         let assert_absent = |directory: &str, forbidden: &[&str]| {
-            let offenders = crate::test_support::rust_sources(&root.join(directory))
+            let sources = crate::test_support::rust_sources(&root.join(directory));
+            assert!(
+                !sources.is_empty(),
+                "{directory}: layer tripwire must inspect at least one Rust source"
+            );
+            let offenders = sources
                 .into_iter()
                 .filter_map(|path| {
                     let source = std::fs::read_to_string(&path).expect("Rust source");
@@ -78,7 +86,7 @@ mod build_reproducibility_tests {
         };
 
         assert_absent(
-            "src/types",
+            "crates/typokat-types/src/types",
             &["crate::diagnostics", "crate::relate", "crate::check"],
         );
         assert_absent("src/relate", &["crate::diagnostics", "crate::check"]);

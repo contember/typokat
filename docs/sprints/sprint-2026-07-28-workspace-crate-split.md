@@ -144,3 +144,9 @@ independent reviewer; fixes return to the implementation agent before closure.
   `oxc_span`. The root remains a real package and aliases the moved modules while
   the other layers are still local. Workspace gate: root 1,218 passed / 13
   ignored, core 9 passed, all integrations and doctests passed, clippy clean.
+- 2026-07-28: `typokat-types` now owns the type store, interner, substitution
+  engine, and shared class semantics. Its normal dependencies are limited to
+  `dragonbox_ecma`, `rustc-hash`, and `smallvec`; test-only instrumentation is
+  feature-gated for root invariant specs. Workspace gate: root 1,110 passed / 12
+  ignored, types 108 passed / 1 ignored, core 9 passed, all integrations and
+  doctests passed, clippy clean.

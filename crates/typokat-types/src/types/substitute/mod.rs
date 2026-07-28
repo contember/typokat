@@ -12,9 +12,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Default, PartialEq, Eq)]
-pub(super) struct SubstitutionMeasure {
+pub struct SubstitutionMeasure {
     pub runs: u64,
     pub apply_visits: u64,
     pub type_id_repeats: u64,
@@ -34,7 +34,7 @@ pub(super) struct SubstitutionMeasure {
     seen_contexts: FxHashSet<(TypeId, Vec<TypeParamId>)>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl std::fmt::Debug for SubstitutionMeasure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubstitutionMeasure")
@@ -57,21 +57,21 @@ impl std::fmt::Debug for SubstitutionMeasure {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static SUBSTITUTION_MEASURE: std::cell::RefCell<Option<SubstitutionMeasureCollector>> = const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 type SubstitutionMeasureCollector = std::rc::Rc<std::cell::RefCell<SubstitutionMeasure>>;
 
-#[cfg(test)]
-pub(super) struct SubstitutionMeasureScope {
+#[cfg(any(test, feature = "test-utils"))]
+pub struct SubstitutionMeasureScope {
     previous: Option<SubstitutionMeasureCollector>,
     _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for SubstitutionMeasureScope {
     fn drop(&mut self) {
         SUBSTITUTION_MEASURE.with(|measure| {
@@ -80,8 +80,8 @@ impl Drop for SubstitutionMeasureScope {
     }
 }
 
-#[cfg(test)]
-pub(super) fn start_substitution_measure() -> SubstitutionMeasureScope {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn start_substitution_measure() -> SubstitutionMeasureScope {
     let collector = std::rc::Rc::new(std::cell::RefCell::new(SubstitutionMeasure::default()));
     let previous =
         SUBSTITUTION_MEASURE.with(|current| current.replace(Some(std::rc::Rc::clone(&collector))));
@@ -91,14 +91,14 @@ pub(super) fn start_substitution_measure() -> SubstitutionMeasureScope {
     }
 }
 
-#[cfg(test)]
-pub(super) fn substitution_measure() -> Option<SubstitutionMeasure> {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn substitution_measure() -> Option<SubstitutionMeasure> {
     let collector = SUBSTITUTION_MEASURE.with(|current| current.borrow().clone())?;
     let measure = collector.borrow().clone();
     Some(measure)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn capture_substitution_measurement() -> Option<SubstitutionMeasureCollector> {
     let collector = SUBSTITUTION_MEASURE.with(|current| current.borrow().clone());
     if let Some(collector) = collector.as_ref() {
@@ -107,7 +107,7 @@ fn capture_substitution_measurement() -> Option<SubstitutionMeasureCollector> {
     collector
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn measure_substitution_visit(
     collector: &SubstitutionMeasureCollector,
     ty: TypeId,
@@ -125,7 +125,7 @@ fn measure_substitution_visit(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn measure_substitution(
     collector: &SubstitutionMeasureCollector,
     update: impl FnOnce(&mut SubstitutionMeasure),
@@ -133,30 +133,30 @@ fn measure_substitution(
     update(&mut collector.borrow_mut());
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SubstitutionRunVisitMeasure {
-    pub(crate) executed_visits: u64,
-    pub(crate) completed_memo_hits: u64,
-    pub(crate) saturated: bool,
+pub struct SubstitutionRunVisitMeasure {
+    pub executed_visits: u64,
+    pub completed_memo_hits: u64,
+    pub saturated: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 type SubstitutionRunVisitMeasureCollector =
     std::rc::Rc<std::cell::RefCell<SubstitutionRunVisitMeasure>>;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static SUBSTITUTION_RUN_VISIT_MEASURE: std::cell::RefCell<Option<SubstitutionRunVisitMeasureCollector>> = const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(test)]
-pub(crate) struct SubstitutionRunVisitMeasureScope {
+#[cfg(any(test, feature = "test-utils"))]
+pub struct SubstitutionRunVisitMeasureScope {
     previous: Option<SubstitutionRunVisitMeasureCollector>,
     _thread_affine: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for SubstitutionRunVisitMeasureScope {
     fn drop(&mut self) {
         SUBSTITUTION_RUN_VISIT_MEASURE.with(|measure| {
@@ -165,8 +165,8 @@ impl Drop for SubstitutionRunVisitMeasureScope {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn start_substitution_run_visit_measure() -> SubstitutionRunVisitMeasureScope {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn start_substitution_run_visit_measure() -> SubstitutionRunVisitMeasureScope {
     let collector = std::rc::Rc::new(std::cell::RefCell::new(
         SubstitutionRunVisitMeasure::default(),
     ));
@@ -178,19 +178,19 @@ pub(crate) fn start_substitution_run_visit_measure() -> SubstitutionRunVisitMeas
     }
 }
 
-#[cfg(test)]
-pub(crate) fn substitution_run_visit_measure() -> Option<SubstitutionRunVisitMeasure> {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn substitution_run_visit_measure() -> Option<SubstitutionRunVisitMeasure> {
     let collector = SUBSTITUTION_RUN_VISIT_MEASURE.with(|current| current.borrow().clone())?;
     let measure = collector.borrow().clone();
     Some(measure)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn capture_substitution_run_visit_measure() -> Option<SubstitutionRunVisitMeasureCollector> {
     SUBSTITUTION_RUN_VISIT_MEASURE.with(|current| current.borrow().clone())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_substitution_run_visit(collector: &SubstitutionRunVisitMeasureCollector, memo_hit: bool) {
     let mut measure = collector.borrow_mut();
     measure.executed_visits = match measure.executed_visits.checked_add(1) {
@@ -231,7 +231,7 @@ mod tests;
 /// Cycle-tainted results remain valid for the current occurrence but must not be
 /// reused by a cache as though they were context-free completed values.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SubstitutionOutcome {
+pub enum SubstitutionOutcome {
     CycleClean(TypeId),
     CycleTainted(TypeId),
 }
@@ -261,10 +261,10 @@ fn tag_can_reenter(tag: TypeTag) -> bool {
 fn for_each_apply_child(
     store: &Store,
     ty: TypeId,
-    #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
+    #[cfg(any(test, feature = "test-utils"))] measurement: Option<&SubstitutionMeasureCollector>,
     mut visit: impl FnMut(TypeId),
 ) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     if let Some(collector) = measurement {
         collector.borrow_mut().prefilter_graph_scans += 1;
     }
@@ -434,7 +434,7 @@ fn retains_full_mapper(store: &Store, ty: TypeId) -> bool {
 /// fixed point. Results publish only after the reachable graph closes.
 fn compute_application_summaries(
     interner: &mut Interner,
-    #[cfg(test)] measurement: Option<&SubstitutionMeasureCollector>,
+    #[cfg(any(test, feature = "test-utils"))] measurement: Option<&SubstitutionMeasureCollector>,
     root: TypeId,
 ) -> ApplicationSummary {
     let cached_free_params = interner.free_param_summary(root);
@@ -488,7 +488,7 @@ fn compute_application_summaries(
             for_each_apply_child(
                 store,
                 ty,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 measurement,
                 |child| children.push(child),
             );
@@ -601,10 +601,10 @@ fn compute_application_summaries(
     }
 }
 
-pub(crate) fn derived_free_params(interner: &mut Interner, ty: TypeId) -> Arc<[TypeParamId]> {
+pub fn derived_free_params(interner: &mut Interner, ty: TypeId) -> Arc<[TypeParamId]> {
     compute_application_summaries(
         interner,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         None,
         ty,
     )
@@ -634,18 +634,18 @@ pub struct Substitution<'a> {
     /// Durable exact summaries opened by this run, used to canonicalize memo keys.
     free_param_summaries: FxHashMap<TypeId, Arc<[TypeParamId]>>,
     /// Captured at construction so each run keeps one stable measurement owner.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     measurement: Option<SubstitutionMeasureCollector>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     run_visit_measurement: Option<SubstitutionRunVisitMeasureCollector>,
 }
 
 impl<'a> Substitution<'a> {
     /// Build a substitution from a `TypeParamId → TypeId` map.
     pub fn new(map: &'a FxHashMap<TypeParamId, TypeId>) -> Self {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         let measurement = capture_substitution_measurement();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         let run_visit_measurement = capture_substitution_run_visit_measure();
         Substitution {
             map,
@@ -657,9 +657,9 @@ impl<'a> Substitution<'a> {
             frame_visited: FxHashSet::default(),
             cycle_epoch: 0,
             free_param_summaries: FxHashMap::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             measurement,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             run_visit_measurement,
         }
     }
@@ -678,7 +678,7 @@ impl<'a> Substitution<'a> {
         // here (or none occurs at all), substitution is the identity — skip the
         // walk before any visit hook, memo entry, or interning.
         if self.effective_free_set_is_empty(interner, ty) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             if let Some(collector) = self.measurement.as_ref() {
                 measure_substitution(collector, |measure| measure.prefilter_skips += 1);
             }
@@ -686,11 +686,11 @@ impl<'a> Substitution<'a> {
         }
 
         let result = 'apply: {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             if let Some(collector) = self.measurement.as_ref() {
                 measure_substitution_visit(collector, ty, &self.blocked);
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             if let Some(collector) = self.run_visit_measurement.as_ref() {
                 record_substitution_run_visit(collector, false);
             }
@@ -703,7 +703,7 @@ impl<'a> Substitution<'a> {
                 // This branch never opens a frame, so this lands in the caller's
                 // accumulator: the caller's result depends on `ty` being live.
                 self.frame_reentered.insert(ty);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.cycle_reentries += 1);
                 }
@@ -714,11 +714,11 @@ impl<'a> Substitution<'a> {
             // A clean result observed no re-entry, so its closure is acyclic and a
             // reuse walk short-circuits here — no dependency record is needed.
             if let Some(&result) = self.completed.get(&key) {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.completed_memo_hits += 1);
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if let Some(collector) = self.run_visit_measurement.as_ref() {
                     let mut measure = collector.borrow_mut();
                     measure.completed_memo_hits = match measure.completed_memo_hits.checked_add(1) {
@@ -755,13 +755,13 @@ impl<'a> Substitution<'a> {
                     if tag_can_reenter(interner.store().tag(ty)) {
                         self.frame_visited.insert(ty);
                     }
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-utils"))]
                     if let Some(collector) = self.measurement.as_ref() {
                         measure_substitution(collector, |measure| measure.tainted_memo_hits += 1);
                     }
                     break 'apply result;
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| {
                         measure.tainted_memo_stale_misses += 1;
@@ -778,7 +778,7 @@ impl<'a> Substitution<'a> {
                 // leave it untouched.
                 TypeTag::TypeParam => {
                     let param_id = interner.store().type_param(ty).map(|p| p.id);
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-utils"))]
                     if let Some(collector) = self.measurement.as_ref() {
                         if param_id.is_some_and(|id| self.blocked.contains(&id)) {
                             measure_substitution(collector, |measure| {
@@ -791,7 +791,7 @@ impl<'a> Substitution<'a> {
                         .and_then(|id| self.map.get(&id).copied())
                     {
                         Some(arg) => {
-                            #[cfg(test)]
+                            #[cfg(any(test, feature = "test-utils"))]
                             if let Some(collector) = self.measurement.as_ref() {
                                 measure_substitution(collector, |measure| {
                                     measure.type_param_map_hits += 1;
@@ -836,7 +836,7 @@ impl<'a> Substitution<'a> {
                 if tag_can_reenter(interner.store().tag(ty)) {
                     self.frame_visited.insert(ty);
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| measure.completed_memo_entries += 1);
                 }
@@ -861,7 +861,7 @@ impl<'a> Substitution<'a> {
                         visited: frame_visited,
                     },
                 );
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 if let Some(collector) = self.measurement.as_ref() {
                     measure_substitution(collector, |measure| {
                         measure.cycle_tainted_skips += 1;
@@ -897,7 +897,7 @@ impl<'a> Substitution<'a> {
             },
             _ => compute_application_summaries(
                 interner,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 self.measurement.as_ref(),
                 ty,
             ),
@@ -988,7 +988,7 @@ pub fn substitute(
 }
 
 /// Substitute while retaining whether any recursive re-entry affected the run.
-pub(crate) fn substitute_with_outcome(
+pub fn substitute_with_outcome(
     interner: &mut Interner,
     ty: TypeId,
     map: &FxHashMap<TypeParamId, TypeId>,

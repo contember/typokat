@@ -8,7 +8,7 @@
 use super::*;
 use crate::types::repr::DeclaredRecipeNode;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 const WELL_KNOWN_COUNT: usize = 17;
 
 // Reference-record domains. These discriminants are append-only.
@@ -17,7 +17,7 @@ const TYPE_DOMAIN: u8 = 1;
 const TYPE_PARAM_DOMAIN: u8 = 2;
 const CLASS_DOMAIN: u8 = 3;
 const DECLARED_RECIPE_DOMAIN: u8 = 10;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 const INTERNER_BUCKET_DOMAIN: u8 = 16;
 
 // Store TypeId owners reuse these relationship fields across payload kinds.
@@ -42,15 +42,15 @@ const CONSTRAINT_TARGET_FIELD: u8 = 7;
 const FROZEN_TYPE_PARAM_FIELD: u8 = 8;
 const TEMPLATE_NAME_TYPE_FIELD: u8 = 9;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 // Interner identity container fields.
 const BUCKET_CANDIDATE_FIELD: u8 = 0;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 const RESERVED_TYPE_FIELD: u8 = 1;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 const WELL_KNOWN_TYPE_FIELD: u8 = 2;
 
-pub(crate) type ReferenceRecord = (u8, u8, u8, u32, u32);
+pub type ReferenceRecord = (u8, u8, u8, u32, u32);
 
 fn reference(
     owner_domain: u8,
@@ -102,18 +102,18 @@ fn push_class_identity(
 }
 
 impl Interner {
-    pub(crate) fn typed_reference_records_for_replay_generation(
+    pub fn typed_reference_records_for_replay_generation(
         &self,
     ) -> Result<Vec<ReferenceRecord>, &'static str> {
         self.store_reference_records()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     /// Canonical reference rows for the store rows and for the interner's own identity
     /// tables, in that order.
     ///
     /// Tuple order is `(owner_domain, target_domain, field, owner, target)`.
-    pub(crate) fn reference_records(
+    pub fn reference_records(
         &self,
     ) -> Result<(Vec<ReferenceRecord>, Vec<ReferenceRecord>), &'static str> {
         if self.has_nonempty_delta() {
@@ -122,7 +122,7 @@ impl Interner {
         self.reference_records_for_complete_state()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn reference_records_for_complete_state(
         &self,
     ) -> Result<(Vec<ReferenceRecord>, Vec<ReferenceRecord>), &'static str> {
@@ -173,16 +173,14 @@ impl Interner {
         Ok((store_references, interner_references))
     }
 
-    #[cfg(test)]
-    pub(crate) fn reference_records_for_test(
-        &self,
-    ) -> (Vec<ReferenceRecord>, Vec<ReferenceRecord>) {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn reference_records_for_test(&self) -> (Vec<ReferenceRecord>, Vec<ReferenceRecord>) {
         self.reference_records()
             .expect("typed interner references enumerate")
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_type_reference_records_for_test(&self) -> Vec<ReferenceRecord> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_type_reference_records_for_test(&self) -> Vec<ReferenceRecord> {
         let mut records = self
             .store_reference_records_from(self.store.frozen_prefix_len_for_test(), true)
             .expect("typed local store references enumerate");
@@ -590,7 +588,7 @@ impl Interner {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn well_known_ids(well_known: WellKnown) -> [TypeId; WELL_KNOWN_COUNT] {
     [
         well_known.error,

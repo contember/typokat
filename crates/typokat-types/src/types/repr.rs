@@ -819,7 +819,7 @@ pub fn number_to_string(n: f64) -> String {
 /// Template `${number}` matching deliberately keeps this separate from JavaScript
 /// `Number::toString`: TypeScript accepts some decimal spellings such as the fixed
 /// representation of `1e21` in the intrinsic pattern.
-pub(crate) fn decimal_number_to_string(n: f64) -> String {
+pub fn decimal_number_to_string(n: f64) -> String {
     format!("{n}")
 }
 

@@ -829,6 +829,7 @@ dependencies = [
  "tikv-jemallocator",
  "toml",
  "typokat-core",
+ "typokat-types",
 ]
 
 [[package]]
@@ -836,6 +837,15 @@ name = "typokat-core"
 version = "0.1.0"
 dependencies = [
  "oxc_span",
+]
+
+[[package]]
+name = "typokat-types"
+version = "0.1.0"
+dependencies = [
+ "dragonbox_ecma",
+ "rustc-hash",
+ "smallvec",
 ]
 
 [[package]]

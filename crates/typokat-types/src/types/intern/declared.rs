@@ -9,7 +9,7 @@ use crate::types::substitute::{derived_free_params, substitute_with_outcome, Sub
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl Interner {
-    pub(crate) fn intern_declared_recipe(&mut self, node: DeclaredRecipeNode) -> DeclaredRecipeId {
+    pub fn intern_declared_recipe(&mut self, node: DeclaredRecipeNode) -> DeclaredRecipeId {
         let free_params = self.derive_declared_recipe_free_params(&node);
         let recipe = DeclaredTypeRecipe { node, free_params };
         if let Some(id) = self
@@ -93,7 +93,7 @@ impl Interner {
         free_params
     }
 
-    pub(crate) fn intern_declared(
+    pub fn intern_declared(
         &mut self,
         recipe: DeclaredRecipeId,
         mapper: impl IntoIterator<Item = (TypeParamId, TypeId)>,
@@ -126,7 +126,7 @@ impl Interner {
         id
     }
 
-    pub(crate) fn materialize_declared(&mut self, declared: TypeId) -> Option<SubstitutionOutcome> {
+    pub fn materialize_declared(&mut self, declared: TypeId) -> Option<SubstitutionOutcome> {
         let application = self.store.declared_type(declared)?.clone();
         let mapper: FxHashMap<_, _> = application.mapper.into_iter().collect();
         Some(self.materialize_declared_recipe(application.recipe, &mapper))

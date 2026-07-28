@@ -19,11 +19,11 @@ use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::hash::Hash;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 struct UserDeltaDropWitness {
     discarded: Arc<AtomicBool>,
 }
@@ -36,7 +36,7 @@ struct FreeParamSummaryCache {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ApplicationKeyMode {
+pub enum ApplicationKeyMode {
     RelevantOnly,
     FullMap,
 }
@@ -48,13 +48,13 @@ enum CleanApplicationArguments {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CleanApplicationKey {
+pub struct CleanApplicationKey {
     source: TypeId,
     arguments: CleanApplicationArguments,
 }
 
 impl CleanApplicationKey {
-    pub(crate) fn from_sorted_arguments(
+    pub fn from_sorted_arguments(
         source: TypeId,
         mode: ApplicationKeyMode,
         arguments: impl IntoIterator<Item = (TypeParamId, TypeId)>,
@@ -185,7 +185,7 @@ impl FreeParamSummaryCache {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for UserDeltaDropWitness {
     fn drop(&mut self) {
         self.discarded.store(true, Ordering::Release);
@@ -193,14 +193,14 @@ impl Drop for UserDeltaDropWitness {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReservedTypeKind {
+pub enum ReservedTypeKind {
     Object,
     Conditional,
     Mapped,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum ReservedTypeFill {
+pub enum ReservedTypeFill {
     Object(TypeId, ObjectType),
     Conditional(TypeId, ConditionalType),
     Mapped(TypeId, MappedType),
@@ -225,7 +225,7 @@ impl ReservedTypeFill {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReservedTypeFillError {
+pub enum ReservedTypeFillError {
     Duplicate(TypeId),
     NotReserved(TypeId),
     KindMismatch {
@@ -238,7 +238,7 @@ pub(crate) enum ReservedTypeFillError {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReservedObjectPromotionError {
+pub enum ReservedObjectPromotionError {
     NotReserved(TypeId),
     KindMismatch(TypeId),
     NotFrozen(TypeId),
@@ -328,7 +328,7 @@ pub struct Interner {
     /// Nominal placeholder rows are mutable exactly once, as one validated batch.
     reserved_types: FxHashMap<TypeId, ReservedType>,
     well_known: WellKnown,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     user_delta_drop_witness: Option<UserDeltaDropWitness>,
 }
 
@@ -371,7 +371,7 @@ impl Interner {
                 omit_this_parameter: TypeId(0),
                 object: TypeId(0),
             },
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             user_delta_drop_witness: None,
         };
 
@@ -418,13 +418,13 @@ impl Interner {
         &self.store
     }
 
-    pub(crate) fn free_param_summary(&mut self, ty: TypeId) -> Option<Arc<[TypeParamId]>> {
+    pub fn free_param_summary(&mut self, ty: TypeId) -> Option<Arc<[TypeParamId]>> {
         self.free_param_summaries
             .align_with(self.store.semantic_graph_identity());
         self.free_param_summaries.get(ty)
     }
 
-    pub(crate) fn publish_free_param_summaries(
+    pub fn publish_free_param_summaries(
         &mut self,
         summaries: impl IntoIterator<Item = (TypeId, Arc<[TypeParamId]>)>,
     ) {
@@ -433,13 +433,13 @@ impl Interner {
         self.free_param_summaries.insert_batch(summaries);
     }
 
-    pub(crate) fn application_key_mode(&mut self, ty: TypeId) -> Option<ApplicationKeyMode> {
+    pub fn application_key_mode(&mut self, ty: TypeId) -> Option<ApplicationKeyMode> {
         self.application_key_modes
             .align_with(self.store.semantic_graph_identity());
         self.application_key_modes.get(&ty)
     }
 
-    pub(crate) fn publish_application_key_modes(
+    pub fn publish_application_key_modes(
         &mut self,
         modes: impl IntoIterator<Item = (TypeId, ApplicationKeyMode)>,
     ) {
@@ -448,36 +448,32 @@ impl Interner {
         self.application_key_modes.insert_batch(modes);
     }
 
-    pub(crate) fn deferred_keyof_result(&mut self, ty: TypeId) -> Option<bool> {
+    pub fn deferred_keyof_result(&mut self, ty: TypeId) -> Option<bool> {
         self.deferred_keyof_results
             .align_with(self.store.semantic_graph_identity());
         self.deferred_keyof_results.get(&ty)
     }
 
-    pub(crate) fn publish_deferred_keyof_result(&mut self, ty: TypeId, result: bool) {
+    pub fn publish_deferred_keyof_result(&mut self, ty: TypeId, result: bool) {
         self.deferred_keyof_results
             .align_with(self.store.semantic_graph_identity());
         self.deferred_keyof_results.insert(ty, result);
     }
 
-    pub(crate) fn clean_application_result(&mut self, key: &CleanApplicationKey) -> Option<TypeId> {
+    pub fn clean_application_result(&mut self, key: &CleanApplicationKey) -> Option<TypeId> {
         self.clean_application_results
             .align_with(self.store.semantic_graph_identity());
         self.clean_application_results.get(key)
     }
 
-    pub(crate) fn publish_clean_application_result(
-        &mut self,
-        key: CleanApplicationKey,
-        result: TypeId,
-    ) {
+    pub fn publish_clean_application_result(&mut self, key: CleanApplicationKey, result: TypeId) {
         self.clean_application_results
             .align_with(self.store.semantic_graph_identity());
         self.clean_application_results.insert(key, result);
     }
 
     /// Seal a complete standalone interner as the immutable shared prefix.
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if !self.dedup_base.is_empty()
             || !self.reserved_types_base.is_empty()
             || !self.declared_recipe_base.is_empty()
@@ -511,7 +507,7 @@ impl Interner {
     }
 
     /// Create an isolated interner suffix over this sealed prefix.
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         if !self.dedup.is_empty()
             || !self.reserved_types.is_empty()
             || !self.declared_recipe_local.is_empty()
@@ -539,13 +535,13 @@ impl Interner {
             reserved_types_base: Arc::clone(&self.reserved_types_base),
             reserved_types: FxHashMap::default(),
             well_known: self.well_known,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             user_delta_drop_witness: None,
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn install_user_delta_drop_witness_for_test(&mut self, discarded: Arc<AtomicBool>) {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn install_user_delta_drop_witness_for_test(&mut self, discarded: Arc<AtomicBool>) {
         self.user_delta_drop_witness = Some(UserDeltaDropWitness { discarded });
     }
 
@@ -556,18 +552,18 @@ impl Interner {
             .copied()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn contains_reserved_type(&self, id: TypeId) -> bool {
         self.reserved_types_base.contains_key(&id) || self.reserved_types.contains_key(&id)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn dedup_buckets(&self) -> impl Iterator<Item = (&u64, &SmallVec<[TypeId; 2]>)> {
         self.dedup_base.iter().chain(self.dedup.iter())
     }
 
-    #[cfg(test)]
-    pub(crate) fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
         let id = self
             .dedup_base
             .values()
@@ -578,8 +574,8 @@ impl Interner {
         Some((id, self.store.object_type(id)?.clone()))
     }
 
-    #[cfg(test)]
-    pub(crate) fn base_index_family_sharing_with(&self, other: &Self) -> [bool; 4] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn base_index_family_sharing_with(&self, other: &Self) -> [bool; 4] {
         [
             Arc::ptr_eq(&self.dedup_base, &other.dedup_base),
             Arc::ptr_eq(&self.reserved_types_base, &other.reserved_types_base),
@@ -588,8 +584,8 @@ impl Interner {
         ]
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_index_row_counts_for_test(&self) -> [usize; 4] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_index_row_counts_for_test(&self) -> [usize; 4] {
         [
             self.dedup.values().map(SmallVec::len).sum(),
             self.reserved_types.len(),
@@ -598,14 +594,14 @@ impl Interner {
         ]
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn reserved_types(&self) -> impl Iterator<Item = (&TypeId, &ReservedType)> {
         self.reserved_types_base
             .iter()
             .chain(self.reserved_types.iter())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn has_nonempty_delta(&self) -> bool {
         self.store.has_nonempty_delta()
             || (self.store.is_sealed_base()
@@ -616,8 +612,8 @@ impl Interner {
 
     /// Terminal-state check a completed universe must pass: no unmerged delta, every
     /// reservation frozen, no dedup bucket holding the same row twice.
-    #[cfg(test)]
-    pub(crate) fn strict_terminal_state_for_test(&self) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn strict_terminal_state_for_test(&self) -> Result<(), String> {
         if self.has_nonempty_delta() {
             return Err("interner still carries a non-empty delta".to_owned());
         }
@@ -643,8 +639,8 @@ impl Interner {
 
     /// The dedup index covers exactly the structural rows: every non-reserved row is a
     /// candidate in exactly one bucket, and no reserved row is.
-    #[cfg(test)]
-    pub(crate) fn dedup_partitions_structural_rows_exactly(&self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn dedup_partitions_structural_rows_exactly(&self) -> bool {
         let mut seen = vec![false; self.store.len()];
         for (_, candidates) in self.dedup_buckets() {
             for candidate in candidates.iter().copied() {
@@ -662,8 +658,8 @@ impl Interner {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_indexes_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_indexes_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.dedup_base, &other.dedup_base)
             && Arc::ptr_eq(&self.reserved_types_base, &other.reserved_types_base)
             && Arc::ptr_eq(&self.declared_recipe_base, &other.declared_recipe_base)
@@ -685,7 +681,7 @@ impl Interner {
     }
 
     /// Atomically fill and freeze a complete recursive publication batch.
-    pub(crate) fn fill_reserved_type_batch(
+    pub fn fill_reserved_type_batch(
         &mut self,
         mut fills: Vec<ReservedTypeFill>,
     ) -> Result<(), ReservedTypeFillError> {
@@ -765,11 +761,11 @@ impl Interner {
         self.store.remove_type_param_constraint(id)
     }
 
-    pub(crate) fn type_param_metadata_is_frozen(&self, id: TypeParamId) -> bool {
+    pub fn type_param_metadata_is_frozen(&self, id: TypeParamId) -> bool {
         self.store.type_param_metadata_is_frozen(id)
     }
 
-    pub(crate) fn freeze_type_param_metadata(
+    pub fn freeze_type_param_metadata(
         &mut self,
         ids: &[TypeParamId],
     ) -> Result<(), TypeParamFreezeError> {

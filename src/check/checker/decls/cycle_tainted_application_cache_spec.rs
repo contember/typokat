@@ -34,6 +34,15 @@ fn empty_binder() -> Binder {
     crate::binder::bind_module_with_prelude(&prelude.program, &user.program)
 }
 
+fn type_source(relative: &str) -> String {
+    std::fs::read_to_string(
+        crate::test_support::repository_root()
+            .join("crates/typokat-types/src/types")
+            .join(relative),
+    )
+    .expect("type source")
+}
+
 fn pass<'a>(interner: &'a mut Interner, binder: &'a Binder) -> Pass<'a, 'static> {
     let mut pass = super::super::build_pass(
         interner,
@@ -435,8 +444,7 @@ fn source_shape_keeps_semantic_boundaries_and_clean_lookup_first() {
         .unwrap();
     assert!(complete < lazy && lazy < clean && clean < option);
     assert!(option < tainted && option < insertion);
-    assert!(!include_str!("../../../types/substitute/mod.rs")
-        .contains("cycle_tainted_application_cache"));
+    assert!(!type_source("substitute/mod.rs").contains("cycle_tainted_application_cache"));
 }
 
 #[test]

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 /// Construction state for one class declaration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ClassConstructionState {
+pub enum ClassConstructionState {
     Pending,
     #[allow(dead_code)] // Kept for the ADR-0006 publication-state contract.
     Building,
@@ -20,7 +20,7 @@ pub(crate) enum ClassConstructionState {
 /// Typed reason a semantic demand could not safely complete.
 #[allow(clippy::enum_variant_names)] // ADR-0006 fixes these externally meaningful reason names.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Exhaustion {
+pub enum Exhaustion {
     ClassNotPublished {
         class: ClassId,
         state: ClassConstructionState,
@@ -43,14 +43,14 @@ pub(crate) enum Exhaustion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassDefaultDeclaration {
-    pub(crate) class: ClassId,
-    pub(crate) parameter: TypeParamId,
-    pub(crate) index: usize,
+pub struct ClassDefaultDeclaration {
+    pub class: ClassId,
+    pub parameter: TypeParamId,
+    pub index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ClassApplicationArguments {
+pub enum ClassApplicationArguments {
     WrongArity {
         expected_min: usize,
         expected_max: usize,
@@ -72,14 +72,14 @@ pub(crate) enum ClassApplicationArguments {
 
 /// Evaluation/projection outcome. Exhaustion is never folded into recovery.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum DemandOutcome<T> {
+pub enum DemandOutcome<T> {
     Ready(T),
     Exhausted(Exhaustion),
 }
 
 /// Immutable proof that every registered class reached a final state.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PublishedClassSurface {
+pub struct PublishedClassSurface {
     class: ClassId,
     type_params: Box<[TypeParamId]>,
     instance_template: TypeId,
@@ -88,7 +88,7 @@ pub(crate) struct PublishedClassSurface {
 }
 
 impl PublishedClassSurface {
-    pub(crate) fn new(
+    pub fn new(
         class: ClassId,
         type_params: Vec<TypeParamId>,
         instance_template: TypeId,
@@ -104,36 +104,36 @@ impl PublishedClassSurface {
         }
     }
 
-    pub(crate) fn class(&self) -> ClassId {
+    pub fn class(&self) -> ClassId {
         self.class
     }
 
-    pub(crate) fn type_params(&self) -> &[TypeParamId] {
+    pub fn type_params(&self) -> &[TypeParamId] {
         &self.type_params
     }
 
-    pub(crate) fn instance_template(&self) -> TypeId {
+    pub fn instance_template(&self) -> TypeId {
         self.instance_template
     }
 
-    pub(crate) fn static_template(&self) -> TypeId {
+    pub fn static_template(&self) -> TypeId {
         self.static_template
     }
 
-    pub(crate) fn constructor_template(&self) -> Option<TypeId> {
+    pub fn constructor_template(&self) -> Option<TypeId> {
         self.constructor_template
     }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PublishedClassPoison {
+pub enum PublishedClassPoison {
     Heritage,
     Initializer,
     Surface,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CanonicalPublishedClassTerminal<'a> {
+pub enum CanonicalPublishedClassTerminal<'a> {
     Ready(&'a PublishedClassSurface),
     HeritagePoison,
     InitializerPoison,
@@ -143,14 +143,14 @@ pub(crate) enum CanonicalPublishedClassTerminal<'a> {
 /// Lifetime-free class publication row: the owned form of
 /// [`CanonicalPublishedClassTerminal`], used when the frozen product is decomposed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum OwnedPublishedClassTerminal {
+pub enum OwnedPublishedClassTerminal {
     Ready(PublishedClassSurface),
     Poisoned(PublishedClassPoison),
 }
 
 /// Immutable proof that every registered class reached a final state. Drafts
 /// and partially composed surfaces never enter this registry.
-pub(crate) struct PublishedClasses {
+pub struct PublishedClasses {
     states: LayeredMap<ClassId, ClassConstructionState>,
     surfaces: LayeredMap<ClassId, PublishedClassSurface>,
     poison: LayeredMap<ClassId, PublishedClassPoison>,
@@ -169,7 +169,7 @@ impl Clone for PublishedClasses {
 }
 
 impl PublishedClasses {
-    pub(crate) fn owned_terminals(&self) -> Option<Vec<(ClassId, OwnedPublishedClassTerminal)>> {
+    pub fn owned_terminals(&self) -> Option<Vec<(ClassId, OwnedPublishedClassTerminal)>> {
         self.canonical_terminals().map(|terminals| {
             terminals
                 .into_iter()
@@ -194,8 +194,8 @@ impl PublishedClasses {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_owned_terminals(&self) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_owned_terminals(&self) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
         self.states
             .local_iter()
             .filter_map(|(&class, state)| match state {
@@ -216,13 +216,13 @@ impl PublishedClasses {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_row_count_for_test(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_row_count_for_test(&self) -> usize {
         self.states.local_len() + self.surfaces.local_len() + self.poison.local_len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_owned_terminals(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn from_owned_terminals(
         terminals: Vec<(ClassId, OwnedPublishedClassTerminal)>,
     ) -> Result<Self, &'static str> {
         if terminals.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
@@ -250,7 +250,7 @@ impl PublishedClasses {
             .ok_or("owned class publication is not terminal")
     }
 
-    pub(crate) fn canonical_terminals(
+    pub fn canonical_terminals(
         &self,
     ) -> Option<Vec<(ClassId, CanonicalPublishedClassTerminal<'_>)>> {
         let mut classes = self.states.keys().copied().collect::<Vec<_>>();
@@ -282,7 +282,7 @@ impl PublishedClasses {
             .collect()
     }
 
-    pub(crate) fn extend(mut self, extension: Self) -> Option<Self> {
+    pub fn extend(mut self, extension: Self) -> Option<Self> {
         if extension
             .states
             .keys()
@@ -311,7 +311,7 @@ impl PublishedClasses {
         Some(self)
     }
 
-    pub(crate) fn from_publication(
+    pub fn from_publication(
         states: FxHashMap<ClassId, ClassConstructionState>,
         surfaces: FxHashMap<ClassId, PublishedClassSurface>,
         poison: FxHashMap<ClassId, PublishedClassPoison>,
@@ -358,7 +358,7 @@ impl PublishedClasses {
             })
     }
 
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         PublishedClasses {
             states: LayeredMap::default(),
             surfaces: LayeredMap::default(),
@@ -367,17 +367,17 @@ impl PublishedClasses {
         }
     }
 
-    pub(crate) fn identity(&self) -> &Arc<()> {
+    pub fn identity(&self) -> &Arc<()> {
         &self.identity
     }
 
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         self.states.freeze_as_base()?;
         self.surfaces.freeze_as_base()?;
         self.poison.freeze_as_base()
     }
 
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             states: self.states.fork_delta()?,
             surfaces: self.surfaces.fork_delta()?,
@@ -386,14 +386,14 @@ impl PublishedClasses {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_with(&self, other: &Self) -> bool {
         self.states.shares_base_with(&other.states)
             && self.surfaces.shares_base_with(&other.surfaces)
             && self.poison.shares_base_with(&other.poison)
     }
 
-    pub(crate) fn require(&self, class: ClassId) -> DemandOutcome<()> {
+    pub fn require(&self, class: ClassId) -> DemandOutcome<()> {
         match self.states.get(&class).copied() {
             Some(ClassConstructionState::Published) => DemandOutcome::Ready(()),
             Some(ClassConstructionState::Poisoned) => match self.poison.get(&class) {
@@ -415,7 +415,7 @@ impl PublishedClasses {
         }
     }
 
-    pub(crate) fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+    pub fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
         match self.require(class) {
             DemandOutcome::Ready(()) => match self.surfaces.get(&class) {
                 Some(surface) => DemandOutcome::Ready(surface),
@@ -428,8 +428,8 @@ impl PublishedClasses {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn forged(class: ClassId, state: ClassConstructionState) -> Self {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn forged(class: ClassId, state: ClassConstructionState) -> Self {
         PublishedClasses {
             states: FxHashMap::from_iter([(class, state)]).into(),
             surfaces: LayeredMap::default(),

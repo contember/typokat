@@ -4,68 +4,68 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::hash::Hash;
 use std::ops::Index;
 use std::sync::Arc;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use std::{cell::RefCell, collections::BTreeMap};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy)]
-pub(crate) enum BaseWorkOperationForTest {
+pub enum BaseWorkOperationForTest {
     SequentialScan,
     Materialize,
     Clone,
     Remap,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BaseWorkLedgerForTest {
-    pub(crate) sequential_scans: BTreeMap<&'static str, u64>,
-    pub(crate) materializations: BTreeMap<&'static str, u64>,
-    pub(crate) clones: BTreeMap<&'static str, u64>,
-    pub(crate) remaps: BTreeMap<&'static str, u64>,
+pub struct BaseWorkLedgerForTest {
+    pub sequential_scans: BTreeMap<&'static str, u64>,
+    pub materializations: BTreeMap<&'static str, u64>,
+    pub clones: BTreeMap<&'static str, u64>,
+    pub remaps: BTreeMap<&'static str, u64>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static BASE_WORK_LEDGER: RefCell<Option<BaseWorkLedgerForTest>> = const { RefCell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static LOCAL_ROW_ALLOCATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_local_row_allocation_for_test() {
     LOCAL_ROW_ALLOCATIONS.set(LOCAL_ROW_ALLOCATIONS.get().saturating_add(1));
 }
 
-#[cfg(test)]
-pub(crate) struct LocalRowAllocationScopeForTest(u64);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct LocalRowAllocationScopeForTest(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl LocalRowAllocationScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(LOCAL_ROW_ALLOCATIONS.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         LOCAL_ROW_ALLOCATIONS.get().saturating_sub(self.0)
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LocalRowAllocationCalibrationForTest {
-    pub(crate) vector_push: u64,
-    pub(crate) map_insert: u64,
-    pub(crate) set_insert: u64,
-    pub(crate) map_vacant_insert: u64,
+pub struct LocalRowAllocationCalibrationForTest {
+    pub vector_push: u64,
+    pub map_insert: u64,
+    pub set_insert: u64,
+    pub map_vacant_insert: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl LocalRowAllocationCalibrationForTest {
-    pub(crate) fn total(self) -> u64 {
+    pub fn total(self) -> u64 {
         self.vector_push
             .saturating_add(self.map_insert)
             .saturating_add(self.set_insert)
@@ -73,8 +73,8 @@ impl LocalRowAllocationCalibrationForTest {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn calibrate_local_row_allocations_for_test() -> LocalRowAllocationCalibrationForTest {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn calibrate_local_row_allocations_for_test() -> LocalRowAllocationCalibrationForTest {
     let vector_scope = LocalRowAllocationScopeForTest::start();
     let mut rows = LayeredVec::default();
     rows.push_local(1_u8);
@@ -106,8 +106,8 @@ pub(crate) fn calibrate_local_row_allocations_for_test() -> LocalRowAllocationCa
     }
 }
 
-#[cfg(test)]
-pub(crate) fn record_base_work_for_test(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_base_work_for_test(
     family: &'static str,
     operation: BaseWorkOperationForTest,
     rows: usize,
@@ -128,7 +128,7 @@ pub(crate) fn record_base_work_for_test(
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_full_view_base_scan_for_test(rows: usize) {
     if rows > 0 {
         record_base_work_for_test(
@@ -139,14 +139,14 @@ fn record_full_view_base_scan_for_test(rows: usize) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static LOCAL_FULL_VIEW_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// The local layer is the one that grows, so a per-item scan of it is the quadratic
 /// the base probe above cannot see.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_full_view_local_scan_for_test(rows: usize) {
     if rows > 0 {
         let rows = u64::try_from(rows).unwrap_or(u64::MAX);
@@ -154,26 +154,26 @@ fn record_full_view_local_scan_for_test(rows: usize) {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct LocalFullViewScanScopeForTest(u64);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct LocalFullViewScanScopeForTest(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl LocalFullViewScanScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(LOCAL_FULL_VIEW_SCANS.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         LOCAL_FULL_VIEW_SCANS.get().saturating_sub(self.0)
     }
 }
 
-#[cfg(test)]
-pub(crate) struct BaseWorkScopeForTest;
+#[cfg(any(test, feature = "test-utils"))]
+pub struct BaseWorkScopeForTest;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl BaseWorkScopeForTest {
-    pub(crate) fn start(families: impl IntoIterator<Item = &'static str>) -> Self {
+    pub fn start(families: impl IntoIterator<Item = &'static str>) -> Self {
         let empty = families
             .into_iter()
             .map(|family| (family, 0))
@@ -190,15 +190,15 @@ impl BaseWorkScopeForTest {
         Self
     }
 
-    pub(crate) fn finish(self) -> BaseWorkLedgerForTest {
+    pub fn finish(self) -> BaseWorkLedgerForTest {
         BASE_WORK_LEDGER
             .with_borrow_mut(Option::take)
             .expect("base-work scope is active")
     }
 }
 
-#[cfg(test)]
-pub(crate) fn calibrate_base_work_ledger_for_test(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn calibrate_base_work_ledger_for_test(
     sequential_scans: u64,
     materializations: u64,
     clones: u64,
@@ -226,26 +226,26 @@ pub(crate) fn calibrate_base_work_ledger_for_test(
     scope.finish()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static BASE_WRITE_ATTEMPTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_base_write_attempt_for_test() {
     BASE_WRITE_ATTEMPTS.set(BASE_WRITE_ATTEMPTS.get().saturating_add(1));
 }
 
-#[cfg(test)]
-pub(crate) struct BaseWriteAttemptScopeForTest(u64);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct BaseWriteAttemptScopeForTest(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl BaseWriteAttemptScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(BASE_WRITE_ATTEMPTS.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         BASE_WRITE_ATTEMPTS.get().saturating_sub(self.0)
     }
 }
@@ -285,7 +285,7 @@ impl<T> DoubleEndedIterator for LayeredIter<'_, T> {
 
 impl<T> ExactSizeIterator for LayeredIter<'_, T> {}
 
-pub(crate) struct LayeredVec<T> {
+pub struct LayeredVec<T> {
     base: Arc<[T]>,
     local: Vec<T>,
     sealed: bool,
@@ -312,27 +312,27 @@ impl<T> Default for LayeredVec<T> {
 }
 
 impl<T> LayeredVec<T> {
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.base.len() + self.local.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub(crate) fn base_len(&self) -> usize {
+    pub fn base_len(&self) -> usize {
         self.base.len()
     }
 
-    pub(crate) fn local_len(&self) -> usize {
+    pub fn local_len(&self) -> usize {
         self.local.len()
     }
 
-    pub(crate) fn is_sealed(&self) -> bool {
+    pub fn is_sealed(&self) -> bool {
         self.sealed
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<&T> {
+    pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.base.len() {
             self.base.get(index)
         } else {
@@ -340,26 +340,26 @@ impl<T> LayeredVec<T> {
         }
     }
 
-    pub(crate) fn get_mut_local(&mut self, index: usize) -> Option<&mut T> {
-        #[cfg(test)]
+    pub fn get_mut_local(&mut self, index: usize) -> Option<&mut T> {
+        #[cfg(any(test, feature = "test-utils"))]
         if index < self.base.len() {
             record_base_write_attempt_for_test();
         }
         self.local.get_mut(index.checked_sub(self.base.len())?)
     }
 
-    pub(crate) fn push_local(&mut self, value: T) -> usize {
+    pub fn push_local(&mut self, value: T) -> usize {
         let index = self.len();
         self.local.push(value);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_local_row_allocation_for_test();
         index
     }
 
-    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &T> + DoubleEndedIterator + Clone {
-        #[cfg(test)]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &T> + DoubleEndedIterator + Clone {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         LayeredIter {
             base: self.base.iter(),
@@ -367,29 +367,29 @@ impl<T> LayeredVec<T> {
         }
     }
 
-    pub(crate) fn local_iter(&self) -> std::slice::Iter<'_, T> {
-        #[cfg(test)]
+    pub fn local_iter(&self) -> std::slice::Iter<'_, T> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.local.iter()
     }
 
-    pub(crate) fn local_iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
-        #[cfg(test)]
+    pub fn local_iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.local.iter_mut()
     }
 
-    pub(crate) fn local_slice_mut(&mut self) -> &mut [T] {
-        #[cfg(test)]
+    pub fn local_slice_mut(&mut self) -> &mut [T] {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         &mut self.local
     }
 
-    pub(crate) fn clear_local(&mut self) {
+    pub fn clear_local(&mut self) {
         self.local.clear();
     }
 
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if self.sealed || !self.base.is_empty() {
             return Err("layered vector is already sealed");
         }
@@ -398,7 +398,7 @@ impl<T> LayeredVec<T> {
         Ok(())
     }
 
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         if !self.sealed {
             return Err("layered vector base is not sealed");
         }
@@ -412,8 +412,8 @@ impl<T> LayeredVec<T> {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.base, &other.base)
     }
 }
@@ -441,15 +441,15 @@ impl<'a, T> IntoIterator for &'a LayeredVec<T> {
     type IntoIter = std::iter::Chain<std::slice::Iter<'a, T>, std::slice::Iter<'a, T>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 }
 
-pub(crate) struct LayeredMap<K, V> {
+pub struct LayeredMap<K, V> {
     base: Arc<FxHashMap<K, V>>,
     local: FxHashMap<K, V>,
     sealed: bool,
@@ -476,53 +476,57 @@ impl<K, V> Default for LayeredMap<K, V> {
 }
 
 impl<K: Eq + Hash, V> LayeredMap<K, V> {
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.base.len() + self.local.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_len(&self) -> usize {
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty() && self.local.is_empty()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_len(&self) -> usize {
         self.local.len()
     }
 
-    pub(crate) fn get(&self, key: &K) -> Option<&V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
         self.base.get(key).or_else(|| self.local.get(key))
     }
 
-    pub(crate) fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool {
         self.base.contains_key(key) || self.local.contains_key(key)
     }
 
-    pub(crate) fn insert_local(&mut self, key: K, value: V) -> Result<Option<V>, &'static str> {
+    pub fn insert_local(&mut self, key: K, value: V) -> Result<Option<V>, &'static str> {
         if self.base.contains_key(&key) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_base_write_attempt_for_test();
             return Err("layered map cannot replace a sealed entry");
         }
         let previous = self.local.insert(key, value);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         if previous.is_none() {
             record_local_row_allocation_for_test();
         }
         Ok(previous)
     }
 
-    pub(crate) fn remove_local(&mut self, key: &K) -> Result<Option<V>, &'static str> {
+    pub fn remove_local(&mut self, key: &K) -> Result<Option<V>, &'static str> {
         if self.base.contains_key(key) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_base_write_attempt_for_test();
             return Err("layered map cannot remove a sealed entry");
         }
         Ok(self.local.remove(key))
     }
 
-    pub(crate) fn get_or_insert_local_with(
+    pub fn get_or_insert_local_with(
         &mut self,
         key: K,
         default: impl FnOnce() -> V,
     ) -> Result<&mut V, &'static str> {
         if self.base.contains_key(&key) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_base_write_attempt_for_test();
             return Err("layered map cannot replace a sealed entry");
         }
@@ -530,54 +534,54 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
             std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let value = entry.insert(default());
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_local_row_allocation_for_test();
                 Ok(value)
             }
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 
-    pub(crate) fn keys(&self) -> impl Iterator<Item = &K> {
-        #[cfg(test)]
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.keys().chain(self.local.keys())
     }
 
-    pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
-        #[cfg(test)]
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.values().chain(self.local.values())
     }
 
-    pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        #[cfg(test)]
+    pub fn local_iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.local.iter()
     }
 
-    pub(crate) fn local_values_mut(&mut self) -> impl Iterator<Item = &mut V> {
-        #[cfg(test)]
+    pub fn local_values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.local.values_mut()
     }
 
-    pub(crate) fn clear_local(&mut self) {
+    pub fn clear_local(&mut self) {
         self.local.clear();
     }
 
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if self.sealed || !self.base.is_empty() {
             return Err("layered map is already sealed");
         }
@@ -586,7 +590,7 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         Ok(())
     }
 
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         if !self.sealed {
             return Err("layered map base is not sealed");
         }
@@ -600,8 +604,8 @@ impl<K: Eq + Hash, V> LayeredMap<K, V> {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.base, &other.base)
     }
 }
@@ -624,15 +628,15 @@ impl<'a, K, V> IntoIterator for &'a LayeredMap<K, V> {
     >;
 
     fn into_iter(self) -> Self::IntoIter {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 }
 
-pub(crate) struct LayeredSet<T> {
+pub struct LayeredSet<T> {
     base: Arc<FxHashSet<T>>,
     local: FxHashSet<T>,
     sealed: bool,
@@ -659,44 +663,44 @@ impl<T> Default for LayeredSet<T> {
 }
 
 impl<T: Eq + Hash> LayeredSet<T> {
-    #[cfg(test)]
-    pub(crate) fn local_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_len(&self) -> usize {
         self.local.len()
     }
 
-    pub(crate) fn contains(&self, value: &T) -> bool {
+    pub fn contains(&self, value: &T) -> bool {
         self.base.contains(value) || self.local.contains(value)
     }
 
-    pub(crate) fn insert_local(&mut self, value: T) -> Result<bool, &'static str> {
+    pub fn insert_local(&mut self, value: T) -> Result<bool, &'static str> {
         if self.base.contains(&value) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_base_write_attempt_for_test();
             return Err("layered set cannot replace a sealed entry");
         }
         let inserted = self.local.insert(value);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         if inserted {
             record_local_row_allocation_for_test();
         }
         Ok(inserted)
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
-        #[cfg(test)]
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }
 
-    pub(crate) fn local_iter(&self) -> impl Iterator<Item = &T> {
-        #[cfg(test)]
+    pub fn local_iter(&self) -> impl Iterator<Item = &T> {
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.local.iter()
     }
 
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if self.sealed || !self.base.is_empty() {
             return Err("layered set is already sealed");
         }
@@ -705,7 +709,7 @@ impl<T: Eq + Hash> LayeredSet<T> {
         Ok(())
     }
 
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         if !self.sealed {
             return Err("layered set base is not sealed");
         }
@@ -719,8 +723,8 @@ impl<T: Eq + Hash> LayeredSet<T> {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.base, &other.base)
     }
 }
@@ -743,9 +747,9 @@ impl<'a, T> IntoIterator for &'a LayeredSet<T> {
     >;
 
     fn into_iter(self) -> Self::IntoIter {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_base_scan_for_test(self.base.len());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_full_view_local_scan_for_test(self.local.len());
         self.base.iter().chain(self.local.iter())
     }

@@ -15,7 +15,7 @@
 //! and `Instantiation`, plus the trusted string-intrinsic markers, `ThisType`, and
 //! `OmitThisParameter`.
 //!
-//! `crate::types::substitute_with_outcome` is crate-private and returns
+//! `crate::types::substitute_with_outcome` is an internal boundary API and returns
 //! `SubstitutionOutcome::{CycleClean, CycleTainted}`. The existing public
 //! `substitute(...) -> TypeId` API stays unchanged. Nested substitutions, including
 //! every per-member substitution created by homomorphic mapped distribution, must
@@ -55,6 +55,15 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
 use rustc_hash::FxHashMap;
+
+fn type_source(relative: &str) -> String {
+    std::fs::read_to_string(
+        crate::test_support::repository_root()
+            .join("crates/typokat-types/src/types")
+            .join(relative),
+    )
+    .expect("type source")
+}
 
 fn prop(name: impl Into<String>, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
@@ -1057,9 +1066,9 @@ fn activation_shape_keeps_cache_at_the_ready_final_arm_and_telemetry_test_only()
     let resolve = include_str!("resolve.rs");
     let context = include_str!("../context.rs");
     let type_groups = include_str!("../type_groups.rs");
-    let types_module = include_str!("../../../types/mod.rs");
-    let substitute_module = include_str!("../../../types/substitute/mod.rs");
-    let substitute_apply = include_str!("../../../types/substitute/apply.rs");
+    let types_module = type_source("mod.rs");
+    let substitute_module = type_source("substitute/mod.rs");
+    let substitute_apply = type_source("substitute/apply.rs");
 
     let application = source_section(
         resolve,
@@ -1133,7 +1142,7 @@ fn activation_shape_keeps_cache_at_the_ready_final_arm_and_telemetry_test_only()
     assert_test_guard_covers_every_occurrence(type_groups, "from_explicit_terminals_for_test");
     assert_test_guard_covers_every_occurrence(resolve, "instantiate_type_group_arguments_for_test");
 
-    let public_substitute_reexport = source_section(types_module, "pub use substitute::", ";");
+    let public_substitute_reexport = source_section(&types_module, "pub use substitute::", ";");
     let (_, exported_names) = public_substitute_reexport
         .split_once("::")
         .expect("substitute re-export names follow the module path");
@@ -1143,42 +1152,32 @@ fn activation_shape_keeps_cache_at_the_ready_final_arm_and_telemetry_test_only()
             .any(|token| token == "substitute"),
         "crate::types::substitute remains a public re-export"
     );
-    let mut crate_private_substitute_entries = Vec::new();
+    let mut boundary_substitute_entries = Vec::new();
     for statement in types_module.split(';') {
         let compact = without_whitespace(statement);
-        let crate_private = compact.contains("pub(crate)usesubstitute::");
-        let restricted = compact.contains("pub(in") && compact.contains(")usesubstitute::");
-        if crate_private || restricted {
-            let entries = normalized_substitute_reexport_entries(statement);
-            assert!(
-                !entries.iter().any(|entry| entry == "substitute"),
-                "the existing substitute function cannot become crate-private"
-            );
-            if crate_private {
-                crate_private_substitute_entries.extend(entries);
-            }
+        if compact.contains("pubusesubstitute::") {
+            boundary_substitute_entries.extend(normalized_substitute_reexport_entries(statement));
         }
     }
-    assert!(crate_private_substitute_entries
+    assert!(boundary_substitute_entries
         .iter()
         .any(|entry| entry == "substitute_with_outcome"));
-    assert!(crate_private_substitute_entries
+    assert!(boundary_substitute_entries
         .iter()
         .any(|entry| entry == "SubstitutionOutcome"));
 
     let substitute_api = without_whitespace(source_section(
-        substitute_module,
+        &substitute_module,
         "pub fn substitute(",
         "pub fn instantiate_function(",
     ));
     assert!(substitute_api.contains("pubfnsubstitute("));
     assert!(substitute_api.contains(")->TypeId"));
-    let compact_substitute_module = without_whitespace(substitute_module);
-    assert!(compact_substitute_module.contains("pub(crate)fnsubstitute_with_outcome("));
-    assert!(!compact_substitute_module.contains("pubfnsubstitute_with_outcome("));
+    let compact_substitute_module = without_whitespace(&substitute_module);
+    assert!(compact_substitute_module.contains("pubfnsubstitute_with_outcome("));
 
     let mapped_apply = without_whitespace(source_section(
-        substitute_apply,
+        &substitute_apply,
         "fn apply_mapped(",
         "fn apply_keyof(",
     ));

@@ -70,7 +70,7 @@ impl Interner {
     }
 
     /// Close an unpublished object reservation without making it structural.
-    pub(crate) fn abandon_reserved_object(
+    pub fn abandon_reserved_object(
         &mut self,
         id: TypeId,
     ) -> Result<(), super::ReservedTypeFillError> {
@@ -81,7 +81,7 @@ impl Interner {
     }
 
     /// Promote a caller-proven acyclic alias reservation into structural identity.
-    pub(crate) fn promote_caller_certified_acyclic_reserved_object(
+    pub fn promote_caller_certified_acyclic_reserved_object(
         &mut self,
         id: TypeId,
     ) -> Result<TypeId, super::ReservedObjectPromotionError> {

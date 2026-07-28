@@ -223,7 +223,7 @@ impl Interner {
     }
 
     /// Freeze a failed conditional-alias reservation as a deterministic error body.
-    pub(crate) fn poison_reserved_conditional(
+    pub fn poison_reserved_conditional(
         &mut self,
         id: TypeId,
     ) -> Result<(), super::ReservedTypeFillError> {
@@ -268,7 +268,7 @@ impl Interner {
 
     /// Intern an immutable class application. The argument order is declaration
     /// order and is never canonicalized or routed through alias instantiation.
-    pub(crate) fn intern_class_instance(&mut self, class: ClassId, args: Vec<TypeId>) -> TypeId {
+    pub fn intern_class_instance(&mut self, class: ClassId, args: Vec<TypeId>) -> TypeId {
         let key = StructuralKey::ClassInstance { class, args: &args };
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
@@ -286,11 +286,7 @@ impl Interner {
     }
 
     /// Intern a deferred indexed access by its ordered `(object, index)` pair.
-    pub(crate) fn intern_deferred_indexed_access(
-        &mut self,
-        object: TypeId,
-        index: TypeId,
-    ) -> TypeId {
+    pub fn intern_deferred_indexed_access(&mut self, object: TypeId, index: TypeId) -> TypeId {
         let key = StructuralKey::DeferredIndexedAccess { object, index };
         let hash = structural_hash(&key);
         if let Some(existing) = self.lookup(hash, |store, id| {
@@ -371,7 +367,7 @@ impl Interner {
     }
 
     /// Freeze a failed mapped-alias reservation as a deterministic error body.
-    pub(crate) fn poison_reserved_mapped(
+    pub fn poison_reserved_mapped(
         &mut self,
         id: TypeId,
     ) -> Result<(), super::ReservedTypeFillError> {

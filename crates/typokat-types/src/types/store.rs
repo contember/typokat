@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub struct TypeId(pub u32);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TypeParamFreezeError {
+pub enum TypeParamFreezeError {
     Duplicate(TypeParamId),
     AlreadyFrozen(TypeParamId),
 }
@@ -135,25 +135,25 @@ impl Store {
         self.tag.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn frozen_prefix_len_for_test(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn frozen_prefix_len_for_test(&self) -> usize {
         self.tag.base_len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_type_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_type_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
         let base_len = self.tag.base_len();
         self.tag.local_iter().enumerate().map(move |(index, _)| {
             TypeId(u32::try_from(base_len + index).expect("type id fits u32"))
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_type_param_ids_for_test(&self) -> impl Iterator<Item = TypeParamId> + '_ {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_type_param_ids_for_test(&self) -> impl Iterator<Item = TypeParamId> + '_ {
         self.type_params.local_iter().map(|parameter| parameter.id)
     }
 
-    pub(crate) fn base_len(&self) -> usize {
+    pub fn base_len(&self) -> usize {
         self.tag.base_len()
     }
 
@@ -161,16 +161,16 @@ impl Store {
         self.tag.is_empty()
     }
 
-    pub(crate) fn semantic_graph_identity(&self) -> &Arc<()> {
+    pub fn semantic_graph_identity(&self) -> &Arc<()> {
         &self.semantic_graph_identity
     }
 
-    pub(crate) fn mark_semantic_graph_mutation(&mut self) {
+    pub fn mark_semantic_graph_mutation(&mut self) {
         self.semantic_graph_identity = Arc::new(());
     }
 
     /// Seal this standalone store as an immutable prefix.
-    pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if self.tag.is_sealed() {
             return Err("store is already sealed");
         }
@@ -207,7 +207,7 @@ impl Store {
     }
 
     /// Create a private empty suffix over a sealed immutable prefix.
-    pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
+    pub fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             semantic_graph_identity: Arc::new(()),
             sealed_type_param_ids: Arc::clone(&self.sealed_type_param_ids),
@@ -237,8 +237,8 @@ impl Store {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_nonempty_delta(&self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn has_nonempty_delta(&self) -> bool {
         self.tag.is_sealed()
             && (self.tag.local_len() != 0
                 || self.flags.local_len() != 0
@@ -265,13 +265,13 @@ impl Store {
                 || self.stable_hash.local_len() != 0)
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_sealed_base(&self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn is_sealed_base(&self) -> bool {
         self.tag.is_sealed()
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_base_rows_with(&self, other: &Self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn shares_base_rows_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.sealed_type_param_ids, &other.sealed_type_param_ids)
             && self.tag.shares_base_with(&other.tag)
             && self.flags.shares_base_with(&other.flags)
@@ -308,8 +308,8 @@ impl Store {
             && self.stable_hash.shares_base_with(&other.stable_hash)
     }
 
-    #[cfg(test)]
-    pub(crate) fn base_family_sharing_with(&self, other: &Self) -> [bool; 5] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn base_family_sharing_with(&self, other: &Self) -> [bool; 5] {
         let rows = self.tag.shares_base_with(&other.tag)
             && self.flags.shares_base_with(&other.flags)
             && self.payload.shares_base_with(&other.payload);
@@ -349,8 +349,8 @@ impl Store {
         ]
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_family_row_counts_for_test(&self) -> [usize; 5] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn local_family_row_counts_for_test(&self) -> [usize; 5] {
         [
             self.tag.local_len(),
             self.literals.local_len()
@@ -572,11 +572,7 @@ impl Store {
     /// Record a type parameter's `extends` constraint (M24). Internal — the checker
     /// calls it through `Interner::set_type_param_constraint` once, when the
     /// declaration's parameter list is lowered with the frame active.
-    pub(crate) fn set_type_param_constraint(
-        &mut self,
-        id: TypeParamId,
-        constraint: TypeId,
-    ) -> bool {
+    pub fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) -> bool {
         if self.type_param_belongs_to_base(id) || self.frozen_type_params.contains(&id) {
             return false;
         }
@@ -592,7 +588,7 @@ impl Store {
 
     /// Erase a circular type-parameter constraint so the degenerate cycle never
     /// reaches the relation engine's assume-true stack.
-    pub(crate) fn remove_type_param_constraint(&mut self, id: TypeParamId) -> bool {
+    pub fn remove_type_param_constraint(&mut self, id: TypeParamId) -> bool {
         if self.type_param_belongs_to_base(id) || self.frozen_type_params.contains(&id) {
             return false;
         }
@@ -605,13 +601,13 @@ impl Store {
         true
     }
 
-    pub(crate) fn type_param_metadata_is_frozen(&self, id: TypeParamId) -> bool {
+    pub fn type_param_metadata_is_frozen(&self, id: TypeParamId) -> bool {
         self.frozen_type_params.contains(&id)
     }
 
     /// Freeze a whole declaration batch after prevalidation. A failed batch
     /// changes nothing, so publication cannot expose a partially frozen SCC.
-    pub(crate) fn freeze_type_param_metadata(
+    pub fn freeze_type_param_metadata(
         &mut self,
         ids: &[TypeParamId],
     ) -> Result<(), TypeParamFreezeError> {
@@ -641,7 +637,7 @@ impl Store {
 
     /// Record a reserved template row's display name (M28 round 3). Internal — the
     /// checker calls it through `Interner::set_template_name` at reserve time.
-    pub(crate) fn set_template_name(&mut self, id: TypeId, name: String) {
+    pub fn set_template_name(&mut self, id: TypeId, name: String) {
         if id.index() < self.tag.base_len()
             || id.index() >= self.len()
             || !matches!(self.tag(id), TypeTag::Conditional | TypeTag::Mapped)
@@ -687,13 +683,13 @@ impl Store {
     }
 
     /// Append an intrinsic row. Internal — `Interner` owns dedup.
-    pub(crate) fn push_intrinsic(&mut self, kind: IntrinsicKind, flags: TypeFlags) -> TypeId {
+    pub fn push_intrinsic(&mut self, kind: IntrinsicKind, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::Intrinsic, flags, kind as u32)
     }
 
     /// Append a literal row (value into the side-table, index into payload).
     /// Internal — `Interner` owns dedup.
-    pub(crate) fn push_literal(&mut self, value: LiteralValue, flags: TypeFlags) -> TypeId {
+    pub fn push_literal(&mut self, value: LiteralValue, flags: TypeFlags) -> TypeId {
         let payload = self.literals.len() as u32;
         self.literals.push_local(value);
         self.push(TypeTag::Literal, flags, payload)
@@ -702,7 +698,7 @@ impl Store {
     /// Append an object row (object into the side-table, index into payload).
     /// The caller (`Interner`) passes an already-canonicalized `ObjectType` and
     /// owns dedup.
-    pub(crate) fn push_object(&mut self, object: ObjectType, flags: TypeFlags) -> TypeId {
+    pub fn push_object(&mut self, object: ObjectType, flags: TypeFlags) -> TypeId {
         let payload = self.objects.len() as u32;
         self.objects.push_local(object);
         self.push(TypeTag::Object, flags, payload)
@@ -722,7 +718,7 @@ impl Store {
     /// Append a function row (function into the side-table, index into payload).
     /// Internal — `Interner` owns dedup. Parameters are stored positionally (the
     /// caller does not sort them).
-    pub(crate) fn push_function(&mut self, function: FunctionType, flags: TypeFlags) -> TypeId {
+    pub fn push_function(&mut self, function: FunctionType, flags: TypeFlags) -> TypeId {
         let payload = self.functions.len() as u32;
         self.functions.push_local(function);
         self.push(TypeTag::Function, flags, payload)
@@ -732,7 +728,7 @@ impl Store {
     /// Internal — `Interner` owns canonicalization and dedup; the caller passes
     /// an already-canonical (flattened, sorted, deduped, `never`-free) member
     /// slice of length ≥ 2.
-    pub(crate) fn push_union(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
+    pub fn push_union(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
         let payload = self.unions.len() as u32;
         self.unions.push_local(members);
         self.push(TypeTag::Union, flags, payload)
@@ -742,7 +738,7 @@ impl Store {
     /// payload). Internal — `Interner` owns canonicalization and dedup; the caller
     /// passes an already-canonical (flattened, sorted, deduped, `unknown`-free)
     /// member slice of length ≥ 2 (M31).
-    pub(crate) fn push_intersection(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
+    pub fn push_intersection(&mut self, members: Box<[TypeId]>, flags: TypeFlags) -> TypeId {
         let payload = self.intersections.len() as u32;
         self.intersections.push_local(members);
         self.push(TypeTag::Intersection, flags, payload)
@@ -750,14 +746,14 @@ impl Store {
 
     /// Append a type-parameter row (M9). Internal — `Interner` owns dedup (by
     /// `TypeParamId`).
-    pub(crate) fn push_type_param(&mut self, param: TypeParamType, flags: TypeFlags) -> TypeId {
+    pub fn push_type_param(&mut self, param: TypeParamType, flags: TypeFlags) -> TypeId {
         let payload = self.type_params.len() as u32;
         self.type_params.push_local(param);
         self.push(TypeTag::TypeParam, flags, payload)
     }
 
     /// Append an array row (M17). Internal — `Interner` owns dedup (by element id).
-    pub(crate) fn push_array(&mut self, array: ArrayType, flags: TypeFlags) -> TypeId {
+    pub fn push_array(&mut self, array: ArrayType, flags: TypeFlags) -> TypeId {
         let payload = self.arrays.len() as u32;
         self.arrays.push_local(array);
         self.push(TypeTag::Array, flags, payload)
@@ -765,7 +761,7 @@ impl Store {
 
     /// Append a tuple row (M18). Internal — `Interner` owns dedup (by the ordered
     /// element list). The caller passes elements in source order (never sorted).
-    pub(crate) fn push_tuple(&mut self, tuple: TupleType, flags: TypeFlags) -> TypeId {
+    pub fn push_tuple(&mut self, tuple: TupleType, flags: TypeFlags) -> TypeId {
         let payload = self.tuples.len() as u32;
         self.tuples.push_local(tuple);
         self.push(TypeTag::Tuple, flags, payload)
@@ -773,17 +769,13 @@ impl Store {
 
     /// Append a readonly wrapper row. Internal — `Interner` owns dedup by operand.
     /// The wrapped array/tuple id is stored inline in `payload`.
-    pub(crate) fn push_readonly(&mut self, operand: TypeId, flags: TypeFlags) -> TypeId {
+    pub fn push_readonly(&mut self, operand: TypeId, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::Readonly, flags, operand.0)
     }
 
     /// Append a conditional row (M25). Internal — `Interner` owns dedup (by all four
     /// component ids + `infer_count` + `distributive`, in order).
-    pub(crate) fn push_conditional(
-        &mut self,
-        conditional: ConditionalType,
-        flags: TypeFlags,
-    ) -> TypeId {
+    pub fn push_conditional(&mut self, conditional: ConditionalType, flags: TypeFlags) -> TypeId {
         let payload = self.conditionals.len() as u32;
         self.conditionals.push_local(conditional);
         self.push(TypeTag::Conditional, flags, payload)
@@ -801,7 +793,7 @@ impl Store {
     }
 
     /// Append an instantiation row (M25). Internal — `Interner` owns dedup.
-    pub(crate) fn push_instantiation(
+    pub fn push_instantiation(
         &mut self,
         instantiation: InstantiationType,
         flags: TypeFlags,
@@ -812,11 +804,7 @@ impl Store {
     }
 
     /// Append an immutable class application. Internal — `Interner` owns dedup.
-    pub(crate) fn push_class_instance(
-        &mut self,
-        instance: ClassInstanceType,
-        flags: TypeFlags,
-    ) -> TypeId {
+    pub fn push_class_instance(&mut self, instance: ClassInstanceType, flags: TypeFlags) -> TypeId {
         let payload = u32::try_from(self.class_instances.len())
             .expect("class-instance side table exceeds the u32 payload range");
         self.class_instances.push_local(instance);
@@ -824,7 +812,7 @@ impl Store {
     }
 
     /// Append an immutable deferred indexed access. Internal — `Interner` owns dedup.
-    pub(crate) fn push_deferred_indexed_access(
+    pub fn push_deferred_indexed_access(
         &mut self,
         access: DeferredIndexedAccessType,
         flags: TypeFlags,
@@ -835,7 +823,7 @@ impl Store {
         self.push(TypeTag::DeferredIndexedAccess, flags, payload)
     }
 
-    pub(crate) fn push_declared_recipe(&mut self, recipe: DeclaredTypeRecipe) -> DeclaredRecipeId {
+    pub fn push_declared_recipe(&mut self, recipe: DeclaredTypeRecipe) -> DeclaredRecipeId {
         let id = DeclaredRecipeId(
             u32::try_from(self.declared_recipes.len()).expect("declared recipe id fits u32"),
         );
@@ -843,7 +831,7 @@ impl Store {
         id
     }
 
-    pub(crate) fn push_declared(&mut self, declared: DeclaredType, flags: TypeFlags) -> TypeId {
+    pub fn push_declared(&mut self, declared: DeclaredType, flags: TypeFlags) -> TypeId {
         let payload = u32::try_from(self.declared_types.len()).expect("declared payload fits u32");
         self.declared_types.push_local(declared);
         self.push(TypeTag::Declared, flags, payload)
@@ -851,13 +839,13 @@ impl Store {
 
     /// Append an infer-binder row (M25). Internal — `Interner` owns dedup (by index).
     /// The de Bruijn index is stored inline in `payload`.
-    pub(crate) fn push_infer(&mut self, index: u32, flags: TypeFlags) -> TypeId {
+    pub fn push_infer(&mut self, index: u32, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::Infer, flags, index)
     }
 
     /// Append a mapped-type row (M26). Internal — `Interner` owns dedup (by the whole
     /// [`MappedType`]).
-    pub(crate) fn push_mapped(&mut self, mapped: MappedType, flags: TypeFlags) -> TypeId {
+    pub fn push_mapped(&mut self, mapped: MappedType, flags: TypeFlags) -> TypeId {
         let payload = self.mapped.len() as u32;
         self.mapped.push_local(mapped);
         self.push(TypeTag::Mapped, flags, payload)
@@ -876,19 +864,19 @@ impl Store {
 
     /// Append a deferred-`keyof` row (M28). Internal — `Interner` owns dedup (by
     /// operand). The operand id is stored inline in `payload`.
-    pub(crate) fn push_keyof(&mut self, operand: TypeId, flags: TypeFlags) -> TypeId {
+    pub fn push_keyof(&mut self, operand: TypeId, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::Keyof, flags, operand.0)
     }
 
     /// Append a mapped-value placeholder row (M26). Internal — `Interner` owns dedup
     /// (identity is the tag alone; payload `0`).
-    pub(crate) fn push_mapped_value(&mut self, flags: TypeFlags) -> TypeId {
+    pub fn push_mapped_value(&mut self, flags: TypeFlags) -> TypeId {
         self.push(TypeTag::MappedValue, flags, 0)
     }
 
     /// Append a template-literal row (M27). Internal — `Interner` owns dedup (by the
     /// whole [`TemplateType`]).
-    pub(crate) fn push_template(&mut self, template: TemplateType, flags: TypeFlags) -> TypeId {
+    pub fn push_template(&mut self, template: TemplateType, flags: TypeFlags) -> TypeId {
         let payload = self.templates.len() as u32;
         self.templates.push_local(template);
         self.push(TypeTag::Template, flags, payload)
@@ -896,7 +884,7 @@ impl Store {
 }
 
 impl Store {
-    pub(crate) fn all_type_param_constraints(&self) -> Vec<(TypeParamId, TypeId)> {
+    pub fn all_type_param_constraints(&self) -> Vec<(TypeParamId, TypeId)> {
         let mut constraints = self
             .type_param_constraints
             .iter()
@@ -906,7 +894,7 @@ impl Store {
         constraints
     }
 
-    pub(crate) fn local_type_param_constraints_for_test(
+    pub fn local_type_param_constraints_for_test(
         &self,
     ) -> impl Iterator<Item = (TypeParamId, TypeId)> + '_ {
         self.type_param_constraints
@@ -914,23 +902,21 @@ impl Store {
             .map(|(&parameter, &constraint)| (parameter, constraint))
     }
 
-    pub(crate) fn all_frozen_type_params(&self) -> Vec<TypeParamId> {
+    pub fn all_frozen_type_params(&self) -> Vec<TypeParamId> {
         let mut parameters = self.frozen_type_params.iter().copied().collect::<Vec<_>>();
         parameters.sort_unstable();
         parameters
     }
 
-    pub(crate) fn local_frozen_type_params_for_test(
-        &self,
-    ) -> impl Iterator<Item = TypeParamId> + '_ {
+    pub fn local_frozen_type_params_for_test(&self) -> impl Iterator<Item = TypeParamId> + '_ {
         self.frozen_type_params.local_iter().copied()
     }
 
-    pub(crate) fn all_template_name_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
+    pub fn all_template_name_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
         self.template_names.keys().copied()
     }
 
-    pub(crate) fn all_declared_recipes(
+    pub fn all_declared_recipes(
         &self,
     ) -> impl Iterator<Item = (DeclaredRecipeId, &DeclaredTypeRecipe)> + '_ {
         self.declared_recipes
@@ -944,11 +930,11 @@ impl Store {
             })
     }
 
-    pub(crate) fn declared_recipe_base_len(&self) -> usize {
+    pub fn declared_recipe_base_len(&self) -> usize {
         self.declared_recipes.base_len()
     }
 
-    pub(crate) fn local_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
+    pub fn local_template_name_ids_for_test(&self) -> impl Iterator<Item = TypeId> + '_ {
         self.template_names.local_iter().map(|(&id, _)| id)
     }
 }
