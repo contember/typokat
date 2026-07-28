@@ -307,7 +307,7 @@ impl PublishedTypeEnvironment {
                 .shares_base_with(&other.groups.resolved)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn base_family_sharing_with(&self, other: &Self) -> [bool; 2] {
         [
             self.groups.entries.shares_base_with(&other.groups.entries)
@@ -323,7 +323,7 @@ impl PublishedTypeEnvironment {
         ]
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_family_row_counts_for_test(&self) -> [usize; 2] {
         [
             self.groups.entries.local_len()
@@ -333,7 +333,7 @@ impl PublishedTypeEnvironment {
         ]
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_group_terminals(
         &self,
     ) -> impl Iterator<Item = (TypeGroupId, &PublishedTypeGroupTerminal)> {
@@ -348,7 +348,7 @@ impl PublishedTypeEnvironment {
             })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_class_terminals(
         &self,
     ) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {

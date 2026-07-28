@@ -54,7 +54,7 @@ takes wall 4.79 s → 0.192 s with RSS unchanged (81.4 → 81.6 MB). Two indepen
 
 ### Mechanisms
 
-- **`a7923b6`** — project-wide lexical event *preallocation* (`src/check/checker/lexical_events.rs`,
+- **`a7923b6`** — project-wide lexical event *preallocation* (`crates/typokat-check/src/check/checker/lexical_events.rs`,
   `events.rs`), mandated by [ADR-0008](../decisions/) for deterministic replay order. Every statement
   site eagerly reserves **three** entries (`event`, `deferred`, `incomplete`) in one checker-wide
   `BTreeMap<EventKey, Completion>` where `Completion` wraps a `Vec<CheckerRecord>` — ≥56 B plus
@@ -74,7 +74,7 @@ takes wall 4.79 s → 0.192 s with RSS unchanged (81.4 → 81.6 MB). Two indepen
   loaded the base is always empty, so it is collapsible.
 
 **Library loading is not implicated.** Startup floor at HEAD is 5.5 MB / ~0 ms; production still uses
-`src/prelude.ts` (ADR-0012), and the 21 MB `include_bytes!` snapshot is `.rodata`, never read.
+`crates/typokat-check/src/prelude.ts` (ADR-0012), and the 21 MB `include_bytes!` snapshot is `.rodata`, never read.
 
 The largest step (+19.5 MB combined) is **behaviourally inert at its own boundary**: 356 fixtures plus
 `errors-10000.ts` produce byte-identical output across it, 4,661 diagnostic lines each. It is
@@ -123,7 +123,7 @@ ratchet at 0 regressions. Do not weaken ADR-0008's replay determinism to get the
 
 ## Touch points
 
-`src/check/checker/lexical_events.rs`, `src/check/checker/events.rs`, `src/binder/declaration.rs`
+`crates/typokat-check/src/check/checker/lexical_events.rs`, `crates/typokat-check/src/check/checker/events.rs`, `src/binder/declaration.rs`
 (`DeclarationTable`), `src/binder/namespace.rs` (`MergeKey`, `MergeParticipant`,
 `collect_project_namespace_metadata`), `src/types/layered.rs`.
 

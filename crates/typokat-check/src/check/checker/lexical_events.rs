@@ -39,29 +39,29 @@ fn record_declaration_reservation_index_probe_for_test() {
 }
 
 #[cfg(test)]
-pub(crate) struct LexicalOwnerLookupScope(u64);
+pub struct LexicalOwnerLookupScope(u64);
 
 #[cfg(test)]
 impl LexicalOwnerLookupScope {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(LEXICAL_OWNER_INDEX_PROBES.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         LEXICAL_OWNER_INDEX_PROBES.get().saturating_sub(self.0)
     }
 }
 
 #[cfg(test)]
-pub(crate) struct DeclarationReservationLookupScope(u64);
+pub struct DeclarationReservationLookupScope(u64);
 
 #[cfg(test)]
 impl DeclarationReservationLookupScope {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(DECLARATION_RESERVATION_INDEX_PROBES.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         DECLARATION_RESERVATION_INDEX_PROBES
             .get()
             .saturating_sub(self.0)
@@ -69,23 +69,23 @@ impl DeclarationReservationLookupScope {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ClassSiteId(usize);
+pub struct ClassSiteId(usize);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct MemberSiteId(usize);
+pub struct MemberSiteId(usize);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct CallableSiteId(usize);
+pub struct CallableSiteId(usize);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SourceSite {
-    pub(crate) unit: SourceUnit,
-    pub(crate) source_start: u32,
+pub struct SourceSite {
+    pub unit: SourceUnit,
+    pub source_start: u32,
 }
 
 impl SourceSite {
     #[cfg(test)]
-    pub(crate) const fn user(
+    pub const fn user(
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
         source_start: u32,
@@ -99,12 +99,12 @@ impl SourceSite {
         }
     }
 
-    pub(crate) const fn ordinal(self) -> SourceOrdinal {
+    pub const fn ordinal(self) -> SourceOrdinal {
         source_ordinal(self.unit)
     }
 }
 
-pub(crate) const fn source_ordinal(source: SourceUnit) -> SourceOrdinal {
+pub const fn source_ordinal(source: SourceUnit) -> SourceOrdinal {
     match source {
         SourceUnit::User { module_ordinal, .. } => SourceOrdinal::User(module_ordinal),
         SourceUnit::Library { file_ordinal } => SourceOrdinal::Library(file_ordinal),
@@ -113,23 +113,23 @@ pub(crate) const fn source_ordinal(source: SourceUnit) -> SourceOrdinal {
 
 /// Record positions retained by every callable reservation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SiteTickets<Ticket: Copy = UserRecordTicket> {
-    pub(crate) immediate: Ticket,
-    pub(crate) deferred: Ticket,
-    pub(crate) incomplete: Ticket,
+pub struct SiteTickets<Ticket: Copy = UserRecordTicket> {
+    pub immediate: Ticket,
+    pub deferred: Ticket,
+    pub incomplete: Ticket,
 }
 
 /// Record positions retained by every callable reservation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CallableTickets<Ticket: Copy = UserRecordTicket> {
-    pub(crate) signature: Ticket,
-    pub(crate) deferred: Ticket,
-    pub(crate) incomplete: Ticket,
-    pub(crate) body: Ticket,
+pub struct CallableTickets<Ticket: Copy = UserRecordTicket> {
+    pub signature: Ticket,
+    pub deferred: Ticket,
+    pub incomplete: Ticket,
+    pub body: Ticket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum LexicalOwnerPhase {
+pub enum LexicalOwnerPhase {
     Immediate,
     Deferred,
     Incomplete,
@@ -137,18 +137,18 @@ pub(crate) enum LexicalOwnerPhase {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LexicalOwner<Ticket: Copy = UserRecordTicket> {
-    pub(crate) ticket: Ticket,
+pub struct LexicalOwner<Ticket: Copy = UserRecordTicket> {
+    pub ticket: Ticket,
 }
 
 /// Neutral event reserved for one exact source declaration occurrence.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DeclarationReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) source: SourceSite,
-    pub(crate) kind: DeclarationKind,
-    pub(crate) declaration_span: Span,
-    pub(crate) binding_span: Span,
-    pub(crate) owner: Ticket,
+pub struct DeclarationReservation<Ticket: Copy = UserRecordTicket> {
+    pub source: SourceSite,
+    pub kind: DeclarationKind,
+    pub declaration_span: Span,
+    pub binding_span: Span,
+    pub owner: Ticket,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -159,7 +159,7 @@ struct ExportAliasReservation<Ticket: Copy = UserRecordTicket> {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum InterfaceOccurrenceKind {
+pub enum InterfaceOccurrenceKind {
     Header,
     Member,
     Heritage,
@@ -181,102 +181,102 @@ struct SourceAnchorReservation<Ticket: Copy = UserRecordTicket> {
 
 /// Stable class identities attached after binder/type reservation and before fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassBinding {
-    pub(crate) class_id: ClassId,
-    pub(crate) type_decl: TypeGroupId,
-    pub(crate) value_decl: Option<ValueStorageId>,
-    pub(crate) header_type_params: Vec<TypeParamId>,
+pub struct ClassBinding {
+    pub class_id: ClassId,
+    pub type_decl: TypeGroupId,
+    pub value_decl: Option<ValueStorageId>,
+    pub header_type_params: Vec<TypeParamId>,
 }
 
 /// Stable callable binders attached during the same reservation phase.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CallableBinding {
-    pub(crate) type_params: Vec<TypeParamId>,
+pub struct CallableBinding {
+    pub type_params: Vec<TypeParamId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TopLevelReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) source: SourceSite,
-    pub(crate) tickets: SiteTickets<Ticket>,
-    pub(crate) class: Option<ClassSiteId>,
-    pub(crate) callable: Option<CallableSiteId>,
+pub struct TopLevelReservation<Ticket: Copy = UserRecordTicket> {
+    pub source: SourceSite,
+    pub tickets: SiteTickets<Ticket>,
+    pub class: Option<ClassSiteId>,
+    pub callable: Option<CallableSiteId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NestedStatementReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) source: SourceSite,
-    pub(crate) tickets: SiteTickets<Ticket>,
-    pub(crate) callable: Option<CallableSiteId>,
+pub struct NestedStatementReservation<Ticket: Copy = UserRecordTicket> {
+    pub source: SourceSite,
+    pub tickets: SiteTickets<Ticket>,
+    pub callable: Option<CallableSiteId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DeclaratorReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) source: SourceSite,
-    pub(crate) tickets: SiteTickets<Ticket>,
+pub struct DeclaratorReservation<Ticket: Copy = UserRecordTicket> {
+    pub source: SourceSite,
+    pub tickets: SiteTickets<Ticket>,
 }
 
 /// One lexical owner for an initializer's assignment relation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct InitializerReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) source: SourceSite,
-    pub(crate) owner: Ticket,
+pub struct InitializerReservation<Ticket: Copy = UserRecordTicket> {
+    pub source: SourceSite,
+    pub owner: Ticket,
 }
 
 /// One lexical owner per source class type-parameter default.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassDefaultReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) parameter_index: usize,
-    pub(crate) source: SourceSite,
-    pub(crate) owner: Ticket,
+pub struct ClassDefaultReservation<Ticket: Copy = UserRecordTicket> {
+    pub parameter_index: usize,
+    pub source: SourceSite,
+    pub owner: Ticket,
 }
 
 /// One lexical owner per source class type-parameter constraint.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassConstraintReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) parameter_index: usize,
-    pub(crate) source: SourceSite,
-    pub(crate) owner: Ticket,
+pub struct ClassConstraintReservation<Ticket: Copy = UserRecordTicket> {
+    pub parameter_index: usize,
+    pub source: SourceSite,
+    pub owner: Ticket,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ClassReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) id: ClassSiteId,
-    pub(crate) source: SourceSite,
-    pub(crate) tickets: SiteTickets<Ticket>,
-    pub(crate) constraints: Vec<ClassConstraintReservation<Ticket>>,
-    pub(crate) defaults: Vec<ClassDefaultReservation<Ticket>>,
-    pub(crate) members: Vec<MemberSiteId>,
-    pub(crate) binding: Option<ClassBinding>,
+pub struct ClassReservation<Ticket: Copy = UserRecordTicket> {
+    pub id: ClassSiteId,
+    pub source: SourceSite,
+    pub tickets: SiteTickets<Ticket>,
+    pub constraints: Vec<ClassConstraintReservation<Ticket>>,
+    pub defaults: Vec<ClassDefaultReservation<Ticket>>,
+    pub members: Vec<MemberSiteId>,
+    pub binding: Option<ClassBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MemberReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) id: MemberSiteId,
-    pub(crate) class: ClassSiteId,
-    pub(crate) source: SourceSite,
-    pub(crate) tickets: SiteTickets<Ticket>,
-    pub(crate) callable: Option<CallableSiteId>,
+pub struct MemberReservation<Ticket: Copy = UserRecordTicket> {
+    pub id: MemberSiteId,
+    pub class: ClassSiteId,
+    pub source: SourceSite,
+    pub tickets: SiteTickets<Ticket>,
+    pub callable: Option<CallableSiteId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CallableReservation<Ticket: Copy = UserRecordTicket> {
-    pub(crate) id: CallableSiteId,
-    pub(crate) owner_member: Option<MemberSiteId>,
-    pub(crate) source: SourceSite,
-    pub(crate) tickets: CallableTickets<Ticket>,
+pub struct CallableReservation<Ticket: Copy = UserRecordTicket> {
+    pub id: CallableSiteId,
+    pub owner_member: Option<MemberSiteId>,
+    pub source: SourceSite,
+    pub tickets: CallableTickets<Ticket>,
     type_parameter_count: usize,
-    pub(crate) binding: Option<CallableBinding>,
+    pub binding: Option<CallableBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReservationStateError {
+pub enum ReservationStateError {
     UnknownClass(ClassSiteId),
     DuplicateClassBinding(ClassSiteId),
     DuplicateCallableBinding(CallableSiteId),
     MissingDeclarationOwner(DeclId),
 }
 
-pub(super) trait LexicalReservationAllocator {
+pub trait LexicalReservationAllocator {
     type Event: Copy;
     type Ticket: Copy + PartialEq;
     type Error;
@@ -288,7 +288,7 @@ pub(super) trait LexicalReservationAllocator {
 
 /// Persistent source-site table built before class construction, SCCs, and bodies.
 #[derive(Debug)]
-pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
+pub struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     top_level: Vec<TopLevelReservation<Ticket>>,
     top_level_by_source: FxHashMap<(SourceOrdinal, u32), usize>,
     nested_statements: Vec<NestedStatementReservation<Ticket>>,
@@ -301,7 +301,7 @@ pub(crate) struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     members_by_source: FxHashMap<(SourceOrdinal, u32), usize>,
     callables: Vec<CallableReservation<Ticket>>,
     expression_site_tickets: Vec<SiteTickets<Ticket>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     expression_sources: Vec<SourceSite>,
     source_anchors: Vec<SourceAnchorReservation<Ticket>>,
     declarations: Vec<DeclarationReservation<Ticket>>,
@@ -332,7 +332,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             members_by_source: FxHashMap::default(),
             callables: Vec::new(),
             expression_site_tickets: Vec::new(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             expression_sources: Vec::new(),
             source_anchors: Vec::new(),
             declarations: Vec::new(),
@@ -351,7 +351,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
 
 impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     /// Walk one program in lexical order and reserve all top-level/class/callable sites.
-    pub(super) fn reserve_program_with<Allocator>(
+    pub fn reserve_program_with<Allocator>(
         &mut self,
         program: &Program<'_>,
         allocator: &mut Allocator,
@@ -1143,7 +1143,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
         self.reserve_callable(source, event, tickets, None, function, allocator)?;
         self.reserve_parameter_expressions(source, &function.params, allocator)?;
@@ -1169,7 +1169,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
         self.reserve_arrow_callable(source, event, tickets, arrow, allocator)?;
         self.reserve_parameter_expressions(source, &arrow.params, allocator)?;
@@ -1197,7 +1197,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
         self.expression_site_tickets.push(tickets);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
         self.reserve_class(source, class, tickets, allocator)?;
         Ok(())
@@ -1205,45 +1205,41 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
 }
 
 impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
-    pub(crate) fn top_level(&self) -> &[TopLevelReservation<Ticket>] {
+    pub fn top_level(&self) -> &[TopLevelReservation<Ticket>] {
         &self.top_level
     }
 
-    pub(crate) fn classes(&self) -> &[ClassReservation<Ticket>] {
+    pub fn classes(&self) -> &[ClassReservation<Ticket>] {
         &self.classes
     }
 
-    pub(crate) fn class(&self, id: ClassSiteId) -> Option<&ClassReservation<Ticket>> {
+    pub fn class(&self, id: ClassSiteId) -> Option<&ClassReservation<Ticket>> {
         self.classes.get(id.0)
     }
 
-    pub(crate) fn class_at(&self, source: SourceOrdinal, source_start: u32) -> Option<ClassSiteId> {
+    pub fn class_at(&self, source: SourceOrdinal, source_start: u32) -> Option<ClassSiteId> {
         self.classes_by_source
             .get(&(source, source_start))
             .and_then(|ids| ids.first())
             .copied()
     }
 
-    pub(crate) fn member(&self, id: MemberSiteId) -> Option<&MemberReservation<Ticket>> {
+    pub fn member(&self, id: MemberSiteId) -> Option<&MemberReservation<Ticket>> {
         self.members.get(id.0)
     }
 
-    pub(crate) fn callable(&self, id: CallableSiteId) -> Option<&CallableReservation<Ticket>> {
+    pub fn callable(&self, id: CallableSiteId) -> Option<&CallableReservation<Ticket>> {
         self.callables.get(id.0)
     }
 
-    pub(crate) fn callable_at(
-        &self,
-        source: SourceOrdinal,
-        source_start: u32,
-    ) -> Option<CallableSiteId> {
+    pub fn callable_at(&self, source: SourceOrdinal, source_start: u32) -> Option<CallableSiteId> {
         self.callables_by_source
             .get(&(source, source_start))
             .and_then(|ids| ids.first())
             .copied()
     }
 
-    pub(crate) fn attach_declaration_owner(
+    pub fn attach_declaration_owner(
         &mut self,
         declaration: DeclId,
         source: SourceOrdinal,
@@ -1274,7 +1270,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Ok(())
     }
 
-    pub(crate) fn export_alias_owner(
+    pub fn export_alias_owner(
         &self,
         source: SourceOrdinal,
         local_span: Span,
@@ -1289,19 +1285,19 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         })
     }
 
-    pub(crate) fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner<Ticket>> {
+    pub fn declaration_owner(&self, declaration: DeclId) -> Option<LexicalOwner<Ticket>> {
         self.declaration_reservation(declaration)
             .map(|reservation| LexicalOwner {
                 ticket: reservation.owner,
             })
     }
 
-    pub(crate) fn declaration_source(&self, declaration: DeclId) -> Option<SourceSite> {
+    pub fn declaration_source(&self, declaration: DeclId) -> Option<SourceSite> {
         self.declaration_reservation(declaration)
             .map(|reservation| reservation.source)
     }
 
-    pub(crate) fn declaration_reservation(
+    pub fn declaration_reservation(
         &self,
         declaration: DeclId,
     ) -> Option<&DeclarationReservation<Ticket>> {
@@ -1312,7 +1308,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             .and_then(|index| self.declarations.get(*index))
     }
 
-    pub(crate) fn interface_occurrence_owner(
+    pub fn interface_occurrence_owner(
         &self,
         declaration: DeclId,
         kind: InterfaceOccurrenceKind,
@@ -1332,7 +1328,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Some(occurrence.owner)
     }
 
-    pub(crate) fn owner_at(
+    pub fn owner_at(
         &self,
         source: SourceOrdinal,
         source_start: u32,
@@ -1385,7 +1381,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Some(LexicalOwner { ticket })
     }
 
-    pub(crate) fn attach_class_binding(
+    pub fn attach_class_binding(
         &mut self,
         site: ClassSiteId,
         binding: ClassBinding,
@@ -1401,7 +1397,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     }
 
     /// Allocate every callable binder during reservation, before class fill or bodies.
-    pub(crate) fn reserve_callable_type_params(
+    pub fn reserve_callable_type_params(
         &mut self,
         next_type_param: &mut u32,
     ) -> Result<(), ReservationStateError> {
@@ -1423,7 +1419,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Ok(())
     }
 
-    pub(crate) fn tickets(&self) -> Vec<Ticket> {
+    pub fn tickets(&self) -> Vec<Ticket> {
         let mut tickets = Vec::new();
         tickets.extend(
             self.declarations
@@ -1466,30 +1462,26 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         tickets
     }
 
-    pub(crate) fn initializer_owner_at(
-        &self,
-        source: SourceUnit,
-        source_start: u32,
-    ) -> Option<Ticket> {
+    pub fn initializer_owner_at(&self, source: SourceUnit, source_start: u32) -> Option<Ticket> {
         self.initializers_by_source
             .get(&(source, source_start))
             .and_then(|index| self.initializers.get(*index))
             .map(|initializer| initializer.owner)
     }
 
-    pub(crate) fn retain_source_anchor(&mut self, source: SourceSite, owner: Ticket) {
+    pub fn retain_source_anchor(&mut self, source: SourceSite, owner: Ticket) {
         self.source_anchors
             .push(SourceAnchorReservation { source, owner });
     }
 
-    pub(crate) fn source_anchor_tickets(&self) -> Vec<Ticket> {
+    pub fn source_anchor_tickets(&self) -> Vec<Ticket> {
         self.source_anchors
             .iter()
             .map(|anchor| anchor.owner)
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn structural_source_sites(&self) -> Vec<SourceSite> {
         let mut sites = Vec::new();
         sites.extend(
@@ -1539,7 +1531,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         sites
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn retained_source_sites(&self) -> Vec<SourceSite> {
         self.source_anchors
             .iter()
@@ -1548,8 +1540,8 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn retained_source_units(&self) -> Vec<SourceUnit> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn retained_source_units(&self) -> Vec<SourceUnit> {
         self.retained_source_sites()
             .into_iter()
             .map(|site| site.unit)
@@ -1558,7 +1550,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
 }
 
 impl<Ticket: Copy + Ord> LexicalReservations<Ticket> {
-    pub(crate) fn class_ticket_owners(&self) -> BTreeMap<Ticket, ClassId> {
+    pub fn class_ticket_owners(&self) -> BTreeMap<Ticket, ClassId> {
         let mut owners = BTreeMap::new();
         let insert = |owners: &mut BTreeMap<Ticket, ClassId>, ticket, class| {
             let previous = owners.insert(ticket, class);

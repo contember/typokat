@@ -177,3 +177,10 @@ independent reviewer; fixes return to the implementation agent before closure.
   seven normal dependencies are limited to `core`, `types`, `binder`, and the
   Oxc allocator/AST/parser/span stack; it has no semantic-checker or reporting
   edge. The full gate remains 1,287 passed / 16 ignored with clean clippy.
+- 2026-07-28: `typokat-check` now owns all 105 checker/inference/flow Rust files
+  and the byte-identical minimal production prelude. The crate depends only on
+  lower workspace layers plus its direct Oxc/hash utilities; no library or
+  driver edge exists. All 816 original checker test attributes moved intact,
+  and a new replay-scanner regression pins exclusion of feature-gated support
+  code from the production manifest. Workspace gate: 1,288 passed / 16 ignored,
+  unchanged replay/profile digests, clean all-target clippy.

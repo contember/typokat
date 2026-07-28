@@ -6,7 +6,7 @@ use crate::source::LibraryFileOrdinal;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LibraryEventId(usize);
+pub struct LibraryEventId(usize);
 
 impl LibraryEventId {
     const fn index(self) -> usize {
@@ -15,28 +15,28 @@ impl LibraryEventId {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LibraryRecordTicket {
-    pub(crate) event: LibraryEventId,
-    pub(crate) record_ordinal: usize,
+pub struct LibraryRecordTicket {
+    pub event: LibraryEventId,
+    pub record_ordinal: usize,
 }
 
-pub(crate) const fn library_record_ticket_key(ticket: LibraryRecordTicket) -> (usize, usize) {
+pub const fn library_record_ticket_key(ticket: LibraryRecordTicket) -> (usize, usize) {
     (ticket.event.index(), ticket.record_ordinal)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LibraryReservedEvent {
-    pub(crate) id: LibraryEventId,
-    pub(crate) primary: LibraryRecordTicket,
+pub struct LibraryReservedEvent {
+    pub id: LibraryEventId,
+    pub primary: LibraryRecordTicket,
 }
 
 /// The total library replay order. Field order is intentional.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LibraryEventKey {
-    pub(crate) file_ordinal: LibraryFileOrdinal,
-    pub(crate) source_start: u32,
-    pub(crate) event_ordinal: usize,
-    pub(crate) record_ordinal: usize,
+pub struct LibraryEventKey {
+    pub file_ordinal: LibraryFileOrdinal,
+    pub source_start: u32,
+    pub event_ordinal: usize,
+    pub record_ordinal: usize,
 }
 
 #[derive(Debug)]
@@ -54,7 +54,7 @@ enum LibraryCompletion {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum LibraryEventLedgerError {
+pub enum LibraryEventLedgerError {
     UnknownEvent(LibraryEventId),
     UnknownRecord(LibraryRecordTicket),
     DuplicateCompletion(LibraryRecordTicket),
@@ -62,21 +62,21 @@ pub(crate) enum LibraryEventLedgerError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LibraryEventLedgerSnapshot {
-    pub(crate) reserved_records: usize,
-    pub(crate) filled_records: usize,
-    pub(crate) reserved_file_ordinals: Vec<LibraryFileOrdinal>,
+pub struct LibraryEventLedgerSnapshot {
+    pub reserved_records: usize,
+    pub filled_records: usize,
+    pub reserved_file_ordinals: Vec<LibraryFileOrdinal>,
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct LibraryEventLedger {
+pub struct LibraryEventLedger {
     events: Vec<LibraryEventMeta>,
     next_event_ordinal: BTreeMap<LibraryFileOrdinal, usize>,
     completions: BTreeMap<LibraryEventKey, LibraryCompletion>,
 }
 
 impl LibraryEventLedger {
-    pub(crate) fn replay_ticket_owners(&self) -> BTreeMap<(usize, usize), LibraryEventKey> {
+    pub fn replay_ticket_owners(&self) -> BTreeMap<(usize, usize), LibraryEventKey> {
         self.events
             .iter()
             .enumerate()
@@ -96,7 +96,7 @@ impl LibraryEventLedger {
             .collect()
     }
 
-    pub(crate) fn reserve_event(
+    pub fn reserve_event(
         &mut self,
         file_ordinal: LibraryFileOrdinal,
         source_start: u32,
@@ -124,7 +124,7 @@ impl LibraryEventLedger {
         LibraryReservedEvent { id, primary }
     }
 
-    pub(crate) fn reserve_record(
+    pub fn reserve_record(
         &mut self,
         event: LibraryEventId,
     ) -> Result<LibraryRecordTicket, LibraryEventLedgerError> {
@@ -146,7 +146,7 @@ impl LibraryEventLedger {
         Ok(ticket)
     }
 
-    pub(crate) fn complete(
+    pub fn complete(
         &mut self,
         ticket: LibraryRecordTicket,
         records: Vec<CheckerRecord>,
@@ -166,9 +166,7 @@ impl LibraryEventLedger {
         }
     }
 
-    pub(crate) fn finish(
-        self,
-    ) -> Result<Vec<(LibraryEventKey, CheckerRecord)>, LibraryEventLedgerError> {
+    pub fn finish(self) -> Result<Vec<(LibraryEventKey, CheckerRecord)>, LibraryEventLedgerError> {
         let unfinished = self
             .completions
             .iter()
@@ -191,7 +189,7 @@ impl LibraryEventLedger {
             .collect())
     }
 
-    pub(crate) fn snapshot(&self) -> LibraryEventLedgerSnapshot {
+    pub fn snapshot(&self) -> LibraryEventLedgerSnapshot {
         LibraryEventLedgerSnapshot {
             reserved_records: self.completions.len(),
             filled_records: self
@@ -245,12 +243,12 @@ impl LibraryEventLedger {
     }
 }
 
-pub(crate) struct LibrarySemanticReportingAdapter<'ledger> {
+pub struct LibrarySemanticReportingAdapter<'ledger> {
     ledger: &'ledger mut LibraryEventLedger,
 }
 
 impl<'ledger> LibrarySemanticReportingAdapter<'ledger> {
-    pub(crate) fn new(ledger: &'ledger mut LibraryEventLedger) -> Self {
+    pub fn new(ledger: &'ledger mut LibraryEventLedger) -> Self {
         Self { ledger }
     }
 

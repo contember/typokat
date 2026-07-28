@@ -33,7 +33,7 @@ it); cross-check tsc 6.0.3 --strict.
 
 ## Touch points
 
-`src/check/checker/flowgraph.rs` + `flow.rs` (assigned-ness walk), constructor checking
-(`src/check/checker/classes.rs`), `src/diagnostics.rs`.
+`crates/typokat-check/src/check/checker/flowgraph.rs` + `flow.rs` (assigned-ness walk), constructor checking
+(`crates/typokat-check/src/check/checker/classes.rs`), `src/diagnostics.rs`.
 
 <!-- Origin: completion-roadmap review (2026-07-07); probe: use-before-assign is silent. -->

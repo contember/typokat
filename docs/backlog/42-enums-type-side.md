@@ -34,7 +34,7 @@ the official-suite `syntax:enum` gate opens after landing.
 ## Touch points
 
 `src/binder/` (enum declarations, multi-slot), `src/types/repr.rs` (enum/member types),
-`src/check/checker/` (member access, expression typing), `src/check/flow.rs` (narrowing),
+`crates/typokat-check/src/check/checker/` (member access, expression typing), `crates/typokat-check/src/check/flow.rs` (narrowing),
 official-suite `OUT_OF_SCOPE_SYNTAX`.
 
 <!-- Origin: completion-roadmap review (2026-07-07); architecture §9 keep-column. -->

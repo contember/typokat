@@ -533,7 +533,7 @@ class ContractTests(unittest.TestCase):
 
     @unittest.skipUnless(
         os.environ.get("TYPOKAT_FULL_LIB_ACCEPTANCE") == "1",
-        "RED until the production full-library provider replaces src/prelude.ts",
+        "RED until the production full-library provider replaces crates/typokat-check/src/prelude.ts",
     )
     def test_production_path_acceptance(self) -> None:
         binary = bench.ROOT / "target/release/typokat"

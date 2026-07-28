@@ -125,7 +125,7 @@ witnessed in the structured ledger.
 ## Touch points
 
 `docs/reference/scope.md`, `docs/backlog/completion-1.0.toml`, `tests/manifest.rs`, focused
-conformance corpora, `src/check/checker/annotations/`, checker/binder/type-store paths selected per
+conformance corpora, `crates/typokat-check/src/check/checker/annotations/`, checker/binder/type-store paths selected per
 family, and `src/diagnostics/`.
 
 <!-- Origin: post-sprint scope-to-manifest completeness audit, 2026-07-10. -->

@@ -165,7 +165,7 @@ fn no_library_owned_record_reaches_user_output() {
 
 /// The same proof at the process boundary: the CLI prints nothing for a clean file.
 ///
-/// The CLI still forks from `src/prelude.ts` until the WU7 cutover, so this is the weaker half
+/// The CLI still forks from `crates/typokat-check/src/prelude.ts` until the WU7 cutover, so this is the weaker half
 /// of the pair above — it holds the boundary while the entry point moves.
 #[test]
 fn the_cli_prints_no_record_for_a_clean_file() {

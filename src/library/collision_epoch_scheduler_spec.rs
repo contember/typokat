@@ -412,9 +412,9 @@ fn root_lookup_ordinals_recover_placeholder_roots_and_global_flags() {
 
 #[test]
 fn sparse_graph_access_exposes_no_base_cardinality_for_bitmap_allocation() {
-    let source = include_str!("../check/checker/replay_index.rs");
+    let source = include_str!("../../crates/typokat-check/src/check/checker/replay_index.rs");
     let declaration = source
-        .split_once("pub(crate) trait SparseReplayGraphAccess")
+        .split_once("pub trait SparseReplayGraphAccess")
         .expect("production sparse graph access")
         .1
         .split_once("\n}")
@@ -438,10 +438,10 @@ fn sparse_graph_access_exposes_no_base_cardinality_for_bitmap_allocation() {
 
 #[test]
 fn sparse_scheduler_and_admitted_graph_implementation_are_not_test_only() {
-    let source = include_str!("../check/checker/replay_index.rs");
+    let source = include_str!("../../crates/typokat-check/src/check/checker/replay_index.rs");
     for declaration in [
-        "pub(crate) trait SparseReplayGraphAccess",
-        "pub(crate) fn schedule_sparse_collision_closure",
+        "pub trait SparseReplayGraphAccess",
+        "pub fn schedule_sparse_collision_closure",
         "impl SparseReplayGraphAccess for AdmittedCollisionReplayIndex",
     ] {
         let offset = source.find(declaration).expect("production scheduler seam");

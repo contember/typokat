@@ -17,7 +17,7 @@
 //! selected flat subset while the rest of its corpus remains disabled.
 //!
 //! Every corpus also names the **base** its fixtures are checked against
-//! ([`FixtureBase`]): `src/prelude.ts` (production) or the full TypeScript 6.0.3 default
+//! ([`FixtureBase`]): `crates/typokat-check/src/prelude.ts` (production) or the full TypeScript 6.0.3 default
 //! library. The base is declared once per directory in `MILESTONE_DIRS` and applies to that
 //! directory's `ENABLED_FIXTURES` / `ENABLED_PROJECT_FIXTURES` rows too.
 
@@ -35,7 +35,7 @@ use FixtureBase::{Library, Prelude};
 /// Which type universe a corpus's fixtures are checked in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum FixtureBase {
-    /// `src/prelude.ts` — the production path (`check_source` / `check_project`).
+    /// `crates/typokat-check/src/prelude.ts` — the production path (`check_source` / `check_project`).
     Prelude,
     /// The full TypeScript 6.0.3 default library (`check_source_with_library` /
     /// `check_project_with_library`). Backlog-14 scaffolding: the library entry points are a

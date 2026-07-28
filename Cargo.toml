@@ -36,6 +36,7 @@ typokat-relate = { path = "crates/typokat-relate" }
 typokat-diagnostics = { path = "crates/typokat-diagnostics" }
 typokat-surface = { path = "crates/typokat-surface" }
 typokat-frontend = { path = "crates/typokat-frontend" }
+typokat-check = { path = "crates/typokat-check" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -66,6 +67,7 @@ typokat-relate.workspace = true
 typokat-diagnostics.workspace = true
 typokat-surface.workspace = true
 typokat-frontend.workspace = true
+typokat-check.workspace = true
 
 # ECMAScript Number::toString formatting for numeric template literal construction.
 dragonbox_ecma.workspace = true
@@ -82,7 +84,7 @@ smallvec.workspace = true
 rayon.workspace = true
 
 # Vendored library profile identity (`library/profile.rs`) and the collision replay
-# manifest digest (`check/checker/replay_index.rs`).
+# manifest digest (`crates/typokat-check/src/check/checker/replay_index.rs`).
 sha2.workspace = true
 
 # Allocator for the CLI (`src/main.rs` only — the library must not pick its
@@ -97,6 +99,7 @@ typokat-core = { workspace = true, features = ["test-utils"] }
 typokat-types = { workspace = true, features = ["test-utils"] }
 typokat-binder = { workspace = true, features = ["test-utils"] }
 typokat-relate = { workspace = true, features = ["test-utils"] }
+typokat-check = { workspace = true, features = ["test-utils"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix.workspace = true

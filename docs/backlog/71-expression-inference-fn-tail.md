@@ -60,8 +60,8 @@ concrete known families.
 
 ## Touch points
 
-`src/check/checker/expr.rs`, `src/check/checker/statements.rs`,
-`src/check/checker/calls.rs`, `tests/cases/` (new corpus), backlog `45`/`46`
+`crates/typokat-check/src/check/checker/expr.rs`, `crates/typokat-check/src/check/checker/statements.rs`,
+`crates/typokat-check/src/check/checker/calls.rs`, `tests/cases/` (new corpus), backlog `45`/`46`
 boundaries.
 
 <!-- Origin: sprint-2026-07-10-soundness-review-fixes run log (WU4-A/WU4-B byproducts). -->

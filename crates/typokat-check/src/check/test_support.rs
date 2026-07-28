@@ -5,19 +5,19 @@ use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{run_project_frontend, run_source_frontend, FileInput, ProjectProgram};
 use crate::types::Interner;
 
-pub(crate) struct CheckOutput {
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) parse_errors: Vec<String>,
-    pub(crate) incomplete: Vec<IncompleteSurface>,
+pub struct CheckOutput {
+    pub diagnostics: Vec<Diagnostic>,
+    pub parse_errors: Vec<String>,
+    pub incomplete: Vec<IncompleteSurface>,
 }
 
-pub(crate) struct FileReport {
-    pub(crate) name: String,
-    pub(crate) source: String,
-    pub(crate) output: CheckOutput,
+pub struct FileReport {
+    pub name: String,
+    pub source: String,
+    pub output: CheckOutput,
 }
 
-pub(crate) fn check_source(source: &str) -> CheckOutput {
+pub fn check_source(source: &str) -> CheckOutput {
     let run = run_source_frontend(source, |program| {
         let mut interner = Interner::with_intrinsics();
         check_program(&mut interner, program)
@@ -40,16 +40,13 @@ pub(crate) fn check_source(source: &str) -> CheckOutput {
     }
 }
 
-pub(crate) fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
+pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
     check_project_with_checker(inputs, |interner, units| {
         check_project_programs(interner, units)
     })
 }
 
-pub(crate) fn check_project_with_checker<F>(
-    inputs: Vec<FileInput>,
-    check_project: F,
-) -> Vec<FileReport>
+pub fn check_project_with_checker<F>(inputs: Vec<FileInput>, check_project: F) -> Vec<FileReport>
 where
     F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
 {
@@ -66,7 +63,7 @@ where
     reports_from_run(run.inputs, run.parse_errors, run.product)
 }
 
-pub(crate) fn check_project_with_owned_checker_for_test<F>(
+pub fn check_project_with_owned_checker_for_test<F>(
     inputs: Vec<FileInput>,
     check_project: F,
 ) -> Vec<FileReport>

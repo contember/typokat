@@ -22,7 +22,7 @@ The mutations that trigger it are ordinary: `set_type_param_constraint` (`src/ty
 once per constrained generic binder — and `fill_reserved_type_batch` (`src/types/intern/mod.rs:682`) —
 once per interface SCC.
 
-**Why it is invisible right now:** the production CLI still bootstraps `src/prelude.ts` rather than a
+**Why it is invisible right now:** the production CLI still bootstraps `crates/typokat-check/src/prelude.ts` rather than a
 frozen library base, so `base` is empty and clearing it costs nothing. After the ADR-0012 cutover the
 base holds the whole 82-file library, and the first user generic with a constraint throws all of it
 away — forcing `compute_application_summaries` to re-walk library subgraphs for the remainder of the

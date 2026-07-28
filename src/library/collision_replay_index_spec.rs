@@ -77,6 +77,7 @@ fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
             fields.push(
                 name.trim()
                     .strip_prefix("pub(crate) ")
+                    .or_else(|| name.trim().strip_prefix("pub "))
                     .unwrap_or(name.trim())
                     .to_owned(),
             );
@@ -89,7 +90,7 @@ fn exact_struct_field_names(source: &str, declaration: &str) -> Vec<String> {
 
 #[test]
 fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
-    let source = include_str!("../check/checker/replay_index.rs");
+    let source = include_str!("../../crates/typokat-check/src/check/checker/replay_index.rs");
     let wire_fields = [
         "schema",
         "owner_partition",
@@ -106,7 +107,7 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
         "typed_reference_coverage_misses",
     ];
     assert_eq!(
-        exact_struct_field_names(source, "pub(crate) struct CollisionReplayIndex"),
+        exact_struct_field_names(source, "pub struct CollisionReplayIndex"),
         [
             wire_fields.as_slice(),
             &["canonical_manifest_bytes", "canonical_manifest_sha256",],
@@ -115,7 +116,7 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
     );
 
     let admitted_fields =
-        exact_struct_field_names(source, "pub(crate) struct AdmittedCollisionReplayIndex");
+        exact_struct_field_names(source, "pub struct AdmittedCollisionReplayIndex");
     assert_eq!(
         admitted_fields
             .iter()
@@ -160,7 +161,7 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
         admitted_identity_fields
     );
     let declaration = source
-        .split_once("pub(crate) struct AdmittedCollisionReplayIndex")
+        .split_once("pub struct AdmittedCollisionReplayIndex")
         .expect("admitted replay index declaration")
         .1
         .split_once("\n}")
@@ -176,9 +177,9 @@ fn admitted_replay_index_retains_decoded_rows_but_not_raw_manifest_bytes() {
 
 #[test]
 fn singleton_scc_owner_rows_use_inline_storage_without_changing_the_wire_model() {
-    let source = include_str!("../check/checker/replay_index.rs");
+    let source = include_str!("../../crates/typokat-check/src/check/checker/replay_index.rs");
     let declaration = source
-        .split_once("pub(crate) struct ReplayScc")
+        .split_once("pub struct ReplayScc")
         .expect("replay SCC declaration")
         .1
         .split_once("\n}")
@@ -190,7 +191,7 @@ fn singleton_scc_owner_rows_use_inline_storage_without_changing_the_wire_model()
         "the overwhelmingly singleton SCC partition must not allocate one owner Vec per row"
     );
     assert!(
-        source.contains("pub(crate) scc_membership: Vec<ReplayScc>,"),
+        source.contains("pub scc_membership: Vec<ReplayScc>,"),
         "inline owner storage must preserve the ordered retained SCC row model"
     );
 }
@@ -1007,7 +1008,8 @@ if (condition) {
 #[test]
 fn library_binder_checkpoint_is_unforgeable_and_resumes_only_through_the_continuation() {
     let binder = binder_source("bind.rs");
-    let private_compiler = include_str!("../check/checker/library_compiler.rs");
+    let private_compiler =
+        include_str!("../../crates/typokat-check/src/check/checker/library_compiler.rs");
     let library_compiler = include_str!("compiler.rs");
     let checkpoint_offset = binder
         .find("pub struct LibraryBinderCheckpoint {")

@@ -21,7 +21,7 @@ use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
-pub(crate) const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
+pub const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AlphaBinderKey {
@@ -56,9 +56,9 @@ enum ExactFamilyAttempt {
     Exhausted(Exhaustion),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct QueryDemandMeasure {
+pub struct QueryDemandMeasure {
     pub root_calls: u64,
     pub planner_root_visits: u64,
     pub planner_visits: u64,
@@ -77,9 +77,9 @@ pub(crate) struct QueryDemandMeasure {
     pub evaluation_cycle_exhaustions: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct QuerySourceColdMeasure {
+pub struct QuerySourceColdMeasure {
     pub publication_calls: u64,
     pub publication_query_roots: u64,
     pub publication_edge_visits: u64,
@@ -108,7 +108,7 @@ pub(crate) struct QuerySourceColdMeasure {
     pub exhaustion_frontiers: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static QUERY_DEMAND_MEASURE: std::cell::RefCell<QueryDemandMeasure> =
         std::cell::RefCell::new(QueryDemandMeasure::default());
@@ -121,26 +121,26 @@ thread_local! {
     static EVALUATOR_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct QueryCacheWritesForTest {
-    pub(crate) projection: u64,
-    pub(crate) evaluator: u64,
+pub struct QueryCacheWritesForTest {
+    pub projection: u64,
+    pub evaluator: u64,
 }
 
-#[cfg(test)]
-pub(crate) struct QueryCacheWriteScopeForTest(QueryCacheWritesForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct QueryCacheWriteScopeForTest(QueryCacheWritesForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl QueryCacheWriteScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(QueryCacheWritesForTest {
             projection: PROJECTION_CACHE_WRITES.get(),
             evaluator: EVALUATOR_CACHE_WRITES.get(),
         })
     }
 
-    pub(crate) fn finish(self) -> QueryCacheWritesForTest {
+    pub fn finish(self) -> QueryCacheWritesForTest {
         QueryCacheWritesForTest {
             projection: PROJECTION_CACHE_WRITES
                 .get()
@@ -152,8 +152,8 @@ impl QueryCacheWriteScopeForTest {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn calibrate_query_cache_writes_for_test() -> QueryCacheWritesForTest {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn calibrate_query_cache_writes_for_test() -> QueryCacheWritesForTest {
     let scope = QueryCacheWriteScopeForTest::start();
     let mut projection = FxHashMap::default();
     let mut evaluator = FxHashMap::default();
@@ -172,7 +172,7 @@ fn commit_query_cache_entries(
     pending_projection: FxHashMap<TypeId, TypeId>,
     pending_evaluator: FxHashMap<TypeId, TypeId>,
 ) {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECTION_CACHE_WRITES.set(
             PROJECTION_CACHE_WRITES
@@ -205,13 +205,13 @@ mod cache_write_calibration_tests {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct QuerySourceColdMeasureGuard {
+#[cfg(any(test, feature = "test-utils"))]
+pub struct QuerySourceColdMeasureGuard {
     _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
     _relation_guard: crate::relate::relation::RelationSourceColdMeasureGuard,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for QuerySourceColdMeasureGuard {
     fn drop(&mut self) {
         QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
@@ -224,13 +224,13 @@ impl Drop for QuerySourceColdMeasureGuard {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn reset_query_demand_measure() {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn reset_query_demand_measure() {
     QUERY_DEMAND_MEASURE.with(|measure| *measure.borrow_mut() = QueryDemandMeasure::default());
 }
 
-#[cfg(test)]
-pub(crate) fn start_query_source_cold_measure() -> QuerySourceColdMeasureGuard {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn start_query_source_cold_measure() -> QuerySourceColdMeasureGuard {
     QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
         assert!(
             !enabled.get(),
@@ -248,13 +248,13 @@ pub(crate) fn start_query_source_cold_measure() -> QuerySourceColdMeasureGuard {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn query_demand_measure() -> QueryDemandMeasure {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn query_demand_measure() -> QueryDemandMeasure {
     QUERY_DEMAND_MEASURE.with(|measure| *measure.borrow())
 }
 
-#[cfg(test)]
-pub(crate) fn query_source_cold_measure() -> Option<QuerySourceColdMeasure> {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn query_source_cold_measure() -> Option<QuerySourceColdMeasure> {
     QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
         enabled
             .get()
@@ -262,12 +262,12 @@ pub(crate) fn query_source_cold_measure() -> Option<QuerySourceColdMeasure> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn measure_query_demand(update: impl FnOnce(&mut QueryDemandMeasure)) {
     QUERY_DEMAND_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn measure_query_source_cold(update: impl FnOnce(&mut QuerySourceColdMeasure)) {
     QUERY_SOURCE_COLD_ENABLED.with(|enabled| {
         if enabled.get() {
@@ -277,8 +277,8 @@ fn measure_query_source_cold(update: impl FnOnce(&mut QuerySourceColdMeasure)) {
 }
 
 /// One enclosing semantic-query transaction (savepoint, body, promote-or-discard).
-#[cfg(test)]
-pub(crate) fn record_semantic_query_transaction() {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_semantic_query_transaction() {
     measure_query_source_cold(|measure| measure.semantic_query_transactions += 1);
 }
 
@@ -294,7 +294,7 @@ fn restore_entry<K: std::hash::Hash + Eq, V>(
     };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn measure_publication_children(parent: TypeId, children: &[TypeId]) {
     if !QUERY_SOURCE_COLD_ENABLED.with(std::cell::Cell::get) {
         return;
@@ -314,7 +314,7 @@ fn measure_publication_children(parent: TypeId, children: &[TypeId]) {
 
 /// Immutable published-class boundary consumed by query planning. Implementors
 /// must return poison/pre-publication exhaustion before exposing any template.
-pub(crate) trait PublishedClassLookup {
+pub trait PublishedClassLookup {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface>;
     fn require_class(&self, class: ClassId) -> DemandOutcome<()>;
     fn publication_identity(&self) -> &Arc<()>;
@@ -411,7 +411,7 @@ struct ResetSemanticContext {
 
 /// Pass-local durable semantic-query state. A tainted query changes none of it.
 #[derive(Default)]
-pub(crate) struct SemanticQueryState {
+pub struct SemanticQueryState {
     projection_memo: FxHashMap<TypeId, TypeId>,
     evaluation_memo: FxHashMap<TypeId, TypeId>,
     completed_identities: FxHashMap<CompletedIdentityKey, bool>,
@@ -428,8 +428,8 @@ pub(crate) struct SemanticQueryState {
 impl SemanticQueryState {
     /// Open a speculative layer. Nothing is copied: later writes are journaled and
     /// the relation cache layers itself, so only this layer's own work is at stake.
-    pub(crate) fn savepoint(&mut self) {
-        #[cfg(test)]
+    pub fn savepoint(&mut self) {
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| measure.semantic_state_forks += 1);
         self.savepoints.push(self.journal.len());
         self.relation_cache.savepoint();
@@ -437,8 +437,8 @@ impl SemanticQueryState {
 
     /// Promote the speculative layer. Its writes stay; an enclosing transaction
     /// inherits their undo records, and at the outermost layer they are dropped.
-    pub(crate) fn commit(&mut self) {
-        #[cfg(test)]
+    pub fn commit(&mut self) {
+        #[cfg(any(test, feature = "test-utils"))]
         self.measure_layer_close();
         self.savepoints
             .pop()
@@ -450,8 +450,8 @@ impl SemanticQueryState {
     }
 
     /// Discard the speculative layer, leaving no trace of its writes in the parent.
-    pub(crate) fn rollback(&mut self) {
-        #[cfg(test)]
+    pub fn rollback(&mut self) {
+        #[cfg(any(test, feature = "test-utils"))]
         self.measure_layer_close();
         let mark = self
             .savepoints
@@ -619,7 +619,7 @@ impl SemanticQueryState {
         self.publication_snapshot_identity = Some(Arc::clone(publication_identity));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn measure_layer_close(&self) {
         let mark = self.savepoints.last().copied().unwrap_or_default();
         let journaled = u64::try_from(self.journal.len().saturating_sub(mark))
@@ -630,8 +630,8 @@ impl SemanticQueryState {
         });
     }
 
-    #[cfg(test)]
-    pub(crate) fn durable_lengths(&self) -> (usize, usize, usize, usize, usize) {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn durable_lengths(&self) -> (usize, usize, usize, usize, usize) {
         (
             self.projection_memo.len(),
             self.evaluation_memo.len(),
@@ -641,19 +641,19 @@ impl SemanticQueryState {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn completed_relation_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn completed_relation_len(&self) -> usize {
         self.completed_relations.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn completed_relation_no_candidate_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn completed_relation_no_candidate_len(&self) -> usize {
         self.completed_relation_no_candidates.len()
     }
 }
 
 /// The sole mutable entry boundary for class-reachable semantic queries.
-pub(crate) struct SemanticQueryCoordinator<'a, L: PublishedClassLookup + ?Sized> {
+pub struct SemanticQueryCoordinator<'a, L: PublishedClassLookup + ?Sized> {
     interner: &'a mut Interner,
     published: &'a L,
     state: &'a mut SemanticQueryState,
@@ -661,7 +661,7 @@ pub(crate) struct SemanticQueryCoordinator<'a, L: PublishedClassLookup + ?Sized>
 }
 
 impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
-    pub(crate) fn new(
+    pub fn new(
         interner: &'a mut Interner,
         published: &'a L,
         state: &'a mut SemanticQueryState,
@@ -687,9 +687,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Demand one normalized outer shape. Successful untainted work promotes
     /// projection/evaluator memo entries together; exhaustion promotes nothing.
-    pub(crate) fn demand(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+    pub fn demand(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
         self.observe_outer_class(root);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| measure.root_calls += 1);
         if matches!(
             self.interner.store().tag(root),
@@ -733,7 +733,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Normalize a class application's arguments without erasing its nominal root.
     /// Call/constructor inference needs the class identity until the relation phase.
-    pub(crate) fn normalize_class_application(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
+    pub fn normalize_class_application(&mut self, root: TypeId) -> DemandOutcome<TypeId> {
         self.observe_outer_class(root);
         let Some(application) = self.interner.store().class_instance_type(root).cloned() else {
             return self.demand(root);
@@ -756,7 +756,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     /// Normalize two published roots in one query transaction, then compare their
     /// canonical identities. Interface heritage uses identity rather than
     /// assignability (`1` differs from `number`, and `any` differs from `string`).
-    pub(crate) fn is_identical(&mut self, left: TypeId, right: TypeId) -> DemandOutcome<bool> {
+    pub fn is_identical(&mut self, left: TypeId, right: TypeId) -> DemandOutcome<bool> {
         self.observe_outer_class(left);
         self.observe_outer_class(right);
         if let Some(reason) = publication_exhaustion(
@@ -772,7 +772,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
         let completed_key = Self::completed_identity_key(left, right);
         if let Some(&identical) = self.state.completed_identities.get(&completed_key) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             measure_query_source_cold(|measure| {
                 if identical {
                     measure.durable_identity_yes_hits += 1;
@@ -819,7 +819,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             let cache_tainted = transaction.cache_tainted;
             self.commit_plan(transaction.into_commit());
             if !cache_tainted {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 measure_query_source_cold(|measure| {
                     if *identical {
                         measure.durable_identity_yes_inserts += 1;
@@ -870,7 +870,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         alpha_binders: &mut Vec<(TypeParamId, TypeParamId)>,
         retry: &mut IdentityRetryState,
     ) -> IdentityAttempt {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| measure.identity_recursive_calls += 1);
         let mut left = match plan.normalize(left) {
             Ok(left) => left,
@@ -1611,7 +1611,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     }
 
     /// Plan, normalize, and relate one top-level assignability operation.
-    pub(crate) fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
+    pub fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
         self.observe_outer_class(src);
         self.observe_outer_class(tgt);
         if let Some(reason) = publication_exhaustion(
@@ -1624,7 +1624,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
         let completed_key = CompletedRelationKey::assignable(src, tgt);
         if let Some(completed) = self.state.completed_relations.get(&completed_key).cloned() {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             measure_query_source_cold(|measure| match &completed {
                 CompletedRelationOutcome::Yes => measure.completed_relation_yes_hits += 1,
                 CompletedRelationOutcome::No(_) => measure.completed_relation_no_hits += 1,
@@ -1749,7 +1749,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Structurally collect inference candidates through the same overlays.
     /// Exhaustion discards the attempt's local candidates and every pending write.
-    pub(crate) fn infer_types(
+    pub fn infer_types(
         &mut self,
         source: TypeId,
         target: TypeId,
@@ -1795,7 +1795,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
     /// Check one overload signature against its implementation through the same
     /// projection/evaluation transaction as every other class-reachable relation.
-    pub(crate) fn overload_implementation_compatible(
+    pub fn overload_implementation_compatible(
         &mut self,
         overload: TypeId,
         implementation: TypeId,
@@ -1864,9 +1864,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     }
 
     fn commit_plan(&mut self, transaction: PendingQueryCommit) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| measure.planner_commits += 1);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| {
             measure.durable_evaluation_inserts +=
                 u64::try_from(transaction.pending_evaluator_writes.len()).unwrap();
@@ -1894,7 +1894,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         if self.state.completed_relations.contains_key(&key) {
             return;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| match &completed {
             CompletedRelationOutcome::Yes => measure.completed_relation_yes_inserts += 1,
             CompletedRelationOutcome::No(_) => measure.completed_relation_no_inserts += 1,
@@ -1905,7 +1905,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
 
 /// Immutable overlays consumed by relation before identity/cache/cycle logic.
 #[derive(Default)]
-pub(crate) struct ProjectionPlan<'a> {
+pub struct ProjectionPlan<'a> {
     class_projection_overlay: FxHashMap<TypeId, TypeId>,
     resolved_class_projections: FxHashSet<TypeId>,
     evaluation_overlay: FxHashMap<TypeId, TypeId>,
@@ -2045,7 +2045,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
         next_type_param: u32,
     ) -> Self {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| {
             measure.planner_transactions += 1;
         });
@@ -2089,12 +2089,12 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             | TypeTag::Instantiation
             | TypeTag::Mapped
             | TypeTag::Template => {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 measure_query_demand(|measure| measure.planner_root_visits += 1);
                 self.visit_demand_outer(root);
             }
             TypeTag::Declared => {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 measure_query_demand(|measure| measure.planner_root_visits += 1);
                 self.visit_demand_outer(root);
             }
@@ -2158,7 +2158,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 (self.durable_evaluation_memo.get(&key) != Some(&value)).then_some((key, value))
             })
             .collect();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| {
             if self.planning_tainted {
                 measure.planner_tainted_finishes += 1;
@@ -2193,26 +2193,26 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn visit_with_policy(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             measure_query_demand(|measure| measure.planner_visits += 1);
             measure_query_source_cold(|measure| measure.planner_visits += 1);
         }
         if let Ok(normalized) = self.plan.normalize(ty) {
             if normalized != ty {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 measure_query_demand(|measure| measure.overlay_hits += 1);
                 self.visit_demand_result(normalized, policy);
                 return self.plan.normalize(ty).unwrap_or(normalized);
             }
         }
         if self.visited.contains(&ty) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             measure_query_demand(|measure| measure.visited_hits += 1);
             return ty;
         }
         if !self.visiting.insert(ty) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             measure_query_demand(|measure| measure.reentries += 1);
             return ty;
         }
@@ -2388,7 +2388,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn evaluate_existing(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| measure.pending_evaluations += 1);
         let local = self.working_evaluation_memo.get(&ty).copied();
         let durable = local
@@ -2396,7 +2396,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             .then(|| self.durable_evaluation_memo.get(&ty).copied())
             .flatten();
         if let Some(result) = local.or(durable) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             if durable.is_some() {
                 measure_query_demand(|measure| measure.durable_evaluation_hits += 1);
             }
@@ -2415,7 +2415,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             return ty;
         }
         self.evaluation_expansions += 1;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| measure.evaluation_expansions += 1);
 
         let (outcome, exhausted, cycle_detected) = {
@@ -2444,7 +2444,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 return ty;
             }
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| {
             if result == ty {
                 measure.evaluation_identity_returns += 1;
@@ -2527,7 +2527,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
 
     fn record_evaluation(&mut self, source: TypeId, result: TypeId) {
         self.plan.resolved_evaluations.insert(source);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| measure.evaluation_memo_inserts += 1);
         self.working_evaluation_memo.insert(source, result);
         if source != result {
@@ -2536,7 +2536,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn mark_frontier(&mut self, ty: TypeId, reason: Exhaustion) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| {
             measure.exhaustion_frontiers += 1;
             match &reason {
@@ -2545,7 +2545,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 _ => {}
             }
         });
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| measure.exhaustion_frontiers += 1);
         self.planning_tainted = true;
         if self.first_exhaustion.is_none() {
@@ -2561,7 +2561,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
     published: &L,
     state: &mut SemanticQueryState,
 ) -> Option<Exhaustion> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     measure_query_source_cold(|measure| {
         measure.publication_calls += 1;
         measure.publication_query_roots += u64::try_from(roots.len()).unwrap();
@@ -2579,7 +2579,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
             }
         }
         let children = query_children(store, ty);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         measure_publication_children(ty, &children);
         stack.extend(children);
     }

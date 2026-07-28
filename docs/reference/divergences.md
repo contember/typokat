@@ -635,7 +635,7 @@ primitives) also stays DEFERRED — never a permissive `{}`.
 ## Utility types (M28)
 
 Implemented (M28): the standard aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude,
-Extract, NonNullable, ReturnType, ThisParameterType, and OmitThisParameter) are BUILT-INS via a prelude compilation unit (`src/prelude.ts`). `OmitThisParameter`
+Extract, NonNullable, ReturnType, ThisParameterType, and OmitThisParameter) are BUILT-INS via a prelude compilation unit (`crates/typokat-check/src/prelude.ts`). `OmitThisParameter`
 uses a trusted intrinsic specialization to preserve represented function parameter shape; the other
 aliases use the ordinary mapped/conditional machinery. The same
 canonical unit also supplies the deliberately bounded `console` (`log`/`warn`/`error`) and numeric

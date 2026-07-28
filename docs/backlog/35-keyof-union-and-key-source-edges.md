@@ -26,7 +26,7 @@ the remaining probes above go clean and the README divergence entries are delete
 
 ## Touch points
 
-`src/check/checker/eval.rs` (mapped key iteration),
+`crates/typokat-check/src/check/checker/eval.rs` (mapped key iteration),
 `src/relate/relation.rs` if pattern index signatures land.
 
 **Follow-up (2026-07-10, completeness-accounting sprint WU5):** an ALIASED keyof as a

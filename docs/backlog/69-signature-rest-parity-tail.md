@@ -45,7 +45,7 @@ guards around tuple-rest call arity.
 
 ## Touch points
 
-`src/check/infer/mod.rs`, `src/check/infer/context.rs`, `src/check/checker/calls.rs`,
+`crates/typokat-check/src/check/infer/mod.rs`, `crates/typokat-check/src/check/infer/context.rs`, `crates/typokat-check/src/check/checker/calls.rs`,
 `tests/cases/m32_signature_shape/`.
 
 <!-- Origin: M32 signature-shape adversarial review follow-up (2026-07-09). -->

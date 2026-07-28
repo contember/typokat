@@ -84,7 +84,7 @@ python3 tooling/full-lib-bench/full_lib_bench.py assert-red \
 ```
 
 At WU0A HEAD this succeeds only by observing the expected failure. The normal
-CLI still bootstraps `src/prelude.ts`: `Promise`, DOM, Intl, Date and other
+CLI still bootstraps `crates/typokat-check/src/prelude.ts`: `Promise`, DOM, Intl, Date and other
 library names are missing, native members are absent, regexp literals are
 incomplete, and the clean rows do not exit 0. This is the precise remaining RED
 reason—not a comparator or fixture failure.

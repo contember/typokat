@@ -1,7 +1,13 @@
 //! Packaged-profile ownership witnesses for the source-backed checker compiler.
 
 use super::profile::ExactLibraryProfile;
-use crate::check::checker::library_compiler::{tests, InjectedLibrarySource};
+use crate::check::checker::library_compiler::{
+    assert_exact_full_profile_owned_base_checks_caller_certified_suffix,
+    assert_exact_profile_interner_has_no_pending_reservations,
+    assert_exact_profile_replay_index_is_complete_and_deterministic,
+    assert_exact_profile_selects_complete_native_bridge_identities, run_library_release_probe,
+    InjectedLibrarySource,
+};
 use std::time::Instant;
 
 fn injected_sources(profile: &ExactLibraryProfile) -> Vec<InjectedLibrarySource<'_>> {
@@ -24,7 +30,7 @@ fn injected_sources(profile: &ExactLibraryProfile) -> Vec<InjectedLibrarySource<
 )]
 fn exact_profile_interner_has_no_pending_reservations() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
-    tests::assert_exact_profile_interner_has_no_pending_reservations(&injected_sources(&profile));
+    assert_exact_profile_interner_has_no_pending_reservations(&injected_sources(&profile));
 }
 
 #[test]
@@ -34,9 +40,7 @@ fn exact_profile_interner_has_no_pending_reservations() {
 )]
 fn exact_profile_replay_index_is_complete_and_deterministic() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
-    tests::assert_exact_profile_replay_index_is_complete_and_deterministic(&injected_sources(
-        &profile,
-    ));
+    assert_exact_profile_replay_index_is_complete_and_deterministic(&injected_sources(&profile));
 }
 
 #[test]
@@ -46,9 +50,7 @@ fn exact_profile_replay_index_is_complete_and_deterministic() {
 )]
 fn exact_profile_selects_complete_native_bridge_identities() {
     let profile = ExactLibraryProfile::load_packaged().expect("packaged full-library profile");
-    tests::assert_exact_profile_selects_complete_native_bridge_identities(&injected_sources(
-        &profile,
-    ));
+    assert_exact_profile_selects_complete_native_bridge_identities(&injected_sources(&profile));
 }
 
 #[test]
@@ -59,7 +61,7 @@ fn library_release_probe_once() {
     let profile =
         ExactLibraryProfile::load_packaged().expect("packaged library registry validation");
     let registry_validation = registry_started.elapsed();
-    tests::run_library_release_probe(
+    run_library_release_probe(
         &injected_sources(&profile),
         registry_validation,
         total_started,
@@ -73,7 +75,7 @@ fn library_release_probe_once() {
 )]
 fn exact_full_profile_owned_base_checks_caller_certified_suffix() {
     let profile = ExactLibraryProfile::load_packaged().expect("exact pinned full profile");
-    tests::assert_exact_full_profile_owned_base_checks_caller_certified_suffix(&injected_sources(
+    assert_exact_full_profile_owned_base_checks_caller_certified_suffix(&injected_sources(
         &profile,
     ));
 }

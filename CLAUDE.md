@@ -54,7 +54,7 @@ in [docs/reference/architecture.md](docs/reference/architecture.md)):
   `Relation::No(ReasonChain)` (never a bare `bool`) so reporting runs the same path.
   Carries a cache-soundness fix (architecture §6.3) — regressing it drops errors
   order-dependently, the sharpest bug class in the project.
-- **Statement checker** (`src/check/`) — a flow-sensitive interpreter (a narrowing
+- **Statement checker** (`crates/typokat-check/src/check/`) — a flow-sensitive interpreter (a narrowing
   environment that forks at `if`/`else`/`switch`) plus the generic **inference
   engine** (`infer`, a separate machine from the relation engine). Split into
   `checker/` submodules.

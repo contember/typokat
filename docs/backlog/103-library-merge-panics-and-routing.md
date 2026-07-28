@@ -13,7 +13,7 @@ blocked-by: []
 happen. The classifier exists (`src/library/collision_preflight.rs`) but is never called on real
 input, and the private-rebuild route ADR-0011 mandates is not implemented. Effort XL. **Blocks the
 WU7 CLI cutover**, because refusing every `declare global` is a product regression against
-`src/prelude.ts`.
+`crates/typokat-check/src/prelude.ts`.
 
 ## Problem
 
@@ -85,7 +85,7 @@ proof that no identity of any kind crosses between a private universe and the sh
 
 ## Touch points
 
-`src/binder/bind.rs`, `src/binder/namespace.rs`, `src/check/checker/mod.rs`,
+`src/binder/bind.rs`, `src/binder/namespace.rs`, `crates/typokat-check/src/check/checker/mod.rs`,
 `src/library/collision_preflight.rs`, `src/library/base.rs`, `src/driver.rs`,
 `tooling/full-lib-bench/workloads/collision/`, `tooling/full-lib-bench/workloads/fanout/`.
 

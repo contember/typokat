@@ -28,7 +28,7 @@ shapes; cross-check tsc 6.0.3. Audit indexed access for the same hazard.
 
 ## Touch points
 
-`src/check/checker/annotations.rs` (keyof lowering), `decls.rs` (fill ordering),
+`crates/typokat-check/src/check/checker/annotations.rs` (keyof lowering), `decls.rs` (fill ordering),
 possibly `eval.rs` (demand-driven keyof).
 
 <!-- Origin: warm-ups sprint re-review note 1 (2026-07-05), attribution-proven

@@ -168,7 +168,7 @@ fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
 // SECOND ENTRY POINT — not a second loader. There is exactly one [`FrozenLibraryBase`] and one
 // `LibraryCompiler` in the process; the siblings only choose which base a check forks from, so
 // backlog 14's prohibition on forking a second *ambient-loading path* is not engaged. They exist
-// so the backlog-14 acceptance corpus can run before production moves off `src/prelude.ts`, and
+// so the backlog-14 acceptance corpus can run before production moves off `crates/typokat-check/src/prelude.ts`, and
 // the WU7 cutover deletes them once `check_source`/`check_project` fork from the library base
 // themselves.
 
@@ -199,7 +199,7 @@ where
     })
 }
 
-/// [`check_source`] against the full default library instead of `src/prelude.ts`.
+/// [`check_source`] against the full default library instead of `crates/typokat-check/src/prelude.ts`.
 ///
 /// Temporary backlog-14 scaffolding — see the section comment above. `Err` means the library base
 /// itself could not be published or forked; ordinary type/parse problems ride in the
@@ -239,7 +239,7 @@ fn check_source_with_library_inner(
     }
 }
 
-/// [`check_project`] against the full default library instead of `src/prelude.ts`.
+/// [`check_project`] against the full default library instead of `crates/typokat-check/src/prelude.ts`.
 ///
 /// Temporary backlog-14 scaffolding — see the section comment above. The module graph, dependency
 /// order, and per-input report order are the production ones; only the base differs.

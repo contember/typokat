@@ -33,7 +33,7 @@ predicate-signature assignability; cross-check tsc 6.0.3 --strict.
 
 ## Touch points
 
-`src/types/repr.rs` (predicates on signatures), `src/check/checker/annotations/` (lowering `x is T`
-/ `asserts`), `src/check/checker/flowgraph/` and `src/check/flow.rs` (guard-call recognition).
+`src/types/repr.rs` (predicates on signatures), `crates/typokat-check/src/check/checker/annotations/` (lowering `x is T`
+/ `asserts`), `crates/typokat-check/src/check/checker/flowgraph/` and `crates/typokat-check/src/check/flow.rs` (guard-call recognition).
 
 <!-- Origin: completion-roadmap review (2026-07-07); M23 deferral list (README known limitations). -->

@@ -47,7 +47,7 @@ unions. Cross-check `tsc 6.0.3`. Extend `m25_conditional_types/`.
 
 ## Touch points
 
-`infer` candidate resolution in the inference engine (`src/check/infer.rs`),
+`infer` candidate resolution in the inference engine (`crates/typokat-check/src/check/infer.rs`),
 `m25_conditional_types/` corpus, `docs/reference/divergences.md`.
 
 <!-- Origin: 2026-07-07 divergence-ledger audit (verified vs tsc 6.0.3); corrects the

@@ -5,9 +5,9 @@
 pub mod checker;
 pub mod flow;
 pub mod infer;
-pub(crate) mod query;
-#[cfg(test)]
-pub(crate) mod test_support;
+pub mod query;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_support;
 
-pub(crate) use checker::check_project_programs;
+pub use checker::check_project_programs;
 pub use checker::{check_program, CheckResult};

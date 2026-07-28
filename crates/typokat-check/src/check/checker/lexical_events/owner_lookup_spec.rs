@@ -470,9 +470,9 @@ fn declaration_reservation_lookup_is_direct_exact_and_table_independent() {
 #[test]
 fn owner_and_declaration_lookup_hot_paths_have_no_scan_fallback() {
     let source = include_str!("../lexical_events.rs");
-    let owner_start = source.find("    pub(crate) fn owner_at(").unwrap();
+    let owner_start = source.find("    pub fn owner_at(").unwrap();
     let owner_end = source[owner_start..]
-        .find("    pub(crate) fn attach_class_binding(")
+        .find("    pub fn attach_class_binding(")
         .map(|offset| owner_start + offset)
         .unwrap();
     let owner_at = &source[owner_start..owner_end];
@@ -490,11 +490,9 @@ fn owner_and_declaration_lookup_hot_paths_have_no_scan_fallback() {
     assert!(!owner_at.contains(".iter()"));
     assert!(!owner_at.contains(".find("));
 
-    let declaration_start = source
-        .find("    pub(crate) fn declaration_reservation(")
-        .unwrap();
+    let declaration_start = source.find("    pub fn declaration_reservation(").unwrap();
     let declaration_end = source[declaration_start..]
-        .find("    pub(crate) fn interface_occurrence_owner(")
+        .find("    pub fn interface_occurrence_owner(")
         .map(|offset| declaration_start + offset)
         .unwrap();
     let declaration_lookup = &source[declaration_start..declaration_end];

@@ -773,15 +773,11 @@ fn collision_free_capability_is_issued_only_for_a_shared_receipt() {
     );
 
     let checker_owner = fs::read_to_string(
-        crate::test_support::repository_root().join("src/check/checker/library_compiler.rs"),
+        crate::test_support::repository_root()
+            .join("crates/typokat-check/src/check/checker/library_compiler.rs"),
     )
     .expect("checker library compiler source");
     assert_eq!(checker_owner.matches(&constructor).count(), 1);
-    assert_eq!(
-        checker_owner
-            .matches("pub(crate) fn issue() -> Self")
-            .count(),
-        1
-    );
+    assert_eq!(checker_owner.matches("pub fn issue() -> Self").count(), 1);
     assert_eq!(issuers, ["collision_preflight.rs"]);
 }

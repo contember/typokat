@@ -126,12 +126,18 @@ values — none of which the implementation's own tests surfaced.
 
 ```
 src/
-  driver.rs, main.rs, span.rs, diagnostics.rs   pipeline, CLI, spans, diagnostics + rendering
-  prelude.ts                                    the built-in utility types + bounded ambient compilation unit
-  types/    store · intern (hash-consing) · repr · hash · substitute   the type store
-  binder/   scope · symbol (multi-slot) · bind                          scope graph
-  check/    checker (incl. flowgraph) · infer (inference engine) · flow (nodes + narrowing ops)   the checkers
-  relate/   relation (is_assignable, cycle stack, reasons) · cache      the relation engine
+  driver.rs, library/, main.rs                  orchestration, library loading, and CLI
+crates/
+  typokat-core/                                 spans and shared source identities
+  typokat-types/                                type store, interning, representation, substitution
+  typokat-binder/                               scope graph and multi-slot symbols
+  typokat-relate/                               assignability, cycle stack, reasons, and cache
+  typokat-diagnostics/                          diagnostics and rendering
+  typokat-surface/                              exhaustive Oxc AST surface classification
+  typokat-frontend/                             parser and project dependency ordering
+  typokat-check/
+    src/prelude.ts                              built-in utility types and bounded ambient unit
+    src/check/                                  checker, inference engine, and flow analysis
 tests/
   conformance.rs        marker-driven harness (MILESTONE_DIRS enables m0..m33 + bug-fix corpora)
   cases/mN_*/           the conformance corpus (the spec)

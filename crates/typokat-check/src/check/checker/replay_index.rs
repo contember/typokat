@@ -20,7 +20,7 @@ const COLLISION_REPLAY_MANIFEST_DOMAIN: &[u8] = b"typokat-collision-replay-index
 
 /// Stable semantic publication domains. Tag order is part of the manifest wire contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ReplayOwner {
+pub enum ReplayOwner {
     TypeGroup(TypeGroupId),
     Value(ValueStorageId),
     Namespace(NamespaceId),
@@ -59,7 +59,7 @@ impl Ord for ReplayOwner {
 }
 
 impl ReplayOwner {
-    pub(crate) const fn tag(self) -> u8 {
+    pub const fn tag(self) -> u8 {
         match self {
             Self::TypeGroup(_) => 0,
             Self::Value(_) => 1,
@@ -90,30 +90,30 @@ impl ReplayOwner {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayOwnerSite {
-    pub(crate) owner: ReplayOwner,
-    pub(crate) file_ordinal: LibraryFileOrdinal,
-    pub(crate) span: Span,
+pub struct ReplayOwnerSite {
+    pub owner: ReplayOwner,
+    pub file_ordinal: LibraryFileOrdinal,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayRootSlot {
-    pub(crate) name: String,
-    pub(crate) value: Option<ValueStorageId>,
-    pub(crate) ty: Option<TypeGroupId>,
-    pub(crate) namespace: Option<NamespaceId>,
-    pub(crate) global_object_contributor: bool,
-    pub(crate) explicit_global_this: bool,
+pub struct ReplayRootSlot {
+    pub name: String,
+    pub value: Option<ValueStorageId>,
+    pub ty: Option<TypeGroupId>,
+    pub namespace: Option<NamespaceId>,
+    pub global_object_contributor: bool,
+    pub explicit_global_this: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ReplayReverseEdge {
-    pub(crate) dependency: ReplayOwner,
-    pub(crate) consumer: ReplayOwner,
+pub struct ReplayReverseEdge {
+    pub dependency: ReplayOwner,
+    pub consumer: ReplayOwner,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum RootSlotKind {
+pub enum RootSlotKind {
     Value,
     Type,
     Namespace,
@@ -130,89 +130,89 @@ impl RootSlotKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ReplayDependencyKey {
+pub enum ReplayDependencyKey {
     Owner(ReplayOwner),
     RootSlot { name: String, slot: RootSlotKind },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ReplayRootConsumer {
-    pub(crate) name: String,
-    pub(crate) slot: RootSlotKind,
-    pub(crate) consumer: ReplayOwner,
+pub struct ReplayRootConsumer {
+    pub name: String,
+    pub slot: RootSlotKind,
+    pub consumer: ReplayOwner,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayScc {
-    pub(crate) replay_ordinal: u32,
-    pub(crate) owners: SmallVec<[ReplayOwner; 1]>,
+pub struct ReplayScc {
+    pub replay_ordinal: u32,
+    pub owners: SmallVec<[ReplayOwner; 1]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayBaselineRecord {
-    pub(crate) owner: ReplayOwner,
-    pub(crate) record_count: u64,
-    pub(crate) digest: [u8; 32],
+pub struct ReplayBaselineRecord {
+    pub owner: ReplayOwner,
+    pub record_count: u64,
+    pub digest: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CollisionReplayIndex {
-    pub(crate) schema: u32,
-    pub(crate) owner_partition: Vec<ReplayOwner>,
-    pub(crate) root_slots: Vec<ReplayRootSlot>,
-    pub(crate) owner_sites: Vec<ReplayOwnerSite>,
-    pub(crate) reverse_edges: Vec<ReplayReverseEdge>,
-    pub(crate) root_slot_consumers: Vec<ReplayRootConsumer>,
-    pub(crate) scc_membership: Vec<ReplayScc>,
-    pub(crate) statement_owners: Vec<(LibraryEventKey, ReplayOwner)>,
-    pub(crate) baseline_records: Vec<ReplayBaselineRecord>,
-    pub(crate) unowned_demand_count: u64,
-    pub(crate) invalid_owner_site_count: u64,
-    pub(crate) noncanonical_edge_count: u64,
-    pub(crate) typed_reference_coverage_misses: u64,
-    pub(crate) canonical_manifest_bytes: Vec<u8>,
-    pub(crate) canonical_manifest_sha256: [u8; 32],
+pub struct CollisionReplayIndex {
+    pub schema: u32,
+    pub owner_partition: Vec<ReplayOwner>,
+    pub root_slots: Vec<ReplayRootSlot>,
+    pub owner_sites: Vec<ReplayOwnerSite>,
+    pub reverse_edges: Vec<ReplayReverseEdge>,
+    pub root_slot_consumers: Vec<ReplayRootConsumer>,
+    pub scc_membership: Vec<ReplayScc>,
+    pub statement_owners: Vec<(LibraryEventKey, ReplayOwner)>,
+    pub baseline_records: Vec<ReplayBaselineRecord>,
+    pub unowned_demand_count: u64,
+    pub invalid_owner_site_count: u64,
+    pub noncanonical_edge_count: u64,
+    pub typed_reference_coverage_misses: u64,
+    pub canonical_manifest_bytes: Vec<u8>,
+    pub canonical_manifest_sha256: [u8; 32],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AdmittedCollisionReplayIndex {
-    pub(crate) schema: u32,
-    pub(crate) owner_partition: Vec<ReplayOwner>,
-    pub(crate) root_slots: Vec<ReplayRootSlot>,
-    pub(crate) owner_sites: Vec<ReplayOwnerSite>,
-    pub(crate) reverse_edges: Vec<ReplayReverseEdge>,
-    pub(crate) root_slot_consumers: Vec<ReplayRootConsumer>,
-    pub(crate) scc_membership: Vec<ReplayScc>,
-    pub(crate) statement_owners: Vec<(LibraryEventKey, ReplayOwner)>,
-    pub(crate) baseline_records: Vec<ReplayBaselineRecord>,
-    pub(crate) unowned_demand_count: u64,
-    pub(crate) invalid_owner_site_count: u64,
-    pub(crate) noncanonical_edge_count: u64,
-    pub(crate) typed_reference_coverage_misses: u64,
-    pub(crate) owner_to_scc: Vec<u32>,
-    pub(crate) scc_owner_ranges: Vec<ReplayRowRange>,
-    pub(crate) scc_owners: Vec<ReplayOwner>,
-    pub(crate) reverse_scc_offsets: Vec<u32>,
-    pub(crate) reverse_scc_edges: Vec<u32>,
-    pub(crate) root_slot_lookup: rustc_hash::FxHashMap<Box<str>, ReplayRootLookup>,
-    pub(crate) owner_site_ranges: Vec<ReplayRowRange>,
-    pub(crate) baseline_record_ranges: Vec<ReplayRowRange>,
-    pub(crate) canonical_manifest_len: usize,
-    pub(crate) canonical_manifest_sha256: [u8; 32],
+pub struct AdmittedCollisionReplayIndex {
+    pub schema: u32,
+    pub owner_partition: Vec<ReplayOwner>,
+    pub root_slots: Vec<ReplayRootSlot>,
+    pub owner_sites: Vec<ReplayOwnerSite>,
+    pub reverse_edges: Vec<ReplayReverseEdge>,
+    pub root_slot_consumers: Vec<ReplayRootConsumer>,
+    pub scc_membership: Vec<ReplayScc>,
+    pub statement_owners: Vec<(LibraryEventKey, ReplayOwner)>,
+    pub baseline_records: Vec<ReplayBaselineRecord>,
+    pub unowned_demand_count: u64,
+    pub invalid_owner_site_count: u64,
+    pub noncanonical_edge_count: u64,
+    pub typed_reference_coverage_misses: u64,
+    pub owner_to_scc: Vec<u32>,
+    pub scc_owner_ranges: Vec<ReplayRowRange>,
+    pub scc_owners: Vec<ReplayOwner>,
+    pub reverse_scc_offsets: Vec<u32>,
+    pub reverse_scc_edges: Vec<u32>,
+    pub root_slot_lookup: rustc_hash::FxHashMap<Box<str>, ReplayRootLookup>,
+    pub owner_site_ranges: Vec<ReplayRowRange>,
+    pub baseline_record_ranges: Vec<ReplayRowRange>,
+    pub canonical_manifest_len: usize,
+    pub canonical_manifest_sha256: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayRowRange {
+pub struct ReplayRowRange {
     start: u32,
     end: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayRootLookup {
-    pub(crate) root_ordinal: u32,
-    pub(crate) value_seeds: SmallVec<[ReplayOwner; 1]>,
-    pub(crate) type_seeds: SmallVec<[ReplayOwner; 1]>,
-    pub(crate) namespace_seeds: SmallVec<[ReplayOwner; 1]>,
+pub struct ReplayRootLookup {
+    pub root_ordinal: u32,
+    pub value_seeds: SmallVec<[ReplayOwner; 1]>,
+    pub type_seeds: SmallVec<[ReplayOwner; 1]>,
+    pub namespace_seeds: SmallVec<[ReplayOwner; 1]>,
 }
 
 impl ReplayRootLookup {
@@ -241,13 +241,13 @@ impl ReplayRowRange {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
-pub(crate) enum SparseReplayScheduleError {
+pub enum SparseReplayScheduleError {
     UnknownSeed(ReplayOwner),
     MissingScc(u32),
 }
 
 #[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
-pub(crate) trait SparseReplayGraphAccess {
+pub trait SparseReplayGraphAccess {
     fn owner_scc(&self, owner: ReplayOwner) -> Option<u32>;
     fn reverse_sccs(&self, scc: u32) -> Option<&[u32]>;
     fn scc_owners(&self, scc: u32) -> Option<&[ReplayOwner]>;
@@ -261,7 +261,7 @@ pub(crate) trait SparseReplayGraphAccess {
 }
 
 #[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
-pub(crate) fn schedule_sparse_collision_closure<G: SparseReplayGraphAccess + ?Sized>(
+pub fn schedule_sparse_collision_closure<G: SparseReplayGraphAccess + ?Sized>(
     graph: &G,
     seeds: &[ReplayOwner],
 ) -> Result<Vec<ReplayOwner>, SparseReplayScheduleError> {
@@ -331,14 +331,14 @@ impl SparseReplayGraphAccess for AdmittedCollisionReplayIndex {
 }
 
 impl AdmittedCollisionReplayIndex {
-    #[cfg(test)]
-    pub(crate) const fn canonical_manifest_len(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub const fn canonical_manifest_len(&self) -> usize {
         self.canonical_manifest_len
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplayIndexAdmissionError {
+pub enum ReplayIndexAdmissionError {
     InvalidEncoding,
     InvalidOwnerPartition,
     InvalidRootIndex,
@@ -352,16 +352,16 @@ pub(crate) enum ReplayIndexAdmissionError {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ReplayIndexAdmissionLimits<'roots> {
-    pub(crate) type_groups: usize,
-    pub(crate) value_storages: usize,
-    pub(crate) namespaces: usize,
-    pub(crate) classes: usize,
-    pub(crate) source_files: usize,
-    pub(crate) roots: &'roots [ReplayRootIdentity],
+pub struct ReplayIndexAdmissionLimits<'roots> {
+    pub type_groups: usize,
+    pub value_storages: usize,
+    pub namespaces: usize,
+    pub classes: usize,
+    pub source_files: usize,
+    pub roots: &'roots [ReplayRootIdentity],
 }
 
-pub(crate) type ReplayRootIdentity = (
+pub type ReplayRootIdentity = (
     String,
     Option<ValueStorageId>,
     Option<TypeGroupId>,
@@ -369,7 +369,7 @@ pub(crate) type ReplayRootIdentity = (
 );
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ReplayIndexGenerationError {
+pub enum ReplayIndexGenerationError {
     UnownedDemands {
         count: u64,
         samples: Vec<ReplayUnownedDemandSample>,
@@ -396,13 +396,13 @@ pub(crate) enum ReplayIndexGenerationError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ReplayUnownedDemandSample {
-    pub(crate) dependency: ReplayDependencyKey,
-    pub(crate) boundary: &'static str,
+pub struct ReplayUnownedDemandSample {
+    pub dependency: ReplayDependencyKey,
+    pub boundary: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum ReplayCoverageMiss {
+pub enum ReplayCoverageMiss {
     Boundary(&'static str),
     Dependency {
         consumer: ReplayOwner,
@@ -424,19 +424,19 @@ struct ReplayTraceState {
 
 /// Pass-local, source-generation-only trace. Clones share one compiler-owned collector.
 #[derive(Clone, Default)]
-pub(crate) struct ReplayDependencyTrace {
+pub struct ReplayDependencyTrace {
     state: Rc<RefCell<ReplayTraceState>>,
 }
 
 impl ReplayDependencyTrace {
-    pub(crate) fn scope(&self, owner: ReplayOwner) -> ReplayOwnerScope {
+    pub fn scope(&self, owner: ReplayOwner) -> ReplayOwnerScope {
         self.enter(owner);
         ReplayOwnerScope {
             trace: self.clone(),
             owner,
         }
     }
-    pub(crate) fn new(ticket_owners: BTreeMap<(usize, usize), LibraryEventKey>) -> Self {
+    pub fn new(ticket_owners: BTreeMap<(usize, usize), LibraryEventKey>) -> Self {
         Self {
             state: Rc::new(RefCell::new(ReplayTraceState {
                 ticket_owners,
@@ -445,7 +445,7 @@ impl ReplayDependencyTrace {
         }
     }
 
-    pub(crate) fn statement_owner(&self, ticket: (usize, usize)) -> Option<ReplayOwner> {
+    pub fn statement_owner(&self, ticket: (usize, usize)) -> Option<ReplayOwner> {
         self.state
             .borrow()
             .ticket_owners
@@ -454,15 +454,15 @@ impl ReplayDependencyTrace {
             .map(ReplayOwner::Statement)
     }
 
-    pub(crate) fn current_owner(&self) -> Option<ReplayOwner> {
+    pub fn current_owner(&self) -> Option<ReplayOwner> {
         self.state.borrow().active_owners.last().copied()
     }
 
-    pub(crate) fn enter(&self, owner: ReplayOwner) {
+    pub fn enter(&self, owner: ReplayOwner) {
         self.state.borrow_mut().active_owners.push(owner);
     }
 
-    pub(crate) fn leave(&self, expected: ReplayOwner) {
+    pub fn leave(&self, expected: ReplayOwner) {
         let actual = self.state.borrow_mut().active_owners.pop();
         assert_eq!(
             actual,
@@ -471,15 +471,15 @@ impl ReplayDependencyTrace {
         );
     }
 
-    pub(crate) fn demand(&self, dependency: ReplayOwner) {
+    pub fn demand(&self, dependency: ReplayOwner) {
         self.demand_at(dependency, "owner-demand");
     }
 
-    pub(crate) fn demand_at(&self, dependency: ReplayOwner, boundary: &'static str) {
+    pub fn demand_at(&self, dependency: ReplayOwner, boundary: &'static str) {
         self.demand_key(ReplayDependencyKey::Owner(dependency), boundary);
     }
 
-    pub(crate) fn demand_root_slot(&self, name: &str, slot: RootSlotKind) {
+    pub fn demand_root_slot(&self, name: &str, slot: RootSlotKind) {
         self.demand_key(
             ReplayDependencyKey::RootSlot {
                 name: name.to_owned(),
@@ -489,10 +489,7 @@ impl ReplayDependencyTrace {
         );
     }
 
-    pub(crate) fn observe_typed_demand(
-        &self,
-        boundary: &'static str,
-    ) -> ReplayTypedDemandObservation {
+    pub fn observe_typed_demand(&self, boundary: &'static str) -> ReplayTypedDemandObservation {
         self.state
             .borrow_mut()
             .active_typed_observations
@@ -503,11 +500,7 @@ impl ReplayDependencyTrace {
         }
     }
 
-    pub(crate) fn record_statement_dependency(
-        &self,
-        ticket: (usize, usize),
-        producer: ReplayOwner,
-    ) {
+    pub fn record_statement_dependency(&self, ticket: (usize, usize), producer: ReplayOwner) {
         let mut state = self.state.borrow_mut();
         let Some(key) = state.ticket_owners.get(&ticket).copied() else {
             state.unowned_demand_count = state.unowned_demand_count.saturating_add(1);
@@ -524,11 +517,7 @@ impl ReplayDependencyTrace {
             .insert(ReplayDependencyKey::Owner(producer));
     }
 
-    pub(crate) fn require_dependency(
-        &self,
-        consumer: ReplayOwner,
-        dependency: ReplayOwner,
-    ) -> bool {
+    pub fn require_dependency(&self, consumer: ReplayOwner, dependency: ReplayOwner) -> bool {
         if consumer == dependency {
             return true;
         }
@@ -624,7 +613,7 @@ impl ReplayDependencyTrace {
         (state.unowned_demand_count, 0)
     }
 
-    pub(crate) fn finish(
+    pub fn finish(
         self,
         owner_partition: Vec<ReplayOwner>,
         mut root_slots: Vec<ReplayRootSlot>,
@@ -898,16 +887,13 @@ fn validate_edge_rows(
     u64::try_from(malformed_edges.saturating_add(malformed_roots)).unwrap_or(u64::MAX)
 }
 
-pub(crate) struct ReplayClassLookup<'a> {
+pub struct ReplayClassLookup<'a> {
     published: &'a PublishedClasses,
     trace: Option<ReplayDependencyTrace>,
 }
 
 impl<'a> ReplayClassLookup<'a> {
-    pub(crate) fn new(
-        published: &'a PublishedClasses,
-        trace: Option<ReplayDependencyTrace>,
-    ) -> Self {
+    pub fn new(published: &'a PublishedClasses, trace: Option<ReplayDependencyTrace>) -> Self {
         Self { published, trace }
     }
 }
@@ -939,12 +925,12 @@ impl PublishedClassLookup for ReplayClassLookup<'_> {
     }
 }
 
-pub(crate) struct ReplayOwnerScope {
+pub struct ReplayOwnerScope {
     trace: ReplayDependencyTrace,
     owner: ReplayOwner,
 }
 
-pub(crate) struct ReplayTypedDemandObservation {
+pub struct ReplayTypedDemandObservation {
     trace: ReplayDependencyTrace,
     boundary: &'static str,
 }
@@ -962,7 +948,7 @@ impl Drop for ReplayOwnerScope {
 }
 
 impl CollisionReplayIndex {
-    pub(crate) fn encode(&self) -> Result<Vec<u8>, ReplayIndexGenerationError> {
+    pub fn encode(&self) -> Result<Vec<u8>, ReplayIndexGenerationError> {
         let mut bytes = ManifestBytes::new(COLLISION_REPLAY_MANIFEST_DOMAIN);
         bytes.u32(self.schema);
         bytes.usize(self.owner_partition.len())?;
@@ -1038,7 +1024,7 @@ fn owner_in_bounds(owner: ReplayOwner, limits: ReplayIndexAdmissionLimits<'_>) -
 ///
 /// Admission is the single construction path: it re-checks the generator's structural
 /// guarantees and derives the compact runtime indexes the collision scheduler walks.
-pub(crate) fn admit_generated_collision_replay_index(
+pub fn admit_generated_collision_replay_index(
     decoded: CollisionReplayIndex,
     limits: ReplayIndexAdmissionLimits<'_>,
     expected_manifest_sha256: Option<[u8; 32]>,
@@ -1479,7 +1465,7 @@ fn empty_baseline_digest() -> [u8; 32] {
     Sha256::digest(bytes.finish()).into()
 }
 
-pub(crate) fn baseline_record(
+pub fn baseline_record(
     owner: ReplayOwner,
     records: &[Vec<u8>],
 ) -> Result<ReplayBaselineRecord, ReplayIndexGenerationError> {
@@ -1930,88 +1916,88 @@ mod tests {
     }
 
     const TEST_ONLY_REPLAY_SOURCE_PATHS: &[&str] = &[
-        "src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs",
-        "src/check/checker/calls/contextual_rewalk_scaling_spec.rs",
-        "src/check/checker/declaration_owner_scaling_spec.rs",
-        "src/check/checker/declaration_surface_lazy_spec.rs",
-        "src/check/checker/declaration_surface_measure.rs",
-        "src/check/checker/exact_declaration_site_cutover_spec.rs",
-        "src/check/checker/decls/cycle_tainted_application_cache_spec.rs",
-        "src/check/checker/decls/eager_application_cache_spec.rs",
-        "src/check/checker/decls/heritage_base_merge_scan_spec.rs",
-        "src/check/checker/decls/interface_scc_pending_spec.rs",
-        "src/check/checker/eval/deferred_keyof_cache_spec.rs",
-        "src/check/checker/eval/tests.rs",
-        "src/check/checker/lexical_events/completion_slot_spec.rs",
-        "src/check/checker/lexical_events/owner_lookup_spec.rs",
-        "src/check/checker/surface_lowering_copy_spec.rs",
-        "src/check/query/deferred_indexed_lazy_spec.rs",
-        "src/check/query/demand_identity_spec.rs",
-        "src/check/query/dom_source_cold_spec.rs",
-        "src/check/query/event_listener_union_scaling_spec.rs",
-        "src/check/query/failing_relation_scaling_spec.rs",
-        "src/check/query/identity_memo_spec.rs",
-        "src/check/query/instantiation_root_lazy_spec.rs",
-        "src/check/query/relation_root_lazy_spec.rs",
-        "src/check/query/tests.rs",
-        "src/check/query/transaction_fork_scaling_spec.rs",
+        "crates/typokat-check/src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs",
+        "crates/typokat-check/src/check/checker/calls/contextual_rewalk_scaling_spec.rs",
+        "crates/typokat-check/src/check/checker/declaration_owner_scaling_spec.rs",
+        "crates/typokat-check/src/check/checker/declaration_surface_lazy_spec.rs",
+        "crates/typokat-check/src/check/checker/declaration_surface_measure.rs",
+        "crates/typokat-check/src/check/checker/exact_declaration_site_cutover_spec.rs",
+        "crates/typokat-check/src/check/checker/decls/cycle_tainted_application_cache_spec.rs",
+        "crates/typokat-check/src/check/checker/decls/eager_application_cache_spec.rs",
+        "crates/typokat-check/src/check/checker/decls/heritage_base_merge_scan_spec.rs",
+        "crates/typokat-check/src/check/checker/decls/interface_scc_pending_spec.rs",
+        "crates/typokat-check/src/check/checker/eval/deferred_keyof_cache_spec.rs",
+        "crates/typokat-check/src/check/checker/eval/tests.rs",
+        "crates/typokat-check/src/check/checker/lexical_events/completion_slot_spec.rs",
+        "crates/typokat-check/src/check/checker/lexical_events/owner_lookup_spec.rs",
+        "crates/typokat-check/src/check/checker/surface_lowering_copy_spec.rs",
+        "crates/typokat-check/src/check/query/deferred_indexed_lazy_spec.rs",
+        "crates/typokat-check/src/check/query/demand_identity_spec.rs",
+        "crates/typokat-check/src/check/query/dom_source_cold_spec.rs",
+        "crates/typokat-check/src/check/query/event_listener_union_scaling_spec.rs",
+        "crates/typokat-check/src/check/query/failing_relation_scaling_spec.rs",
+        "crates/typokat-check/src/check/query/identity_memo_spec.rs",
+        "crates/typokat-check/src/check/query/instantiation_root_lazy_spec.rs",
+        "crates/typokat-check/src/check/query/relation_root_lazy_spec.rs",
+        "crates/typokat-check/src/check/query/tests.rs",
+        "crates/typokat-check/src/check/query/transaction_fork_scaling_spec.rs",
     ];
 
     const EXPECTED_PRODUCTION_REPLAY_SOURCE_PATHS: &[&str] = &[
-        "src/check/checker/annotations/composites.rs",
-        "src/check/checker/annotations/declared.rs",
-        "src/check/checker/annotations/functions.rs",
-        "src/check/checker/annotations/mod.rs",
-        "src/check/checker/annotations/signatures.rs",
-        "src/check/checker/annotations/type_operators.rs",
-        "src/check/checker/assignment.rs",
-        "src/check/checker/calls.rs",
-        "src/check/checker/classes/application.rs",
-        "src/check/checker/classes/body.rs",
-        "src/check/checker/classes/construction.rs",
-        "src/check/checker/classes/inheritance.rs",
-        "src/check/checker/classes/initializer.rs",
-        "src/check/checker/classes/members.rs",
-        "src/check/checker/classes/mod.rs",
-        "src/check/checker/classes/publication.rs",
-        "src/check/checker/classes/retained.rs",
-        "src/check/checker/classes/surface_types.rs",
-        "src/check/checker/classes/type_syntax.rs",
-        "src/check/checker/classes/visibility.rs",
-        "src/check/checker/context.rs",
-        "src/check/checker/decls/interface.rs",
-        "src/check/checker/decls/mod.rs",
-        "src/check/checker/decls/params.rs",
-        "src/check/checker/decls/resolve.rs",
-        "src/check/checker/eval/demand.rs",
-        "src/check/checker/eval/extends.rs",
-        "src/check/checker/eval/instantiation.rs",
-        "src/check/checker/eval/keyof.rs",
-        "src/check/checker/eval/mapped.rs",
-        "src/check/checker/eval/mod.rs",
-        "src/check/checker/eval/template.rs",
-        "src/check/checker/events.rs",
-        "src/check/checker/events_library.rs",
-        "src/check/checker/expr.rs",
-        "src/check/checker/flowgraph/exprs.rs",
-        "src/check/checker/flowgraph/mod.rs",
-        "src/check/checker/flowgraph/nodes.rs",
-        "src/check/checker/function_groups.rs",
-        "src/check/checker/indexed_access.rs",
-        "src/check/checker/lexical_events.rs",
-        "src/check/checker/lexical_events_library.rs",
-        "src/check/checker/lexical_events_user.rs",
-        "src/check/checker/library_compiler.rs",
-        "src/check/checker/library_identities.rs",
-        "src/check/checker/library_reporting.rs",
-        "src/check/checker/mod.rs",
-        "src/check/checker/namespace_values.rs",
-        "src/check/checker/narrowing.rs",
-        "src/check/checker/replay_index.rs",
-        "src/check/checker/reporting_record.rs",
-        "src/check/checker/statements.rs",
-        "src/check/checker/type_groups.rs",
-        "src/check/query/mod.rs",
+        "crates/typokat-check/src/check/checker/annotations/composites.rs",
+        "crates/typokat-check/src/check/checker/annotations/declared.rs",
+        "crates/typokat-check/src/check/checker/annotations/functions.rs",
+        "crates/typokat-check/src/check/checker/annotations/mod.rs",
+        "crates/typokat-check/src/check/checker/annotations/signatures.rs",
+        "crates/typokat-check/src/check/checker/annotations/type_operators.rs",
+        "crates/typokat-check/src/check/checker/assignment.rs",
+        "crates/typokat-check/src/check/checker/calls.rs",
+        "crates/typokat-check/src/check/checker/classes/application.rs",
+        "crates/typokat-check/src/check/checker/classes/body.rs",
+        "crates/typokat-check/src/check/checker/classes/construction.rs",
+        "crates/typokat-check/src/check/checker/classes/inheritance.rs",
+        "crates/typokat-check/src/check/checker/classes/initializer.rs",
+        "crates/typokat-check/src/check/checker/classes/members.rs",
+        "crates/typokat-check/src/check/checker/classes/mod.rs",
+        "crates/typokat-check/src/check/checker/classes/publication.rs",
+        "crates/typokat-check/src/check/checker/classes/retained.rs",
+        "crates/typokat-check/src/check/checker/classes/surface_types.rs",
+        "crates/typokat-check/src/check/checker/classes/type_syntax.rs",
+        "crates/typokat-check/src/check/checker/classes/visibility.rs",
+        "crates/typokat-check/src/check/checker/context.rs",
+        "crates/typokat-check/src/check/checker/decls/interface.rs",
+        "crates/typokat-check/src/check/checker/decls/mod.rs",
+        "crates/typokat-check/src/check/checker/decls/params.rs",
+        "crates/typokat-check/src/check/checker/decls/resolve.rs",
+        "crates/typokat-check/src/check/checker/eval/demand.rs",
+        "crates/typokat-check/src/check/checker/eval/extends.rs",
+        "crates/typokat-check/src/check/checker/eval/instantiation.rs",
+        "crates/typokat-check/src/check/checker/eval/keyof.rs",
+        "crates/typokat-check/src/check/checker/eval/mapped.rs",
+        "crates/typokat-check/src/check/checker/eval/mod.rs",
+        "crates/typokat-check/src/check/checker/eval/template.rs",
+        "crates/typokat-check/src/check/checker/events.rs",
+        "crates/typokat-check/src/check/checker/events_library.rs",
+        "crates/typokat-check/src/check/checker/expr.rs",
+        "crates/typokat-check/src/check/checker/flowgraph/exprs.rs",
+        "crates/typokat-check/src/check/checker/flowgraph/mod.rs",
+        "crates/typokat-check/src/check/checker/flowgraph/nodes.rs",
+        "crates/typokat-check/src/check/checker/function_groups.rs",
+        "crates/typokat-check/src/check/checker/indexed_access.rs",
+        "crates/typokat-check/src/check/checker/lexical_events.rs",
+        "crates/typokat-check/src/check/checker/lexical_events_library.rs",
+        "crates/typokat-check/src/check/checker/lexical_events_user.rs",
+        "crates/typokat-check/src/check/checker/library_compiler.rs",
+        "crates/typokat-check/src/check/checker/library_identities.rs",
+        "crates/typokat-check/src/check/checker/library_reporting.rs",
+        "crates/typokat-check/src/check/checker/mod.rs",
+        "crates/typokat-check/src/check/checker/namespace_values.rs",
+        "crates/typokat-check/src/check/checker/narrowing.rs",
+        "crates/typokat-check/src/check/checker/replay_index.rs",
+        "crates/typokat-check/src/check/checker/reporting_record.rs",
+        "crates/typokat-check/src/check/checker/statements.rs",
+        "crates/typokat-check/src/check/checker/type_groups.rs",
+        "crates/typokat-check/src/check/query/mod.rs",
     ];
 
     fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
@@ -2216,8 +2202,11 @@ mod tests {
         .any(|keyword| strip_keyword(remainder, keyword).is_some())
     }
 
-    fn next_cfg_test_attribute(source: &str, search_from: usize) -> Option<usize> {
-        const CFG_TEST: &[u8] = b"#[cfg(test)]";
+    fn next_test_only_attribute(source: &str, search_from: usize) -> Option<(usize, usize)> {
+        const TEST_ONLY_ATTRIBUTES: [&[u8]; 2] = [
+            b"#[cfg(test)]",
+            b"#[cfg(any(test, feature = \"test-utils\"))]",
+        ];
         let bytes = source.as_bytes();
         let mut cursor = search_from;
         while cursor < bytes.len() {
@@ -2225,8 +2214,11 @@ mod tests {
                 cursor = end.max(cursor + 1);
                 continue;
             }
-            if bytes.get(cursor..cursor + CFG_TEST.len()) == Some(CFG_TEST) {
-                return Some(cursor);
+            if let Some(attribute) = TEST_ONLY_ATTRIBUTES
+                .iter()
+                .find(|attribute| bytes.get(cursor..cursor + attribute.len()) == Some(**attribute))
+            {
+                return Some((cursor, attribute.len()));
             }
             cursor += 1;
         }
@@ -2234,11 +2226,10 @@ mod tests {
     }
 
     fn production_source(source: &str) -> String {
-        const CFG_TEST_LEN: usize = b"#[cfg(test)]".len();
         let mut stripped = source.to_owned();
         let mut search_from = 0usize;
-        while let Some(start) = next_cfg_test_attribute(&stripped, search_from) {
-            let item_start = start + CFG_TEST_LEN;
+        while let Some((start, attribute_len)) = next_test_only_attribute(&stripped, search_from) {
+            let item_start = start + attribute_len;
             let end = if cfg_test_starts_item(&stripped, item_start) {
                 cfg_test_item_end(&stripped, item_start)
             } else {
@@ -2289,8 +2280,16 @@ mod tests {
         }
 
         let mut sources = std::collections::BTreeMap::new();
-        visit(root, &root.join("src/check/checker"), &mut sources);
-        visit(root, &root.join("src/check/query"), &mut sources);
+        visit(
+            root,
+            &root.join("crates/typokat-check/src/check/checker"),
+            &mut sources,
+        );
+        visit(
+            root,
+            &root.join("crates/typokat-check/src/check/query"),
+            &mut sources,
+        );
         sources
     }
 
@@ -2358,46 +2357,46 @@ mod tests {
         let root = crate::test_support::repository_root();
         let sources = discover_production_rust_sources(&root);
         let allowed = [
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "self.class_parents.iter()", count: 1, reason: "snapshot projection" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "type_decl_id(binder, binder.prelude_module, name)", count: 1, reason: "prelude identity selection" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_value_binding(scope, name);", count: 1, reason: "no-trace value binding fast path" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_value(scope, name);", count: 1, reason: "no-trace value fast path" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_type(scope, name);", count: 1, reason: "no-trace type fast path" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "let symbol = self.binder.resolve_type(scope, name)?;", count: 1, reason: "speculative planner read; dependency replayed on commit; fallback performs canonical traced lowering" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.binder.resolve_qualified_type_path(scope, segments);", count: 1, reason: "no-trace qualified fast path" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: ".classes().published_class(class)", count: 1, reason: "instrumented class delegate" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "return self.decl_types.get(storage);", count: 1, reason: "no-trace decl fast path" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "self.decl_types.get(storage)", count: 1, reason: "instrumented decl delegate" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "decl_types.set(decl_id, error)", count: 2, reason: "module placeholder bootstrap, once per project-check path (prelude and default-library base)" },
-            RawAccessAllowance { path: "src/check/checker/mod.rs", snippet: "|pass| pass.decl_types.set(storage, ty)", count: 1, reason: "owned copied publication" },
-            RawAccessAllowance { path: "src/check/checker/assignment.rs", snippet: "binder.resolve_value(scope, name)", count: 1, reason: "current binding identity" },
-            RawAccessAllowance { path: "src/check/checker/calls.rs", snippet: ".binder.resolve_value(scope, &name)", count: 5, reason: "current callable parameter identity" },
-            RawAccessAllowance { path: "src/check/checker/calls.rs", snippet: ".binder.resolve_value(scope, &n)", count: 1, reason: "current callable parameter identity" },
-            RawAccessAllowance { path: "src/check/checker/statements.rs", snippet: "self.decl_types.get(decl_id)", count: 2, reason: "own-target cache invalidation" },
-            RawAccessAllowance { path: "src/check/checker/statements.rs", snippet: "self.binder.resolve_value(scope, id.name.as_str())", count: 1, reason: "current declaration symbol" },
-            RawAccessAllowance { path: "src/check/checker/statements.rs", snippet: ".binder.resolve_value(scope, name)", count: 2, reason: "current function group symbol" },
-            RawAccessAllowance { path: "src/check/checker/statements.rs", snippet: "binder.resolve_value(declaration_scope, identifier.name.as_str())", count: 1, reason: "declaration owner lookup" },
-            RawAccessAllowance { path: "src/check/checker/classes/publication.rs", snippet: "type_decl_id(self.binder, self.scope, name)", count: 1, reason: "no-trace surface resolver" },
-            RawAccessAllowance { path: "src/check/checker/classes/publication.rs", snippet: "self.binder.resolve_qualified_type_path(self.scope, segments)", count: 1, reason: "no-trace qualified resolver" },
-            RawAccessAllowance { path: "src/check/checker/classes/publication.rs", snippet: ".staged_published_classes.as_ref().expect(\"class publication is staged\").published_class(class)", count: 1, reason: "instrumented staged class delegate" },
-            RawAccessAllowance { path: "src/check/checker/classes/publication.rs", snippet: "self.decl_types.set(value_decl, static_side)", count: 1, reason: "class-owned construction staging" },
-            RawAccessAllowance { path: "src/check/checker/classes/publication.rs", snippet: "self.decl_types.set(value_decl, surface.static_template())", count: 1, reason: "value-owned final class publication" },
-            RawAccessAllowance { path: "src/check/checker/classes/publication.rs", snippet: "self.class_parents.get(&class_id)", count: 1, reason: "child-owned parent metadata" },
-            RawAccessAllowance { path: "src/check/checker/classes/inheritance.rs", snippet: "self.class_parents.get(&current)", count: 1, reason: "child-owned parent chain" },
-            RawAccessAllowance { path: "src/check/checker/decls/interface.rs", snippet: ".expect(\"class registry is frozen before interface heritage construction\").published_class(application.class)", count: 1, reason: "instrumented interface class projection" },
-            RawAccessAllowance { path: "src/check/checker/namespace_values.rs", snippet: ".expect(\"class publication precedes namespace finalization\").published_class(*class)", count: 1, reason: "instrumented staged class delegate" },
-            RawAccessAllowance { path: "src/check/checker/namespace_values.rs", snippet: ".binder.resolve_value(self.scope, identifier.name.as_str())", count: 1, reason: "root self-storage census" },
-            RawAccessAllowance { path: "src/check/checker/decls/mod.rs", snippet: "type_decl_id(binder, scope, \"Array\")", count: 1, reason: "topology prepass" },
-            RawAccessAllowance { path: "src/check/checker/decls/mod.rs", snippet: "type_decl_id(binder, scope, name)", count: 1, reason: "topology prepass" },
-            RawAccessAllowance { path: "src/check/checker/decls/mod.rs", snippet: "binder.resolve_type(scope, name)", count: 2, reason: "topology ambiguity check and helper sink" },
-            RawAccessAllowance { path: "src/check/checker/decls/mod.rs", snippet: "binder.resolve_value(scope, name)", count: 1, reason: "topology ambiguity check" },
-            RawAccessAllowance { path: "src/check/checker/decls/mod.rs", snippet: "binder.resolve_qualified_type_path(scope, segments)", count: 1, reason: "topology prepass" },
-            RawAccessAllowance { path: "src/check/checker/decls/mod.rs", snippet: "fn type_decl_id(", count: 1, reason: "raw helper definition" },
-            RawAccessAllowance { path: "src/check/checker/library_compiler.rs", snippet: "parts.runtime.class_parents.iter()", count: 2, reason: "snapshot structural validation" },
-            RawAccessAllowance { path: "src/check/checker/replay_index.rs", snippet: "self.published.published_class(class)", count: 1, reason: "instrumented replay class delegate" },
-            RawAccessAllowance { path: "src/check/query/mod.rs", snippet: "self.published.published_class(source.class)", count: 1, reason: "relation query class projection" },
-            RawAccessAllowance { path: "src/check/query/mod.rs", snippet: "self.published.published_class(instance.class)", count: 1, reason: "query application class projection" },
-            RawAccessAllowance { path: "src/check/query/mod.rs", snippet: "published.published_class(instance.class)", count: 1, reason: "query publication frontier" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "self.class_parents.iter()", count: 1, reason: "snapshot projection" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "type_decl_id(binder, binder.prelude_module, name)", count: 1, reason: "prelude identity selection" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_value_binding(scope, name);", count: 1, reason: "no-trace value binding fast path" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_value(scope, name);", count: 1, reason: "no-trace value fast path" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_type(scope, name);", count: 1, reason: "no-trace type fast path" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "let symbol = self.binder.resolve_type(scope, name)?;", count: 1, reason: "speculative planner read; dependency replayed on commit; fallback performs canonical traced lowering" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_qualified_type_path(scope, segments);", count: 1, reason: "no-trace qualified fast path" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: ".classes().published_class(class)", count: 1, reason: "instrumented class delegate" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.decl_types.get(storage);", count: 1, reason: "no-trace decl fast path" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "self.decl_types.get(storage)", count: 1, reason: "instrumented decl delegate" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "decl_types.set(decl_id, error)", count: 2, reason: "module placeholder bootstrap, once per project-check path (prelude and default-library base)" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "|pass| pass.decl_types.set(storage, ty)", count: 1, reason: "owned copied publication" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/assignment.rs", snippet: "binder.resolve_value(scope, name)", count: 1, reason: "current binding identity" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/calls.rs", snippet: ".binder.resolve_value(scope, &name)", count: 5, reason: "current callable parameter identity" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/calls.rs", snippet: ".binder.resolve_value(scope, &n)", count: 1, reason: "current callable parameter identity" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: "self.decl_types.get(decl_id)", count: 2, reason: "own-target cache invalidation" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: "self.binder.resolve_value(scope, id.name.as_str())", count: 1, reason: "current declaration symbol" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: ".binder.resolve_value(scope, name)", count: 2, reason: "current function group symbol" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: "binder.resolve_value(declaration_scope, identifier.name.as_str())", count: 1, reason: "declaration owner lookup" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "type_decl_id(self.binder, self.scope, name)", count: 1, reason: "no-trace surface resolver" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "self.binder.resolve_qualified_type_path(self.scope, segments)", count: 1, reason: "no-trace qualified resolver" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: ".staged_published_classes.as_ref().expect(\"class publication is staged\").published_class(class)", count: 1, reason: "instrumented staged class delegate" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "self.decl_types.set(value_decl, static_side)", count: 1, reason: "class-owned construction staging" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "self.decl_types.set(value_decl, surface.static_template())", count: 1, reason: "value-owned final class publication" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "self.class_parents.get(&class_id)", count: 1, reason: "child-owned parent metadata" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/inheritance.rs", snippet: "self.class_parents.get(&current)", count: 1, reason: "child-owned parent chain" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/interface.rs", snippet: ".expect(\"class registry is frozen before interface heritage construction\").published_class(application.class)", count: 1, reason: "instrumented interface class projection" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/namespace_values.rs", snippet: ".expect(\"class publication precedes namespace finalization\").published_class(*class)", count: 1, reason: "instrumented staged class delegate" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/namespace_values.rs", snippet: ".binder.resolve_value(self.scope, identifier.name.as_str())", count: 1, reason: "root self-storage census" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/mod.rs", snippet: "type_decl_id(binder, scope, \"Array\")", count: 1, reason: "topology prepass" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/mod.rs", snippet: "type_decl_id(binder, scope, name)", count: 1, reason: "topology prepass" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/mod.rs", snippet: "binder.resolve_type(scope, name)", count: 2, reason: "topology ambiguity check and helper sink" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/mod.rs", snippet: "binder.resolve_value(scope, name)", count: 1, reason: "topology ambiguity check" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/mod.rs", snippet: "binder.resolve_qualified_type_path(scope, segments)", count: 1, reason: "topology prepass" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/decls/mod.rs", snippet: "fn type_decl_id(", count: 1, reason: "raw helper definition" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/library_compiler.rs", snippet: "parts.runtime.class_parents.iter()", count: 2, reason: "snapshot structural validation" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "self.published.published_class(class)", count: 1, reason: "instrumented replay class delegate" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "self.published.published_class(source.class)", count: 1, reason: "relation query class projection" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "self.published.published_class(instance.class)", count: 1, reason: "query application class projection" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "published.published_class(instance.class)", count: 1, reason: "query publication frontier" },
         ];
         validate_raw_access_manifest(&sources, EXPECTED_PRODUCTION_REPLAY_SOURCE_PATHS, &allowed)
             .unwrap();
@@ -2406,18 +2405,22 @@ mod tests {
     #[test]
     fn semantic_replay_access_guard_rejects_an_injected_bypass() {
         let sources = std::collections::BTreeMap::from([(
-            "src/check/checker/injected.rs".to_owned(),
+            "crates/typokat-check/src/check/checker/injected.rs".to_owned(),
             "fn bypass() { binder.resolve_type(scope, name); }".to_owned(),
         )]);
-        let error = validate_raw_access_manifest(&sources, &["src/check/checker/injected.rs"], &[])
-            .unwrap_err();
+        let error = validate_raw_access_manifest(
+            &sources,
+            &["crates/typokat-check/src/check/checker/injected.rs"],
+            &[],
+        )
+        .unwrap_err();
         assert!(error.contains("unapproved raw replay access"));
     }
 
     #[test]
     fn semantic_replay_access_guard_preserves_code_after_a_cfg_test_field() {
         let sources = std::collections::BTreeMap::from([(
-            "src/check/checker/injected.rs".to_owned(),
+            "crates/typokat-check/src/check/checker/injected.rs".to_owned(),
             "
                 struct Probe {
                     #[cfg(test)]
@@ -2428,8 +2431,12 @@ mod tests {
             "
             .to_owned(),
         )]);
-        let error = validate_raw_access_manifest(&sources, &["src/check/checker/injected.rs"], &[])
-            .unwrap_err();
+        let error = validate_raw_access_manifest(
+            &sources,
+            &["crates/typokat-check/src/check/checker/injected.rs"],
+            &[],
+        )
+        .unwrap_err();
         assert!(error.contains("unapproved raw replay access"));
     }
 
@@ -2442,12 +2449,15 @@ mod tests {
         ];
         for source in fixtures {
             let sources = std::collections::BTreeMap::from([(
-                "src/check/checker/injected.rs".to_owned(),
+                "crates/typokat-check/src/check/checker/injected.rs".to_owned(),
                 source.to_owned(),
             )]);
-            let error =
-                validate_raw_access_manifest(&sources, &["src/check/checker/injected.rs"], &[])
-                    .unwrap_err();
+            let error = validate_raw_access_manifest(
+                &sources,
+                &["crates/typokat-check/src/check/checker/injected.rs"],
+                &[],
+            )
+            .unwrap_err();
             assert!(error.contains("unapproved raw replay access"));
         }
     }
@@ -2491,6 +2501,21 @@ mod tests {
     }
 
     #[test]
+    fn cfg_test_stripping_removes_test_utils_items() {
+        let source = "
+            #[cfg(any(test, feature = \"test-utils\"))]
+            fn helper() {
+                binder.resolve_type(scope, name);
+            }
+            fn production() {}
+        ";
+        let production = production_source(source);
+        assert!(!production.contains("helper"));
+        assert!(!production.contains("binder.resolve_type(scope, name)"));
+        assert!(production.contains("fn production()"));
+    }
+
+    #[test]
     fn production_source_discovery_recurses_into_query_submodules() {
         let unique = format!(
             "typokat-replay-source-discovery-{}-{}",
@@ -2508,60 +2533,85 @@ mod tests {
             }
         }
         let _cleanup = Cleanup(root.clone());
-        std::fs::create_dir_all(root.join("src/check/checker")).expect("create checker fixture");
-        std::fs::create_dir_all(root.join("src/check/query/nested")).expect("create query fixture");
-        std::fs::write(root.join("src/check/checker/known.rs"), "fn known() {}")
-            .expect("write checker fixture");
-        std::fs::write(root.join("src/check/query/mod.rs"), "mod nested;")
-            .expect("write query root fixture");
+        std::fs::create_dir_all(root.join("crates/typokat-check/src/check/checker"))
+            .expect("create checker fixture");
+        std::fs::create_dir_all(root.join("crates/typokat-check/src/check/query/nested"))
+            .expect("create query fixture");
         std::fs::write(
-            root.join("src/check/query/nested/new.rs"),
+            root.join("crates/typokat-check/src/check/checker/known.rs"),
+            "fn known() {}",
+        )
+        .expect("write checker fixture");
+        std::fs::write(
+            root.join("crates/typokat-check/src/check/query/mod.rs"),
+            "mod nested;",
+        )
+        .expect("write query root fixture");
+        std::fs::write(
+            root.join("crates/typokat-check/src/check/query/nested/new.rs"),
             "fn discovered() {}",
         )
         .expect("write nested query fixture");
-        std::fs::write(root.join("src/check/query/tests.rs"), "fn test_only() {}")
-            .expect("write excluded query fixture");
+        std::fs::write(
+            root.join("crates/typokat-check/src/check/query/tests.rs"),
+            "fn test_only() {}",
+        )
+        .expect("write excluded query fixture");
 
         let sources = discover_production_rust_sources(&root);
-        assert!(sources.contains_key("src/check/query/nested/new.rs"));
-        assert!(!sources.contains_key("src/check/query/tests.rs"));
+        assert!(sources.contains_key("crates/typokat-check/src/check/query/nested/new.rs"));
+        assert!(!sources.contains_key("crates/typokat-check/src/check/query/tests.rs"));
         let error = validate_production_source_set(
             &sources,
-            &["src/check/checker/known.rs", "src/check/query/mod.rs"],
+            &[
+                "crates/typokat-check/src/check/checker/known.rs",
+                "crates/typokat-check/src/check/query/mod.rs",
+            ],
         )
         .unwrap_err();
-        assert!(error.contains("unexpected=[\"src/check/query/nested/new.rs\"]"));
+        assert!(
+            error.contains("unexpected=[\"crates/typokat-check/src/check/query/nested/new.rs\"]")
+        );
     }
 
     #[test]
     fn semantic_replay_access_guard_rejects_an_unmanifested_production_file() {
         let sources = std::collections::BTreeMap::from([
             (
-                "src/check/checker/known.rs".to_owned(),
+                "crates/typokat-check/src/check/checker/known.rs".to_owned(),
                 "fn safe() {}".to_owned(),
             ),
             (
-                "src/check/checker/new_module.rs".to_owned(),
+                "crates/typokat-check/src/check/checker/new_module.rs".to_owned(),
                 "fn also_safe() {}".to_owned(),
             ),
         ]);
-        let error = validate_raw_access_manifest(&sources, &["src/check/checker/known.rs"], &[])
-            .unwrap_err();
-        assert!(error.contains("unexpected=[\"src/check/checker/new_module.rs\"]"));
+        let error = validate_raw_access_manifest(
+            &sources,
+            &["crates/typokat-check/src/check/checker/known.rs"],
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("unexpected=[\"crates/typokat-check/src/check/checker/new_module.rs\"]")
+        );
     }
 
     #[test]
     fn semantic_replay_access_guard_rejects_a_missing_production_file() {
         let sources = std::collections::BTreeMap::from([(
-            "src/check/checker/known.rs".to_owned(),
+            "crates/typokat-check/src/check/checker/known.rs".to_owned(),
             "fn safe() {}".to_owned(),
         )]);
         let error = validate_raw_access_manifest(
             &sources,
-            &["src/check/checker/known.rs", "src/check/checker/missing.rs"],
+            &[
+                "crates/typokat-check/src/check/checker/known.rs",
+                "crates/typokat-check/src/check/checker/missing.rs",
+            ],
             &[],
         )
         .unwrap_err();
-        assert!(error.contains("missing=[\"src/check/checker/missing.rs\"]"));
+        assert!(error.contains("missing=[\"crates/typokat-check/src/check/checker/missing.rs\"]"));
     }
 }

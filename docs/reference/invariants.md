@@ -7,7 +7,7 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
 
 ## 1. Invariants you must NOT break
 
-- **Semantic query and relation boundary** (`src/check/query/`, `src/relate/relation/mod.rs`):
+- **Semantic query and relation boundary** (`crates/typokat-check/src/check/query/`, `src/relate/relation/mod.rs`):
   production assignability enters only through `SemanticQueryCoordinator`; raw `Relater`
   construction/`is_assignable` is test-only. Each query uses fresh projection/evaluation overlays,
   and `Relater` applies present overlay mappings **before** identity, the 3×`u32`
@@ -37,7 +37,7 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   **relation engine ignores `readonly`/`is_accessor`** for assignability (they only gate access /
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
 - **Immutable class publication and lexical effects** (`src/class_semantics.rs`,
-  `src/check/checker/classes/`, `src/check/checker/events.rs`): every class application is an
+  `crates/typokat-check/src/check/checker/classes/`, `crates/typokat-check/src/check/checker/events.rs`): every class application is an
   immutable `ClassInstance` with a syntactically valid, semantically available, complete ordered
   vector of real argument `TypeId`s; never fabricate error/`unknown`/`never` or a partial vector.
   Class declaration SCCs publish complete instance/constructor/static/binder/callable surfaces
@@ -55,7 +55,7 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   call's frame closes. The line is *when*, not *whether* — holding a batch before it reaches an
   owner is candidate locality; removing records after they have reached one is the suppression this
   forbids.
-- **Private iterative evaluator walkers** (`src/check/checker/eval/`): `InferRewrite` and
+- **Private iterative evaluator walkers** (`crates/typokat-check/src/check/checker/eval/`): `InferRewrite` and
   `MappedRewrite` use explicit heap task/value stacks for
   every child they traverse, including function type-parameter constraints/defaults. Keep their
   policies distinct: infer rewriting preserves per-run fresh-binder scope, completed-memo rules,
@@ -73,7 +73,7 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   intersections must report `TK2313` and clear the recorded constraint before any relation query can
   treat the cycle as assignable. Structural indirection such as `{ self: T }` is legal recursion and
   must terminate through the relation engine instead.
-- **Narrowing** (`src/check/flow.rs` ops + the **flow-node CFG** in `src/check/checker/flowgraph.rs`):
+- **Narrowing** (`crates/typokat-check/src/check/flow.rs` ops + the **flow-node CFG** in `crates/typokat-check/src/check/checker/flowgraph.rs`):
   keyed on `SymbolId`, never escapes its branch, unknown guard narrows nothing, resets at function
   boundaries. The flow-node CFG (M23) is the **single** narrowing model — `if`/`else`/`switch` *and*
   unstructured flow (early `return`/`throw`, `&&`/`||`/ternary, `while` back/exit/`break`/`continue`

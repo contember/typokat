@@ -12,7 +12,7 @@ published package artifacts and are not treated as equivalent provenance.
 
 Regenerate or verify this directory only through
 [`tooling/library-profile/profile.py`](../../../tooling/library-profile/profile.py), using explicit
-local npm-package and bare-Git inputs. No production reader is wired yet; `src/prelude.ts` remains
+local npm-package and bare-Git inputs. No production reader is wired yet; `crates/typokat-check/src/prelude.ts` remains
 the production library source until the planned cutover.
 
 The copied Apache license and third-party notices apply to the vendored TypeScript artifacts. This

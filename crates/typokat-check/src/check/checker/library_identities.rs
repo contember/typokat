@@ -93,7 +93,7 @@ impl NativeArrayGroups {
 }
 
 impl LibrarySemanticIdentities {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -182,7 +182,7 @@ impl LibrarySemanticIdentities {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn callable_function_group(&self) -> Option<TypeGroupId> {
         match &self.inner.callable_function {
             LibraryIdentityTerminal::Ready(identity) => Some(identity.group),

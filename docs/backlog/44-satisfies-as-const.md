@@ -27,7 +27,7 @@ TK2540, interaction with M30 contextual typing and literal widening. Cross-check
 
 ## Touch points
 
-`src/check/checker/expr.rs` (both operators), the freshness/excess path,
+`crates/typokat-check/src/check/checker/expr.rs` (both operators), the freshness/excess path,
 `src/types/repr.rs` (readonly array/tuple forms — coordinate with backlog `24`'s tuple
 work), official-suite `OUT_OF_SCOPE_SYNTAX`.
 

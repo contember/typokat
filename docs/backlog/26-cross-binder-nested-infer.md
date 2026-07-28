@@ -35,9 +35,9 @@ of the m25 corpus or the official suite.
 
 ## Touch points
 
-`src/types/repr.rs` / `substitute.rs` (index arithmetic), `src/check/checker/
+`src/types/repr.rs` / `substitute.rs` (index arithmetic), `crates/typokat-check/src/check/checker/
 annotations.rs` (lowering: drop the poison, bind across frames with shifts),
-`src/check/checker/eval.rs` (`substitute_infers` descent), `m25_conditional_types/
+`crates/typokat-check/src/check/checker/eval.rs` (`substitute_infers` descent), `m25_conditional_types/
 nested_infer.ts` (rewrite to resolution semantics).
 
 <!-- Origin: M25 sprint (2026-07-04) — implementation-agent probes showed the unmodelled

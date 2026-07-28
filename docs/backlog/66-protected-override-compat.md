@@ -61,7 +61,7 @@ private-member redeclaration) and `TS2417` (static-side override).
 
 ## Touch points
 
-The override-compat check in the class-completeness path (`src/check/checker/…`), the
+The override-compat check in the class-completeness path (`crates/typokat-check/src/check/checker/…`), the
 nominal relation guard (`src/relate/…`), `b06_class_completeness/` corpus,
 `tests/conformance.rs`, `docs/reference/divergences.md`.
 

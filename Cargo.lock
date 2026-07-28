@@ -828,6 +828,7 @@ dependencies = [
  "tikv-jemallocator",
  "toml",
  "typokat-binder",
+ "typokat-check",
  "typokat-core",
  "typokat-diagnostics",
  "typokat-frontend",
@@ -847,6 +848,26 @@ dependencies = [
  "oxc_span",
  "rustc-hash",
  "typokat-core",
+ "typokat-types",
+]
+
+[[package]]
+name = "typokat-check"
+version = "0.1.0"
+dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_span",
+ "rustc-hash",
+ "sha2",
+ "smallvec",
+ "typokat-binder",
+ "typokat-core",
+ "typokat-diagnostics",
+ "typokat-frontend",
+ "typokat-relate",
  "typokat-types",
 ]
 

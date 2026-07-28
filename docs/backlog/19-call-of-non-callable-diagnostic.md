@@ -27,7 +27,7 @@ produce a false positive, and union callability once the checker can model it so
 
 ## Touch points
 
-`src/check/checker/calls.rs`, `src/diagnostics.rs`, `tests/cases/README.md`, and a focused
+`crates/typokat-check/src/check/checker/calls.rs`, `src/diagnostics.rs`, `tests/cases/README.md`, and a focused
 conformance corpus for non-callable calls.
 
 <!-- Origin: WU2 of ../archive/sprint-2026-06-28-object-interface-signatures.md. -->

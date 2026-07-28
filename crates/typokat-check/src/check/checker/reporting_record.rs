@@ -3,14 +3,14 @@
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 
 #[derive(Clone, Debug)]
-pub(crate) enum CheckerRecord {
+pub enum CheckerRecord {
     Diagnostic(Diagnostic),
     Incomplete(IncompleteSurface),
 }
 
 impl CheckerRecord {
-    #[cfg(test)]
-    pub(crate) const fn is_diagnostic(&self) -> bool {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub const fn is_diagnostic(&self) -> bool {
         matches!(self, Self::Diagnostic(_))
     }
 }

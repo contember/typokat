@@ -22,7 +22,7 @@ set against tsc in the spec).
 ## The sharper symptom: the *result* is the error type
 
 **Measured 2026-07-26**, and worse than "operands are unchecked". `infer_binary`
-(`src/check/checker/expr.rs:689`) models only `+`; every other binary operator returns `wk.error`.
+(`crates/typokat-check/src/check/checker/expr.rs:689`) models only `+`; every other binary operator returns `wk.error`.
 The error type then absorbs downstream assignments silently, so this family also eats ordinary
 `TK2322`s that have nothing to do with operator rules:
 
@@ -53,7 +53,7 @@ reusing the relation engine for TK2367 comparability. Cross-check tsc 6.0.3 --st
 
 ## Touch points
 
-`src/check/checker/expr.rs` (binary/unary typing), `src/diagnostics.rs` (new codes),
+`crates/typokat-check/src/check/checker/expr.rs` (binary/unary typing), `src/diagnostics.rs` (new codes),
 `src/relate/` (comparability entry for TK2367).
 
 <!-- Origin: completion-roadmap review (2026-07-07); probe: "x" - 1 and non-overlapping === both silent. -->

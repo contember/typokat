@@ -27,7 +27,7 @@ fresh-process target against pinned native TypeScript 7 on every approved semant
 [`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
 first substitution and diagnostic-rendering barriers but ended at WU0 NO-GO: its authoritative
 5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8. No loader or
-cutover has shipped yet; `src/prelude.ts` remains the production path until the active sprint's
+cutover has shipped yet; `crates/typokat-check/src/prelude.ts` remains the production path until the active sprint's
 atomic acceptance gates pass.
 
 ## Problem
@@ -93,7 +93,7 @@ explicit outcomes rather than approximate them.
 
 ## Touch points
 
-`src/driver.rs`, `src/check/checker/mod.rs`, `src/check/checker/decls/`, and the shared prelude/type
+`src/driver.rs`, `crates/typokat-check/src/check/checker/mod.rs`, `crates/typokat-check/src/check/checker/decls/`, and the shared prelude/type
 universe paths selected by its architecture design (parallelism Stage 1 — architecture §8.2). The
 accepted detailed design remains in
 [`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the archived

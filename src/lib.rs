@@ -4,9 +4,8 @@
 //! architecture layers.
 
 pub use typokat_binder::binder;
-pub mod check;
+pub use typokat_check::check;
 pub use typokat_diagnostics::diagnostics;
-pub(crate) use typokat_types::class_semantics;
 pub mod driver;
 pub use typokat_frontend::frontend;
 pub mod library;
@@ -48,7 +47,10 @@ mod build_reproducibility_tests {
                     .any(|path| path == &root.join("crates/typokat-surface/src/lib.rs"))
                 && sources
                     .iter()
-                    .any(|path| path == &root.join("crates/typokat-frontend/src/lib.rs")),
+                    .any(|path| path == &root.join("crates/typokat-frontend/src/lib.rs"))
+                && sources
+                    .iter()
+                    .any(|path| path == &root.join("crates/typokat-check/src/lib.rs")),
             "reproducibility scan must cover root and workspace-member sources"
         );
         let offenders = sources
@@ -140,6 +142,9 @@ mod build_reproducibility_tests {
             &["typokat_types", "typokat_binder", "typokat_check"],
         );
         assert_absent("src/library", &["crate::driver"]);
-        assert_absent("src/check", &["crate::library", "crate::driver"]);
+        assert_absent(
+            "crates/typokat-check/src/check",
+            &["crate::library", "crate::driver"],
+        );
     }
 }

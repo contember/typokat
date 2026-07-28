@@ -46,7 +46,7 @@ the object-keyword type itself is already shipped.
 
 ## Touch points
 
-`src/check/checker/expr.rs` (receiver nullability), `src/types/repr.rs` (optional
-methods/accessors), `src/check/flow.rs` (guard overlap with `51`), `src/diagnostics.rs`.
+`crates/typokat-check/src/check/checker/expr.rs` (receiver nullability), `src/types/repr.rs` (optional
+methods/accessors), `crates/typokat-check/src/check/flow.rs` (guard overlap with `51`), `src/diagnostics.rs`.
 
 <!-- Origin: completion-roadmap review (2026-07-07); M21 deferral list (README known limitations). -->

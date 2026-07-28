@@ -50,7 +50,7 @@ same profiling-gate discipline as [`ADR-0001`](../decisions/0001-type-level-vm-i
 
 ## Touch points
 
-`src/driver.rs` (second entry point), `src/check/checker/` (a resolve-only path through member
+`src/driver.rs` (second entry point), `crates/typokat-check/src/check/checker/` (a resolve-only path through member
 access and calls), profiling harness. No changes to `src/relate/`.
 
 <!-- Origin: pavouk/typokat integration design session, 2026-07-14. Explicitly ranked below 79/80:

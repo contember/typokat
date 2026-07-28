@@ -10,7 +10,7 @@ until it happens to suppress or produce a downstream error — backlog `65` (can
 instead of fixed-then-checked) was exactly this class, and several corpora fall back to
 code-only markers because the inferred target's shape can't be asserted
 (`tests/cases/README.md`, b65 construction note). Inference is otherwise pinned only by
-`src/check/infer/tests.rs` unit tests (engine-level, not end-to-end).
+`crates/typokat-check/src/check/infer/tests.rs` unit tests (engine-level, not end-to-end).
 
 ## Design (the form that survived review)
 

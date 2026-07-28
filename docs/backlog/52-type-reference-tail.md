@@ -41,7 +41,7 @@ must resolve `typeof cb` and recover the exact `TK2345` call rejection.
 
 ## Touch points
 
-`src/check/checker/annotations.rs` (type-reference and `typeof` query lowering), `src/check/checker/calls.rs`
+`crates/typokat-check/src/check/checker/annotations.rs` (type-reference and `typeof` query lowering), `crates/typokat-check/src/check/checker/calls.rs`
 (explicit type arguments), `src/diagnostics.rs`.
 
 <!-- Origin: completion-roadmap review (2026-07-07); M22 deferral list + probes. -->

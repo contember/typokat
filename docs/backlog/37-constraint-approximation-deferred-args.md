@@ -30,7 +30,7 @@ Acceptance: the UE divergence marker flips to clean with no FN elsewhere in
 
 ## Touch points
 
-`src/check/checker/calls.rs` (TK2344 argument side), `src/check/checker/eval.rs`
+`crates/typokat-check/src/check/checker/calls.rs` (TK2344 argument side), `crates/typokat-check/src/check/checker/eval.rs`
 (approximation helper over conditional templates).
 
 <!-- Origin: M28 review round 3 + leader arbitration probe m28_arb3.ts (2026-07-05). -->

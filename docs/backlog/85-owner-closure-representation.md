@@ -13,7 +13,7 @@ queries — 22% of cold library compilation. Effort M.
 
 ## Problem
 
-`terminal_expression_owners` (`src/check/checker/library_compiler.rs`) flattens the owner
+`terminal_expression_owners` (`crates/typokat-check/src/check/checker/library_compiler.rs`) flattens the owner
 expressions in one ascending pass, memoizing every expression (`bc59c9f`). That is exactly
 input+output on a shared pass-through spine, which is what the previous root-only memoization
 regressed on (`dfa62b4`). It is *not* linear on an **accumulating chain**: `T0 → T1 → … → T(L-1)`
@@ -74,7 +74,7 @@ bound for the other's again.
 
 ## Touch points
 
-`src/check/checker/library_compiler.rs` (`terminal_expression_owners`,
+`crates/typokat-check/src/check/checker/library_compiler.rs` (`terminal_expression_owners`,
 `require_terminal_class_dependency_closure`, the `TerminalClassDependencyValidationWork` counters
 and their specs).
 

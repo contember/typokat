@@ -823,17 +823,17 @@ impl DeclTypes {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.base, &other.base)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_len(&self) -> usize {
         self.local.len()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_slots(
         &self,
     ) -> impl Iterator<Item = (ValueStorageId, Option<TypeId>)> + '_ {

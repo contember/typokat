@@ -68,7 +68,7 @@ decisions → reference → archive.
   pinned suite rather than the published base. The
   [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the production
   Stage-1 cutover, collision/fanout correctness, and the cross-tool gate against native
-  TypeScript 7. Stage 1 is not yet shipped and `src/prelude.ts` remains production until the atomic
+  TypeScript 7. Stage 1 is not yet shipped and `crates/typokat-check/src/prelude.ts` remains production until the atomic
   cutover.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —

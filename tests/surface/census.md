@@ -39,7 +39,7 @@ validator pins `[meta].oxc_version` against `Cargo.toml` and drives exhaustive R
 
 ## Dispatcher roles and their silent-drop sites
 
-The pipeline (`src/check/checker/mod.rs:60`, `:159`) runs five node-dispatching layers, each
+The pipeline (`crates/typokat-check/src/check/checker/mod.rs:60`, `:159`) runs five node-dispatching layers, each
 with an independent fallback. A silent drop is a wildcard `_ => {}` / `_ => None` / a `continue`
 past a child slot / a `None` degradation to the error type — none of which record a diagnostic.
 
@@ -55,7 +55,7 @@ past a child slot / a `None` degradation to the error type — none of which rec
 | expression | `bind_expression` | `bind.rs:646` `_ => {}` — **narrower than `infer_expr`** |
 | binding pattern | `binding_name` | `bind.rs:746` `_ => None` (destructuring patterns) |
 
-### Role `flow` — `src/check/checker/flowgraph/`
+### Role `flow` — `crates/typokat-check/src/check/checker/flowgraph/`
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|
@@ -63,14 +63,14 @@ past a child slot / a `None` degradation to the error type — none of which rec
 | declaration (in export) | `build_flow_declaration` | `flowgraph/mod.rs:122` `_ => {}` |
 | expression | `build_flow_expr` | `flowgraph/exprs.rs:97`, `:245`, `:298`, `:351` |
 
-### Role `stmt-check` — `src/check/checker/statements.rs`
+### Role `stmt-check` — `crates/typokat-check/src/check/checker/statements.rs`
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|
 | statement | `check_stmt` | `statements.rs:145` `_ => {}` — drops `try`/`with`/`debugger` + all module decls |
 | declaration (in export) | `check_declaration` | `statements.rs:162` `_ => {}` |
 
-### Role `expr-infer` — `src/check/checker/expr.rs`
+### Role `expr-infer` — `crates/typokat-check/src/check/checker/expr.rs`
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|
@@ -80,7 +80,7 @@ past a child slot / a `None` degradation to the error type — none of which rec
 | array-literal element | `infer_array_literal` | `expr.rs:290` (spread / elision skipped via `as_expression`) |
 | member / element access base | `infer_member_access` / `infer_element_access` | non-object/array/tuple base → error type, no diagnostic |
 
-### Role `annotation-lower` — `src/check/checker/annotations/`
+### Role `annotation-lower` — `crates/typokat-check/src/check/checker/annotations/`
 
 | Child-slot role | Dispatch fn | Silent drop |
 |---|---|---|

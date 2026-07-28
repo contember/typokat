@@ -7,7 +7,7 @@ use super::context::{
 };
 use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use super::lexical_events::SourceSite;
 use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
 use super::replay_index::ReplayOwner;
@@ -45,7 +45,7 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     prepared_owners: FxHashSet<(ScopeId, String)>,
     standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan<Ticket>>,
     standalone_terminals: LayeredMap<NamespaceId, StandaloneNamespaceTerminal>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     namespace_function_reservations: FxHashMap<DeclId, SourceSite>,
     #[cfg(test)]
     standalone_query_root_calls: u64,
@@ -329,7 +329,7 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
             prepared_owners: FxHashSet::default(),
             standalone_plans: FxHashMap::default(),
             standalone_terminals: LayeredMap::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             namespace_function_reservations: FxHashMap::default(),
             #[cfg(test)]
             standalone_query_root_calls: 0,
@@ -361,7 +361,7 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         self.standalone_terminals = frozen.standalone;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn terminals_share_base_with(
         &self,
         frozen: &FrozenNamespaceValueTerminals,
@@ -370,12 +370,12 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
             .shares_base_with(&frozen.standalone)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_terminal_row_count_for_test(&self) -> usize {
         self.standalone_terminals.local_len()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_terminal_snapshot_parts_for_test(
         &self,
     ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
@@ -397,7 +397,7 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         self.standalone_query_root_calls
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn record_namespace_function_reservation(&mut self, declaration: DeclId, source: SourceSite) {
         if let Some(previous) = self
             .namespace_function_reservations
@@ -407,7 +407,7 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn namespace_function_reservation(
         &self,
         declaration: DeclId,
@@ -579,7 +579,7 @@ impl FrozenNamespaceValueTerminals {
         Ok(rows)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn local_snapshot_parts(
         &self,
     ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
@@ -1883,7 +1883,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .and_then(|site| self.lexical_events.callable(site))
             .expect("namespace function has preallocated callable tickets");
         let tickets = callable.tickets;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         self.namespace_values.record_namespace_function_reservation(
             declaration.expect("namespace function declaration"),
             callable.source,

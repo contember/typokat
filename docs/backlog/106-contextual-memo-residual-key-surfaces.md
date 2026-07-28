@@ -60,7 +60,7 @@ differential programs. Listed here for completeness, not as open work.
 
 ## Touch points
 
-`src/check/checker/context.rs` (`DeclTypes`, `WalkEnvironment`), `src/check/checker/calls.rs`.
+`crates/typokat-check/src/check/checker/context.rs` (`DeclTypes`, `WalkEnvironment`), `crates/typokat-check/src/check/checker/calls.rs`.
 
 <!-- Origin: self-reported by the backlog 95 work unit, 2026-07-27, as the two weakest links in its
      own soundness argument. Filed so they are not lost in a commit message. -->

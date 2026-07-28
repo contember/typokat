@@ -34,7 +34,7 @@ types. Preserve lexical constructor accessibility and diagnostic precedence.
 
 ## Touch points
 
-Class value alias provenance and `src/check/checker/calls.rs::infer_new`; generic class
+Class value alias provenance and `crates/typokat-check/src/check/checker/calls.rs::infer_new`; generic class
 constructor substitution and the focused disabled corpus. Stop if exact support requires a
 general value-flow/alias analysis or static-side object identity redesign.
 

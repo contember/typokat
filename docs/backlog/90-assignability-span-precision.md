@@ -51,7 +51,7 @@ substring-based today, which is precisely why this hid.
 
 ## Touch points
 
-`src/check/checker/lexical_events.rs` (owner tickets), `src/check/checker/assignment.rs`,
+`crates/typokat-check/src/check/checker/lexical_events.rs` (owner tickets), `crates/typokat-check/src/check/checker/assignment.rs`,
 `src/diagnostics/`, `tests/cases/` fixtures, `tests/conformance.rs` if column assertions are added.
 
 <!-- Origin: bisect of the multi-file regression, 2026-07-25 (section 4, incidental). -->

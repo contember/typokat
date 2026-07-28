@@ -254,7 +254,7 @@ Every directory in `MILESTONE_DIRS` (`tests/conformance.rs`) carries a third fie
 
 | `FixtureBase` | Universe | Driver entry points |
 |---|---|---|
-| `Prelude` | `src/prelude.ts` — the production path | `check_source` / `check_project` |
+| `Prelude` | `crates/typokat-check/src/prelude.ts` — the production path | `check_source` / `check_project` |
 | `Library` | the full TypeScript 6.0.3 default library | `check_source_with_library` / `check_project_with_library` |
 
 The base is declared **once per directory** and applies to that directory's rows in
@@ -542,7 +542,7 @@ excess-property walk is syntax-directed and recognised an object literal only
 *directly* in the checked position, so it stopped at the first non-literal node. It
 now descends through the same operands `context_can_shape_fresh_literal` does — both
 ternary arms, both `||`/`??` operands, `&&`'s right — which is stated once in
-`contextual_value_operands` (`src/check/checker/expr.rs`) and consumed by the
+`contextual_value_operands` (`crates/typokat-check/src/check/checker/expr.rs`) and consumed by the
 contextual re-walk gate and both excess walks. `ternary_arms.ts` pins each arm
 independently plus the array/tuple and nested-declared-target children;
 `logical_operands.ts` pins each shaped operand; `nested_compositions.ts` pins that the
@@ -611,7 +611,7 @@ same `2^depth`. The two cheap-to-walk shapes are the ones that hang in the wild,
 are pinned independently rather than treated as covered by the generic ones.
 `tsc 6.0.3 --strict --noEmit` reports exactly one `TS2304` on every line of all four
 fixtures, at every depth. The full 1–12 depth sweep lives in
-`src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs`, which reports the
+`crates/typokat-check/src/check/checker/calls/contextual_duplicate_diagnostics_spec.rs`, which reports the
 observed count in its failure text; the fixtures stop at 8 to keep corpus runtime bounded.
 
 `retained_raw_walks.ts` is the other half of the contract and the reason the fix is not

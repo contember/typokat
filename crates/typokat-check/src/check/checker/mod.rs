@@ -5,7 +5,7 @@
 
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
 use crate::binder::bind_module_with_prelude;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::declaration::source_global_binding_census;
 use crate::binder::declaration::{DeclId, DeclarationKind, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::SourceUnitKey;
@@ -52,24 +52,24 @@ mod declaration_surface_lazy_spec;
 pub(crate) mod declaration_surface_measure;
 mod decls;
 pub(in crate::check) mod eval;
-pub(crate) mod events;
-pub(crate) mod events_library;
+pub mod events;
+pub mod events_library;
 #[cfg(test)]
 mod exact_declaration_site_cutover_spec;
 mod expr;
 mod flowgraph;
 mod function_groups;
 mod indexed_access;
-pub(crate) mod lexical_events;
-pub(crate) mod lexical_events_library;
+pub mod lexical_events;
+pub mod lexical_events_library;
 mod lexical_events_user;
-pub(crate) mod library_compiler;
+pub mod library_compiler;
 mod library_identities;
 pub(crate) mod library_reporting;
 mod namespace_values;
 mod narrowing;
-pub(crate) mod replay_index;
-pub(crate) mod reporting_record;
+pub mod replay_index;
+pub mod reporting_record;
 mod statements;
 #[cfg(test)]
 mod surface_lowering_copy_spec;
@@ -599,8 +599,8 @@ fn bootstrap_trusted_prelude(
 /// incomplete-surface channel (in-scope AST positions the checker skipped). An empty
 /// `incomplete` is the normal case today — WU3–5 wire the emissions (sprint 2026-07-10).
 pub struct CheckResult {
-    pub(crate) module_ordinal: ModuleOrdinal,
-    pub(crate) unit_slot: UnitSlot,
+    pub module_ordinal: ModuleOrdinal,
+    pub unit_slot: UnitSlot,
     pub diagnostics: Vec<Diagnostic>,
     pub incomplete: Vec<IncompleteSurface>,
 }
@@ -746,7 +746,7 @@ where
     check_bound_user_program_inner(interner, binder, program, base, inspect, |_, _| {})
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(in crate::check::checker) fn check_bound_user_program_with_final_identity_inspector<
     'ast,
     F,
@@ -791,7 +791,7 @@ where
     ),
     G: FnOnce(&Pass<'_, 'ast>, u32),
 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     BOUND_USER_CHECK_CALLS.with(|calls| calls.set(calls.get() + 1));
     let module_ordinal = ModuleOrdinal::new(0);
     let unit_slot = UnitSlot::new(0);
@@ -926,7 +926,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static BOUND_USER_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static FINAL_IDENTITY_INSPECTOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -943,23 +943,23 @@ pub(in crate::check::checker) fn final_identity_inspector_calls_for_test() -> u6
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProjectSourceBindingRow {
-    pub(crate) normalized_path: String,
-    pub(crate) source_file_kind: crate::binder::namespace::SourceFileKind,
-    pub(crate) external_module: bool,
-    pub(crate) original_module_ordinal: OriginalModuleOrdinal,
-    pub(crate) unit_slot: UnitSlot,
-    pub(crate) source: SourceUnitKey,
-    pub(crate) module: ScopeId,
+pub struct ProjectSourceBindingRow {
+    pub normalized_path: String,
+    pub source_file_kind: crate::binder::namespace::SourceFileKind,
+    pub external_module: bool,
+    pub original_module_ordinal: OriginalModuleOrdinal,
+    pub unit_slot: UnitSlot,
+    pub source: SourceUnitKey,
+    pub module: ScopeId,
 }
 
-pub(crate) struct BoundProjectBinder {
-    pub(crate) binder: Binder,
-    pub(crate) module_scopes: Vec<ScopeId>,
-    pub(crate) module_placeholders: Vec<Vec<ImportPlaceholder>>,
-    pub(crate) project_sources: Vec<ProjectSourceBindingRow>,
-    #[cfg(test)]
-    pub(crate) normalized: ProjectBindingProductForTest,
+pub struct BoundProjectBinder {
+    pub binder: Binder,
+    pub module_scopes: Vec<ScopeId>,
+    pub module_placeholders: Vec<Vec<ImportPlaceholder>>,
+    pub project_sources: Vec<ProjectSourceBindingRow>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub normalized: ProjectBindingProductForTest,
 }
 
 impl std::fmt::Debug for BoundProjectBinder {
@@ -972,15 +972,15 @@ impl std::fmt::Debug for BoundProjectBinder {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ProjectBindingProductForTest {
-    pub(crate) normalized_per_path_binding_shape: Vec<String>,
-    pub(crate) normalized_import_export_shape: Vec<String>,
-    pub(crate) normalized_namespace_shape: Vec<String>,
+pub struct ProjectBindingProductForTest {
+    pub normalized_per_path_binding_shape: Vec<String>,
+    pub normalized_import_export_shape: Vec<String>,
+    pub normalized_namespace_shape: Vec<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static PROJECT_BINDING_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PROJECT_BINDING_FRESH_SEEDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -995,30 +995,30 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct AuthoritativeProjectBindingWorkForTest {
-    pub(crate) entries: u64,
-    pub(crate) fresh_project_seed_entries: u64,
-    pub(crate) authenticated_checkpoint_seed_entries: u64,
-    pub(crate) bound_units: u64,
-    pub(crate) typed_products_produced: u64,
-    pub(crate) ordinary_check_products_consumed: u64,
-    pub(crate) continuation_route_products_consumed: u64,
-    pub(crate) fresh_project_products: Vec<ProjectBindingProductForTest>,
-    pub(crate) authenticated_checkpoint_products: Vec<ProjectBindingProductForTest>,
+pub struct AuthoritativeProjectBindingWorkForTest {
+    pub entries: u64,
+    pub fresh_project_seed_entries: u64,
+    pub authenticated_checkpoint_seed_entries: u64,
+    pub bound_units: u64,
+    pub typed_products_produced: u64,
+    pub ordinary_check_products_consumed: u64,
+    pub continuation_route_products_consumed: u64,
+    pub fresh_project_products: Vec<ProjectBindingProductForTest>,
+    pub authenticated_checkpoint_products: Vec<ProjectBindingProductForTest>,
 }
 
-#[cfg(test)]
-pub(crate) struct AuthoritativeProjectBindingWorkScopeForTest {
+#[cfg(any(test, feature = "test-utils"))]
+pub struct AuthoritativeProjectBindingWorkScopeForTest {
     start: AuthoritativeProjectBindingWorkForTest,
     fresh_len: usize,
     checkpoint_len: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl AuthoritativeProjectBindingWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self {
             start: project_binding_work_for_test(),
             fresh_len: PROJECT_BINDING_FRESH_PRODUCTS.with(|products| products.borrow().len()),
@@ -1027,7 +1027,7 @@ impl AuthoritativeProjectBindingWorkScopeForTest {
         }
     }
 
-    pub(crate) fn finish(self) -> AuthoritativeProjectBindingWorkForTest {
+    pub fn finish(self) -> AuthoritativeProjectBindingWorkForTest {
         let end = project_binding_work_for_test();
         AuthoritativeProjectBindingWorkForTest {
             entries: end.entries.saturating_sub(self.start.entries),
@@ -1055,7 +1055,7 @@ impl AuthoritativeProjectBindingWorkScopeForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn project_binding_work_for_test() -> AuthoritativeProjectBindingWorkForTest {
     AuthoritativeProjectBindingWorkForTest {
         entries: PROJECT_BINDING_ENTRIES.get(),
@@ -1070,8 +1070,8 @@ fn project_binding_work_for_test() -> AuthoritativeProjectBindingWorkForTest {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn project_binding_thread_receipt_for_test() -> AuthoritativeProjectBindingWorkForTest {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn project_binding_thread_receipt_for_test() -> AuthoritativeProjectBindingWorkForTest {
     let mut receipt = project_binding_work_for_test();
     receipt.fresh_project_products =
         PROJECT_BINDING_FRESH_PRODUCTS.with(|products| products.borrow().clone());
@@ -1080,8 +1080,8 @@ pub(crate) fn project_binding_thread_receipt_for_test() -> AuthoritativeProjectB
     receipt
 }
 
-#[cfg(test)]
-pub(crate) fn merge_project_binding_thread_receipt_for_test(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn merge_project_binding_thread_receipt_for_test(
     receipt: AuthoritativeProjectBindingWorkForTest,
 ) {
     PROJECT_BINDING_ENTRIES.set(
@@ -1143,7 +1143,7 @@ type ExportSurface = BTreeMap<String, ExportedSlots>;
 
 /// Check a dependency-ordered project in one serial type universe. Returns one
 /// [`CheckResult`] per unit, indexed like `units`.
-pub(crate) fn check_project_programs<'ast>(
+pub fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
 ) -> Vec<CheckResult> {
@@ -1245,7 +1245,7 @@ where
     // The single-source path already propagates this; the project path must not turn it into a
     // panic (backlog 103).
     let binder = builder.finish_frozen_library_continuation(binder_module)?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     library_compiler::record_user_source_binds_for_test(units.len());
     decl_types.resize(binder.decl_count);
 
@@ -1385,7 +1385,7 @@ where
         );
         emit_test_incomplete(&mut pass);
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     library_compiler::record_user_source_checks_for_test(units.len());
 
     let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
@@ -1409,7 +1409,7 @@ where
 ///
 /// The inspector-free face of [`check_project_programs_with_owned_library`], whose closure bounds
 /// mention a checker-private type and so cannot cross the crate.
-pub(crate) fn check_project_programs_with_library<'ast>(
+pub fn check_project_programs_with_library<'ast>(
     state: library_compiler::OwnedLibraryRuntimeState,
     units: &[ProjectProgram<'ast>],
 ) -> Result<Vec<CheckResult>, &'static str> {
@@ -1423,7 +1423,7 @@ pub(crate) fn check_project_programs_with_library<'ast>(
 /// single-file semantics [`check_program`] gives it on the prelude path. The existing
 /// `library_compiler` single-source route is welded to its witness/counter machinery, so this is
 /// the plain one.
-pub(crate) fn check_program_with_owned_library<'ast>(
+pub fn check_program_with_owned_library<'ast>(
     state: library_compiler::OwnedLibraryRuntimeState,
     program: &'ast Program<'ast>,
 ) -> Result<CheckResult, &'static str> {
@@ -1442,8 +1442,8 @@ pub(crate) fn check_program_with_owned_library<'ast>(
     ))
 }
 
-#[cfg(test)]
-pub(crate) fn check_project_programs_with_binding_inspector<'ast, F>(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_project_programs_with_binding_inspector<'ast, F>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
     inspect: F,
@@ -1454,41 +1454,41 @@ where
     check_project_programs_inner(interner, units, inspect, |_, _, _, _, _, _, _| {}, |_| {})
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ProjectNamespaceRootInspection {
-    pub(crate) name: String,
-    pub(crate) symbol: SymbolId,
-    pub(crate) terminal: &'static str,
-    pub(crate) namespace_storage: Option<ValueStorageId>,
-    pub(crate) terminal_storage: Option<ValueStorageId>,
-    pub(crate) ty: Option<TypeId>,
-    pub(crate) published: Option<TypeId>,
+pub struct ProjectNamespaceRootInspection {
+    pub name: String,
+    pub symbol: SymbolId,
+    pub terminal: &'static str,
+    pub namespace_storage: Option<ValueStorageId>,
+    pub terminal_storage: Option<ValueStorageId>,
+    pub ty: Option<TypeId>,
+    pub published: Option<TypeId>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ProjectReplayRecordInspection {
+pub enum ProjectReplayRecordInspection {
     Diagnostic(String),
     Incomplete(String),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ProjectReplayInspection {
-    pub(crate) key: events::EventKey,
-    pub(crate) record: ProjectReplayRecordInspection,
+pub struct ProjectReplayInspection {
+    pub key: events::EventKey,
+    pub record: ProjectReplayRecordInspection,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ProjectNamespaceValueInspection {
-    pub(crate) roots: Vec<ProjectNamespaceRootInspection>,
-    pub(crate) replay: Vec<ProjectReplayInspection>,
+pub struct ProjectNamespaceValueInspection {
+    pub roots: Vec<ProjectNamespaceRootInspection>,
+    pub replay: Vec<ProjectReplayInspection>,
 }
 
-#[cfg(test)]
-pub(crate) fn check_project_programs_with_namespace_value_inspector<'ast, F>(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_project_programs_with_namespace_value_inspector<'ast, F>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
     inspect: F,
@@ -1568,7 +1568,7 @@ pub(crate) fn bind_library_checkpoint_project_programs(
         .map_err(|_| "library source prefix exceeds u32")?
         .checked_sub(1)
         .ok_or_else(|| "library source prefix omits the prelude".to_owned())?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECT_BINDING_CHECKPOINT_SEEDS
             .set(PROJECT_BINDING_CHECKPOINT_SEEDS.get().saturating_add(1));
@@ -1594,7 +1594,7 @@ pub(crate) fn bind_library_checkpoint_project_programs(
         &lexical_events,
         &mut external_effects,
     )?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECT_BINDING_CHECKPOINT_PRODUCTS
             .with(|products| products.borrow_mut().push(bound.normalized.clone()));
@@ -1608,7 +1608,7 @@ fn bind_fresh_project_programs(
     lexical_events: &LexicalReservations,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Result<BoundProjectBinder, String> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_SEEDS.set(PROJECT_BINDING_FRESH_SEEDS.get().saturating_add(1));
     let bound = bind_authoritative_project_core(
         ProjectBinderBuilder::new(prelude),
@@ -1617,7 +1617,7 @@ fn bind_fresh_project_programs(
         lexical_events,
         external_effects,
     )?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_PRODUCTS
         .with(|products| products.borrow_mut().push(bound.normalized.clone()));
     Ok(bound)
@@ -1630,7 +1630,7 @@ fn bind_authoritative_project_core<'ast>(
     lexical_events: &LexicalReservations,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Result<BoundProjectBinder, String> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECT_BINDING_ENTRIES.set(PROJECT_BINDING_ENTRIES.get().saturating_add(1));
         PROJECT_BINDING_BOUND_UNITS.set(
@@ -1698,22 +1698,22 @@ fn bind_authoritative_project_core<'ast>(
         })
         .collect::<Result<Vec<_>, String>>()?;
     project_sources.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let normalized =
         normalized_project_binding_product(&binder, units, &module_scopes, &module_placeholders);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_PRODUCTS.set(PROJECT_BINDING_PRODUCTS.get().saturating_add(1));
     Ok(BoundProjectBinder {
         binder,
         module_scopes,
         module_placeholders,
         project_sources,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         normalized,
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn normalized_project_binding_product(
     binder: &Binder,
     units: &[ProjectProgram<'_>],
@@ -1828,7 +1828,7 @@ fn normalized_project_binding_product(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) fn record_continuation_project_binding_consumed_for_test() {
     PROJECT_BINDING_CONTINUATION_CONSUMERS.set(
         PROJECT_BINDING_CONTINUATION_CONSUMERS
@@ -1896,7 +1896,7 @@ where
         module_placeholders = bound.module_placeholders;
         bound.binder
     });
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_ORDINARY_CONSUMERS
         .set(PROJECT_BINDING_ORDINARY_CONSUMERS.get().saturating_add(1));
 
@@ -2484,12 +2484,12 @@ fn seed_prelude_intrinsics(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static DECLARATION_OWNER_SCAN_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_declaration_owner_scan_for_test(rows: u64) {
     DECLARATION_OWNER_SCAN_ROWS.set(DECLARATION_OWNER_SCAN_ROWS.get().saturating_add(rows));
 }
@@ -2548,7 +2548,7 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
     spans: &ModuleDeclarationSpans,
 ) {
     let span = spans.module(scope);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     record_declaration_owner_scan_for_test(u64::from(span.end.saturating_sub(span.start)));
     for id in span {
         let Some(declaration) = binder.declarations.get(DeclId(id)) else {

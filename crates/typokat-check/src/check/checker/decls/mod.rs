@@ -27,11 +27,15 @@ use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static CLASS_ALLOCATION_EVENTS: std::cell::RefCell<Vec<ClassId>> = const {
         std::cell::RefCell::new(Vec::new())
     };
+}
+
+#[cfg(test)]
+thread_local! {
     static INTERFACE_SCC_CONSTRUCTION_WORK: std::cell::RefCell<Vec<InterfaceSccConstructionWork>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -53,17 +57,17 @@ fn reserve_class_id(next_class_id: &mut u32) -> ClassId {
     *next_class_id = next_class_id
         .checked_add(1)
         .expect("class identity domain exhausted");
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     CLASS_ALLOCATION_EVENTS.with(|events| events.borrow_mut().push(class));
     class
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn reset_class_allocation_events_for_test() {
     CLASS_ALLOCATION_EVENTS.with(|events| events.borrow_mut().clear());
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(super) fn class_allocation_events_for_test() -> Vec<ClassId> {
     CLASS_ALLOCATION_EVENTS.with(|events| events.borrow().clone())
 }

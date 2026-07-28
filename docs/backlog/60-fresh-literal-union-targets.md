@@ -34,8 +34,8 @@ multi-shape, discriminated unions must stay working); cross-check tsc 6.0.3 --st
 
 ## Touch points
 
-`src/check/checker/expr.rs` (`contextual_literal_target`),
-`src/check/checker/assignment.rs` (excess against unions), `src/relate/relation.rs`
+`crates/typokat-check/src/check/checker/expr.rs` (`contextual_literal_target`),
+`crates/typokat-check/src/check/checker/assignment.rs` (excess against unions), `src/relate/relation.rs`
 (fresh-literal union-target rule), m30 corpus extension.
 
 <!-- Origin: cross-cutting soundness review 2026-07-07 (modules reviewer #3 + evaluator observation), leader-verified. -->

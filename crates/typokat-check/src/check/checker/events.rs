@@ -2,52 +2,51 @@
 
 use super::reporting_record::CheckerRecord;
 use crate::diagnostics::Diagnostic;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::diagnostics::IncompleteSurface;
 use crate::source::ModuleOrdinal;
 use std::collections::BTreeMap;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static USER_EVENT_RESERVATIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_user_event_reservation_for_test() {
     USER_EVENT_RESERVATIONS.set(USER_EVENT_RESERVATIONS.get().saturating_add(1));
 }
 
-#[cfg(test)]
-pub(crate) struct UserEventReservationScopeForTest(u64);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct UserEventReservationScopeForTest(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl UserEventReservationScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(USER_EVENT_RESERVATIONS.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         USER_EVENT_RESERVATIONS.get().saturating_sub(self.0)
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct UserEventReservationCalibrationForTest {
-    pub(crate) event: u64,
-    pub(crate) record: u64,
+pub struct UserEventReservationCalibrationForTest {
+    pub event: u64,
+    pub record: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl UserEventReservationCalibrationForTest {
-    pub(crate) fn total(self) -> u64 {
+    pub fn total(self) -> u64 {
         self.event.saturating_add(self.record)
     }
 }
 
-#[cfg(test)]
-pub(crate) fn calibrate_user_event_reservations_for_test() -> UserEventReservationCalibrationForTest
-{
+#[cfg(any(test, feature = "test-utils"))]
+pub fn calibrate_user_event_reservations_for_test() -> UserEventReservationCalibrationForTest {
     let event_scope = UserEventReservationScopeForTest::start();
     let mut store = EventStore::default();
     let event = store.reserve_event(ModuleOrdinal::new(0), 0);
@@ -65,7 +64,7 @@ pub(crate) fn calibrate_user_event_reservations_for_test() -> UserEventReservati
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static RESERVED_EVENTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static RESERVED_RECORD_POSITIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -78,27 +77,27 @@ thread_local! {
 /// any semantic phase has produced a record. Reservation is unconditional and lexical, so
 /// every field below is driven by how many statement sites a program *has*, never by how many
 /// of them turn out to say anything.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct EventCompletionWorkForTest {
+pub struct EventCompletionWorkForTest {
     /// Events reserved by the lexical walk. One per source site the replay key must name.
-    pub(crate) reserved_events: u64,
+    pub reserved_events: u64,
     /// Record positions reserved under those events — `immediate`/`deferred`/`incomplete` per
     /// site, plus a callable `body`. The replay contract has to *name* each of these; naming
     /// one does not by itself require the store to keep anything for it.
-    pub(crate) reserved_record_positions: u64,
+    pub reserved_record_positions: u64,
     /// Positions for which the store physically materialized a completion slot during
     /// reservation, holding nothing.
-    pub(crate) materialized_completion_slots: u64,
+    pub materialized_completion_slots: u64,
     /// Bytes those slots retain. Each representation reports its own per-slot cost; the
     /// `BTreeMap` reports key + value only, so its figure is a lower bound that ignores
     /// B-tree node overhead and fill factor.
-    pub(crate) materialized_completion_bytes: u64,
+    pub materialized_completion_bytes: u64,
     /// Records the store actually replayed — the only thing a completion slot exists to carry.
-    pub(crate) replayed_records: u64,
+    pub replayed_records: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn event_completion_work_for_test() -> EventCompletionWorkForTest {
     EventCompletionWorkForTest {
         reserved_events: RESERVED_EVENTS.get(),
@@ -109,12 +108,12 @@ fn event_completion_work_for_test() -> EventCompletionWorkForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_reserved_event() {
     RESERVED_EVENTS.set(RESERVED_EVENTS.get().saturating_add(1));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_reserved_record_position() {
     RESERVED_RECORD_POSITIONS.set(RESERVED_RECORD_POSITIONS.get().saturating_add(1));
 }
@@ -122,7 +121,7 @@ fn record_reserved_record_position() {
 /// Account for the storage one newly reserved position materialized. A representation that
 /// keeps no per-position storage reports zero bytes, and therefore no slot: nothing holds the
 /// position's place except a bit in an event row the store already pays for.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_materialized_completion_slot(bytes: usize) {
     if bytes == 0 {
         return;
@@ -135,7 +134,7 @@ fn record_materialized_completion_slot(bytes: usize) {
     );
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_replayed_records(records: usize) {
     REPLAYED_RECORDS.set(
         REPLAYED_RECORDS
@@ -144,16 +143,16 @@ fn record_replayed_records(records: usize) {
     );
 }
 
-#[cfg(test)]
-pub(crate) struct EventCompletionWorkScopeForTest(EventCompletionWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct EventCompletionWorkScopeForTest(EventCompletionWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl EventCompletionWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(event_completion_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> EventCompletionWorkForTest {
+    pub fn finish(self) -> EventCompletionWorkForTest {
         let end = event_completion_work_for_test();
         EventCompletionWorkForTest {
             reserved_events: end.reserved_events.saturating_sub(self.0.reserved_events),
@@ -173,39 +172,39 @@ impl EventCompletionWorkScopeForTest {
 
 /// Stable identity of one lexically reserved event.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct EventId(usize);
+pub struct EventId(usize);
 
 impl EventId {
-    pub(crate) const fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self.0
     }
 }
 
 /// Stable completion capability for one record position in an event.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct UserRecordTicket {
-    pub(crate) event: EventId,
-    pub(crate) record_ordinal: usize,
+pub struct UserRecordTicket {
+    pub event: EventId,
+    pub record_ordinal: usize,
 }
 
-pub(crate) const fn user_record_ticket_key(ticket: UserRecordTicket) -> (usize, usize) {
+pub const fn user_record_ticket_key(ticket: UserRecordTicket) -> (usize, usize) {
     (ticket.event.index(), ticket.record_ordinal)
 }
 
 /// The total replay order. Field order is intentional and is the checker contract.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct EventKey {
-    pub(crate) module_ordinal: ModuleOrdinal,
-    pub(crate) source_start: u32,
-    pub(crate) event_ordinal: usize,
-    pub(crate) record_ordinal: usize,
+pub struct EventKey {
+    pub module_ordinal: ModuleOrdinal,
+    pub source_start: u32,
+    pub event_ordinal: usize,
+    pub record_ordinal: usize,
 }
 
 /// An event always starts with one record ticket, completed by one ordered record group.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReservedEvent {
-    pub(crate) id: EventId,
-    pub(crate) primary: UserRecordTicket,
+pub struct ReservedEvent {
+    pub id: EventId,
+    pub primary: UserRecordTicket,
 }
 
 /// Record positions one event can reserve. The lexical walk names at most four per site —
@@ -245,14 +244,14 @@ const fn reserved_mask(positions: usize) -> u32 {
 /// [`EventMeta`] already carries whether or not the position is used. Any change that gives a
 /// position its own slot again — a map entry, an arena element, a `Vec` of per-position state —
 /// must report that slot's size here, or the guard measures nothing.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 const fn reserved_position_bytes() -> usize {
     0
 }
 
 /// Reservation or completion misuse. These failures are checker bugs, not user errors.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EventStoreError {
+pub enum EventStoreError {
     UnknownEvent(EventId),
     UnknownRecord(UserRecordTicket),
     DuplicateCompletion(UserRecordTicket),
@@ -262,7 +261,7 @@ pub(crate) enum EventStoreError {
 
 /// Checker-wide authority for deterministic records.
 #[derive(Debug, Default)]
-pub(crate) struct EventStore {
+pub struct EventStore {
     events: Vec<EventMeta>,
     next_event_ordinal: BTreeMap<ModuleOrdinal, usize>,
     /// Records in completion order, each already carrying the replay key of the position that
@@ -273,12 +272,12 @@ pub(crate) struct EventStore {
 
 impl EventStore {
     /// Reserve an event and its mandatory primary record position.
-    pub(crate) fn reserve_event(
+    pub fn reserve_event(
         &mut self,
         module_ordinal: ModuleOrdinal,
         source_start: u32,
     ) -> ReservedEvent {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             record_user_event_reservation_for_test();
             record_reserved_event();
@@ -299,16 +298,13 @@ impl EventStore {
             next_record_ordinal: 1,
             completed: 0,
         });
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_materialized_completion_slot(reserved_position_bytes());
         ReservedEvent { id, primary }
     }
 
     /// Add another ordered record position to an existing event.
-    pub(crate) fn reserve_record(
-        &mut self,
-        event: EventId,
-    ) -> Result<UserRecordTicket, EventStoreError> {
+    pub fn reserve_record(&mut self, event: EventId) -> Result<UserRecordTicket, EventStoreError> {
         let Some(meta) = self.events.get_mut(event.index()) else {
             return Err(EventStoreError::UnknownEvent(event));
         };
@@ -316,7 +312,7 @@ impl EventStore {
             return Err(EventStoreError::RecordCapacity(event));
         }
         // Secondary record positions are semantic reservations too.
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             record_user_event_reservation_for_test();
             record_reserved_record_position();
@@ -326,13 +322,13 @@ impl EventStore {
             record_ordinal: meta.next_record_ordinal,
         };
         meta.next_record_ordinal += 1;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_materialized_completion_slot(reserved_position_bytes());
         Ok(ticket)
     }
 
     /// Complete exactly one reserved position with zero or more ordered records.
-    pub(crate) fn complete(
+    pub fn complete(
         &mut self,
         ticket: UserRecordTicket,
         records: Vec<CheckerRecord>,
@@ -362,8 +358,8 @@ impl EventStore {
     }
 
     /// Emit a lexically immediate record under an already-reserved source event.
-    #[cfg(test)]
-    pub(crate) fn emit_immediate(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn emit_immediate(
         &mut self,
         event: EventId,
         record: CheckerRecord,
@@ -373,13 +369,13 @@ impl EventStore {
     }
 
     /// Atomically commit the selected candidate's completions.
-    #[cfg(test)]
-    pub(crate) fn commit(&mut self, effects: CandidateEffects) -> Result<(), EventStoreError> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn commit(&mut self, effects: CandidateEffects) -> Result<(), EventStoreError> {
         self.complete(effects.owner, effects.records)
     }
 
     /// Replay completed records in their reserved total order.
-    pub(crate) fn finish(mut self) -> Result<Vec<(EventKey, CheckerRecord)>, EventStoreError> {
+    pub fn finish(mut self) -> Result<Vec<(EventKey, CheckerRecord)>, EventStoreError> {
         let unfinished = self.unfinished_positions();
         if !unfinished.is_empty() {
             return Err(EventStoreError::Unfinished(unfinished));
@@ -398,7 +394,7 @@ impl EventStore {
         // 3. `sort_by_key` is stable: distinct keys come out in four-key order, and equal keys
         //    keep push order — which by (2) is the producer order within one position.
         self.records.sort_by_key(|(key, _)| *key);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_replayed_records(self.records.len());
         Ok(self.records)
     }
@@ -430,8 +426,8 @@ impl EventStore {
         unfinished
     }
 
-    #[cfg(test)]
-    pub(crate) fn event_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn event_count(&self) -> usize {
         self.events.len()
     }
 
@@ -443,8 +439,8 @@ impl EventStore {
 
     /// Record positions reserved across every event — what the store has promised to account
     /// for, not what it has stored.
-    #[cfg(test)]
-    pub(crate) fn record_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn record_count(&self) -> usize {
         self.events
             .iter()
             .map(|meta| meta.next_record_ordinal)
@@ -454,30 +450,30 @@ impl EventStore {
 
 /// Records accumulated by one speculative candidate before the winner commits.
 #[derive(Debug)]
-pub(crate) struct CandidateEffects {
+pub struct CandidateEffects {
     owner: UserRecordTicket,
     records: Vec<CheckerRecord>,
 }
 
 impl CandidateEffects {
-    pub(crate) fn new(owner: UserRecordTicket) -> Self {
+    pub fn new(owner: UserRecordTicket) -> Self {
         Self {
             owner,
             records: Vec::new(),
         }
     }
 
-    pub(crate) fn diagnostic(&mut self, diagnostic: Diagnostic) {
+    pub fn diagnostic(&mut self, diagnostic: Diagnostic) {
         self.records.push(CheckerRecord::Diagnostic(diagnostic));
     }
 
-    #[cfg(test)]
-    pub(crate) fn incomplete(&mut self, incomplete: IncompleteSurface) {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn incomplete(&mut self, incomplete: IncompleteSurface) {
         self.records.push(CheckerRecord::Incomplete(incomplete));
     }
 
-    #[cfg(test)]
-    pub(crate) fn merge(&mut self, child: CandidateEffects) {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn merge(&mut self, child: CandidateEffects) {
         assert_eq!(
             self.owner, child.owner,
             "nested effects must share one owner"
@@ -485,12 +481,12 @@ impl CandidateEffects {
         self.records.extend(child.records);
     }
 
-    pub(crate) fn into_parts(self) -> (UserRecordTicket, Vec<CheckerRecord>) {
+    pub fn into_parts(self) -> (UserRecordTicket, Vec<CheckerRecord>) {
         (self.owner, self.records)
     }
 
-    #[cfg(test)]
-    pub(crate) fn discard(self) {}
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn discard(self) {}
 }
 
 #[cfg(test)]

@@ -8,16 +8,16 @@ use super::events_library::{
 };
 use super::lexical_events::LexicalReservations;
 use super::lexical_events_library::library_unit;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use super::lexical_events_library::ExactUnit;
 use super::library_identities::LibraryIdentityTerminal;
 use super::library_identities::LibrarySemanticIdentities;
 use super::library_reporting::LibraryReportingConsumer;
 #[cfg(test)]
 use super::library_reporting::LibraryReportingFamily;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use super::library_reporting::LibraryReportingReceipt;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use super::namespace_values::NamespaceValueRegistry;
 use super::namespace_values::{
     FrozenNamespaceValueTerminalSnapshot, FrozenNamespaceValueTerminalSnapshotRow,
@@ -40,20 +40,20 @@ use super::{
     FrozenCheckerRuntimeMetadata, FrozenCheckerRuntimeSnapshotParts, PassReporting,
     PassReportingPlan,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use super::{check_bound_user_program_with_final_identity_inspector, BoundUserBase};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::bind::LibraryBinderCheckpointEnds;
 use crate::binder::bind::{LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::declaration::DeclId;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::declaration::TypeFragmentKind;
 use crate::binder::declaration::{
     source_global_binding_census_with_provenance, SourceBindingSlot, SourceGlobalContributorKind,
     TypeGroupId, ValueStorageId,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::namespace::MergeDeclarationKind;
 use crate::binder::namespace::{
     exact_key, source_file_kind, CompilationUnit, ExactKey, ExportContextKind,
@@ -61,47 +61,47 @@ use crate::binder::namespace::{
 };
 use crate::binder::roots::{collect_root_rows, RootNameRow};
 use crate::binder::scope::ScopeId;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::class_semantics::CanonicalPublishedClassTerminal;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::class_semantics::DemandOutcome;
 use crate::class_semantics::OwnedPublishedClassTerminal;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::diagnostics::render_type;
 use crate::diagnostics::{render_to_writer_with_format, DiagnosticFormat};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
 use crate::types::repr::ClassId;
 use crate::types::repr::TypeParamId;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::types::repr::{
     IntrinsicKind, LiteralValue, ModifierOp, ObjectType, TypeTag, Visibility,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::types::store::Store;
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_parser::{Parser, ParserReturn};
 use oxc_span::SourceType;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use std::time::{Duration, Instant};
 
 /// Sealed authority for one collision-preflighted frozen-prefix fork.
-pub(crate) struct CollisionFreeUserDeltaCapability(());
+pub struct CollisionFreeUserDeltaCapability(());
 
 impl CollisionFreeUserDeltaCapability {
-    pub(crate) fn issue() -> Self {
+    pub fn issue() -> Self {
         Self(())
     }
 }
 
-pub(crate) struct OwnedLibraryRuntimeState {
+pub struct OwnedLibraryRuntimeState {
     interner: Interner,
     binder: Binder,
     published_types: PublishedTypeEnvironment,
@@ -128,12 +128,12 @@ pub(in crate::check::checker) struct OwnedLibraryRuntimeProductParts {
     pub(in crate::check::checker) source_file_count: u32,
 }
 
-pub(crate) struct CompiledLibraryRuntimeProduct {
+pub struct CompiledLibraryRuntimeProduct {
     pub(in crate::check::checker) _parts: OwnedLibraryRuntimeProductParts,
-    pub(crate) _replay_index: AdmittedCollisionReplayIndex,
+    pub _replay_index: AdmittedCollisionReplayIndex,
 }
 
-pub(crate) fn freeze_library_runtime_product(
+pub fn freeze_library_runtime_product(
     mut state: OwnedLibraryRuntimeState,
 ) -> Result<CompiledLibraryRuntimeProduct, &'static str> {
     let replay_index = state
@@ -603,7 +603,7 @@ impl OwnedLibraryRuntimeState {
         )
     }
 
-    pub(crate) fn freeze_as_library_base(&mut self) -> Result<(), &'static str> {
+    pub fn freeze_as_library_base(&mut self) -> Result<(), &'static str> {
         self.interner.freeze_as_base()?;
         self.binder.freeze_as_base()?;
         self.published_types.freeze_as_base()?;
@@ -611,7 +611,7 @@ impl OwnedLibraryRuntimeState {
         self.runtime.freeze_as_base()
     }
 
-    pub(crate) fn fork_collision_free_user_delta(
+    pub fn fork_collision_free_user_delta(
         &self,
         _capability: CollisionFreeUserDeltaCapability,
     ) -> Result<Self, &'static str> {
@@ -619,7 +619,7 @@ impl OwnedLibraryRuntimeState {
     }
 
     fn fork_user_delta(&self) -> Result<Self, &'static str> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         USER_DELTA_FORKS.set(USER_DELTA_FORKS.get().saturating_add(1));
         Ok(Self {
             interner: self.interner.fork_delta()?,
@@ -635,7 +635,7 @@ impl OwnedLibraryRuntimeState {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn fork_user_delta_for_test(&self) -> Result<Self, &'static str> {
         self.fork_user_delta()
     }
@@ -656,8 +656,8 @@ impl OwnedLibraryRuntimeState {
     /// Reference-row counts of the frozen base: store, interner identity, binder.
     ///
     /// A user delta that leaked a row into the base would move one of these.
-    #[cfg(test)]
-    pub(crate) fn reference_record_counts_for_test(&self) -> [usize; 3] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn reference_record_counts_for_test(&self) -> [usize; 3] {
         let (store, interner) = self.interner.reference_records_for_test();
         let binder = crate::binder::references::reference_records(&self.binder)
             .expect("frozen binder projects its reference rows")
@@ -665,8 +665,8 @@ impl OwnedLibraryRuntimeState {
         [store.len(), interner.len(), binder]
     }
 
-    #[cfg(test)]
-    pub(crate) fn storage_identity_for_test(&self) -> [usize; 8] {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn storage_identity_for_test(&self) -> [usize; 8] {
         [
             std::ptr::from_ref(self).addr(),
             std::ptr::from_ref(&self.interner).addr(),
@@ -681,13 +681,13 @@ impl OwnedLibraryRuntimeState {
         ]
     }
 
-    #[cfg(test)]
-    pub(crate) fn initial_visible_user_names_for_test(&self) -> BTreeSet<String> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn initial_visible_user_names_for_test(&self) -> BTreeSet<String> {
         self.binder.local_names_for_test()
     }
 
-    #[cfg(test)]
-    pub(crate) fn install_user_delta_drop_witness_for_test(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn install_user_delta_drop_witness_for_test(
         &mut self,
         discarded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) {
@@ -697,7 +697,7 @@ impl OwnedLibraryRuntimeState {
 
     /// Frozen id prefixes in `FrozenLibraryPrefixes` order: types, type params, classes,
     /// scopes, symbols, declarations, type groups, namespaces, value storages.
-    pub(crate) fn library_prefixes(&self) -> Result<[usize; 9], &'static str> {
+    pub fn library_prefixes(&self) -> Result<[usize; 9], &'static str> {
         Ok([
             self.interner.store().len(),
             usize::try_from(self.next_type_param)
@@ -712,8 +712,8 @@ impl OwnedLibraryRuntimeState {
         ])
     }
 
-    #[cfg(test)]
-    pub(crate) fn identity_ends_for_test(&self) -> OwnedBaseFinalIdentityEnds {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn identity_ends_for_test(&self) -> OwnedBaseFinalIdentityEnds {
         OwnedBaseFinalIdentityEnds {
             store: self.interner.store().len(),
             declared_recipes: self.interner.store().all_declared_recipes().count(),
@@ -729,8 +729,8 @@ impl OwnedLibraryRuntimeState {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn named_type_for_test(&self, name: &str) -> Option<TypeId> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn named_type_for_test(&self, name: &str) -> Option<TypeId> {
         let group = self
             .binder
             .resolve_type(self.binder.compilation_global, name)
@@ -751,13 +751,13 @@ impl OwnedLibraryRuntimeState {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
         self.interner.frozen_structural_object_probe_for_test()
     }
 
-    #[cfg(test)]
-    pub(crate) fn reintern_structural_type_for_test(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn reintern_structural_type_for_test(
         &self,
         descriptor: ObjectType,
     ) -> Result<(TypeId, usize), &'static str> {
@@ -767,7 +767,7 @@ impl OwnedLibraryRuntimeState {
         Ok((resolved, delta.interner.store().len() - before))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn final_base_family_clone_counts_for_test(
         &self,
         pass: &super::context::Pass<'_, '_>,
@@ -875,7 +875,7 @@ impl OwnedLibraryRuntimeState {
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn final_local_rows_written_for_test(pass: &super::context::Pass<'_, '_>) -> u64 {
         let store = pass.interner.store().local_family_row_counts_for_test();
         let interner = pass.interner.local_index_row_counts_for_test();
@@ -901,8 +901,8 @@ impl OwnedLibraryRuntimeState {
         u64::try_from(rows).expect("local row count fits u64")
     }
 
-    #[cfg(test)]
-    pub(crate) fn type_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn type_count(&self) -> usize {
         self.interner.store().len()
     }
 
@@ -934,8 +934,8 @@ impl OwnedLibraryRuntimeState {
         Ok(parts)
     }
 
-    #[cfg(test)]
-    pub(crate) fn replay_index(&self) -> Option<&AdmittedCollisionReplayIndex> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn replay_index(&self) -> Option<&AdmittedCollisionReplayIndex> {
         self.replay_index.as_deref()
     }
 
@@ -971,15 +971,15 @@ impl OwnedLibraryRuntimeState {
     }
 
     /// Root names published into the compilation-global scope of the compiled library.
-    pub(crate) fn library_root_names(&self) -> Result<BTreeSet<String>, &'static str> {
+    pub fn library_root_names(&self) -> Result<BTreeSet<String>, &'static str> {
         collect_root_rows(&self.binder)
             .map(|rows| rows.into_iter().map(|row| row.name).collect())
             .map_err(|_| "library binder does not expose a compilation-global root index")
     }
 }
 
-#[cfg(test)]
-pub(crate) fn compile_synthetic_padding_base_for_test(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_synthetic_padding_base_for_test(
     namespace_count: usize,
 ) -> Result<OwnedLibraryRuntimeState, String> {
     let mut source = String::new();
@@ -1003,39 +1003,39 @@ pub(crate) fn compile_synthetic_padding_base_for_test(
     Ok(state)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct OwnedBaseUserTimings {
-    pub(crate) parse: Duration,
-    pub(crate) bind: Duration,
-    pub(crate) check: Duration,
+pub struct OwnedBaseUserTimings {
+    pub parse: Duration,
+    pub bind: Duration,
+    pub check: Duration,
 }
 
-#[cfg(test)]
-pub(crate) struct OwnedBaseUserRun {
-    pub(crate) result: super::CheckResult,
-    pub(crate) timings: OwnedBaseUserTimings,
-    pub(crate) witness: OwnedBaseContinuationWitness,
-    pub(crate) final_identity: OwnedBaseFinalIdentityWitness,
+#[cfg(any(test, feature = "test-utils"))]
+pub struct OwnedBaseUserRun {
+    pub result: super::CheckResult,
+    pub timings: OwnedBaseUserTimings,
+    pub witness: OwnedBaseContinuationWitness,
+    pub final_identity: OwnedBaseFinalIdentityWitness,
 }
 
-#[cfg(test)]
-pub(crate) struct OwnedBaseUserProjectRun {
-    pub(crate) reports: Vec<crate::check::test_support::FileReport>,
-    pub(crate) final_identity: OwnedBaseFinalIdentityWitness,
-    pub(crate) cross_file: OwnedBaseCrossFileWitness,
+#[cfg(any(test, feature = "test-utils"))]
+pub struct OwnedBaseUserProjectRun {
+    pub reports: Vec<crate::check::test_support::FileReport>,
+    pub final_identity: OwnedBaseFinalIdentityWitness,
+    pub cross_file: OwnedBaseCrossFileWitness,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OwnedBaseCrossFileWitness {
-    pub(crate) producer_type_group: TypeGroupId,
-    pub(crate) consumer_type_group: TypeGroupId,
-    pub(crate) producer_value_storage: ValueStorageId,
-    pub(crate) consumer_value_storage: ValueStorageId,
+pub struct OwnedBaseCrossFileWitness {
+    pub producer_type_group: TypeGroupId,
+    pub consumer_type_group: TypeGroupId,
+    pub producer_value_storage: ValueStorageId,
+    pub consumer_value_storage: ValueStorageId,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static USER_SOURCE_PARSE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_SOURCE_BIND_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1043,29 +1043,29 @@ thread_local! {
     static USER_DELTA_FORKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
-pub(crate) struct UserDeltaForkScopeForTest(u64);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct UserDeltaForkScopeForTest(u64);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl UserDeltaForkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(USER_DELTA_FORKS.get())
     }
 
-    pub(crate) fn finish(self) -> u64 {
+    pub fn finish(self) -> u64 {
         USER_DELTA_FORKS.get().saturating_sub(self.0)
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct UserSourceWorkForTest {
-    pub(crate) parses: u64,
-    pub(crate) binds: u64,
-    pub(crate) checks: u64,
+pub struct UserSourceWorkForTest {
+    pub parses: u64,
+    pub binds: u64,
+    pub checks: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn user_source_work_for_test() -> UserSourceWorkForTest {
     UserSourceWorkForTest {
         parses: USER_SOURCE_PARSE_CALLS.get(),
@@ -1074,8 +1074,8 @@ fn user_source_work_for_test() -> UserSourceWorkForTest {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn record_user_source_parses_for_test(count: usize) {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_user_source_parses_for_test(count: usize) {
     USER_SOURCE_PARSE_CALLS.set(
         USER_SOURCE_PARSE_CALLS
             .get()
@@ -1083,8 +1083,8 @@ pub(crate) fn record_user_source_parses_for_test(count: usize) {
     );
 }
 
-#[cfg(test)]
-pub(in crate::check::checker) fn record_user_source_binds_for_test(count: usize) {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_user_source_binds_for_test(count: usize) {
     USER_SOURCE_BIND_CALLS.set(
         USER_SOURCE_BIND_CALLS
             .get()
@@ -1092,8 +1092,8 @@ pub(in crate::check::checker) fn record_user_source_binds_for_test(count: usize)
     );
 }
 
-#[cfg(test)]
-pub(in crate::check::checker) fn record_user_source_checks_for_test(count: usize) {
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_user_source_checks_for_test(count: usize) {
     USER_SOURCE_CHECK_CALLS.set(
         USER_SOURCE_CHECK_CALLS
             .get()
@@ -1101,16 +1101,16 @@ pub(in crate::check::checker) fn record_user_source_checks_for_test(count: usize
     );
 }
 
-#[cfg(test)]
-pub(crate) struct UserSourceWorkScopeForTest(UserSourceWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct UserSourceWorkScopeForTest(UserSourceWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl UserSourceWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(user_source_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> UserSourceWorkForTest {
+    pub fn finish(self) -> UserSourceWorkForTest {
         let end = user_source_work_for_test();
         UserSourceWorkForTest {
             parses: end.parses.saturating_sub(self.0.parses),
@@ -1120,80 +1120,80 @@ impl UserSourceWorkScopeForTest {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OwnedBaseFinalIdentityWitness {
-    pub(crate) ends: OwnedBaseFinalIdentityEnds,
-    pub(crate) actual_ids: OwnedBaseActualIds,
-    pub(crate) named_alias_types: BTreeMap<String, TypeId>,
-    pub(crate) local_names: BTreeSet<String>,
-    pub(crate) references: OwnedBaseReferenceSummary,
-    pub(crate) reused_base_shape: Option<OwnedBaseReusedShapeWitness>,
-    pub(crate) base_row_clone_counts: BTreeMap<&'static str, u64>,
-    pub(crate) local_rows_written: u64,
+pub struct OwnedBaseFinalIdentityWitness {
+    pub ends: OwnedBaseFinalIdentityEnds,
+    pub actual_ids: OwnedBaseActualIds,
+    pub named_alias_types: BTreeMap<String, TypeId>,
+    pub local_names: BTreeSet<String>,
+    pub references: OwnedBaseReferenceSummary,
+    pub reused_base_shape: Option<OwnedBaseReusedShapeWitness>,
+    pub base_row_clone_counts: BTreeMap<&'static str, u64>,
+    pub local_rows_written: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct OwnedBaseActualIds {
-    pub(crate) types: Vec<usize>,
-    pub(crate) type_params: Vec<usize>,
-    pub(crate) classes: Vec<usize>,
-    pub(crate) scopes: Vec<usize>,
-    pub(crate) symbols: Vec<usize>,
-    pub(crate) declarations: Vec<usize>,
-    pub(crate) type_groups: Vec<usize>,
-    pub(crate) namespaces: Vec<usize>,
-    pub(crate) value_storages: Vec<usize>,
+pub struct OwnedBaseActualIds {
+    pub types: Vec<usize>,
+    pub type_params: Vec<usize>,
+    pub classes: Vec<usize>,
+    pub scopes: Vec<usize>,
+    pub symbols: Vec<usize>,
+    pub declarations: Vec<usize>,
+    pub type_groups: Vec<usize>,
+    pub namespaces: Vec<usize>,
+    pub value_storages: Vec<usize>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct OwnedBaseReferenceSummary {
-    pub(crate) base_to_delta: u64,
-    pub(crate) delta_to_base: u64,
-    pub(crate) delta_to_delta: u64,
+pub struct OwnedBaseReferenceSummary {
+    pub base_to_delta: u64,
+    pub delta_to_base: u64,
+    pub delta_to_delta: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OwnedBaseFinalIdentityEnds {
-    pub(crate) store: usize,
-    pub(crate) declared_recipes: usize,
-    pub(crate) type_params: usize,
-    pub(crate) classes: usize,
-    pub(crate) scopes: usize,
-    pub(crate) symbols: usize,
-    pub(crate) declarations: usize,
-    pub(crate) type_groups: usize,
-    pub(crate) namespaces: usize,
-    pub(crate) value_storages: usize,
+pub struct OwnedBaseFinalIdentityEnds {
+    pub store: usize,
+    pub declared_recipes: usize,
+    pub type_params: usize,
+    pub classes: usize,
+    pub scopes: usize,
+    pub symbols: usize,
+    pub declarations: usize,
+    pub type_groups: usize,
+    pub namespaces: usize,
+    pub value_storages: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OwnedBaseReusedShapeWitness {
-    pub(crate) type_id: TypeId,
-    pub(crate) tag: TypeTag,
+pub struct OwnedBaseReusedShapeWitness {
+    pub type_id: TypeId,
+    pub tag: TypeTag,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OwnedBaseContinuationWitness {
-    pub(crate) base_store_len: usize,
-    pub(crate) final_store_len: usize,
-    pub(crate) base_type_group_count: usize,
-    pub(crate) final_type_group_count: usize,
-    pub(crate) base_decl_count: u32,
-    pub(crate) final_decl_count: u32,
-    pub(crate) source_key: u32,
-    pub(crate) base_max_source_key: u32,
-    pub(crate) array_group_stable: bool,
-    pub(crate) document_value_stable: bool,
-    pub(crate) store_prefix_stable: Option<bool>,
+pub struct OwnedBaseContinuationWitness {
+    pub base_store_len: usize,
+    pub final_store_len: usize,
+    pub base_type_group_count: usize,
+    pub final_type_group_count: usize,
+    pub base_decl_count: u32,
+    pub final_decl_count: u32,
+    pub source_key: u32,
+    pub base_max_source_key: u32,
+    pub array_group_stable: bool,
+    pub document_value_stable: bool,
+    pub store_prefix_stable: Option<bool>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn store_prefix_digest(
     store: &Store,
     type_len: usize,
@@ -1217,7 +1217,7 @@ fn store_prefix_digest(
     Ok(format!("{:x}", Sha256::digest(bytes.finish())))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 struct FinalIdentityInspection<'a> {
     base_store_len: usize,
     base_value_storage_len: usize,
@@ -1235,7 +1235,7 @@ struct FinalIdentityInspection<'a> {
     local_rows_written: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<usize> {
     match domain {
         1 => Some(ends.store),
@@ -1252,7 +1252,7 @@ fn base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<us
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn classify_live_reference(
     summary: &mut OwnedBaseReferenceSummary,
     base: &OwnedBaseFinalIdentityEnds,
@@ -1275,7 +1275,7 @@ fn classify_live_reference(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn final_reference_summary(
     pass: &super::context::Pass<'_, '_>,
     base: &OwnedBaseFinalIdentityEnds,
@@ -1438,7 +1438,7 @@ fn final_reference_summary(
     summary
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinalIdentityWitness {
     let FinalIdentityInspection {
         base_store_len,
@@ -1622,14 +1622,14 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct InjectedLibrarySource<'source> {
-    pub(crate) file_ordinal: LibraryFileOrdinal,
-    pub(crate) name: &'source str,
-    pub(crate) source: &'source str,
+pub struct InjectedLibrarySource<'source> {
+    pub file_ordinal: LibraryFileOrdinal,
+    pub name: &'source str,
+    pub source: &'source str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum InjectedProfileError {
+pub enum InjectedProfileError {
     EmptyProfile,
     EmptyName {
         file_ordinal: LibraryFileOrdinal,
@@ -1650,26 +1650,26 @@ pub(crate) enum InjectedProfileError {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct LibraryPhaseCounts {
-    pub(crate) parse_units: usize,
-    pub(crate) bind_units: usize,
-    pub(crate) reserved_records: usize,
-    pub(crate) filled_records: usize,
-    pub(crate) publication_validations: usize,
-    pub(crate) statement_check_units: usize,
+pub struct LibraryPhaseCounts {
+    pub parse_units: usize,
+    pub bind_units: usize,
+    pub reserved_records: usize,
+    pub filled_records: usize,
+    pub publication_validations: usize,
+    pub statement_check_units: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct LibraryPhaseTimings {
-    pub(crate) parse: Duration,
-    pub(crate) bind: Duration,
-    pub(crate) reserve_fill: Duration,
-    pub(crate) publication_validation: Duration,
-    pub(crate) statement_check: Duration,
+pub struct LibraryPhaseTimings {
+    pub parse: Duration,
+    pub bind: Duration,
+    pub reserve_fill: Duration,
+    pub publication_validation: Duration,
+    pub statement_check: Duration,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl LibraryPhaseTimings {
     fn measured_total(&self) -> Duration {
         self.parse
@@ -1680,70 +1680,70 @@ impl LibraryPhaseTimings {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TypeProbe {
-    pub(crate) identity: TypeGroupId,
-    pub(crate) declaration_identities: Vec<(LibraryFileOrdinal, TypeGroupId)>,
-    pub(crate) declaration_count: usize,
-    pub(crate) member_names: Vec<String>,
+pub struct TypeProbe {
+    pub identity: TypeGroupId,
+    pub declaration_identities: Vec<(LibraryFileOrdinal, TypeGroupId)>,
+    pub declaration_count: usize,
+    pub member_names: Vec<String>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SignatureProbe {
-    pub(crate) parameter_types: Vec<String>,
-    pub(crate) return_type: String,
+pub struct SignatureProbe {
+    pub parameter_types: Vec<String>,
+    pub return_type: String,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CallableMemberProbe {
-    pub(crate) name: String,
-    pub(crate) identity: ValueStorageId,
-    pub(crate) source: ExactUnit,
-    pub(crate) reservation_source: ExactUnit,
-    pub(crate) source_start: u32,
-    pub(crate) call_signature_count: usize,
-    pub(crate) signatures: Vec<SignatureProbe>,
+pub struct CallableMemberProbe {
+    pub name: String,
+    pub identity: ValueStorageId,
+    pub source: ExactUnit,
+    pub reservation_source: ExactUnit,
+    pub source_start: u32,
+    pub call_signature_count: usize,
+    pub signatures: Vec<SignatureProbe>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ValueProbe {
-    pub(crate) identity: ValueStorageId,
+pub struct ValueProbe {
+    pub identity: ValueStorageId,
     visible_type: Option<TypeId>,
-    pub(crate) participant_identities: Vec<(LibraryFileOrdinal, ValueStorageId)>,
-    pub(crate) declaration_count: usize,
-    pub(crate) call_signature_count: usize,
-    pub(crate) member_names: Vec<String>,
-    pub(crate) callable_members: Vec<CallableMemberProbe>,
+    pub participant_identities: Vec<(LibraryFileOrdinal, ValueStorageId)>,
+    pub declaration_count: usize,
+    pub call_signature_count: usize,
+    pub member_names: Vec<String>,
+    pub callable_members: Vec<CallableMemberProbe>,
 }
 
 #[derive(Debug)]
-pub(crate) struct InjectedProfileRun {
-    pub(crate) phase_counts: LibraryPhaseCounts,
-    #[cfg(test)]
-    pub(crate) phase_timings: LibraryPhaseTimings,
-    #[cfg(test)]
-    pub(crate) reserved_file_ordinals: Vec<LibraryFileOrdinal>,
-    #[cfg(test)]
+pub struct InjectedProfileRun {
+    pub phase_counts: LibraryPhaseCounts,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub phase_timings: LibraryPhaseTimings,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub reserved_file_ordinals: Vec<LibraryFileOrdinal>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) reporting_receipts: Vec<LibraryReportingReceipt>,
     /// The library's own records — empty unless the caller asked for
     /// [`LibraryRecordRetention::Collect`]. Nothing downstream of a compile retains them
     /// (ADR-0018).
-    pub(crate) library_records: Vec<(LibraryEventKey, CheckerRecord)>,
-    #[cfg(test)]
-    pub(crate) pass_source_units: Vec<ExactUnit>,
-    #[cfg(test)]
-    pub(crate) lexical_source_units: Vec<ExactUnit>,
-    #[cfg(test)]
+    pub library_records: Vec<(LibraryEventKey, CheckerRecord)>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub pass_source_units: Vec<ExactUnit>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub lexical_source_units: Vec<ExactUnit>,
+    #[cfg(any(test, feature = "test-utils"))]
     global_types: BTreeMap<String, TypeProbe>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     module_types: BTreeMap<(LibraryFileOrdinal, String), TypeProbe>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     global_values: BTreeMap<String, ValueProbe>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     semantic_identities: LibrarySemanticIdentities,
 }
 
@@ -1752,27 +1752,27 @@ pub(crate) struct InjectedProfileRun {
 /// This is artifact identity, not semantic output: the records themselves are what
 /// ADR-0011 requires be preserved exactly, and they reach the base untouched. Nothing in a
 /// compile reads these blobs, so the suite — not every process — projects them (ADR-0017).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CanonicalLibraryEvidence {
-    pub(crate) diagnostics: Vec<u8>,
-    pub(crate) incompletes: Vec<u8>,
-    pub(crate) ledger: Vec<u8>,
+pub struct CanonicalLibraryEvidence {
+    pub diagnostics: Vec<u8>,
+    pub incompletes: Vec<u8>,
+    pub ledger: Vec<u8>,
 }
 
 impl InjectedProfileRun {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn semantic_identities(&self) -> &LibrarySemanticIdentities {
         &self.semantic_identities
     }
 
-    #[cfg(test)]
-    pub(crate) fn global_type_probe(&self, name: &str) -> Option<&TypeProbe> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn global_type_probe(&self, name: &str) -> Option<&TypeProbe> {
         self.global_types.get(name)
     }
 
-    #[cfg(test)]
-    pub(crate) fn module_type_probe(
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn module_type_probe(
         &self,
         file_ordinal: LibraryFileOrdinal,
         name: &str,
@@ -1780,8 +1780,8 @@ impl InjectedProfileRun {
         self.module_types.get(&(file_ordinal, name.to_owned()))
     }
 
-    #[cfg(test)]
-    pub(crate) fn global_value_probe(&self, name: &str) -> Option<&ValueProbe> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn global_value_probe(&self, name: &str) -> Option<&ValueProbe> {
         self.global_values.get(name)
     }
 }
@@ -1799,13 +1799,13 @@ struct CanonicalLibraryFrontend<'source, 'ast> {
     binder: Binder,
     module_scopes: Vec<ScopeId>,
     semantic_scopes: Vec<ScopeId>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     parse_elapsed: Duration,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     bind_elapsed: Duration,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static CANONICAL_FRONTEND_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static CANONICAL_FRONTEND_PARSE_UNITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1815,18 +1815,18 @@ thread_local! {
     static CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct CanonicalLibraryFrontendWorkForTest {
-    pub(crate) entries: u64,
-    pub(crate) parse_units: u64,
-    pub(crate) bind_batches: u64,
-    pub(crate) bind_units: u64,
-    pub(crate) full_source_products_consumed: u64,
-    pub(crate) checkpoint_products_consumed: u64,
+pub struct CanonicalLibraryFrontendWorkForTest {
+    pub entries: u64,
+    pub parse_units: u64,
+    pub bind_batches: u64,
+    pub bind_units: u64,
+    pub full_source_products_consumed: u64,
+    pub checkpoint_products_consumed: u64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn canonical_library_frontend_work_for_test() -> CanonicalLibraryFrontendWorkForTest {
     CanonicalLibraryFrontendWorkForTest {
         entries: CANONICAL_FRONTEND_ENTRIES.get(),
@@ -1838,16 +1838,16 @@ fn canonical_library_frontend_work_for_test() -> CanonicalLibraryFrontendWorkFor
     }
 }
 
-#[cfg(test)]
-pub(crate) struct CanonicalLibraryFrontendWorkScopeForTest(CanonicalLibraryFrontendWorkForTest);
+#[cfg(any(test, feature = "test-utils"))]
+pub struct CanonicalLibraryFrontendWorkScopeForTest(CanonicalLibraryFrontendWorkForTest);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl CanonicalLibraryFrontendWorkScopeForTest {
-    pub(crate) fn start() -> Self {
+    pub fn start() -> Self {
         Self(canonical_library_frontend_work_for_test())
     }
 
-    pub(crate) fn finish(self) -> CanonicalLibraryFrontendWorkForTest {
+    pub fn finish(self) -> CanonicalLibraryFrontendWorkForTest {
         let end = canonical_library_frontend_work_for_test();
         CanonicalLibraryFrontendWorkForTest {
             entries: end.entries.saturating_sub(self.0.entries),
@@ -1881,7 +1881,7 @@ impl CanonicalBytes {
         self.0.push(value);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn bool(&mut self, value: bool) {
         self.byte(u8::from(value));
     }
@@ -1911,12 +1911,12 @@ impl CanonicalBytes {
         self.bytes(value.as_bytes())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn type_id(&mut self, value: TypeId) {
         self.u32(value.0);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn optional_type_id(&mut self, value: Option<TypeId>) {
         self.bool(value.is_some());
         if let Some(value) = value {
@@ -1924,7 +1924,7 @@ impl CanonicalBytes {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn type_ids(&mut self, values: &[TypeId]) -> Result<(), InjectedProfileError> {
         self.usize(values.len())?;
         for value in values {
@@ -1938,7 +1938,7 @@ impl CanonicalBytes {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn intrinsic_code(kind: IntrinsicKind) -> u8 {
     match kind {
         IntrinsicKind::Error => 0,
@@ -1961,7 +1961,7 @@ fn intrinsic_code(kind: IntrinsicKind) -> u8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn visibility_code(visibility: Visibility) -> u8 {
     match visibility {
         Visibility::Public => 0,
@@ -1970,7 +1970,7 @@ fn visibility_code(visibility: Visibility) -> u8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn modifier_code(modifier: ModifierOp) -> u8 {
     match modifier {
         ModifierOp::Keep => 0,
@@ -1979,7 +1979,7 @@ fn modifier_code(modifier: ModifierOp) -> u8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn encode_store_row(
     bytes: &mut CanonicalBytes,
     store: &Store,
@@ -2178,7 +2178,7 @@ fn encode_store_row(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn encode_declared_recipe_row(
     bytes: &mut CanonicalBytes,
     store: &Store,
@@ -2251,7 +2251,7 @@ fn canonical_input_for_record(
         })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn encode_library_key(
     bytes: &mut CanonicalBytes,
     key: LibraryEventKey,
@@ -2299,8 +2299,8 @@ fn canonical_record_bytes(
 ///
 /// Test-only by construction: the blobs pinned the retired artifact's sections and no compile
 /// reads them, so the projection is a suite assertion rather than startup work (ADR-0017).
-#[cfg(test)]
-pub(crate) fn canonical_library_evidence_for_test(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn canonical_library_evidence_for_test(
     sources: &[InjectedLibrarySource<'_>],
     records: &[(LibraryEventKey, CheckerRecord)],
 ) -> Result<CanonicalLibraryEvidence, InjectedProfileError> {
@@ -2350,7 +2350,7 @@ struct ReplayTerminalValidationInputs<'a> {
     semantic_identities: Option<&'a LibrarySemanticIdentities>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TerminalClassDependencyValidationWork {
     owner_root_summaries: u64,
@@ -2390,11 +2390,13 @@ enum TerminalOwnerExpression {
 /// query roots re-walked shared pass-through chains once per root.
 fn terminal_expression_owners(
     expressions: &[TerminalOwnerExpression],
-    #[cfg(test)] work: &mut Option<&mut TerminalClassDependencyValidationWork>,
+    #[cfg(any(test, feature = "test-utils"))] work: &mut Option<
+        &mut TerminalClassDependencyValidationWork,
+    >,
 ) -> Vec<Vec<ReplayOwner>> {
     let mut owners = Vec::<Vec<ReplayOwner>>::with_capacity(expressions.len());
     for (expression, node) in expressions.iter().enumerate() {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_terminal_owner_expression_visits(work, 1);
         match node {
             TerminalOwnerExpression::Owner(owner) => owners.push(vec![*owner]),
@@ -2407,7 +2409,7 @@ fn terminal_expression_owners(
                         input < expression,
                         "owner expression {expression} merges a later input {input}"
                     );
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-utils"))]
                     record_terminal_owner_expression_visits(work, owners[input].len());
                     merged.extend_from_slice(&owners[input]);
                 }
@@ -2420,7 +2422,7 @@ fn terminal_expression_owners(
     owners
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_terminal_semantic_nodes(
     work: &mut Option<&mut TerminalClassDependencyValidationWork>,
     count: usize,
@@ -2432,7 +2434,7 @@ fn record_terminal_semantic_nodes(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_terminal_semantic_edges(
     work: &mut Option<&mut TerminalClassDependencyValidationWork>,
     count: usize,
@@ -2444,7 +2446,7 @@ fn record_terminal_semantic_edges(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_terminal_class_edges(
     work: &mut Option<&mut TerminalClassDependencyValidationWork>,
     count: usize,
@@ -2456,7 +2458,7 @@ fn record_terminal_class_edges(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_terminal_class_summary_items(
     work: &mut Option<&mut TerminalClassDependencyValidationWork>,
     count: usize,
@@ -2468,7 +2470,7 @@ fn record_terminal_class_summary_items(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn record_terminal_owner_expression_visits(
     work: &mut Option<&mut TerminalClassDependencyValidationWork>,
     count: usize,
@@ -2485,7 +2487,9 @@ fn require_terminal_class_dependency_closure(
     sparse_semantic_edges: &BTreeMap<(u8, u32), Vec<(u8, u32)>>,
     sparse_class_edges: &BTreeMap<(u8, u32), Vec<ClassId>>,
     direct: BTreeMap<ReplayOwner, Vec<TypeId>>,
-    #[cfg(test)] mut work: Option<&mut TerminalClassDependencyValidationWork>,
+    #[cfg(any(test, feature = "test-utils"))] mut work: Option<
+        &mut TerminalClassDependencyValidationWork,
+    >,
 ) {
     const TYPE_DOMAIN: u8 = 1;
 
@@ -2521,7 +2525,7 @@ fn require_terminal_class_dependency_closure(
             &mut class_edges,
             *source_key,
         );
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             record_terminal_class_edges(&mut work, classes.len());
             record_terminal_class_summary_items(&mut work, classes.len());
@@ -2553,7 +2557,7 @@ fn require_terminal_class_dependency_closure(
             continue;
         }
         seen[start] = true;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_terminal_semantic_nodes(&mut work, 1);
         let mut pending = vec![(start, 0_usize)];
         while let Some((node, next_edge)) = pending.last_mut() {
@@ -2564,11 +2568,11 @@ fn require_terminal_class_dependency_closure(
             }
             let target = semantic_edges[*node][*next_edge];
             *next_edge += 1;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_terminal_semantic_edges(&mut work, 1);
             if !seen[target] {
                 seen[target] = true;
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_terminal_semantic_nodes(&mut work, 1);
                 pending.push((target, 0));
             }
@@ -2584,10 +2588,10 @@ fn require_terminal_class_dependency_closure(
         component_of[start] = component_count;
         let mut pending = vec![start];
         while let Some(node) = pending.pop() {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_terminal_semantic_nodes(&mut work, 1);
             for source in &reverse_edges[node] {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-utils"))]
                 record_terminal_semantic_edges(&mut work, 1);
                 if component_of[*source] == usize::MAX {
                     component_of[*source] = component_count;
@@ -2602,17 +2606,17 @@ fn require_terminal_class_dependency_closure(
     let mut component_dependents = vec![Vec::<usize>::new(); component_count];
     let mut component_classes = vec![Vec::<ClassId>::new(); component_count];
     for node in 0..node_count {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_terminal_semantic_nodes(&mut work, 1);
         let component = component_of[node];
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             record_terminal_class_edges(&mut work, class_edges[node].len());
             record_terminal_class_summary_items(&mut work, class_edges[node].len());
         }
         component_classes[component].extend_from_slice(&class_edges[node]);
         for target in &semantic_edges[node] {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_terminal_semantic_edges(&mut work, 1);
             let dependency = component_of[*target];
             if component != dependency {
@@ -2647,7 +2651,7 @@ fn require_terminal_class_dependency_closure(
         .collect::<BTreeMap<_, _>>();
     let mut component_owner_inputs = vec![Vec::<usize>::new(); component_count];
     for (owner, roots) in &direct {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         if let Some(work) = work.as_deref_mut() {
             work.owner_root_summaries = work
                 .owner_root_summaries
@@ -2675,7 +2679,7 @@ fn require_terminal_class_dependency_closure(
     let mut class_owner_inputs = BTreeMap::<ClassId, Vec<usize>>::new();
     while let Some(component) = ready.pop() {
         processed_components += 1;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_terminal_semantic_nodes(&mut work, 1);
 
         component_owner_inputs[component].sort_unstable();
@@ -2691,7 +2695,7 @@ fn require_terminal_class_dependency_closure(
         };
 
         if let Some(expression) = owner_expression {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             {
                 record_terminal_class_edges(&mut work, component_classes[component].len());
                 record_terminal_class_summary_items(&mut work, component_classes[component].len());
@@ -2708,7 +2712,7 @@ fn require_terminal_class_dependency_closure(
         }
 
         for dependency in component_dependencies[component].iter().copied() {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             record_terminal_semantic_edges(&mut work, 1);
             unresolved_dependents[dependency] -= 1;
             if unresolved_dependents[dependency] == 0 {
@@ -2739,12 +2743,12 @@ fn require_terminal_class_dependency_closure(
     }
     let expression_owners = terminal_expression_owners(
         &expressions,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         &mut work,
     );
     for (class, expression) in class_expressions {
         let owners = &expression_owners[expression];
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             record_terminal_class_edges(&mut work, owners.len());
             record_terminal_class_summary_items(&mut work, owners.len());
@@ -2961,7 +2965,7 @@ fn validate_terminal_class_dependencies(
             &semantic_edges,
             &class_edges,
             direct,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-utils"))]
             None,
         );
     }
@@ -3394,8 +3398,8 @@ fn build_collision_replay_index(
         .map_err(InjectedProfileError::ReplayIndex)
 }
 
-#[cfg(test)]
-pub(crate) fn run_injected_profile(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn run_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<InjectedProfileRun, InjectedProfileError> {
     compile_owned_injected_profile(sources).map(|(run, _)| run)
@@ -3407,7 +3411,7 @@ fn with_canonical_library_frontend<'source, Output>(
         CanonicalLibraryFrontend<'source, 'ast>,
     ) -> Result<Output, InjectedProfileError>,
 ) -> Result<Output, InjectedProfileError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let parse_started = Instant::now();
     let canonical = canonical_inputs(sources)?;
     let allocators = (0..canonical.len())
@@ -3482,10 +3486,10 @@ fn with_canonical_library_frontend<'source, Output>(
         .collect::<Result<Vec<_>, _>>()?;
     let (parsed, claims): (Vec<_>, Vec<_>) = parsed_and_claims.into_iter().unzip();
     let parser_export_claims = claims.into_iter().flatten().collect::<Vec<_>>();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let parse_elapsed = parse_started.elapsed();
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let bind_started = Instant::now();
     let units = parsed
         .iter()
@@ -3520,9 +3524,9 @@ fn with_canonical_library_frontend<'source, Output>(
             }
         })
         .collect::<Vec<_>>();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let bind_elapsed = bind_started.elapsed();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     {
         CANONICAL_FRONTEND_ENTRIES.set(CANONICAL_FRONTEND_ENTRIES.get().saturating_add(1));
         CANONICAL_FRONTEND_PARSE_UNITS.set(
@@ -3544,9 +3548,9 @@ fn with_canonical_library_frontend<'source, Output>(
         binder,
         module_scopes,
         semantic_scopes,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         bind_elapsed,
     })
 }
@@ -3559,7 +3563,7 @@ fn with_canonical_library_frontend<'source, Output>(
 /// profile from source, so that run assembles its own index; the shared default-library base does
 /// not carry one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplayIndexPlan {
+pub enum ReplayIndexPlan {
     /// Assemble the index as part of this compile.
     Assemble,
     /// Skip assembly; the run that collides re-compiles from source and assembles then.
@@ -3573,7 +3577,7 @@ pub(crate) enum ReplayIndexPlan {
 /// suite census is their sole witness (ADR-0018). Draining the ledger is still the
 /// completeness gate every compile pays; only handing the drained records onward is optional.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LibraryRecordRetention {
+pub enum LibraryRecordRetention {
     /// Drop the records with the ledger. The production route to a base uses this.
     Drop,
     /// Hand the records back to a caller that asked for them explicitly.
@@ -3581,7 +3585,7 @@ pub(crate) enum LibraryRecordRetention {
 }
 
 /// Compile a profile into its complete runtime product, collision replay index included.
-pub(crate) fn compile_owned_injected_profile(
+pub fn compile_owned_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
@@ -3597,7 +3601,7 @@ pub(crate) fn compile_owned_injected_profile(
 ///
 /// Replay-index assembly is deferred to the run that collides (ADR-0017), and the library's
 /// own records are dropped rather than carried into the base (ADR-0018).
-pub(crate) fn compile_owned_injected_base_profile(
+pub fn compile_owned_injected_base_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
@@ -3613,7 +3617,7 @@ pub(crate) fn compile_owned_injected_base_profile(
 ///
 /// The deliberate record-inspection route costs a full source compilation and answers only to a
 /// caller that explicitly requested retained records (ADR-0018).
-pub(crate) fn compile_owned_injected_records(
+pub fn compile_owned_injected_records(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<Vec<(LibraryEventKey, CheckerRecord)>, InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
@@ -3637,15 +3641,15 @@ fn compile_owned_injected_frontend(
         binder,
         module_scopes,
         semantic_scopes,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         bind_elapsed,
     } = frontend;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     CANONICAL_FRONTEND_FULL_PRODUCTS.set(CANONICAL_FRONTEND_FULL_PRODUCTS.get().saturating_add(1));
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let reserve_fill_started = Instant::now();
     let mut ledger = LibraryEventLedger::default();
     let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
@@ -3732,10 +3736,10 @@ fn compile_owned_injected_frontend(
 
     let declaration_count = pass.type_decls.len();
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let reserve_fill_elapsed = reserve_fill_started.elapsed();
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let publication_validation_started = Instant::now();
     let module_programs = module_scopes
         .iter()
@@ -3751,17 +3755,17 @@ fn compile_owned_injected_frontend(
     pass.fill_pending_interfaces_range(binder.module, 0, declaration_count);
     let publication_validations = pass.publish_type_groups();
     pass.validate_published_class_surfaces();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let lexical_source_units = pass
         .lexical_events
         .library_lexical_evidence()
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let publication_validation_elapsed = publication_validation_started.elapsed();
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let statement_check_started = Instant::now();
     let mut pass_source_units = Vec::with_capacity(canonical.len());
     for (((input, parsed), module), semantic_scope) in canonical
@@ -3782,7 +3786,7 @@ fn compile_owned_injected_frontend(
         pass.type_environment.published(),
         pass.interner.store(),
     );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let (global_types, module_types) = collect_type_probes(
         &binder,
         pass.type_environment.published(),
@@ -3790,7 +3794,7 @@ fn compile_owned_injected_frontend(
         &canonical,
         &module_scopes,
     );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let global_values = collect_value_probes(
         &binder,
         &pass.decl_types,
@@ -3803,7 +3807,7 @@ fn compile_owned_injected_frontend(
     let reporting_receipts = LibraryReportingConsumer::new(&mut ledger)
         .consume_binder_outcomes(&binder)
         .map_err(InjectedProfileError::Reporting)?;
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-utils")))]
     let _ = &reporting_receipts;
     let snapshot = ledger.snapshot();
     let statement_keys = ledger
@@ -3811,7 +3815,7 @@ fn compile_owned_injected_frontend(
         .into_values()
         .collect::<Vec<_>>();
     let library_records = ledger.finish().map_err(InjectedProfileError::Reporting)?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     let statement_check_elapsed = statement_check_started.elapsed();
 
     let namespace_terminals = pass
@@ -3949,7 +3953,7 @@ fn compile_owned_injected_frontend(
             publication_validations,
             statement_check_units: pass_source_units.len(),
         },
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         phase_timings: LibraryPhaseTimings {
             parse: parse_elapsed,
             bind: bind_elapsed,
@@ -3957,35 +3961,35 @@ fn compile_owned_injected_frontend(
             publication_validation: publication_validation_elapsed,
             statement_check: statement_check_elapsed,
         },
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         reserved_file_ordinals: snapshot.reserved_file_ordinals,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         reporting_receipts,
         library_records: match record_retention {
             LibraryRecordRetention::Drop => Vec::new(),
             LibraryRecordRetention::Collect => library_records,
         },
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         pass_source_units,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         lexical_source_units,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         global_types,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         module_types,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         global_values,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         semantic_identities,
     };
     Ok((run, runtime_state))
 }
 
-pub(crate) fn compile_library_binder_checkpoint(
+pub fn compile_library_binder_checkpoint(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<LibraryBinderCheckpoint, InjectedProfileError> {
     with_canonical_library_frontend(sources, |frontend| {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS.set(
             CANONICAL_FRONTEND_CHECKPOINT_PRODUCTS
                 .get()
@@ -4010,54 +4014,54 @@ pub(crate) fn compile_library_binder_checkpoint(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BinderContinuationModuleSourceForTest {
-    pub(crate) module: ScopeId,
-    pub(crate) source: crate::binder::namespace::SourceUnitKey,
+pub struct BinderContinuationModuleSourceForTest {
+    pub module: ScopeId,
+    pub source: crate::binder::namespace::SourceUnitKey,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug)]
-pub(crate) struct LibraryBinderContinuationForTest {
-    pub(crate) bound: super::BoundProjectBinder,
-    pub(crate) checkpoint_ends: LibraryBinderCheckpointEnds,
-    pub(crate) ends: LibraryBinderCheckpointEnds,
-    pub(crate) array_symbol_before_augmentation: SymbolId,
-    pub(crate) array_type_group_before_augmentation: TypeGroupId,
-    pub(crate) array_symbol_after_augmentation: SymbolId,
-    pub(crate) array_type_group_after_augmentation: TypeGroupId,
-    pub(crate) consumer_array_type_group: TypeGroupId,
-    pub(crate) augmentation_declaration: DeclId,
-    pub(crate) appended_scopes: Vec<ScopeId>,
-    pub(crate) appended_symbols: Vec<SymbolId>,
-    pub(crate) appended_declarations: Vec<DeclId>,
-    pub(crate) appended_type_groups: Vec<TypeGroupId>,
-    pub(crate) appended_namespaces: Vec<NamespaceId>,
-    pub(crate) appended_value_storages: Vec<ValueStorageId>,
-    pub(crate) appended_module_sources: Vec<BinderContinuationModuleSourceForTest>,
+pub struct LibraryBinderContinuationForTest {
+    pub bound: super::BoundProjectBinder,
+    pub checkpoint_ends: LibraryBinderCheckpointEnds,
+    pub ends: LibraryBinderCheckpointEnds,
+    pub array_symbol_before_augmentation: SymbolId,
+    pub array_type_group_before_augmentation: TypeGroupId,
+    pub array_symbol_after_augmentation: SymbolId,
+    pub array_type_group_after_augmentation: TypeGroupId,
+    pub consumer_array_type_group: TypeGroupId,
+    pub augmentation_declaration: DeclId,
+    pub appended_scopes: Vec<ScopeId>,
+    pub appended_symbols: Vec<SymbolId>,
+    pub appended_declarations: Vec<DeclId>,
+    pub appended_type_groups: Vec<TypeGroupId>,
+    pub appended_namespaces: Vec<NamespaceId>,
+    pub appended_value_storages: Vec<ValueStorageId>,
+    pub appended_module_sources: Vec<BinderContinuationModuleSourceForTest>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProjectBindingLookupForTest {
-    pub(crate) symbol: SymbolId,
-    pub(crate) value: Option<ValueStorageId>,
-    pub(crate) type_group: Option<TypeGroupId>,
-    pub(crate) namespace: Option<NamespaceId>,
-    pub(crate) blocks_type_lookup: bool,
+pub struct ProjectBindingLookupForTest {
+    pub symbol: SymbolId,
+    pub value: Option<ValueStorageId>,
+    pub type_group: Option<TypeGroupId>,
+    pub namespace: Option<NamespaceId>,
+    pub blocks_type_lookup: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl LibraryBinderContinuationForTest {
-    pub(crate) fn normalized_per_path_binding_shape_for_test(&self) -> Vec<String> {
+    pub fn normalized_per_path_binding_shape_for_test(&self) -> Vec<String> {
         self.bound
             .normalized
             .normalized_per_path_binding_shape
             .clone()
     }
 
-    pub(crate) fn project_sources_for_test(&self) -> &[super::ProjectSourceBindingRow] {
+    pub fn project_sources_for_test(&self) -> &[super::ProjectSourceBindingRow] {
         &self.bound.project_sources
     }
 
@@ -4069,7 +4073,7 @@ impl LibraryBinderContinuationForTest {
             .map(|row| row.module)
     }
 
-    pub(crate) fn lookup_binding_for_test(
+    pub fn lookup_binding_for_test(
         &self,
         path: &str,
         name: &str,
@@ -4086,7 +4090,7 @@ impl LibraryBinderContinuationForTest {
         })
     }
 
-    pub(crate) fn import_placeholders_for_test(&self, path: &str) -> Vec<ValueStorageId> {
+    pub fn import_placeholders_for_test(&self, path: &str) -> Vec<ValueStorageId> {
         let Some(module) = self.project_module_for_test(path) else {
             return Vec::new();
         };
@@ -4101,10 +4105,7 @@ impl LibraryBinderContinuationForTest {
             .collect()
     }
 
-    pub(crate) fn script_namespace_root_reservation_for_test(
-        &self,
-        name: &str,
-    ) -> Option<SymbolId> {
+    pub fn script_namespace_root_reservation_for_test(&self, name: &str) -> Option<SymbolId> {
         self.bound
             .binder
             .graph
@@ -4112,7 +4113,7 @@ impl LibraryBinderContinuationForTest {
             .lookup_local(name)
     }
 
-    pub(crate) fn standalone_namespace_value_storage_for_test(
+    pub fn standalone_namespace_value_storage_for_test(
         &self,
         path: &str,
         name: &str,
@@ -4124,7 +4125,7 @@ impl LibraryBinderContinuationForTest {
             .standalone_value_storage(namespace)
     }
 
-    pub(crate) fn attached_namespace_value_disposition_for_test(
+    pub fn attached_namespace_value_disposition_for_test(
         &self,
         path: &str,
         name: &str,
@@ -4137,15 +4138,15 @@ impl LibraryBinderContinuationForTest {
     }
 }
 
-pub(crate) fn continue_library_project_binder(
+pub fn continue_library_project_binder(
     checkpoint: LibraryBinderCheckpoint,
     inputs: Vec<crate::frontend::FileInput>,
 ) -> Result<super::BoundProjectBinder, String> {
     crate::frontend::run_project_frontend(inputs, |_, units| {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         record_user_source_parses_for_test(units.len());
         let bound = super::bind_library_checkpoint_project_programs(checkpoint, units)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-utils"))]
         {
             record_user_source_binds_for_test(units.len());
             super::record_continuation_project_binding_consumed_for_test();
@@ -4155,8 +4156,8 @@ pub(crate) fn continue_library_project_binder(
     .into_product()
 }
 
-#[cfg(test)]
-pub(crate) fn continuation_receipt_for_test(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn continuation_receipt_for_test(
     checkpoint_ends: LibraryBinderCheckpointEnds,
     array_symbol_before_augmentation: SymbolId,
     array_type_group_before_augmentation: TypeGroupId,
@@ -4240,8 +4241,8 @@ pub(crate) fn continuation_receipt_for_test(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_caller_certified_collision_free_project_with_owned_library(
     state: OwnedLibraryRuntimeState,
     inputs: Vec<crate::frontend::FileInput>,
     expected_base: &OwnedLibraryRuntimeState,
@@ -4337,16 +4338,16 @@ pub(crate) fn check_caller_certified_collision_free_project_with_owned_library(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn check_caller_certified_collision_free_source_with_owned_library(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_caller_certified_collision_free_source_with_owned_library(
     state: OwnedLibraryRuntimeState,
     source: &str,
 ) -> Result<OwnedBaseUserRun, String> {
     check_caller_certified_collision_free_source_with_owned_library_impl(state, source, false, None)
 }
 
-#[cfg(test)]
-pub(crate) fn check_caller_certified_collision_free_source_with_base_evidence(
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_caller_certified_collision_free_source_with_base_evidence(
     state: OwnedLibraryRuntimeState,
     source: &str,
     expected_base: &OwnedLibraryRuntimeState,
@@ -4367,7 +4368,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_and_verify_pr
     check_caller_certified_collision_free_source_with_owned_library_impl(state, source, true, None)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn check_caller_certified_collision_free_source_with_owned_library_impl(
     state: OwnedLibraryRuntimeState,
     source: &str,
@@ -4634,7 +4635,7 @@ fn canonical_inputs<'source>(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn collect_type_probes(
     binder: &Binder,
     published: &PublishedTypeEnvironment,
@@ -4671,7 +4672,7 @@ fn collect_type_probes(
     (globals, modules)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn type_probe(
     binder: &Binder,
     published: &PublishedTypeEnvironment,
@@ -4726,7 +4727,7 @@ fn type_probe(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn collect_value_probes(
     binder: &Binder,
     decl_types: &DeclTypes,
@@ -4757,7 +4758,7 @@ fn collect_value_probes(
     probes
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn value_probe_for_symbol(
     binder: &Binder,
     decl_types: &DeclTypes,
@@ -4836,7 +4837,7 @@ fn value_probe_for_symbol(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn signature_ids(store: &Store, ty: TypeId) -> Vec<TypeId> {
     match store.tag(ty) {
         TypeTag::Function => vec![ty],
@@ -4848,7 +4849,7 @@ fn signature_ids(store: &Store, ty: TypeId) -> Vec<TypeId> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn signature_probe(store: &Store, ty: TypeId) -> Option<SignatureProbe> {
     let signature = store.function_type(ty)?;
     Some(SignatureProbe {
@@ -4861,7 +4862,7 @@ fn signature_probe(store: &Store, ty: TypeId) -> Option<SignatureProbe> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn origin_for_module(binder: &Binder, module: ScopeId) -> Option<LibraryFileOrdinal> {
     binder
         .namespaces
@@ -4870,7 +4871,7 @@ fn origin_for_module(binder: &Binder, module: ScopeId) -> Option<LibraryFileOrdi
         .and_then(|unit| library_ordinal(unit.origin))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn library_ordinal(origin: CompilationOrigin) -> Option<LibraryFileOrdinal> {
     match origin {
         CompilationOrigin::Library(file_ordinal) => Some(file_ordinal),
@@ -4878,7 +4879,7 @@ fn library_ordinal(origin: CompilationOrigin) -> Option<LibraryFileOrdinal> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn release_phase_line(
     process: usize,
     registry_validation: Duration,
@@ -4897,7 +4898,7 @@ fn release_phase_line(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 struct ReleaseOutcomeLine {
     process: usize,
     file_count: usize,
@@ -4911,7 +4912,7 @@ struct ReleaseOutcomeLine {
     tiny_incompletes: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl ReleaseOutcomeLine {
     fn render(&self) -> String {
         format!(
@@ -4930,15 +4931,272 @@ impl ReleaseOutcomeLine {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+pub fn assert_exact_profile_interner_has_no_pending_reservations(
+    injected: &[InjectedLibrarySource<'_>],
+) {
+    let (_, state) =
+        compile_owned_injected_profile(injected).expect("source-compiled full-library profile");
+    state
+        .interner
+        .strict_terminal_state_for_test()
+        .expect("full profile must close every reserved type");
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn assert_exact_profile_replay_index_is_complete_and_deterministic(
+    injected: &[InjectedLibrarySource<'_>],
+) {
+    let started = Instant::now();
+    let (_, first_state) =
+        compile_owned_injected_profile(injected).expect("first exact replay index generation");
+    let first_elapsed = started.elapsed();
+    let started = Instant::now();
+    let (_, second_state) =
+        compile_owned_injected_profile(injected).expect("second exact replay index generation");
+    let second_elapsed = started.elapsed();
+    let first = first_state
+        .replay_index()
+        .expect("source compiler retains its replay index");
+    let second = second_state
+        .replay_index()
+        .expect("source compiler retains its replay index");
+    assert_eq!(
+        first.canonical_manifest_len(),
+        second.canonical_manifest_len()
+    );
+    assert_eq!(
+        first.canonical_manifest_sha256,
+        second.canonical_manifest_sha256
+    );
+    assert_eq!(first.unowned_demand_count, 0);
+    assert_eq!(first.invalid_owner_site_count, 0);
+    assert_eq!(first.noncanonical_edge_count, 0);
+    assert_eq!(first.typed_reference_coverage_misses, 0);
+    let digest = first
+        .canonical_manifest_sha256
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    eprintln!(
+        "replay-index owners={} roots={} sites={} edges={} root_edges={} sccs={} statements={} baselines={} bytes={} sha256={} first={:?} second={:?}",
+        first.owner_partition.len(),
+        first.root_slots.len(),
+        first.owner_sites.len(),
+        first.reverse_edges.len(),
+        first.root_slot_consumers.len(),
+        first.scc_membership.len(),
+        first.statement_owners.len(),
+        first.baseline_records.len(),
+        first.canonical_manifest_len(),
+        digest,
+        first_elapsed,
+        second_elapsed,
+    );
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn assert_exact_profile_selects_complete_native_bridge_identities(
+    injected: &[InjectedLibrarySource<'_>],
+) {
+    let run = run_injected_profile(injected).expect("source-compiled full-library profile");
+    let identities = run.semantic_identities();
+    assert!(identities.all_ready());
+    assert_eq!(
+        identities.callable_function_group(),
+        run.global_type_probe("CallableFunction")
+            .map(|probe| probe.identity)
+    );
+    assert_ne!(
+        identities.callable_function_group(),
+        run.global_type_probe("Function")
+            .map(|probe| probe.identity)
+    );
+    let expected_arities = [1, 1, 0, 0, 0, 0, 0, 0];
+    for (terminal, expected_arity) in identities.terminals().into_iter().zip(expected_arities) {
+        let super::library_identities::LibraryIdentityTerminal::Ready(identity) = terminal else {
+            panic!("exact profile native bridge identity must be ready")
+        };
+        assert_eq!(identity.parameters.len(), expected_arity);
+        assert_ne!(identity.template, TypeId(0));
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn run_library_release_probe(
+    injected: &[InjectedLibrarySource<'_>],
+    registry_validation: Duration,
+    total_started: Instant,
+) {
+    const TINY_SOURCE: &str = "export const typokatLibraryProbe: number = 1;\n";
+
+    let process = std::env::var("TYPOKAT_WU0B_PROCESS")
+        .expect("TYPOKAT_WU0B_PROCESS must identify release process 1..5")
+        .parse::<usize>()
+        .expect("TYPOKAT_WU0B_PROCESS must be an integer in 1..5");
+    assert!(
+        (1..=5).contains(&process),
+        "TYPOKAT_WU0B_PROCESS must be in 1..5"
+    );
+
+    let run = run_injected_profile(injected).expect("exact library profile execution");
+    assert_eq!(run.phase_counts.parse_units, 82);
+    assert_eq!(run.phase_counts.bind_units, 82);
+    assert_eq!(run.phase_counts.statement_check_units, 82);
+    assert!(run.phase_counts.reserved_records > 0);
+    assert_eq!(
+        run.phase_counts.reserved_records,
+        run.phase_counts.filled_records
+    );
+    assert!(run.phase_counts.publication_validations > 0);
+    let expected = (0..82)
+        .map(LibraryFileOrdinal::new)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        run.reserved_file_ordinals
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert!(run
+        .library_records
+        .iter()
+        .all(|(key, _)| expected.contains(&key.file_ordinal)));
+    assert!(run
+        .reporting_receipts
+        .iter()
+        .all(|receipt| expected.contains(&receipt.file_ordinal)));
+
+    let tiny = crate::check::test_support::check_source(TINY_SOURCE);
+    assert!(tiny.parse_errors.is_empty(), "{:?}", tiny.parse_errors);
+    assert!(tiny.diagnostics.is_empty(), "{:?}", tiny.diagnostics);
+    assert!(tiny.incomplete.is_empty(), "{:?}", tiny.incomplete);
+    let library_diagnostics = run
+        .library_records
+        .iter()
+        .filter(|(_, record)| matches!(record, CheckerRecord::Diagnostic(_)))
+        .count();
+    let library_incompletes = run.library_records.len() - library_diagnostics;
+    let total = total_started.elapsed();
+    assert!(
+        registry_validation + run.phase_timings.measured_total() <= total,
+        "external total must cover every measured phase"
+    );
+
+    println!(
+        "{}",
+        release_phase_line(process, registry_validation, &run.phase_timings, total)
+    );
+    println!(
+        "{}",
+        ReleaseOutcomeLine {
+            process,
+            file_count: injected.len(),
+            reserved_records: run.phase_counts.reserved_records,
+            filled_records: run.phase_counts.filled_records,
+            publication_validations: run.phase_counts.publication_validations,
+            library_diagnostics,
+            library_incompletes,
+            tiny_parse_errors: tiny.parse_errors.len(),
+            tiny_diagnostics: tiny.diagnostics.len(),
+            tiny_incompletes: tiny.incomplete.len(),
+        }
+        .render()
+    );
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn assert_exact_full_profile_owned_base_checks_caller_certified_suffix(
+    injected: &[InjectedLibrarySource<'_>],
+) {
+    let (compiled, state) =
+        compile_owned_injected_profile(injected).expect("exact source-compiled owned library");
+    eprintln!(
+        "owned-base compile timings: parse={:?} bind={:?} reserve_fill={:?} publication={:?} statements={:?} total={:?}",
+        compiled.phase_timings.parse,
+        compiled.phase_timings.bind,
+        compiled.phase_timings.reserve_fill,
+        compiled.phase_timings.publication_validation,
+        compiled.phase_timings.statement_check,
+        compiled.phase_timings.measured_total(),
+    );
+    let source = concat!(
+        include_str!("../../../../../tooling/full-lib-bench/workloads/fast-clean/main.ts"),
+        "\nconst directDomProbe: HTMLDivElement = document.createElement(\"div\");\n",
+    );
+    let run = check_caller_certified_collision_free_source_with_owned_library(state, source)
+        .expect("exact owned base accepts the WU0A suffix");
+    eprintln!(
+        "owned-base user timings: parse={:?} bind={:?} check={:?}",
+        run.timings.parse, run.timings.bind, run.timings.check
+    );
+
+    let (_, state) = compile_owned_injected_profile(injected)
+        .expect("second exact source-compiled owned library");
+    let focused = check_caller_certified_collision_free_source_with_owned_library(
+        state,
+        r#"
+            const mutableBad: string[] = [1].map(value => value);
+            const readonlyValues: readonly number[] = [1, 2];
+            const readonlyBad: string[] = readonlyValues.map(value => value);
+            readonlyValues.push(3);
+            const upperBad: number = "x".toUpperCase();
+            const fixedBad: number = (1).toFixed();
+            const booleanBad: string = true.valueOf();
+            const calledBad: number = ((value: string) => value).call(undefined, "x");
+            const objectBad: number = ({ value: 1 }).toString();
+            const regexpBad: string = /x/.test("x");
+            const domBad: number = document.createElement("div");
+        "#,
+    )
+    .expect("exact owned base accepts the focused semantic suffix");
+    eprintln!(
+        "owned-base focused timings: parse={:?} bind={:?} check={:?}",
+        focused.timings.parse, focused.timings.bind, focused.timings.check
+    );
+    assert_eq!(
+        focused
+            .result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        [
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2339,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+            crate::diagnostics::DiagnosticCode::TK2322,
+        ]
+    );
+    assert!(focused.result.incomplete.is_empty());
+    assert_eq!(focused.witness.store_prefix_stable, None);
+    assert_eq!(run.witness.store_prefix_stable, None);
+    assert!(
+        run.result.incomplete.is_empty(),
+        "{:?}",
+        run.result.incomplete
+    );
+    assert!(
+        run.result.diagnostics.is_empty(),
+        "{:?}",
+        run.result.diagnostics
+    );
+}
+
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::check::checker::type_groups::PublishedTypeGroup;
-    use crate::check::test_support::check_source;
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
 
-    const TINY_SOURCE: &str = "export const typokatLibraryProbe: number = 1;\n";
     const PRODUCT_SEMANTIC_LIBRARY: &str = r#"
         interface Array<T> { item: T; }
         interface ReadonlyArray<T> { item: T; }
@@ -6553,68 +6811,6 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_exact_profile_interner_has_no_pending_reservations(
-        injected: &[InjectedLibrarySource<'_>],
-    ) {
-        let (_, state) =
-            compile_owned_injected_profile(injected).expect("source-compiled full-library profile");
-        state
-            .interner
-            .strict_terminal_state_for_test()
-            .expect("full profile must close every reserved type");
-    }
-
-    pub(crate) fn assert_exact_profile_replay_index_is_complete_and_deterministic(
-        injected: &[InjectedLibrarySource<'_>],
-    ) {
-        let started = Instant::now();
-        let (_, first_state) =
-            compile_owned_injected_profile(injected).expect("first exact replay index generation");
-        let first_elapsed = started.elapsed();
-        let started = Instant::now();
-        let (_, second_state) =
-            compile_owned_injected_profile(injected).expect("second exact replay index generation");
-        let second_elapsed = started.elapsed();
-        let first = first_state
-            .replay_index()
-            .expect("source compiler retains its replay index");
-        let second = second_state
-            .replay_index()
-            .expect("source compiler retains its replay index");
-        assert_eq!(
-            first.canonical_manifest_len(),
-            second.canonical_manifest_len()
-        );
-        assert_eq!(
-            first.canonical_manifest_sha256,
-            second.canonical_manifest_sha256
-        );
-        assert_eq!(first.unowned_demand_count, 0);
-        assert_eq!(first.invalid_owner_site_count, 0);
-        assert_eq!(first.noncanonical_edge_count, 0);
-        assert_eq!(first.typed_reference_coverage_misses, 0);
-        let digest = first
-            .canonical_manifest_sha256
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        eprintln!(
-            "replay-index owners={} roots={} sites={} edges={} root_edges={} sccs={} statements={} baselines={} bytes={} sha256={} first={:?} second={:?}",
-            first.owner_partition.len(),
-            first.root_slots.len(),
-            first.owner_sites.len(),
-            first.reverse_edges.len(),
-            first.root_slot_consumers.len(),
-            first.scc_membership.len(),
-            first.statement_owners.len(),
-            first.baseline_records.len(),
-            first.canonical_manifest_len(),
-            digest,
-            first_elapsed,
-            second_elapsed,
-        );
-    }
-
     #[test]
     fn focused_profile_selects_complete_native_bridge_identities() {
         let run = run_injected_profile(&[InjectedLibrarySource {
@@ -6946,34 +7142,6 @@ pub(crate) mod tests {
         );
     }
 
-    pub(crate) fn assert_exact_profile_selects_complete_native_bridge_identities(
-        injected: &[InjectedLibrarySource<'_>],
-    ) {
-        let run = run_injected_profile(injected).expect("source-compiled full-library profile");
-        let identities = run.semantic_identities();
-        assert!(identities.all_ready());
-        assert_eq!(
-            identities.callable_function_group(),
-            run.global_type_probe("CallableFunction")
-                .map(|probe| probe.identity)
-        );
-        assert_ne!(
-            identities.callable_function_group(),
-            run.global_type_probe("Function")
-                .map(|probe| probe.identity)
-        );
-        let expected_arities = [1, 1, 0, 0, 0, 0, 0, 0];
-        for (terminal, expected_arity) in identities.terminals().into_iter().zip(expected_arities) {
-            let super::super::library_identities::LibraryIdentityTerminal::Ready(identity) =
-                terminal
-            else {
-                panic!("exact profile native bridge identity must be ready")
-            };
-            assert_eq!(identity.parameters.len(), expected_arity);
-            assert_ne!(identity.template, TypeId(0));
-        }
-    }
-
     #[test]
     fn phase_timings_are_real_nonoverlapping_measurements() {
         let started = Instant::now();
@@ -7023,88 +7191,6 @@ pub(crate) mod tests {
             }
             .render(),
             "typokat-wu0b-outcome-v1 process=4 file_count=82 reserved_records=13 filled_records=13 publication_validations=9 library_diagnostics=2 library_incompletes=3 tiny_parse_errors=0 tiny_diagnostics=0 tiny_incompletes=0"
-        );
-    }
-
-    pub(crate) fn run_library_release_probe(
-        injected: &[InjectedLibrarySource<'_>],
-        registry_validation: Duration,
-        total_started: Instant,
-    ) {
-        let process = std::env::var("TYPOKAT_WU0B_PROCESS")
-            .expect("TYPOKAT_WU0B_PROCESS must identify release process 1..5")
-            .parse::<usize>()
-            .expect("TYPOKAT_WU0B_PROCESS must be an integer in 1..5");
-        assert!(
-            (1..=5).contains(&process),
-            "TYPOKAT_WU0B_PROCESS must be in 1..5"
-        );
-
-        let run = run_injected_profile(injected).expect("exact library profile execution");
-
-        assert_eq!(run.phase_counts.parse_units, 82);
-        assert_eq!(run.phase_counts.bind_units, 82);
-        assert_eq!(run.phase_counts.statement_check_units, 82);
-        assert!(run.phase_counts.reserved_records > 0);
-        assert_eq!(
-            run.phase_counts.reserved_records,
-            run.phase_counts.filled_records
-        );
-        assert!(run.phase_counts.publication_validations > 0);
-        let expected = (0..82)
-            .map(LibraryFileOrdinal::new)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            run.reserved_file_ordinals
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>(),
-            expected
-        );
-        assert!(run
-            .library_records
-            .iter()
-            .all(|(key, _)| expected.contains(&key.file_ordinal)));
-        assert!(run
-            .reporting_receipts
-            .iter()
-            .all(|receipt| expected.contains(&receipt.file_ordinal)));
-
-        let tiny = check_source(TINY_SOURCE);
-        assert!(tiny.parse_errors.is_empty(), "{:?}", tiny.parse_errors);
-        assert!(tiny.diagnostics.is_empty(), "{:?}", tiny.diagnostics);
-        assert!(tiny.incomplete.is_empty(), "{:?}", tiny.incomplete);
-        let library_diagnostics = run
-            .library_records
-            .iter()
-            .filter(|(_, record)| matches!(record, CheckerRecord::Diagnostic(_)))
-            .count();
-        let library_incompletes = run.library_records.len() - library_diagnostics;
-        let total = total_started.elapsed();
-        assert!(
-            registry_validation + run.phase_timings.measured_total() <= total,
-            "external total must cover every measured phase"
-        );
-
-        println!(
-            "{}",
-            release_phase_line(process, registry_validation, &run.phase_timings, total)
-        );
-        println!(
-            "{}",
-            ReleaseOutcomeLine {
-                process,
-                file_count: injected.len(),
-                reserved_records: run.phase_counts.reserved_records,
-                filled_records: run.phase_counts.filled_records,
-                publication_validations: run.phase_counts.publication_validations,
-                library_diagnostics,
-                library_incompletes,
-                tiny_parse_errors: tiny.parse_errors.len(),
-                tiny_diagnostics: tiny.diagnostics.len(),
-                tiny_incompletes: tiny.incomplete.len(),
-            }
-            .render()
         );
     }
 
@@ -7936,89 +8022,6 @@ const inheritedBad: number = local.elementMarker;
         assert_eq!(
             super::super::bound_user_check_calls_for_test(),
             checks_before
-        );
-    }
-
-    pub(crate) fn assert_exact_full_profile_owned_base_checks_caller_certified_suffix(
-        injected: &[InjectedLibrarySource<'_>],
-    ) {
-        let (compiled, state) =
-            compile_owned_injected_profile(injected).expect("exact source-compiled owned library");
-        eprintln!(
-            "owned-base compile timings: parse={:?} bind={:?} reserve_fill={:?} publication={:?} statements={:?} total={:?}",
-            compiled.phase_timings.parse,
-            compiled.phase_timings.bind,
-            compiled.phase_timings.reserve_fill,
-            compiled.phase_timings.publication_validation,
-            compiled.phase_timings.statement_check,
-            compiled.phase_timings.measured_total(),
-        );
-        let source = concat!(
-            include_str!("../../../tooling/full-lib-bench/workloads/fast-clean/main.ts"),
-            "\nconst directDomProbe: HTMLDivElement = document.createElement(\"div\");\n",
-        );
-        let run = check_caller_certified_collision_free_source_with_owned_library(state, source)
-            .expect("exact owned base accepts the WU0A suffix");
-        eprintln!(
-            "owned-base user timings: parse={:?} bind={:?} check={:?}",
-            run.timings.parse, run.timings.bind, run.timings.check
-        );
-
-        let (_, state) = compile_owned_injected_profile(injected)
-            .expect("second exact source-compiled owned library");
-        let focused = check_caller_certified_collision_free_source_with_owned_library(
-            state,
-            r#"
-                const mutableBad: string[] = [1].map(value => value);
-                const readonlyValues: readonly number[] = [1, 2];
-                const readonlyBad: string[] = readonlyValues.map(value => value);
-                readonlyValues.push(3);
-                const upperBad: number = "x".toUpperCase();
-                const fixedBad: number = (1).toFixed();
-                const booleanBad: string = true.valueOf();
-                const calledBad: number = ((value: string) => value).call(undefined, "x");
-                const objectBad: number = ({ value: 1 }).toString();
-                const regexpBad: string = /x/.test("x");
-                const domBad: number = document.createElement("div");
-            "#,
-        )
-        .expect("exact owned base accepts the focused semantic suffix");
-        eprintln!(
-            "owned-base focused timings: parse={:?} bind={:?} check={:?}",
-            focused.timings.parse, focused.timings.bind, focused.timings.check
-        );
-        assert_eq!(
-            focused
-                .result
-                .diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.code)
-                .collect::<Vec<_>>(),
-            [
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2339,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-                crate::diagnostics::DiagnosticCode::TK2322,
-            ]
-        );
-        assert!(focused.result.incomplete.is_empty());
-        assert_eq!(focused.witness.store_prefix_stable, None);
-        assert_eq!(run.witness.store_prefix_stable, None);
-        assert!(
-            run.result.incomplete.is_empty(),
-            "{:?}",
-            run.result.incomplete
-        );
-        assert!(
-            run.result.diagnostics.is_empty(),
-            "{:?}",
-            run.result.diagnostics
         );
     }
 }

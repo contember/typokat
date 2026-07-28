@@ -1,5 +1,5 @@
 // backlog 100, deferred tail — condition positions the flow pre-pass does not model at
-// all. `build_flow_stmt` (src/check/checker/flowgraph/mod.rs) falls through to `_ => {}`
+// all. `build_flow_stmt` (crates/typokat-check/src/check/checker/flowgraph/mod.rs) falls through to `_ => {}`
 // for `for` / `for-in` / `for-of` / `do…while`, so a reference inside a `for` body — or
 // after a `do…while` — never reaches `reference_flow` and reads its declared type. That
 // is a wider gap than backlog 100: it is not about composition (the single-guard cases

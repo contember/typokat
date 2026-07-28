@@ -12,7 +12,7 @@ panic on valid TypeScript, which violates the no-reachable-panic invariant. Seve
 
 ## Problem
 
-`interface_header_owner` (`src/check/checker/decls/mod.rs:540`) unwraps
+`interface_header_owner` (`crates/typokat-check/src/check/checker/decls/mod.rs:540`) unwraps
 `lexical_events.interface_occurrence_owner(...)` with
 `.expect("interface header has one exact preallocated owner")`. Interface occurrence owners are
 preallocated only for interfaces the lexical-event pass reaches; one nested in a function body is
@@ -49,7 +49,7 @@ standalone.
 
 ## Touch points
 
-`src/check/checker/decls/mod.rs` (`interface_header_owner`), the lexical-event preallocation pass,
+`crates/typokat-check/src/check/checker/decls/mod.rs` (`interface_header_owner`), the lexical-event preallocation pass,
 `src/driver.rs` worker error path.
 
 <!-- Origin: independent adversarial review of the declaration-surface planner, 2026-07-24

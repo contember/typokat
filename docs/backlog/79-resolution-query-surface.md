@@ -81,7 +81,7 @@ backlog [`15`](./15-modules-imports.md) lands real module resolution and `.d.ts`
 
 ## Touch points
 
-`src/binder/symbol.rs` (DeclId → site), `src/check/checker/expr.rs` + `calls.rs` (record on
+`src/binder/symbol.rs` (DeclId → site), `crates/typokat-check/src/check/checker/expr.rs` + `calls.rs` (record on
 resolve), `src/types/repr.rs` (side table — **not** the hashed repr), `src/driver.rs` (return the
 map), `docs/reference/invariants.md` (the hash-consing invariant).
 
