@@ -71,8 +71,8 @@ facts re-checked, and four of its bullets described things that no longer exist.
 - ⚠ **The B14 corpora are not simply "disabled" — the old bullet is wrong.** Both directories are
   `false` in `MILESTONE_DIRS` (`tests/conformance.rs:245-246`), but an admitted slice runs fixture by
   fixture: **9 of the 14** flat fixtures through `ENABLED_FIXTURES` (`tests/conformance.rs:310-327`)
-  and **1 of the 12** projects, `duplicate_global_deferred`, through `ENABLED_PROJECT_FIXTURES`
-  (`:283`). Both corpora check against the `Library` base — i.e. against
+  and **2 of the 12** projects, `duplicate_global_deferred` and `fast_external_module`, through
+  `ENABLED_PROJECT_FIXTURES` (`:283-284`). Both corpora check against the `Library` base — i.e. against
   `check_source_with_library`/`check_project_with_library` (`tests/conformance.rs:40-42`). The five
   flat fixtures still off are `dom_intl`, `global_this_undefined`, `intrinsic_aliases`,
   `native_member_composites`, `unsupported_surfaces`.
@@ -1292,7 +1292,7 @@ it**. The split has its own record, so what belongs here is only what it changed
 its guard tier** — the exhaustive classifier and the authenticated replay index are built and green,
 but the merge itself does not exist, which is backlog
 [`103`](../backlog/103-library-merge-panics-and-routing.md)'s correctness tier and the one thing
-blocking WU7. **WU6's corpus is committed but mostly gated**: 9 of 14 flat fixtures and 1 of 12
+blocking WU7. **WU6's corpus is committed but mostly gated**: 9 of 14 flat fixtures and 2 of 12
 projects run. **WU7, WU8 and WU9 have never run** — the CLI is still on the prelude, and
 `tooling/full-lib-bench/evidence/` still holds only WU0A's RED baseline.
 
@@ -1340,10 +1340,10 @@ of four rows cannot produce a time at all, so this is a hard block, not a sequen
 `library-info` subcommand its runner probes for. Neither edit touches scope, acceptance or the
 threshold.
 
-**Still open, not verified.** The `MILESTONE_DIRS` comment claiming "Five project
-fixtures currently PANIC" predates backlog `103`'s guard tier (`b223817`), which converted all five
-frozen-prefix `.expect` sites into recorded refusals; it is probably stale, but proving it needs the
-disabled fixtures actually run, so it was left alone. Several immutable ADRs carry pre-split paths
-(`0011`, `0012` and `0004` say `src/prelude.ts`; `0018` says `src/library/compiler.rs`; `0016` says
-`src/relate/…`; `0002` says `src/types/repr.rs`) — by convention they keep their historical
-references.
+**The stale B14 panic claim is now verified and removed.** All 12 project fixtures ran one by one
+in a detached worktree at `062f246`; none hit an internal panic or abort. The five former crash
+shapes now reach the guard tier's typed refusal/incomplete outcomes. `fast_external_module` also
+passes unchanged and is now the second enabled project fixture; the other ten remain expectation
+mismatches or typed refusals. Several immutable ADRs carry pre-split paths (`0011`, `0012` and
+`0004` say `src/prelude.ts`; `0018` says `src/library/compiler.rs`; `0016` says `src/relate/…`;
+`0002` says `src/types/repr.rs`) — by convention they keep their historical references.

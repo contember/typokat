@@ -240,8 +240,8 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // Backlog 14 full TypeScript 6.0.3 default-library loading — the only corpora checked
     // against `Library`. Both directories stay `false`: the fixtures that already pass are
     // enabled one at a time through `ENABLED_FIXTURES` / `ENABLED_PROJECT_FIXTURES`, and the
-    // rest wait for the loader defect fixes. Five project fixtures currently PANIC, which
-    // would abort the whole test binary, so they must stay disabled.
+    // rest wait for the loader defect fixes. The former panic shapes now produce typed
+    // refusals, but still stay disabled until backlog 103 makes their merges work.
     ("b14_full_lib_loading", false, Library),
     ("b14_full_lib_loading_project", false, Library),
     // Backlog 102 — a binder write that lands inside the frozen library prefix must either reach
@@ -278,9 +278,10 @@ const PROJECT_DIRS: &[&str] = &[
 /// Selected project fixtures enabled before their mixed flat/project corpus closes. Each runs
 /// against the base its directory declares in `MILESTONE_DIRS`.
 const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
-    // Backlog 14 (`Library` base). The other eleven projects fail or panic; see the corpus
-    // entry in `MILESTONE_DIRS`.
+    // Backlog 14 (`Library` base). The other ten projects fail or produce typed refusals; see
+    // the corpus entry in `MILESTONE_DIRS`.
     ("b14_full_lib_loading_project", "duplicate_global_deferred"),
+    ("b14_full_lib_loading_project", "fast_external_module"),
     (
         "b43_namespaces_declaration_merging",
         "wu5_global_augmentation_forward",

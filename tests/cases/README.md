@@ -286,10 +286,10 @@ the *member* surface `project_library_member_surface` projects — the fixture k
 `map`, and the readonly `push` withholding as the non-permissive controls. The role is keyed on
 the universe-local declaration identity selected from the library's compilation-global scope, so
 `library_identity_shadowing.ts` (a module-local `interface Array<T>`) remains the negative
-witness and is unaffected. Markers are code-only wherever a side is an array or alias layout. Five projects — `declare_global`, `declare_global_value_deferred`,
-`script_collision_forward`, `script_collision_reverse`, `unsupported_merge_no_prefix` — currently
-**panic**, which aborts the whole test binary rather than reporting a marker diff, so they must
-stay disabled until their owning fix lands.
+witness and is unaffected. Markers are code-only wherever a side is an array or alias layout. Five
+projects — `declare_global`, `declare_global_value_deferred`, `script_collision_forward`,
+`script_collision_reverse`, `unsupported_merge_no_prefix` — now produce typed refusals instead of
+internal panics. They remain disabled until backlog `103` makes their merges work.
 
 ## Bug-fix / backlog corpora
 
@@ -346,8 +346,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
-| `b14_full_lib_loading/` | backlog `14` WU0A (8 of 14 enabled, `Library` base) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
-| `b14_full_lib_loading_project/` | backlog `14` WU0A (1 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b14_full_lib_loading/` | backlog `14` WU0A (9 of 14 enabled, `Library` base) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | backlog `14` WU0A (2 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
 | `b102_frozen_prefix_writes/` | backlog `102` (enabled, `Library` base) | fresh script globals reach a writable delta scope; a write aimed at a library-owned row is recorded, never dropped |
 | `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped, `Library` base) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
 | `b103_library_merge_refusals/` | backlog `103` guard tier (enabled, `Library` base) | merging an interface/alias/class/namespace into a library-owned name is a recorded refusal, never a panic |
