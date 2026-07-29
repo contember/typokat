@@ -1,16 +1,13 @@
-// Surface-accounting spec (backlog 73). ENABLED by WU5: annotation lowering records the
-// incomplete surface for unmodeled keyword/literal `TSType` variants before degrading to
-// the error type. See tests/cases/README.md ("Surface-accounting corpus").
+// Surface-accounting spec (backlog 73). Annotation lowering models the `symbol` and `bigint`
+// keyword types as intrinsics while retaining incomplete records for the unmodeled literal and
+// compiler-intrinsic variants below. See tests/cases/README.md ("Surface-accounting corpus").
 //
-// Skip accounted: `lower_annotation_inner` / `lower_literal_type` had no arm for these
-// variants, so each lowered to `None` → the error type silently. WU5 records the surface
-// first. Their remaining semantic model is owned by backlog 75.
+// Oracle: `tsc 6.0.3 --strict --target es2025 --noEmit` reports TS2322 for both keyword
+// assignments with the exact intrinsic names below.
 
-// INCOMPLETE: the `symbol` keyword type is not modeled — the initializer degrades silently.
-let s: symbol = 0; // incomplete[annotation-lower/symbol-keyword/self]
+let s: symbol = 0; // error[TK2322]: Type 'number' is not assignable to type 'symbol'
 
-// INCOMPLETE: the `bigint` keyword type is not modeled.
-let b: bigint = 0; // incomplete[annotation-lower/bigint-keyword/self]
+let b: bigint = 0; // error[TK2322]: Type 'number' is not assignable to type 'bigint'
 
 let o: object = {};
 o = { value: 1 };
