@@ -6,6 +6,7 @@
 
 use super::base::{
     CollisionRouteForTest, PrivateCombinedReceiptForTest, PrivateExecutionForTest,
+    PrivateReplayCandidateFailureForTest, PrivateReplayOwnerOmissionForTest,
     UserDeltaProjectInputForTest,
 };
 use super::{FrozenLibraryBase, LibraryBaseProvider};
@@ -70,9 +71,11 @@ fn assert_private_replay(receipt: &PrivateCombinedReceiptForTest) {
     assert!(receipt.universe.reparsed_sites_match_binder_provenance);
     assert!(receipt.universe.mutation_ledger_contained_by_preflight);
     assert!(receipt.universe.pending_mask_installed_before_queries);
-    assert!(receipt
-        .universe
-        .semantic_query_mask_precedes_identity_cache_and_cycle);
+    assert!(
+        receipt
+            .universe
+            .semantic_query_mask_precedes_identity_cache_and_cycle
+    );
     assert_eq!(receipt.universe.provisional_promotions, 0);
     assert!(receipt.universe.new_ids_begin_after_all_nine_prefixes);
     assert_eq!(receipt.universe.shared_mutable_state_references, 0);
@@ -291,6 +294,87 @@ fn private_combined_universe_is_order_invariant_by_normalized_source_identity() 
 }
 
 #[test]
+fn complete_source_oracle_is_independent_of_a_corrupted_sparse_schedule() {
+    let inputs = [
+        input(
+            "/project/00_augment.ts",
+            r#"interface Array<T> {
+  fullLibBenchFirst(): T;
+}
+"#,
+        ),
+        input(
+            "/project/99_consume.ts",
+            r#"const collisionNumber: number = [1, 2, 3].fullLibBenchFirst();
+const wrongCollisionNumber: string = [1, 2, 3].fullLibBenchFirst();
+const collisionMapped: number[] = [1, 2, 3].map((value) => value + 1);
+const collisionDom: HTMLDivElement = document.createElement("div");
+
+void [collisionNumber, collisionMapped, collisionDom];
+"#,
+        ),
+    ];
+    let healthy = check(&inputs);
+    assert_private_replay(&healthy);
+
+    // This typed fault seam must remove the admitted owner only after reverse closure. The
+    // complete-source continuation still runs independently even when the candidate cannot.
+    let adversarial = acquire()
+        .check_routed_user_project_with_post_closure_owner_omission_against_full_source_oracle_for_test(
+            &inputs,
+            PrivateReplayOwnerOmissionForTest::RootTypeGroup {
+                root_name: "Array".to_owned(),
+            },
+        )
+        .expect("the independent complete-source oracle still finishes");
+    assert!(adversarial.omission.was_in_closed_schedule);
+    assert!(adversarial.omission.removed_after_closure);
+    assert_eq!(
+        adversarial.full_source_oracle.semantics_by_source,
+        healthy.oracle.full_source_semantics_by_source
+    );
+    assert_eq!(
+        adversarial.full_source_oracle.published_root_projection,
+        healthy.oracle.full_source_published_root_projection
+    );
+    let oracle_rows = adversarial
+        .full_source_oracle
+        .semantics_by_source
+        .values()
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        oracle_rows
+            .iter()
+            .filter(|row| row.contains("TK2322"))
+            .count(),
+        1,
+        "tsc 6.0.3 reports only the deliberate number-to-string mismatch"
+    );
+    assert!(
+        oracle_rows.iter().all(|row| !row.contains("TK2339")),
+        "the complete-source oracle must retain the Array augmentation"
+    );
+
+    let candidate_exposes_the_omission = match &adversarial.candidate {
+        Ok(candidate) => {
+            candidate.semantics_by_source != adversarial.full_source_oracle.semantics_by_source
+                || candidate.published_root_projection
+                    != adversarial.full_source_oracle.published_root_projection
+        }
+        Err(failure) => matches!(
+            failure,
+            PrivateReplayCandidateFailureForTest::MissingScheduledOwner { owner }
+                if owner == &adversarial.omission.owner
+        ),
+    };
+    assert!(
+        candidate_exposes_the_omission,
+        "a corrupted candidate must diverge or fail typed; it cannot validate its own oracle"
+    );
+}
+
+#[test]
 fn unique_script_global_object_surface_uses_replay_not_full_source_semantics() {
     let receipt = check(&[
         input(
@@ -333,15 +417,13 @@ fn private_unavailable_merge_never_falls_back_to_the_frozen_prefix() {
         input(
             "/project/00_augment.ts",
             r#"interface Array<T> {
-  wu5Unsupported(value: symbol): T;
+  [key: symbol]: T;
 }
 "#,
         ),
         input(
             "/project/99_consume.ts",
-            r#"const baseMustNotSurvive: string = [1, 2].map((value) => value + 1);
-[1, 2].wu5Unsupported;
-"#,
+            "const baseMustNotSurvive: string = [1, 2].map((value) => value + 1);\n",
         ),
     ]);
 
@@ -386,7 +468,10 @@ fn private_epoch_shares_only_immutable_unaffected_prefix_rows() {
         receipt.universe.private_tokens.terminals,
         shared_tokens.terminals
     );
-    assert_ne!(receipt.universe.private_tokens.suffixes, shared_tokens.suffixes);
+    assert_ne!(
+        receipt.universe.private_tokens.suffixes,
+        shared_tokens.suffixes
+    );
     assert_eq!(base.storage_identity_for_test(), shared_identity);
     assert_eq!(base.epoch_owner_tokens_for_test(), shared_tokens);
     assert_eq!(
@@ -464,18 +549,30 @@ fn two_private_epochs_own_distinct_query_event_terminal_and_suffix_domains() {
 
     assert_private_replay(&first);
     assert_private_replay(&second);
-    assert_ne!(first.universe.private_tokens.graph, second.universe.private_tokens.graph);
+    assert_ne!(
+        first.universe.private_tokens.graph,
+        second.universe.private_tokens.graph
+    );
     assert_ne!(
         first.universe.private_tokens.semantic_identities,
         second.universe.private_tokens.semantic_identities
     );
-    assert_ne!(first.universe.private_tokens.caches, second.universe.private_tokens.caches);
-    assert_ne!(first.universe.private_tokens.events, second.universe.private_tokens.events);
+    assert_ne!(
+        first.universe.private_tokens.caches,
+        second.universe.private_tokens.caches
+    );
+    assert_ne!(
+        first.universe.private_tokens.events,
+        second.universe.private_tokens.events
+    );
     assert_ne!(
         first.universe.private_tokens.terminals,
         second.universe.private_tokens.terminals
     );
-    assert_ne!(first.universe.private_tokens.suffixes, second.universe.private_tokens.suffixes);
+    assert_ne!(
+        first.universe.private_tokens.suffixes,
+        second.universe.private_tokens.suffixes
+    );
     assert!(first.universe.private_owner_tokens_dropped);
     assert!(second.universe.private_owner_tokens_dropped);
     assert_eq!(
@@ -519,7 +616,10 @@ fn classifier_false_negative_mutation_fails_closed_before_semantic_state() {
             "export {};\n[1, 2].wu5Collision;\n",
         )])
         .expect("fresh shared isolation project");
-    assert_eq!(isolation.preflight.route, CollisionRouteForTest::SharedDelta);
+    assert_eq!(
+        isolation.preflight.route,
+        CollisionRouteForTest::SharedDelta
+    );
     assert_eq!(isolation.normalized_diagnostics.len(), 1);
     assert!(isolation.normalized_diagnostics[0].contains("TK2339"));
 }
