@@ -1,12 +1,11 @@
-// Backlog 103, the guard tier. The ambient spelling of the namespace refusal — `declare
-// namespace Intl` reaches the same frozen row as the non-ambient one, and panicked the same way.
+// Backlog 103 correctness tier. The ambient spelling of a legal namespace augmentation must merge
+// into the library-owned `Intl` namespace through the private collision epoch.
 //
-// Oracle: `tsc 6.0.3 --strict --target es2025 --noEmit` is clean. typokat refuses the merge;
-// ledgered in docs/reference/divergences.md under backlog 103.
-declare namespace Intl { // incomplete[bind/frozen-library-global/merge-refused]: user declaration cannot merge into the frozen default-library global
-  interface B103Ambient { // incomplete[bind/frozen-library-global/merge-refused]
+// Oracle: `tsc 6.0.3 --strict --target es2025 --noEmit` is clean.
+declare namespace Intl {
+  interface B103Ambient {
     tag: string;
   }
 }
 
-declare const ambient: Intl.B103Ambient; // error[TK2694]
+declare const ambient: Intl.B103Ambient;
