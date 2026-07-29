@@ -3,7 +3,10 @@
 //! The scheduler cannot reconstruct preflight seeds after binding. The production route therefore
 //! carries the exact classifier receipt and the admitted process-local replay plan forward.
 
-use super::base::{CollisionRouteForTest, RoutedLibraryProject, UserDeltaProjectInputForTest};
+use super::base::{
+    CollisionRouteForTest, LibraryProjectRouteError, PrivateCollisionEpochForkScopeForTest,
+    PrivateRoutePlanFaultForTest, RoutedLibraryProject, UserDeltaProjectInputForTest,
+};
 use super::compiler::LibraryCompilerWorkScopeForTest;
 use super::provider::shared_library_base_provider_for_test;
 use super::FrozenLibraryBase;
@@ -35,18 +38,17 @@ fn route_input(path: &str, source: &str) -> FileInput {
     }
 }
 
-fn route_without_semantic_work(
-    base: &FrozenLibraryBase,
-    inputs: &[FileInput],
-) -> RoutedLibraryProject {
+fn capture_route_work<T>(run: impl FnOnce() -> T) -> (T, u64) {
+    let private_forks = PrivateCollisionEpochForkScopeForTest::start();
     let local_rows = LocalRowAllocationScopeForTest::start();
     let events = UserEventReservationScopeForTest::start();
     let queries = QueryCacheWriteScopeForTest::start();
     let relations = RelationCacheWriteScopeForTest::start();
     let compiler = LibraryCompilerWorkScopeForTest::start();
-    let routed = base.route_user_project(inputs).expect("production route");
+    let output = run();
     let compiler = compiler.finish();
     let queries = queries.finish();
+    let private_forks = private_forks.finish();
 
     assert_eq!(local_rows.finish(), 0);
     assert_eq!(events.finish(), 0);
@@ -57,7 +59,14 @@ fn route_without_semantic_work(
     assert_eq!(compiler.parses, 0);
     assert_eq!(compiler.binds, 0);
     assert_eq!(compiler.checks, 0);
-    routed
+    (output, private_forks)
+}
+
+fn route_without_semantic_work(
+    base: &FrozenLibraryBase,
+    inputs: &[FileInput],
+) -> (RoutedLibraryProject, u64) {
+    capture_route_work(|| base.route_user_project(inputs).expect("production route"))
 }
 
 fn frozen_prefixes(base: &FrozenLibraryBase) -> [usize; 9] {
@@ -96,7 +105,8 @@ declare var document: Document;
         ])
     );
 
-    let routed = route_without_semantic_work(&base, &[route_input(path, source)]);
+    let (routed, private_forks) = route_without_semantic_work(&base, &[route_input(path, source)]);
+    assert_eq!(private_forks, 1);
 
     let private = match routed {
         RoutedLibraryProject::Private(private) => private,
@@ -137,10 +147,45 @@ fn shared_route_does_not_manufacture_a_private_receipt_or_repeat_library_work() 
     assert_eq!(expected.route, CollisionRouteForTest::SharedDelta);
     assert!(expected.reasons.is_empty());
 
-    let routed = route_without_semantic_work(&base, &[route_input(path, source)]);
+    let (routed, private_forks) = route_without_semantic_work(&base, &[route_input(path, source)]);
+    assert_eq!(private_forks, 0);
 
     match routed {
         RoutedLibraryProject::Shared(_) => {}
         RoutedLibraryProject::Private(_) => panic!("fresh input manufactured a private receipt"),
+    }
+}
+
+#[test]
+fn private_route_rejects_plan_faults_before_forking_an_epoch() {
+    let base = acquire();
+    let inputs = [route_input(
+        "/project/private-plan-fault.ts",
+        "declare var B103PrivatePlanFault: number;\n",
+    )];
+    let cases = [
+        (
+            PrivateRoutePlanFaultForTest::Missing,
+            LibraryProjectRouteError::PrivateCollisionPlanUnavailable,
+        ),
+        (
+            PrivateRoutePlanFaultForTest::CorruptPrefixBoundary,
+            LibraryProjectRouteError::PrivateCollisionPlanAdmissionFailed,
+        ),
+        (
+            PrivateRoutePlanFaultForTest::WrongProfileIdentity,
+            LibraryProjectRouteError::PrivateCollisionPlanAdmissionFailed,
+        ),
+    ];
+
+    for (fault, expected) in cases {
+        let (result, private_forks) = capture_route_work(|| {
+            base.route_user_project_with_private_plan_fault_for_test(&inputs, fault)
+        });
+        assert_eq!(private_forks, 0, "{fault:?}");
+        match result {
+            Err(actual) => assert_eq!(actual, expected, "{fault:?}"),
+            Ok(_) => panic!("{fault:?} escaped plan admission"),
+        }
     }
 }
