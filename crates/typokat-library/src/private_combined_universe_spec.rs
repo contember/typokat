@@ -6,7 +6,9 @@
 
 use super::base::{
     CollisionRouteForTest, PrivateCombinedReceiptForTest, PrivateExecutionForTest,
-    PrivateReplayCandidateFailureForTest, PrivateReplayOwnerOmissionForTest,
+    PrivateFallbackControlFailureForTest, PrivateFallbackExecutionControlForTest,
+    PrivateReplayBaselineRecordFaultForTest, PrivateReplayCandidateFailureForTest,
+    PrivateReplayOwnerOmissionForTest, PrivateReplayValidationFailureForTest,
     UserDeltaProjectInputForTest,
 };
 use super::{FrozenLibraryBase, LibraryBaseProvider};
@@ -180,6 +182,90 @@ const wrongOrdinary: string = parseInt("10");
     );
 }
 
+fn intl_inherited_payload_project(reversed: bool) -> Vec<UserDeltaProjectInputForTest<'static>> {
+    const AUGMENT: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/00_augment.ts",
+        source: r#"declare namespace Intl {
+  interface NumberFormatOptions {
+    b103Required: string;
+  }
+}
+"#,
+    };
+    const CONSUME: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/99_consume.ts",
+        source: "new Intl.NumberFormat(\"en\", {});\n",
+    };
+    if reversed {
+        vec![CONSUME, AUGMENT]
+    } else {
+        vec![AUGMENT, CONSUME]
+    }
+}
+
+#[test]
+fn nested_namespace_inherited_payload_reaches_overload_validation_in_both_file_orders() {
+    let forward = check(&intl_inherited_payload_project(false));
+    let reverse = check(&intl_inherited_payload_project(true));
+
+    for receipt in [&forward, &reverse] {
+        assert_eq!(
+            receipt.preflight.route,
+            CollisionRouteForTest::PrivateCombined
+        );
+        assert_eq!(receipt.execution, PrivateExecutionForTest::SelectiveReplay);
+        let oracle_rows = receipt
+            .oracle
+            .full_source_semantics_by_source
+            .values()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            oracle_rows
+                .iter()
+                .filter(|row| {
+                    row.contains("TK2769") && row.contains("No overload matches this call")
+                })
+                .count(),
+            1,
+            "tsc 6.0.3 rejects the missing inherited b103Required option"
+        );
+        assert!(
+            oracle_rows
+                .iter()
+                .all(|row| !row.starts_with("incomplete ")),
+            "the inherited payload must reach overload validation, not a silent incomplete"
+        );
+        assert!(
+            receipt
+                .normalized_semantics_by_source
+                .values()
+                .flatten()
+                .all(|row| !row.starts_with("incomplete ")),
+            "sparse replay must not hide the missing inherited member behind an incomplete"
+        );
+        assert_eq!(
+            receipt.oracle.candidate_semantics_by_source,
+            receipt.oracle.full_source_semantics_by_source,
+            "sparse replay must preserve nested namespace interface payloads"
+        );
+        assert_eq!(
+            receipt
+                .normalized_diagnostics
+                .iter()
+                .filter(|line| {
+                    line.contains("TK2769") && line.contains("No overload matches this call")
+                })
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        forward.normalized_semantics_by_source,
+        reverse.normalized_semantics_by_source
+    );
+}
+
 #[test]
 fn colliding_forms_resolve_same_file_lexical_siblings_before_global_publication() {
     let receipt = check(&[input(
@@ -270,6 +356,28 @@ const wrongMapped: string[] = [1, 2].map((value) => value + 1);
     }
 }
 
+fn production_collision_project() -> Vec<UserDeltaProjectInputForTest<'static>> {
+    vec![
+        input(
+            "/project/00_augment.ts",
+            r#"interface Array<T> {
+  fullLibBenchFirst(): T;
+}
+"#,
+        ),
+        input(
+            "/project/99_consume.ts",
+            r#"const collisionNumber: number = [1, 2, 3].fullLibBenchFirst();
+const wrongCollisionNumber: string = [1, 2, 3].fullLibBenchFirst();
+const collisionMapped: number[] = [1, 2, 3].map((value) => value + 1);
+const collisionDom: HTMLDivElement = document.createElement("div");
+
+void [collisionNumber, collisionMapped, collisionDom];
+"#,
+        ),
+    ]
+}
+
 #[test]
 fn private_combined_universe_is_order_invariant_by_normalized_source_identity() {
     let forward = check(&array_project(false));
@@ -295,25 +403,7 @@ fn private_combined_universe_is_order_invariant_by_normalized_source_identity() 
 
 #[test]
 fn complete_source_oracle_is_independent_of_a_corrupted_sparse_schedule() {
-    let inputs = [
-        input(
-            "/project/00_augment.ts",
-            r#"interface Array<T> {
-  fullLibBenchFirst(): T;
-}
-"#,
-        ),
-        input(
-            "/project/99_consume.ts",
-            r#"const collisionNumber: number = [1, 2, 3].fullLibBenchFirst();
-const wrongCollisionNumber: string = [1, 2, 3].fullLibBenchFirst();
-const collisionMapped: number[] = [1, 2, 3].map((value) => value + 1);
-const collisionDom: HTMLDivElement = document.createElement("div");
-
-void [collisionNumber, collisionMapped, collisionDom];
-"#,
-        ),
-    ];
+    let inputs = production_collision_project();
     let healthy = check(&inputs);
     assert_private_replay(&healthy);
 
@@ -372,6 +462,107 @@ void [collisionNumber, collisionMapped, collisionDom];
         candidate_exposes_the_omission,
         "a corrupted candidate must diverge or fail typed; it cannot validate its own oracle"
     );
+}
+
+#[test]
+fn missing_expected_baseline_record_is_rejected_in_both_validation_directions() {
+    let receipt = acquire()
+        .validate_routed_user_project_with_baseline_record_fault_for_test(
+            &production_collision_project(),
+            PrivateReplayBaselineRecordFaultForTest::OmitObservedExpectedRecord,
+        )
+        .expect("controlled baseline-record fault reaches sparse validation");
+
+    assert!(receipt.fault.record_selected_from_expected_baseline);
+    assert!(receipt.fault.record_removed_from_observed);
+    assert!(matches!(
+        receipt.validation,
+        Err(
+            PrivateReplayValidationFailureForTest::MissingExpectedBaselineRecord {
+                ref fingerprint
+            }
+        ) if fingerprint == &receipt.fault.record_fingerprint
+    ));
+    assert_eq!(receipt.validation_observed_subset_expected_checks, 1);
+    assert_eq!(receipt.validation_expected_subset_observed_checks, 1);
+}
+
+#[test]
+fn sparse_validation_failure_falls_back_under_the_private_permit_with_measured_evidence() {
+    let inputs = production_collision_project();
+    let healthy = check(&inputs);
+    assert_private_replay(&healthy);
+    let base = acquire();
+    let fallback = base
+        .check_routed_user_project_with_sparse_fault_and_complete_source_fallback_for_test(
+            &inputs,
+            PrivateReplayBaselineRecordFaultForTest::OmitObservedExpectedRecord,
+            PrivateFallbackExecutionControlForTest::RunNormally,
+        )
+        .expect("sparse validation failure invokes the complete-source fallback");
+
+    assert_eq!(
+        fallback.execution,
+        PrivateExecutionForTest::CompleteSourceFallback
+    );
+    assert!(matches!(
+        fallback.sparse_failure,
+        PrivateReplayValidationFailureForTest::MissingExpectedBaselineRecord { .. }
+    ));
+    assert_eq!(
+        fallback.normalized_semantics_by_source,
+        fallback.full_source_oracle.semantics_by_source
+    );
+    assert_eq!(
+        fallback.normalized_semantics_by_source,
+        healthy.oracle.full_source_semantics_by_source
+    );
+    assert_eq!(
+        fallback.published_root_projection,
+        healthy.oracle.full_source_published_root_projection
+    );
+    let fallback_rows = fallback
+        .normalized_semantics_by_source
+        .values()
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fallback_rows
+            .iter()
+            .filter(|row| row.contains("TK2322"))
+            .count(),
+        1
+    );
+    assert!(fallback_rows
+        .iter()
+        .all(|row| !row.contains("TK2339") && !row.starts_with("incomplete ")));
+    assert_eq!(fallback.measurement.sparse_validation_failures, 1);
+    assert_eq!(fallback.measurement.full_source_fallback_invocations, 1);
+    assert_eq!(fallback.measurement.full_source_library_parse_units, 82);
+    assert_eq!(fallback.measurement.full_source_library_bind_units, 82);
+    assert_eq!(fallback.measurement.private_permit_acquisitions, 1);
+    assert_eq!(fallback.measurement.shared_base_mutations, 0);
+    assert!(
+        fallback.lifecycle.permit_acquired < fallback.lifecycle.sparse_candidate_dropped
+            && fallback.lifecycle.sparse_candidate_dropped
+                < fallback.lifecycle.complete_source_fallback_started
+            && fallback.lifecycle.complete_source_fallback_started
+                < fallback.lifecycle.fallback_state_dropped
+            && fallback.lifecycle.fallback_state_dropped < fallback.lifecycle.permit_released,
+        "fallback work and cleanup must stay inside one measured permit epoch"
+    );
+
+    let suppressed = base
+        .check_routed_user_project_with_sparse_fault_and_complete_source_fallback_for_test(
+            &inputs,
+            PrivateReplayBaselineRecordFaultForTest::OmitObservedExpectedRecord,
+            PrivateFallbackExecutionControlForTest::SuppressCompleteSourceInvocation,
+        )
+        .expect_err("a receipt cannot claim fallback work when no fallback ran");
+    assert!(matches!(
+        suppressed,
+        PrivateFallbackControlFailureForTest::CompleteSourceFallbackNotInvoked
+    ));
 }
 
 #[test]
