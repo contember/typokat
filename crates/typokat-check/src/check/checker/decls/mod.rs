@@ -783,7 +783,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         end: usize,
     ) {
         // Template lowering keeps conditionals lazy until value-position demand.
-        self.building_template = true;
+        let building_template = std::mem::replace(&mut self.building_template, true);
 
         for index in start..end {
             self.lower_type_group_parameter_metadata(index);
@@ -973,7 +973,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
 
         // Value-position annotations may evaluate conditionals after fill.
-        self.building_template = false;
+        self.building_template = building_template;
     }
 
     pub(in crate::check::checker) fn fill_pending_interfaces_range(

@@ -1089,6 +1089,12 @@ impl BindState {
             .map(|plan| plan.compilation_global)
     }
 
+    pub(super) fn continuation_default_global_scope(&self, fallback: ScopeId) -> ScopeId {
+        self.continuation_publication
+            .as_ref()
+            .map_or(fallback, |plan| plan.default_global_scope)
+    }
+
     pub(super) fn continuation_publication_sites(&self) -> Vec<(u32, String)> {
         self.continuation_publication
             .as_ref()
@@ -1328,6 +1334,7 @@ struct PendingNamespaceModule<'ast> {
 
 struct ContinuationPublicationPlan {
     compilation_global: ScopeId,
+    default_global_scope: ScopeId,
     binding_sites: FxHashMap<u32, String>,
 }
 
@@ -1412,31 +1419,35 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         let mut roots = Vec::new();
         for (program, unit) in units {
             if self.use_mode == BuilderUseMode::Continuation {
-                let binding_sites = if unit.binding.external_module {
-                    FxHashMap::default()
-                } else {
+                let binding_sites =
                     source_global_binding_census_with_provenance(program, unit.binding)
                         .binding_sites
                         .into_iter()
                         .filter(|site| {
-                            self.state
-                                .graph
-                                .get(self.compilation_global)
-                                .and_then(|scope| scope.lookup_local(&site.name))
-                                .is_some()
-                                || self
+                            site.publishable
+                                && (self
                                     .state
-                                    .namespaces
-                                    .is_admitted_compilation_global_name(&site.name)
-                                || site.name == "globalThis"
+                                    .graph
+                                    .get(self.compilation_global)
+                                    .and_then(|scope| scope.lookup_local(&site.name))
+                                    .is_some()
+                                    || self
+                                        .state
+                                        .namespaces
+                                        .is_admitted_compilation_global_name(&site.name)
+                                    || site.name == "globalThis")
                         })
                         .map(|site| (site.span.start, site.name))
-                        .collect()
+                        .collect();
+                let default_global_scope = match self.delta_compilation_global {
+                    Some(scope) => scope,
+                    None => self.compilation_global,
                 };
                 let previous = self.continuation_publication_plans.insert(
                     unit.source,
                     ContinuationPublicationPlan {
                         compilation_global: self.compilation_global,
+                        default_global_scope,
                         binding_sites,
                     },
                 );
@@ -1956,8 +1967,10 @@ fn bind_library_statements(
     bind_type_declarations(state, scope, statements);
     for statement in statements {
         if let Statement::TSGlobalDeclaration(global) = statement {
-            if unit.binding.external_module {
-                bind_statements(state, compilation_global, &global.body.body);
+            if unit.binding.external_module && (global.declare || unit.binding.declaration_file()) {
+                let default_global_scope =
+                    state.continuation_default_global_scope(compilation_global);
+                bind_statements(state, default_global_scope, &global.body.body);
             }
             continue;
         }

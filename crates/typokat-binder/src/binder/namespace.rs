@@ -6521,6 +6521,12 @@ fn bind_global(
         Some(context.lexical_scope),
     ));
     let legal = issues.is_empty();
+    let default_global_scope = state.continuation_default_global_scope(compilation_global);
+    let default_global_owner = if default_global_scope == compilation_global {
+        DeclarationOwner::CompilationGlobal
+    } else {
+        DeclarationOwner::Lexical(default_global_scope)
+    };
     let id = GlobalAugmentationId(
         u32::try_from(state.namespaces.globals.len()).expect("global count fits u32"),
     );
@@ -6534,7 +6540,7 @@ fn bind_global(
         body_span: Span::from_oxc(declaration.body.span),
         diagnostic_span: Span::from_oxc(declaration.global_span),
         target_scope: if legal {
-            compilation_global
+            default_global_scope
         } else {
             overlay_scope
         },
@@ -6545,13 +6551,13 @@ fn bind_global(
         members: Vec::new(),
     });
     let global_lexical_scope = if legal && state.namespaces.uses_library_shared_globals() {
-        compilation_global
+        default_global_scope
     } else {
         overlay_scope
     };
     let global_body = WalkContext {
         owner: if legal {
-            DeclarationOwner::CompilationGlobal
+            default_global_owner
         } else {
             DeclarationOwner::Lexical(overlay_scope)
         },

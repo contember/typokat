@@ -160,6 +160,7 @@ pub struct SourceGlobalBindingProvenance {
 pub(crate) struct SourceGlobalBindingSite {
     pub(crate) name: String,
     pub(crate) span: Span,
+    pub(crate) publishable: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,6 +324,13 @@ impl SourceDeclarationVisitor {
             .is_some_and(|(_, _, _, _, disposition)| {
                 *disposition == GlobalBoundaryDisposition::NestedUncertain
             });
+        let publishable =
+            census
+                .global_boundaries
+                .last()
+                .is_none_or(|(_, _, _, _, disposition)| {
+                    *disposition == GlobalBoundaryDisposition::Legal
+                });
         let candidates = if uncertain {
             &mut census.result.uncertain_candidates
         } else {
@@ -335,6 +343,7 @@ impl SourceDeclarationVisitor {
             sites.push(SourceGlobalBindingSite {
                 name: name.to_owned(),
                 span: Span::from_oxc(binding_span),
+                publishable,
             });
         }
         if !uncertain {
@@ -700,7 +709,9 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
                     if !placement_is_legal {
                         census.result.uncertain_relevant_syntax = true;
                     }
-                    let disposition = if placement_is_legal {
+                    let body_is_publishable =
+                        declaration.declare || census.context.declaration_file();
+                    let disposition = if placement_is_legal && body_is_publishable {
                         GlobalBoundaryDisposition::Legal
                     } else if direct_script_rejected {
                         GlobalBoundaryDisposition::DirectScriptRejected
