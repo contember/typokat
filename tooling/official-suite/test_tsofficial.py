@@ -16,6 +16,7 @@ import json
 import os
 import stat
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -65,6 +66,31 @@ def fake_binary(script_body):
     fd, path = tempfile.mkstemp(suffix=".sh")
     with os.fdopen(fd, "w") as f:
         f.write("#!/bin/sh\n" + script_body)
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC | stat.S_IXGRP)
+    return path
+
+
+def fake_batch_binary(loop_body, before_loop=""):
+    """Write a fake JSONL `typokat official-batch` worker."""
+    fd, path = tempfile.mkstemp(suffix=".py")
+    script = f"""#!/usr/bin/env python3
+import json
+import os
+import signal
+import sys
+import time
+
+if sys.argv[1:] != ["official-batch"]:
+    sys.exit(64)
+{textwrap.dedent(before_loop)}
+provider_route = "production-default-library"
+provider_profile_sha256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+for raw in sys.stdin:
+    request = json.loads(raw)
+{textwrap.indent(textwrap.dedent(loop_body), "    ")}
+"""
+    with os.fdopen(fd, "w") as f:
+        f.write(script)
     os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC | stat.S_IXGRP)
     return path
 
@@ -857,6 +883,491 @@ class ProcessHandlingTests(unittest.TestCase):
         checks."""
         with self.assertRaises(ts.HarnessFailure):
             self._run(DIAG_LINES + INCOMPLETE_LINES + "exit 1\n")
+
+
+# --- WU7: isolated same-process protocol ------------------------------------
+
+class IsolatedBatchProtocolSpec(unittest.TestCase):
+    """RED contract for WU7's one-process official-suite transport.
+
+    Requests and responses are schema-1 JSONL. A response echoes the exact case id,
+    worker PID, provider route, and pinned source-profile identity, then carries the
+    ordinary CLI exit code plus bounded stdout/stderr. The harness returns no partial
+    result if any frame or worker is untrustworthy.
+    """
+
+    MAX_FRAME_BYTES = 2 * 1024 * 1024
+
+    GOOD_LOOP = """
+response = {
+    "schema": 1,
+    "case_id": request["case_id"],
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+}
+print(json.dumps(response), flush=True)
+"""
+
+    def _run(self, binary, cases, timeout=1):
+        try:
+            return ts.run_typokat_batch(binary, cases, timeout=timeout)
+        finally:
+            os.unlink(binary)
+
+    @contextlib.contextmanager
+    def _official_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            saved = (ts.CORPUS, ts.REPORT)
+            ts.CORPUS = os.path.join(root, "corpus")
+            ts.REPORT = os.path.join(root, "report")
+            os.makedirs(ts.CORPUS)
+            tests = []
+            for rel, source in [
+                ("first.ts", "const first = 1;\n"),
+                ("second.ts", "const second = 2;\n"),
+            ]:
+                with open(os.path.join(ts.CORPUS, rel), "w") as f:
+                    f.write(source)
+                tests.append({
+                    "path": rel,
+                    "source": f"tests/cases/{rel}",
+                    "baseline_source": f"tests/baselines/reference/{rel[:-3]}.errors.txt",
+                    "baseline": False,
+                })
+            with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
+                json.dump({
+                    "format": 3,
+                    "sha": ts.PINNED_SHA,
+                    "repo": ts.REPO,
+                    "dirs": ts.DEFAULT_DIRS,
+                    "limit": None,
+                    "mode": "full-default",
+                    "partial": False,
+                    "transport": {
+                        "kind": "git-cache-full-blob",
+                        "url": ts.TS_GIT_URL,
+                        "revision": ts.PINNED_SHA,
+                        "cache_format": ts.GIT_CACHE_FORMAT,
+                    },
+                    "tests": tests,
+                }, f)
+            binary = fake_binary("exit 0\n")
+            args = type("Args", (), {
+                "bin": binary,
+                "limit": None,
+                "check": False,
+                "save": False,
+                "rebaseline": False,
+            })()
+            try:
+                yield args
+            finally:
+                os.unlink(binary)
+                ts.CORPUS, ts.REPORT = saved
+
+    def test_real_official_run_uses_one_batch_call_not_per_case_subprocesses(self):
+        with self._official_run() as args:
+            results = {
+                "first.ts": ([], [], []),
+                "second.ts": ([], [(1, 2322)], []),
+            }
+            with mock.patch.object(
+                ts, "run_typokat_batch", create=True, return_value=results
+            ) as batch, mock.patch.object(
+                ts,
+                "run_typokat",
+                side_effect=AssertionError("official run used the retired per-case path"),
+            ), mock.patch.object(
+                ts.subprocess,
+                "run",
+                side_effect=AssertionError("official run spawned a renamed per-case runner"),
+            ), mock.patch.object(
+                ts.subprocess,
+                "Popen",
+                side_effect=AssertionError("official run spawned a renamed per-case worker"),
+            ):
+                ts.cmd_run(args)
+
+            batch.assert_called_once()
+            call_args = batch.call_args.args
+            self.assertEqual(call_args[0], args.bin)
+            self.assertEqual(call_args[1], [
+                ("first.ts", "const first = 1;\n"),
+                ("second.ts", "const second = 2;\n"),
+            ])
+            with open(os.path.join(ts.REPORT, "latest.json")) as f:
+                report = json.load(f)
+            self.assertEqual(
+                [(row["rel"], row["fp_detail"]) for row in report["files"]],
+                [("first.ts", []), ("second.ts", [[1, 2322]])],
+                "cmd_run must score each case from its exact batch mapping",
+            )
+
+    def test_two_cases_use_one_worker_and_preserve_exact_ids(self):
+        with tempfile.TemporaryDirectory() as root:
+            boots = os.path.join(root, "boots")
+            binary = fake_batch_binary(
+                self.GOOD_LOOP,
+                before_loop=f'open({boots!r}, "a").write("boot\\n")',
+            )
+            observed = self._run(binary, [
+                ("first/case.ts", "export const first = 1;\n"),
+                ("second/case.ts", "export const second = 2;\n"),
+            ])
+            self.assertEqual(observed, {
+                "first/case.ts": ([], [], []),
+                "second/case.ts": ([], [], []),
+            })
+            with open(boots) as f:
+                self.assertEqual(f.read().splitlines(), ["boot"])
+
+    def test_initialization_failure_is_a_hard_failure_with_no_partial_result(self):
+        binary = fake_batch_binary(
+            self.GOOD_LOOP,
+            before_loop="""
+print("error: failed to initialize embedded TypeScript 6.0.3 library: injected", file=sys.stderr)
+sys.exit(2)
+""",
+        )
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(binary, [("never-runs.ts", "const value = 1;\n")])
+
+    def _failing_middle_worker(self, root, failure, replacement_init_failure=False):
+        boots = os.path.join(root, "boots")
+        cases = os.path.join(root, "cases")
+        replacement = """
+if boot > 1:
+    print("error: failed to initialize embedded TypeScript 6.0.3 library: replacement", file=sys.stderr)
+    sys.exit(2)
+""" if replacement_init_failure else ""
+        before = f"""
+try:
+    boot = int(open({boots!r}).read()) + 1
+except (OSError, ValueError):
+    boot = 1
+open({boots!r}, "w").write(str(boot))
+{replacement}
+"""
+        loop = f"""
+open({cases!r}, "a").write(str(boot) + ":" + request["case_id"] + "\\n")
+if boot == 1 and request["case_id"] == "middle.ts":
+    {failure}
+print(json.dumps({{
+    "schema": 1,
+    "case_id": request["case_id"],
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+}}), flush=True)
+"""
+        return fake_batch_binary(loop, before_loop=before), boots, cases
+
+    def test_middle_case_crash_restarts_and_collects_the_following_case(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary, boots, cases = self._failing_middle_worker(
+                root, "os.kill(os.getpid(), signal.SIGKILL)"
+            )
+            with self.assertRaises(ts.HarnessFailure):
+                self._run(binary, [
+                    ("first.ts", "const first = 1;\n"),
+                    ("middle.ts", "const middle = 2;\n"),
+                    ("last.ts", "const last = 3;\n"),
+                ])
+            with open(boots) as f:
+                self.assertEqual(f.read(), "2")
+            with open(cases) as f:
+                self.assertEqual(
+                    f.read().splitlines(),
+                    ["1:first.ts", "1:middle.ts", "2:last.ts"],
+                )
+
+    def test_middle_case_timeout_restarts_and_collects_the_following_case(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary, boots, cases = self._failing_middle_worker(root, "time.sleep(1)")
+            with self.assertRaises(ts.HarnessFailure):
+                self._run(binary, [
+                    ("first.ts", "const first = 1;\n"),
+                    ("middle.ts", "const middle = 2;\n"),
+                    ("last.ts", "const last = 3;\n"),
+                ], timeout=0.05)
+            with open(boots) as f:
+                self.assertEqual(f.read(), "2")
+            with open(cases) as f:
+                self.assertEqual(
+                    f.read().splitlines(),
+                    ["1:first.ts", "1:middle.ts", "2:last.ts"],
+                )
+
+    def test_middle_case_infrastructure_frame_restarts_and_collects_the_following_case(self):
+        with tempfile.TemporaryDirectory() as root:
+            failure = (
+                'print(json.dumps({"schema": 1, "case_id": "middle.ts", '
+                '"worker_pid": os.getpid(), "provider_route": provider_route, '
+                '"profile_sha256": provider_profile_sha256, "infrastructure_error": '
+                '"check worker panicked"}), flush=True); time.sleep(10)'
+            )
+            binary, boots, cases = self._failing_middle_worker(root, failure)
+            with self.assertRaises(ts.HarnessFailure):
+                self._run(binary, [
+                    ("first.ts", "const first = 1;\n"),
+                    ("middle.ts", "const middle = 2;\n"),
+                    ("last.ts", "const last = 3;\n"),
+                ])
+            with open(cases) as f:
+                self.assertEqual(
+                    f.read().splitlines(),
+                    ["1:first.ts", "1:middle.ts", "2:last.ts"],
+                )
+            with open(boots) as f:
+                self.assertEqual(f.read(), "2")
+
+    def test_middle_malformed_and_mismatched_frames_restart_before_following_case(self):
+        failures = [
+            'print("{", flush=True); time.sleep(10)',
+            (
+                'print(json.dumps({"schema": 1, "case_id": "wrong.ts", '
+                '"worker_pid": os.getpid(), "provider_route": provider_route, '
+                '"profile_sha256": provider_profile_sha256, '
+                '"exit_code": 0, "stdout": "", '
+                '"stderr": ""}), flush=True); time.sleep(10)'
+            ),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                with tempfile.TemporaryDirectory() as root:
+                    binary, boots, cases = self._failing_middle_worker(root, failure)
+                    with self.assertRaises(ts.HarnessFailure):
+                        self._run(binary, [
+                            ("first.ts", "const first = 1;\n"),
+                            ("middle.ts", "const middle = 2;\n"),
+                            ("last.ts", "const last = 3;\n"),
+                        ])
+                    with open(boots) as f:
+                        self.assertEqual(f.read(), "2")
+                    with open(cases) as f:
+                        self.assertEqual(
+                            f.read().splitlines(),
+                            ["1:first.ts", "1:middle.ts", "2:last.ts"],
+                        )
+
+    def test_replacement_initialization_failure_stops_without_a_retry_loop(self):
+        with tempfile.TemporaryDirectory() as root:
+            binary, boots, cases = self._failing_middle_worker(
+                root,
+                "os.kill(os.getpid(), signal.SIGKILL)",
+                replacement_init_failure=True,
+            )
+            with self.assertRaises(ts.HarnessFailure):
+                self._run(binary, [
+                    ("first.ts", "const first = 1;\n"),
+                    ("middle.ts", "const middle = 2;\n"),
+                    ("last.ts", "const last = 3;\n"),
+                ])
+            with open(boots) as f:
+                self.assertEqual(f.read(), "2")
+            with open(cases) as f:
+                self.assertEqual(f.read().splitlines(), ["1:first.ts", "1:middle.ts"])
+
+    def test_malformed_duplicate_missing_and_mismatched_ids_are_hard_failures(self):
+        duplicate_input = fake_batch_binary(self.GOOD_LOOP)
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(duplicate_input, [
+                ("same.ts", "const first = 1;\n"),
+                ("same.ts", "const second = 2;\n"),
+            ])
+
+        malformed = fake_batch_binary('print("{", flush=True)')
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(malformed, [("malformed.ts", "const value = 1;\n")])
+
+        mismatch = fake_batch_binary("""
+print(json.dumps({
+    "schema": 1,
+    "case_id": request["case_id"] + "-wrong",
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+}), flush=True)
+""")
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(mismatch, [("expected.ts", "const value = 1;\n")])
+
+        duplicate = fake_batch_binary("""
+print(json.dumps({
+    "schema": 1,
+    "case_id": "first.ts",
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+}), flush=True)
+""")
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(duplicate, [
+                ("first.ts", "const first = 1;\n"),
+                ("second.ts", "const second = 2;\n"),
+            ])
+
+        missing = fake_batch_binary("""
+if request["case_id"] == "first.ts":
+    print(json.dumps({
+        "schema": 1,
+        "case_id": "first.ts",
+        "worker_pid": os.getpid(),
+        "provider_route": provider_route,
+        "profile_sha256": provider_profile_sha256,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+    }), flush=True)
+""")
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(missing, [
+                ("first.ts", "const first = 1;\n"),
+                ("second.ts", "const second = 2;\n"),
+            ])
+
+    def test_request_names_sources_and_total_frame_size_are_validated_before_send(self):
+        invalid_cases = [
+            [("", "const value = 1;\n")],
+            [(7, "const value = 1;\n")],
+            [("wrong-source.ts", False)],
+            [("oversized.ts", "x" * self.MAX_FRAME_BYTES)],
+        ]
+        for cases in invalid_cases:
+            with self.subTest(cases=repr(cases)[:80]):
+                binary = fake_batch_binary(self.GOOD_LOOP)
+                with self.assertRaises(ts.HarnessFailure):
+                    self._run(binary, cases)
+
+    def test_provider_attestation_is_stable_and_truthful_across_the_session(self):
+        changing_route = fake_batch_binary("""
+print(json.dumps({
+    "schema": 1,
+    "case_id": request["case_id"],
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route if request["case_id"] == "first.ts" else "prelude",
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+}), flush=True)
+""")
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(changing_route, [
+                ("first.ts", "const first = 1;\n"),
+                ("second.ts", "const second = 2;\n"),
+            ])
+
+    def test_schema_key_type_bounds_and_stdout_contamination_fail_closed(self):
+        valid_prefix = (
+            '"case_id": request["case_id"], "worker_pid": os.getpid(), '
+            '"provider_route": provider_route, '
+            '"profile_sha256": provider_profile_sha256'
+        )
+        invalid_frames = [
+            f'print(json.dumps({{"schema": 2, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": True, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": "0", "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": True, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": -1, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 2, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 4, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": 7, "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": False}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": 7, "worker_pid": os.getpid(), "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": True, "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid() + 1, "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "provider_route": provider_route, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": provider_route, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": True, "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": "prelude", "profile_sha256": provider_profile_sha256, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": provider_route, "profile_sha256": True, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, "case_id": request["case_id"], "worker_pid": os.getpid(), "provider_route": provider_route, "profile_sha256": "wrong", "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": "", "extra": 1}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "x" * 1048577, "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": "x" * 1048577}}), flush=True)',
+            f'print(" " * {self.MAX_FRAME_BYTES} + json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "", "stderr": ""}}), flush=True)',
+            f'print(json.dumps({{"schema": 1, {valid_prefix}, "exit_code": 0, "stdout": "unexpected", "stderr": ""}}), flush=True)',
+            'sys.stdout.write("{\\\"schema\\\":1"); sys.stdout.flush(); sys.exit(0)',
+            'sys.exit(0)',
+            'print("unframed stdout", flush=True)',
+        ]
+        for index, loop in enumerate(invalid_frames):
+            with self.subTest(index=index):
+                binary = fake_batch_binary(loop)
+                with self.assertRaises(ts.HarnessFailure):
+                    self._run(binary, [("probe.ts", "const value = 1;\n")])
+
+    def test_batch_uses_the_same_diagnostic_and_incomplete_exit_contract(self):
+        binary = fake_batch_binary("""
+if request["case_id"] == "diagnostic.ts":
+    stderr = (
+        "error[TK2322]: Type 'string' is not assignable to type 'number'\\n"
+        + request["name"] + ":1:7\\n"
+    )
+    exit_code = 1
+elif request["case_id"] == "incomplete.ts":
+    stderr = (
+        "incomplete[expr-infer/template-literal/interpolation]: skipped\\n"
+        + "  --> " + request["name"] + ":1:1\\n"
+    )
+    exit_code = 3
+else:
+    stderr = ""
+    exit_code = 0
+print(json.dumps({
+    "schema": 1,
+    "case_id": request["case_id"],
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": exit_code,
+    "stdout": "",
+    "stderr": stderr,
+}), flush=True)
+""")
+        observed = self._run(binary, [
+            ("diagnostic.ts", "const value: number = 'wrong';\n"),
+            ("incomplete.ts", "const value = 1;\n"),
+            ("clean.ts", "const value = 1;\n"),
+        ])
+        self.assertEqual(observed, {
+            "diagnostic.ts": ([], [(1, 2322)], []),
+            "incomplete.ts": (
+                [], [], ["expr-infer/template-literal/interpolation"]
+            ),
+            "clean.ts": ([], [], []),
+        })
+
+        inconsistent = fake_batch_binary("""
+print(json.dumps({
+    "schema": 1,
+    "case_id": request["case_id"],
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "error[TK2322]: hidden diagnostic\\n" + request["name"] + ":1:1\\n",
+}), flush=True)
+""")
+        with self.assertRaises(ts.HarnessFailure):
+            self._run(inconsistent, [("inconsistent.ts", "const value = 1;\n")])
 
 
 # --- scoreboard format round-trip --------------------------------------------
