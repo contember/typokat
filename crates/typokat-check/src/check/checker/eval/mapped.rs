@@ -469,6 +469,18 @@ impl<'a> ConditionalEvaluator<'a> {
                 value_pre.push(value);
             }
         } else {
+            if modifiers_source.is_none()
+                && mapped.optional_modifier == ModifierOp::Keep
+                && mapped.readonly_modifier == ModifierOp::Keep
+            {
+                let string = key_source == wk.string;
+                let number = key_source == wk.number;
+                if string || number {
+                    tasks.push(Task::BuildMappedIndex { string, number });
+                    tasks.push(Task::Eval(mapped.value_template));
+                    return;
+                }
+            }
             // Non-homomorphic: the key set is the string-literal members of the key
             // source. A key set with any non-string-literal member (`K in string`, a
             // numeric key) is out of subset → deferred.

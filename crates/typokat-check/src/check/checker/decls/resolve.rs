@@ -325,12 +325,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         };
 
-        let stable_endpoint = self
-            .type_environment
-            .resolution_environment()
-            .groups()
-            .get(decl_id)
-            .is_some()
+        let has_private_replacement = !self.type_environment.is_published()
+            && self.type_decls.has_replacement(decl_id.index());
+        let stable_endpoint = (!has_private_replacement
+            && self
+                .type_environment
+                .resolution_environment()
+                .groups()
+                .get(decl_id)
+                .is_some())
             || matches!(
                 self.type_decls.get(decl_id.index()),
                 Some(TypeDecl::Class { .. })
@@ -476,6 +479,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
         self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
+        if (matches!(self.current_source, crate::source::SourceUnit::User { .. })
+            || self.combined_user_source)
+            && self
+                .private_collision_unavailable_type_groups
+                .contains(&group)
+        {
+            if let Some(arguments) = arguments {
+                for argument in &arguments.params {
+                    let _ = self.lower_annotation(scope, argument);
+                }
+            }
+            return None;
+        }
         assert!(
             !self.type_environment.is_published()
                 || self
@@ -492,12 +508,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .len(),
             self.binder.type_groups.len(),
         );
-        if self
-            .type_environment
-            .resolution_environment()
-            .groups()
-            .get(group)
-            .is_some()
+        let has_private_replacement =
+            !self.type_environment.is_published() && self.type_decls.has_replacement(group.index());
+        if !has_private_replacement
+            && self
+                .type_environment
+                .resolution_environment()
+                .groups()
+                .get(group)
+                .is_some()
         {
             self.resolve_published_type_group_reference(scope, group, name, span, arguments)
         } else if matches!(
@@ -1292,12 +1311,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Option<TypeId> {
         // The declaration's template (its body with parameter types embedded) and its
         // ordered parameter ids.
-        let published = self
-            .type_environment
-            .resolution_environment()
-            .groups()
-            .get(decl_id)
-            .cloned();
+        let has_private_replacement = !self.type_environment.is_published()
+            && self.type_decls.has_replacement(decl_id.index());
+        let published = (!has_private_replacement)
+            .then(|| {
+                self.type_environment
+                    .resolution_environment()
+                    .groups()
+                    .get(decl_id)
+                    .cloned()
+            })
+            .flatten();
         let is_published = published.is_some();
         let (template, params, defaults) = match published {
             Some(PublishedTypeGroupTerminal::Ready(published)) => match published.surface {
@@ -1423,6 +1447,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn type_decl_defaults(&self, decl_id: TypeGroupId) -> Vec<PublishedTypeParameterDefault> {
+        if self.type_environment.is_published() {
+            return self
+                .type_environment
+                .published()
+                .groups()
+                .get(decl_id)
+                .and_then(|terminal| match terminal {
+                    PublishedTypeGroupTerminal::Ready(published) => {
+                        Some(published.parameter_defaults.clone())
+                    }
+                    PublishedTypeGroupTerminal::Unavailable(_) => None,
+                })
+                .unwrap_or_default();
+        }
         match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface {
                 recovery_defaults, ..
@@ -1459,6 +1497,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn type_decl_parameter_names(&self, decl_id: TypeGroupId) -> Vec<String> {
+        if self.type_environment.is_published() {
+            return self
+                .type_environment
+                .published()
+                .groups()
+                .get(decl_id)
+                .and_then(|terminal| match terminal {
+                    PublishedTypeGroupTerminal::Ready(published) => {
+                        Some(published.parameter_names.clone())
+                    }
+                    PublishedTypeGroupTerminal::Unavailable(_) => None,
+                })
+                .unwrap_or_default();
+        }
         match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface { recovery_names, .. }) => recovery_names.clone(),
             Some(TypeDecl::Class {
@@ -1474,16 +1526,32 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// The ordered type-parameter ids of a type declaration (M9), or an empty list for
     /// a non-generic one / an unknown legacy type-storage id.
     fn type_decl_params(&self, decl_id: TypeGroupId) -> Vec<TypeParamId> {
-        if let Some(PublishedTypeGroupTerminal::Ready(published)) = self
-            .type_environment
-            .resolution_environment()
-            .groups()
-            .get(decl_id)
-        {
-            return published.parameters.clone();
+        if self.type_environment.is_published() {
+            return self
+                .type_environment
+                .published()
+                .groups()
+                .get(decl_id)
+                .and_then(|terminal| match terminal {
+                    PublishedTypeGroupTerminal::Ready(published) => {
+                        Some(published.parameters.clone())
+                    }
+                    PublishedTypeGroupTerminal::Unavailable(_) => None,
+                })
+                .unwrap_or_default();
         }
-        if let Some(params) = self.type_decls.published_params(decl_id.index()) {
-            return params.to_vec();
+        if !self.type_decls.has_replacement(decl_id.index()) {
+            if let Some(PublishedTypeGroupTerminal::Ready(published)) = self
+                .type_environment
+                .resolution_environment()
+                .groups()
+                .get(decl_id)
+            {
+                return published.parameters.clone();
+            }
+            if let Some(params) = self.type_decls.published_params(decl_id.index()) {
+                return params.to_vec();
+            }
         }
         match self.type_decls.get(decl_id.index()) {
             Some(TypeDecl::Interface {
@@ -1495,7 +1563,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             | Some(TypeDecl::Class { params, .. })
             // M28: a prelude declaration resolved in the prelude pass keeps only its
             // ordered parameter ids — exactly what instantiation needs.
-            | Some(TypeDecl::Resolved { params }) => params.clone(),
+            | Some(TypeDecl::Resolved { params, .. }) => params.clone(),
             Some(TypeDecl::Unavailable { .. }) | None => Vec::new(),
         }
     }

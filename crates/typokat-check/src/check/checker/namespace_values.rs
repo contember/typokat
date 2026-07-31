@@ -19,6 +19,7 @@ use crate::binder::namespace::{
     NamespaceValueAttachmentDisposition, StandaloneNamespaceValueAttachment,
 };
 use crate::binder::scope::ScopeId;
+use crate::binder::symbol::SymbolId;
 use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::Diagnostic;
 use crate::source::SourceOrdinal;
@@ -28,7 +29,8 @@ use crate::types::repr::{ClassId, FunctionType, ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     Class, ClassElement, Declaration, Expression, Function, Statement, TSModuleDeclaration,
-    TSModuleDeclarationBody, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    TSModuleDeclarationBody, TSModuleDeclarationName, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use oxc_ast::ast_kind::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -45,6 +47,7 @@ pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserR
     prepared_owners: FxHashSet<(ScopeId, String)>,
     standalone_plans: FxHashMap<NamespaceId, StandaloneNamespacePlan<Ticket>>,
     standalone_terminals: LayeredMap<NamespaceId, StandaloneNamespaceTerminal>,
+    terminal_planning_failed: bool,
     #[cfg(any(test, feature = "test-utils"))]
     namespace_function_reservations: FxHashMap<DeclId, SourceSite>,
     #[cfg(test)]
@@ -84,6 +87,13 @@ pub(in crate::check::checker) enum NamespaceValueUnavailableCause {
 }
 
 pub(in crate::check::checker) type FrozenNamespaceUnavailableCause = NamespaceValueUnavailableCause;
+
+type StandaloneMemberFacts = (
+    MergeDeclarationKind,
+    Option<ValueStorageId>,
+    Option<NamespaceId>,
+    Option<SymbolId>,
+);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum FrozenNamespaceValueTerminalSnapshot {
@@ -300,6 +310,7 @@ struct StandaloneAttachmentInput {
 #[derive(Clone)]
 struct StandaloneMemberInput {
     declaration: Option<DeclId>,
+    symbol: Option<SymbolId>,
     name: Option<String>,
     scope: Option<ScopeId>,
     module: ScopeId,
@@ -329,6 +340,7 @@ impl<Ticket: Copy> Default for NamespaceValueRegistry<Ticket> {
             prepared_owners: FxHashSet::default(),
             standalone_plans: FxHashMap::default(),
             standalone_terminals: LayeredMap::default(),
+            terminal_planning_failed: false,
             #[cfg(any(test, feature = "test-utils"))]
             namespace_function_reservations: FxHashMap::default(),
             #[cfg(test)]
@@ -376,13 +388,18 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_terminal_snapshot_parts_for_test(
+    pub(in crate::check::checker) fn replacement_terminal_row_count_for_test(&self) -> usize {
+        self.standalone_terminals.replacement_len()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn changed_terminal_snapshot_parts_for_test(
         &self,
     ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
         FrozenNamespaceValueTerminals {
             standalone: self.standalone_terminals.clone(),
         }
-        .local_snapshot_parts()
+        .changed_snapshot_parts()
     }
 
     pub(in crate::check::checker) fn standalone_terminal(
@@ -426,13 +443,21 @@ impl<Ticket: Copy> NamespaceValueRegistry<Ticket> {
             self.standalone_plans.insert(namespace, plan).is_none(),
             "standalone namespace planned once"
         );
+        let Ok(previous) = self
+            .standalone_terminals
+            .insert_local(namespace, StandaloneNamespaceTerminal::Planned)
+        else {
+            self.terminal_planning_failed = true;
+            return;
+        };
         assert!(
-            self.standalone_terminals
-                .insert_local(namespace, StandaloneNamespaceTerminal::Planned)
-                .expect("namespace plans cannot replace a frozen base row")
-                .is_none(),
+            !matches!(previous, Some(StandaloneNamespaceTerminal::Planned)),
             "standalone namespace terminal reserved once"
         );
+    }
+
+    pub(in crate::check::checker) fn terminal_planning_failed(&self) -> bool {
+        self.terminal_planning_failed
     }
 
     fn is_prepared_owner(&self, scope: ScopeId, name: &str) -> bool {
@@ -580,16 +605,16 @@ impl FrozenNamespaceValueTerminals {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_snapshot_parts(
+    pub(in crate::check::checker) fn changed_snapshot_parts(
         &self,
     ) -> Result<FrozenNamespaceValueTerminalsSnapshotParts, &'static str> {
         let mut rows = self
             .standalone
-            .local_iter()
+            .changed_iter()
             .map(|(&namespace, &terminal)| {
                 let terminal = match terminal {
                     StandaloneNamespaceTerminal::Planned => {
-                        return Err("local namespace terminal is still planned")
+                        return Err("changed namespace terminal is still planned")
                     }
                     StandaloneNamespaceTerminal::Ready { storage, ty } => {
                         FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty }
@@ -646,6 +671,12 @@ impl FrozenNamespaceValueTerminals {
         })
     }
 
+    pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            standalone: self.standalone.fork_sparse_delta()?,
+        })
+    }
+
     #[cfg(test)]
     pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
         self.standalone.shares_base_with(&other.standalone)
@@ -653,6 +684,10 @@ impl FrozenNamespaceValueTerminals {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    pub(in crate::check::checker) fn namespace_terminal_planning_failed(&self) -> bool {
+        self.namespace_values.terminal_planning_failed()
+    }
+
     /// Prepare one module's attached namespace values before class/callable publication.
     pub(in crate::check::checker) fn prepare_attached_namespace_values(
         &mut self,
@@ -713,10 +748,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let query_roots_before = crate::check::query::query_demand_measure().root_calls;
         let syntax = project_syntax_index(modules);
         for attachment in collect_all_standalone_attachment_inputs(self) {
-            if self
-                .namespace_values
-                .standalone_terminal(attachment.namespace)
-                .is_some()
+            if self.private_collision_affected.is_empty()
+                && self
+                    .namespace_values
+                    .standalone_terminal(attachment.namespace)
+                    .is_some()
             {
                 continue;
             }
@@ -733,11 +769,151 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
+    /// Refresh variable-backed namespace properties after merged interface publication.
+    pub(in crate::check::checker) fn refresh_colliding_standalone_variable_surfaces(
+        &mut self,
+        modules: &[(ScopeId, &'ast [Statement<'ast>])],
+        user_modules: &FxHashSet<ScopeId>,
+    ) {
+        let suppress_effects = self.suppress_effects;
+        self.suppress_effects = true;
+        let syntax = project_syntax_index(modules);
+        for attachment in collect_all_standalone_attachment_inputs(self) {
+            let has_user_fragment = attachment
+                .fragments
+                .iter()
+                .any(|fragment| user_modules.contains(&fragment.module));
+            let has_library_fragment = attachment
+                .fragments
+                .iter()
+                .any(|fragment| !user_modules.contains(&fragment.module));
+            if !has_user_fragment || !has_library_fragment {
+                continue;
+            }
+            let mut refreshed = Vec::new();
+            for member in &attachment.members {
+                if member.kind != MergeDeclarationKind::Variable
+                    || matches!(member.publication, NamespacePublication::Private)
+                {
+                    continue;
+                }
+                let (Some(name), Some(scope), Some(declaration)) =
+                    (&member.name, member.scope, member.declaration)
+                else {
+                    continue;
+                };
+                let Some((kind, declarator)) = syntax
+                    .variables
+                    .get(&(member.module, member.source_start))
+                    .copied()
+                else {
+                    continue;
+                };
+                let Some(annotation) = declarator.type_annotation.as_ref() else {
+                    continue;
+                };
+                let Some(member_ty) = self.lower_namespace_member_annotation(
+                    declaration,
+                    scope,
+                    &annotation.type_annotation,
+                ) else {
+                    continue;
+                };
+                refreshed.push((
+                    name.clone(),
+                    member_ty,
+                    kind.is_const(),
+                    member.value_storage,
+                ));
+            }
+            if refreshed.is_empty() {
+                continue;
+            }
+            for (_, ty, _, storage) in &refreshed {
+                if let Some(storage) = storage {
+                    self.publish_copied_decl_type_replay(*storage, *ty);
+                }
+            }
+            match self
+                .namespace_values
+                .standalone_terminal(attachment.namespace)
+            {
+                Some(StandaloneNamespaceTerminal::Planned) => {
+                    let Some(plan) = self
+                        .namespace_values
+                        .standalone_plans
+                        .get_mut(&attachment.namespace)
+                    else {
+                        continue;
+                    };
+                    for (name, ty, readonly, _) in refreshed {
+                        if let Some(property) = plan
+                            .properties
+                            .iter_mut()
+                            .find(|property| property.name == name)
+                        {
+                            property.ty = ty;
+                            property.readonly = readonly;
+                        } else {
+                            let mut property = PropertyType::public(name, ty);
+                            property.readonly = readonly;
+                            plan.properties.push(property);
+                        }
+                    }
+                    if plan.unavailable
+                        == Some(NamespaceValueUnavailableCause::VariableSurfaceUnavailable)
+                    {
+                        // Recovered members remain sound as a partial object: unsupported
+                        // siblings keep their library incomplete and read as missing.
+                        plan.unavailable = None;
+                    }
+                }
+                Some(StandaloneNamespaceTerminal::Ready { storage, ty }) => {
+                    let Some(mut object) = self.interner.store().object_type(ty).cloned() else {
+                        continue;
+                    };
+                    for (name, ty, readonly, _) in refreshed {
+                        if let Some(property) = object
+                            .properties
+                            .iter_mut()
+                            .find(|property| property.name == name)
+                        {
+                            property.ty = ty;
+                            property.readonly = readonly;
+                        }
+                    }
+                    let ty = self.interner.intern_object(object);
+                    self.publish_copied_decl_type_replay(storage, ty);
+                    if self
+                        .namespace_values
+                        .standalone_terminals
+                        .insert_local(
+                            attachment.namespace,
+                            StandaloneNamespaceTerminal::Ready { storage, ty },
+                        )
+                        .is_err()
+                    {
+                        self.namespace_values.terminal_planning_failed = true;
+                    }
+                }
+                Some(StandaloneNamespaceTerminal::Unavailable { .. }) | None => {}
+            }
+        }
+        self.suppress_effects = suppress_effects;
+    }
+
     fn prepare_standalone_namespace_attachment(
         &mut self,
         attachment: StandaloneAttachmentInput,
         syntax: &ProjectSyntaxIndex<'_, '_>,
     ) {
+        let user_delta_only = self
+            .private_collision_affected
+            .contains(&ReplayOwner::Namespace(attachment.namespace));
+        // An affected namespace is rebuilt from every selected library member plus the user
+        // augmentation. Inheriting its frozen object would retain stale TypeIds in nested
+        // constructor and overload payloads.
+        let inherited_properties = Vec::new();
         for fragment in &attachment.fragments {
             if fragment.ambient {
                 self.namespace_values
@@ -750,7 +926,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             );
         }
 
-        let private_invalid = self.prepare_standalone_private_members(&attachment, syntax);
+        let private_invalid =
+            self.prepare_standalone_private_members(&attachment, syntax, user_delta_only);
 
         let public_members = attachment
             .members
@@ -763,14 +940,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .collect::<Vec<_>>();
         let legal_existing_merges = legal_existing_owner_merges(&public_members);
 
-        let mut first_members: FxHashMap<
-            String,
-            (
-                MergeDeclarationKind,
-                Option<ValueStorageId>,
-                Option<NamespaceId>,
-            ),
-        > = FxHashMap::default();
+        let mut first_members: FxHashMap<String, StandaloneMemberFacts> = FxHashMap::default();
         let mut unavailable = private_invalid
             .then_some(NamespaceValueUnavailableCause::InvalidPrivateNamespaceMember);
         for member in &public_members {
@@ -778,12 +948,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 unavailable = Some(NamespaceValueUnavailableCause::MissingExportedMemberName);
                 continue;
             };
-            let facts = (member.kind, member.value_storage, member.child_namespace);
+            let facts = (
+                member.kind,
+                member.value_storage,
+                member.child_namespace,
+                member.symbol,
+            );
             if let Some(first) = first_members.insert(name.clone(), facts) {
                 let repeated_overload = first.0 == MergeDeclarationKind::Function
                     && member.kind == MergeDeclarationKind::Function
-                    && first.1.is_some()
-                    && first.1 == member.value_storage;
+                    && first.1 != member.value_storage
+                    && first.3.is_some()
+                    && first.3 == member.symbol
+                    && first.3.zip(first.1).is_some_and(|(symbol_id, storage)| {
+                        self.binder.symbols.get(symbol_id).is_some_and(|symbol| {
+                            symbol.function_values.contains(&storage)
+                                && member.value_storage.is_some_and(|member_storage| {
+                                    symbol.function_values.contains(&member_storage)
+                                })
+                        })
+                    });
                 let repeated_namespace = first.0 == MergeDeclarationKind::Namespace
                     && member.kind == MergeDeclarationKind::Namespace
                     && first.1 == member.value_storage
@@ -811,7 +995,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         let mut variables = Vec::new();
         let mut functions = Vec::new();
-        let mut properties = Vec::new();
+        let mut properties = inherited_properties;
         let mut dependencies = Vec::new();
         for member in &public_members {
             self.select_standalone_member_source(member);
@@ -859,21 +1043,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         (Some(_), Some(annotation)) => Some(annotation),
                         (Some(_), None) => None,
                         (None, _) => declarator.init.as_ref().and_then(|initializer| {
-                            query_free_initializer_type(self, kind, initializer)
+                            query_free_initializer_type(self, scope, kind, initializer)
                         }),
                     };
-                    let Some(ty) = ty else {
-                        if declarator.type_annotation.is_none() {
+                    let ty = match ty {
+                        Some(ty) => ty,
+                        None if user_delta_only
+                            && matches!(member.source_ordinal, SourceOrdinal::User(_))
+                            && declarator.type_annotation.is_none()
+                            && declarator.init.is_some() =>
+                        {
                             self.record_namespace_attachment_unavailable(
                                 declaration,
                                 member.span,
                                 "decl/variable-declaration/namespace-payload-inferred-initializer",
                                 "namespace member initializer cannot be finalized before root publication",
                             );
+                            self.interner.well_known().error
                         }
-                        unavailable =
-                            Some(NamespaceValueUnavailableCause::VariableSurfaceUnavailable);
-                        continue;
+                        None => {
+                            if declarator.type_annotation.is_none() {
+                                self.record_namespace_attachment_unavailable(
+                                declaration,
+                                member.span,
+                                "decl/variable-declaration/namespace-payload-inferred-initializer",
+                                "namespace member initializer cannot be finalized before root publication",
+                            );
+                            }
+                            unavailable =
+                                Some(NamespaceValueUnavailableCause::VariableSurfaceUnavailable);
+                            continue;
+                        }
                     };
                     if !invalid_using {
                         let mut property = PropertyType::public(name, ty);
@@ -1203,6 +1403,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         attachment: &StandaloneAttachmentInput,
         syntax: &ProjectSyntaxIndex<'_, '_>,
+        user_delta_only: bool,
     ) -> bool {
         let private = attachment
             .members
@@ -1210,6 +1411,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .filter(|member| {
                 member.has_value_space
                     && matches!(member.publication, NamespacePublication::Private)
+                    && (!user_delta_only || matches!(member.source_ordinal, SourceOrdinal::User(_)))
             })
             .collect::<Vec<_>>();
         if private.is_empty() {
@@ -1256,7 +1458,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     });
                     let ty = annotation.or_else(|| {
                         declarator.init.as_ref().and_then(|initializer| {
-                            query_free_initializer_type(self, kind, initializer)
+                            query_free_initializer_type(self, scope, kind, initializer)
                         })
                     });
                     if let (Some(storage), Some(ty)) = (member.value_storage, ty) {
@@ -1486,7 +1688,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     properties: all_properties,
                     ..Default::default()
                 });
-                assert!(self.decl_type_replay(plan.storage).is_none());
+                let replacing_private_prefix = self
+                    .private_collision_affected
+                    .contains(&ReplayOwner::Namespace(namespace))
+                    && self
+                        .private_collision_affected
+                        .contains(&ReplayOwner::Value(plan.storage));
+                assert!(self.decl_type_replay(plan.storage).is_none() || replacing_private_prefix);
                 self.publish_copied_decl_type_replay(plan.storage, ty);
                 self.namespace_values
                     .standalone_terminals
@@ -1616,7 +1824,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             continue;
                         }
                         (None, _) => declarator.init.as_ref().and_then(|initializer| {
-                            query_free_initializer_type(self, kind, initializer)
+                            query_free_initializer_type(self, member.scope, kind, initializer)
                         }),
                     };
                     let Some(ty) = ty else {
@@ -2200,6 +2408,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .namespace_values
             .is_ambient_fragment(self.current_module, declaration.span.start);
         if !consumed && !has_private_checks {
+            let frozen = (!self.private_collision_affected.is_empty()
+                && matches!(
+                    self.current_source,
+                    crate::source::SourceUnit::Library { .. }
+                ))
+            .then(|| match &declaration.id {
+                TSModuleDeclarationName::Identifier(identifier) => self
+                    .binder
+                    .namespace_fragment_terminal_input(self.current_module, identifier.span.start),
+                TSModuleDeclarationName::StringLiteral(_) => None,
+            })
+            .flatten()
+            .filter(|(namespace, _, _)| {
+                self.namespace_values
+                    .standalone_terminal(*namespace)
+                    .is_some()
+            });
+            if let Some((_, scope, ambient)) = frozen {
+                self.check_prepared_namespace_body(declaration, ambient, scope);
+                return true;
+            }
             return false;
         }
         let scope = self
@@ -2590,6 +2819,7 @@ fn standalone_attachment_input<Ticket: Copy + PartialEq>(
         .into_iter()
         .map(|member| StandaloneMemberInput {
             declaration: member.declaration,
+            symbol: member.symbol,
             name: member.name.map(str::to_owned),
             scope: member.site.and_then(|site| site.scope),
             module: member.site.map_or(fallback_module, |site| site.module),
@@ -2969,6 +3199,7 @@ fn declaration_owner_scope<Ticket: Copy + PartialEq>(
 
 fn query_free_initializer_type<Ticket: Copy + PartialEq>(
     pass: &mut Pass<'_, '_, Ticket>,
+    scope: ScopeId,
     kind: VariableDeclarationKind,
     initializer: &Expression<'_>,
 ) -> Option<TypeId> {
@@ -2986,8 +3217,19 @@ fn query_free_initializer_type<Ticket: Copy + PartialEq>(
             .interner
             .intern_literal(crate::types::repr::LiteralValue::Boolean(literal.value)),
         Expression::NullLiteral(_) => pass.interner.well_known().null,
+        Expression::Identifier(identifier)
+            if pass.combined_user_source
+                || (matches!(pass.current_source, crate::source::SourceUnit::User { .. })
+                    && !pass.private_collision_affected.is_empty()) =>
+        {
+            let storage = pass
+                .resolve_value_replay(scope, identifier.name.as_str())
+                .and_then(|symbol| pass.binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.value)?;
+            pass.decl_type_replay(storage)?
+        }
         Expression::ParenthesizedExpression(parenthesized) => {
-            return query_free_initializer_type(pass, kind, &parenthesized.expression)
+            return query_free_initializer_type(pass, scope, kind, &parenthesized.expression)
         }
         _ => return None,
     };

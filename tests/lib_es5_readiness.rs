@@ -48,7 +48,7 @@ const DEEP_WITNESS_IDS: &[&str] = &[
     "deep.repeat.Number",
     "deep.repeat.String",
 ];
-const RAW_OUTPUT_SHA256: &str = "a6d75841e4faa82b215b49dd140f489c70b409a31dcecb84fa3f71977727102f";
+const RAW_OUTPUT_SHA256: &str = "8ffd5d3506775d001daf2540c6fd9ce570c3e4d553a9f5a5845914c365587191";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WitnessRecord {
@@ -431,9 +431,7 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
     );
 
     let expected_owners = BTreeMap::from([
-        ("annotation-bigint-keyword", OWNER_75),
         ("annotation-intrinsic-keyword", OWNER_75),
-        ("annotation-symbol-keyword", OWNER_75),
         ("annotation-this-type", OWNER_75),
         ("annotation-type-predicate", OWNER_50),
         ("callable-heritage-canonical", OWNER_14),
@@ -673,7 +671,7 @@ fn validate_raw_measurement(
     );
     assert_eq!(
         output.incomplete.len(),
-        181,
+        177,
         "raw incomplete cardinality drifted"
     );
     assert_eq!(integer(measurement, "exit_code", "raw measurement"), 3);

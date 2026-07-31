@@ -27,6 +27,7 @@ pub(in crate::check::checker) trait SurfaceInitializerContext {
     fn lower_annotation(&mut self, annotation: &TSType<'_>) -> DemandOutcome<TypeId>;
     fn earlier_field(&self, name: &str) -> Option<TypeId>;
     fn earlier_method(&self, name: &str) -> Option<EarlierMethodSurface>;
+    fn lexical_value(&self, name: &str) -> Option<TypeId>;
 }
 
 pub(in crate::check::checker) struct SurfaceInitializerInferer<'a, 'b, C> {
@@ -212,7 +213,8 @@ impl<'a, 'b, C: SurfaceInitializerContext> SurfaceInitializerInferer<'a, 'b, C> 
                 .locals
                 .iter()
                 .rev()
-                .find_map(|frame| frame.get(identifier.name.as_str()).copied()),
+                .find_map(|frame| frame.get(identifier.name.as_str()).copied())
+                .or_else(|| self.context.lexical_value(identifier.name.as_str())),
 
             // Explicitly unsupported. Keeping every oxc variant in this match makes
             // an AST upgrade a compile-time classification failure.
@@ -305,6 +307,10 @@ mod tests {
 
         fn earlier_method(&self, name: &str) -> Option<EarlierMethodSurface> {
             self.methods.get(name).copied()
+        }
+
+        fn lexical_value(&self, _name: &str) -> Option<TypeId> {
+            None
         }
     }
 

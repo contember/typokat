@@ -3,13 +3,14 @@
 use super::classes::construction::HeritageDependency;
 use super::context::*;
 use super::lexical_events::InterfaceOccurrenceKind;
+use super::replay_index::ReplayOwner;
 use super::type_groups::{
     InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeParameterDefault,
 };
 use crate::binder::declaration::{
     DeclarationKind as BinderDeclarationKind, TypeGroupFragment, TypeGroupId,
 };
-use crate::binder::namespace::SourceUnitKey;
+use crate::binder::namespace::{MergeDisposition, SourceUnitKey};
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
@@ -88,7 +89,7 @@ mod cycle_tainted_application_cache_spec;
 mod eager_application_cache_spec;
 #[cfg(test)]
 mod heritage_base_merge_scan_spec;
-mod interface;
+pub(in crate::check::checker) mod interface;
 #[cfg(test)]
 mod interface_scc_pending_spec;
 mod params;
@@ -788,8 +789,41 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             self.lower_type_group_parameter_metadata(index);
         }
 
-        // Freeze interface dependency components before aliases can observe them.
-        self.construct_pending_interface_sccs(start, end);
+        if start == self.type_decls.published_len() {
+            let replacement_indices = self.type_decls.replacement_indices();
+            let replacement_interfaces = replacement_indices
+                .iter()
+                .copied()
+                .filter(|index| {
+                    matches!(
+                        self.type_decls.get(*index),
+                        Some(TypeDecl::Interface { .. })
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.building_template = true;
+            for index in replacement_interfaces.iter().copied() {
+                self.lower_type_group_parameter_metadata(index);
+            }
+            let mut interface_candidates = replacement_interfaces.clone();
+            interface_candidates.extend((start..end).filter(|index| {
+                matches!(
+                    self.type_decls.get(*index),
+                    Some(TypeDecl::Interface { .. })
+                )
+            }));
+            if !interface_candidates.is_empty() {
+                self.construct_pending_interface_candidates(&interface_candidates, start, end);
+            }
+            for index in replacement_indices {
+                if replacement_interfaces.binary_search(&index).is_err() {
+                    self.fill_type_decls_range(scope, index, index + 1);
+                }
+            }
+        } else {
+            // Freeze interface dependency components before aliases can observe them.
+            self.construct_pending_interface_sccs(start, end);
+        }
 
         // Fill conditional-alias placeholders before ordinary aliases can instantiate them.
         for index in start..end {
@@ -1087,9 +1121,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> PreparedClassInterfaceGroups<'ast, Ticket> {
         let groups = self
             .type_decls
-            .iter()
-            .enumerate()
-            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
+            .changed_entries()
+            .into_iter()
             .filter_map(|(index, declaration)| match declaration {
                 TypeDecl::Class { interfaces, .. } if !interfaces.is_empty() => Some(index),
                 _ => None,
@@ -1122,6 +1155,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         fragment.members,
                     )
                 });
+                let own = own.object;
                 conflict_inputs.push((fragment.clone(), own.clone()));
 
                 let mut heritage_surfaces = Vec::new();
@@ -1641,36 +1675,47 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// annotation in an SCC is lowered before any reserved root is filled.
     fn construct_pending_interface_sccs(&mut self, start: usize, end: usize) {
         let end = end.min(self.type_decls.len());
-        let has_pending_interface = (start..end).any(|index| {
-            matches!(self.type_decls.get(index), Some(TypeDecl::Interface { .. }))
-                && self.type_group_construction_is_pending(TypeGroupId(
-                    u32::try_from(index).expect("type group index fits u32"),
-                ))
-        });
-        if !has_pending_interface {
-            #[cfg(test)]
-            INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| {
-                work.borrow_mut().push(InterfaceSccConstructionWork {
-                    start,
-                    end,
-                    ..InterfaceSccConstructionWork::default()
-                });
-            });
-            return;
-        }
-        #[cfg(test)]
-        let topology_declaration_scans = self.type_decls.iter().count();
-        let topology = interface_heritage_topology(self.binder, &self.type_decls);
-        #[cfg(test)]
-        let scc_candidate_scans = (start..end)
+        let candidates = (start..end)
             .filter(|index| {
                 matches!(
                     self.type_decls.get(*index),
                     Some(TypeDecl::Interface { .. })
                 )
             })
-            .count();
-        let components = interface_sccs(&self.type_decls, start, end, &topology);
+            .collect::<Vec<_>>();
+        self.construct_pending_interface_candidates(&candidates, start, end);
+    }
+
+    fn construct_pending_interface_candidates(
+        &mut self,
+        candidates: &[usize],
+        work_start: usize,
+        work_end: usize,
+    ) {
+        #[cfg(not(test))]
+        let _ = (work_start, work_end);
+        let has_pending_interface = candidates.iter().copied().any(|index| {
+            u32::try_from(index)
+                .ok()
+                .is_some_and(|index| self.type_group_construction_is_pending(TypeGroupId(index)))
+        });
+        if !has_pending_interface {
+            #[cfg(test)]
+            INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| {
+                work.borrow_mut().push(InterfaceSccConstructionWork {
+                    start: work_start,
+                    end: work_end,
+                    ..InterfaceSccConstructionWork::default()
+                });
+            });
+            return;
+        }
+        #[cfg(test)]
+        let topology_declaration_scans = self.type_decls.changed_entries().len();
+        let topology = interface_heritage_topology(self.binder, &self.type_decls);
+        #[cfg(test)]
+        let scc_candidate_scans = candidates.len();
+        let components = interface_sccs(&self.type_decls, candidates, &topology);
         let mut remaining: Vec<Vec<usize>> = components
             .into_iter()
             .filter(|component| {
@@ -1709,8 +1754,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         #[cfg(test)]
         INTERFACE_SCC_CONSTRUCTION_WORK.with(|work| {
             work.borrow_mut().push(InterfaceSccConstructionWork {
-                start,
-                end,
+                start: work_start,
+                end: work_end,
                 topology_builds: 1,
                 topology_declaration_scans,
                 scc_builds: 1,
@@ -1789,17 +1834,35 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             let mut own = crate::types::repr::ObjectType::default();
+            let mut unavailable = false;
             let mut first_method_members = BTreeSet::new();
             let mut lowered_fragments = Vec::with_capacity(fragments.len());
             for fragment in fragments {
                 let frame = self.build_type_param_frame(fragment.param_decl, &fragment.params);
-                let fragment_own = self.with_type_params(frame, |pass| {
+                let lowered = self.with_type_params(frame, |pass| {
                     pass.lower_interface_declaration_members(
                         fragment.declaration,
                         fragment.scope,
                         fragment.members,
                     )
                 });
+                let fragment_is_user = self
+                    .binder
+                    .declarations
+                    .get(fragment.declaration)
+                    .and_then(|declaration| {
+                        self.binder.module_sources().get(&declaration.site.module)
+                    })
+                    .and_then(|source| {
+                        self.binder
+                            .namespaces
+                            .compilation_origin_for_source(*source)
+                    })
+                    .is_some_and(|origin| {
+                        matches!(origin, crate::source::CompilationOrigin::User(_))
+                    });
+                unavailable |= lowered.unavailable && fragment_is_user;
+                let fragment_own = lowered.object;
                 let mut seen_names = BTreeSet::new();
                 let fragment_methods = fragment
                     .members
@@ -1837,13 +1900,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             let alternatives = self.validate_interface_fragment_conflicts(&lowered_fragments);
-            own_objects.push((index, own, alternatives));
+            own_objects.push((index, own, alternatives, unavailable));
         }
 
         let component_set: FxHashSet<usize> = component.iter().copied().collect();
         let mut completed = Vec::with_capacity(component.len());
-        for (index, own, mut alternatives) in own_objects {
+        let mut unavailable_groups = BTreeSet::new();
+        for (index, own, mut alternatives, unavailable) in own_objects {
             let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+            if unavailable
+                && (self
+                    .private_collision_affected
+                    .contains(&ReplayOwner::TypeGroup(group))
+                    || self.combined_user_library_type_groups.contains(&group))
+            {
+                unavailable_groups.insert(group);
+            }
             let _replay_owner_scope = self
                 .replay_trace
                 .as_ref()
@@ -1991,10 +2063,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .fill_reserved_type_batch(fills)
             .expect("an interface SCC freezes exactly once as one validated batch");
         for &index in component {
+            let Some(group) = u32::try_from(index).ok().map(TypeGroupId) else {
+                continue;
+            };
+            if unavailable_groups.contains(&group) {
+                self.private_collision_unavailable_type_groups.insert(group);
+            }
             self.template_fill[index] = ClassFillState::Done;
-            self.freeze_type_group(TypeGroupId(
-                u32::try_from(index).expect("type group index fits u32"),
-            ));
+            self.freeze_type_group(group);
         }
     }
 
@@ -3327,7 +3403,7 @@ fn interface_heritage_topology(
     declarations: &TypeDeclTable<'_>,
 ) -> InterfaceHeritageTopology {
     let mut topology = InterfaceHeritageTopology::default();
-    for declaration in declarations.iter() {
+    for (_, declaration) in declarations.changed_entries() {
         let fragments = match declaration {
             TypeDecl::Interface { fragments, .. } => fragments,
             TypeDecl::Class { interfaces, .. } => interfaces,
@@ -3511,7 +3587,12 @@ fn plan_heritage_group_application(
     let declaration = match declaration {
         TypeDeclView::Published(published) => {
             let actual_count = arguments.map_or(0, |arguments| arguments.params.len());
-            return if actual_count == published.params.len() {
+            let required_count = published
+                .defaults
+                .iter()
+                .rposition(|default| *default == PublishedTypeParameterDefault::Absent)
+                .map_or(0, |index| index + 1);
+            return if actual_count >= required_count && actual_count <= published.params.len() {
                 HeritageTypePlan::complete(BTreeSet::new())
             } else {
                 HeritageTypePlan::Poisoned
@@ -3570,7 +3651,13 @@ fn plan_heritage_group_application(
             };
             (params.len(), required)
         }
-        TypeDecl::Resolved { params } => (params.len(), params.len()),
+        TypeDecl::Resolved { params, defaults } => (
+            params.len(),
+            defaults
+                .iter()
+                .rposition(|default| *default == PublishedTypeParameterDefault::Absent)
+                .map_or(0, |index| index + 1),
+        ),
         TypeDecl::Unavailable { .. } => (0, 0),
     };
     let actual_count = arguments.map_or(0, |arguments| arguments.params.len());
@@ -3679,9 +3766,15 @@ fn topology_segments_group(
     segments: &[&str],
 ) -> Result<TypeGroupId, HeritageTypePlan> {
     match segments {
-        ["Array"] => type_decl_id(binder, scope, "Array")
-            .filter(|group| group.0 >= binder.prelude_type_group_count)
-            .ok_or_else(|| HeritageTypePlan::Opaque(BTreeSet::new())),
+        ["Array"] => {
+            let group = type_decl_id(binder, scope, "Array")
+                .ok_or_else(|| HeritageTypePlan::Opaque(BTreeSet::new()))?;
+            if type_decl_id(binder, binder.prelude_module, "Array") == Some(group) {
+                Err(HeritageTypePlan::Opaque(BTreeSet::new()))
+            } else {
+                Ok(group)
+            }
+        }
         [name] => type_decl_id(binder, scope, name).ok_or_else(|| {
             if binder.resolve_type(scope, name).is_some()
                 || binder.resolve_value(scope, name).is_some()
@@ -3725,12 +3818,12 @@ fn flatten_topology_type_name<'name>(
 
 fn interface_sccs(
     declarations: &TypeDeclTable<'_>,
-    start: usize,
-    end: usize,
+    candidates: &[usize],
     topology: &InterfaceHeritageTopology,
 ) -> Vec<Vec<usize>> {
-    let nodes: BTreeSet<TypeGroupId> = (start..end)
-        .filter(|index| matches!(declarations.get(*index), Some(TypeDecl::Interface { .. })))
+    let nodes: BTreeSet<TypeGroupId> = candidates
+        .iter()
+        .copied()
         .map(|index| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
         .collect();
     let graph: BTreeMap<TypeGroupId, BTreeSet<TypeGroupId>> = nodes
@@ -3975,6 +4068,58 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
     decls: &mut TypeDeclTable<'ast>,
     resolved: &mut TypeResolvedTable,
 ) {
+    let state = TypeDeclReservationState {
+        interner,
+        binder,
+        next_type_param,
+        next_class_id,
+        decls,
+        resolved,
+    };
+    reserve_type_decls_with_selection(state, module, program, None, false);
+}
+
+pub(in crate::check::checker) struct TypeDeclReservationState<'a, 'ast> {
+    pub interner: &'a mut Interner,
+    pub binder: &'a Binder,
+    pub next_type_param: &'a mut u32,
+    pub next_class_id: &'a mut u32,
+    pub decls: &'a mut TypeDeclTable<'ast>,
+    pub resolved: &'a mut TypeResolvedTable,
+}
+
+pub(in crate::check::checker) fn reserve_type_decls_for_combined_library<'ast>(
+    state: TypeDeclReservationState<'_, 'ast>,
+    module: ScopeId,
+    program: &'ast Program<'ast>,
+) {
+    reserve_type_decls_with_selection(state, module, program, None, true);
+}
+
+pub(in crate::check::checker) fn reserve_type_decls_selected<'ast>(
+    state: TypeDeclReservationState<'_, 'ast>,
+    module: ScopeId,
+    program: &'ast Program<'ast>,
+    selected: &BTreeSet<ReplayOwner>,
+) {
+    reserve_type_decls_with_selection(state, module, program, Some(selected), false);
+}
+
+fn reserve_type_decls_with_selection<'ast>(
+    state: TypeDeclReservationState<'_, 'ast>,
+    module: ScopeId,
+    program: &'ast Program<'ast>,
+    selected: Option<&BTreeSet<ReplayOwner>>,
+    retain_library_declarations: bool,
+) {
+    let TypeDeclReservationState {
+        interner,
+        binder,
+        next_type_param,
+        next_class_id,
+        decls,
+        resolved,
+    } = state;
     // The AST walk is joined to the binder through the exact lexical declaration,
     // never by selecting a first/last declaration from a same-name group.
     walk_type_decls(
@@ -3982,6 +4127,39 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
         module,
         program,
         &mut |_walk_scope, _, declaration| {
+            if let Some(selected) = selected {
+                let (binding_start, kind) = match declaration {
+                    TopTypeDecl::Interface(interface) => {
+                        (interface.id.span.start, BinderDeclarationKind::Interface)
+                    }
+                    TopTypeDecl::Alias(alias) => {
+                        (alias.id.span.start, BinderDeclarationKind::TypeAlias)
+                    }
+                    TopTypeDecl::Class(class) => {
+                        let Some(id) = class.id.as_ref() else {
+                            return;
+                        };
+                        (id.span.start, BinderDeclarationKind::Class)
+                    }
+                };
+                let Some(exact) = binder.exact_declaration_at(module, binding_start, kind) else {
+                    return;
+                };
+                let group_selected = exact
+                    .type_group
+                    .is_some_and(|group| selected.contains(&ReplayOwner::TypeGroup(group)));
+                let class_selected = exact
+                    .type_group
+                    .and_then(|group| decls.get(group.index()))
+                    .and_then(|decl| match decl {
+                        TypeDecl::Class { class_id, .. } => Some(*class_id),
+                        _ => None,
+                    })
+                    .is_some_and(|class| selected.contains(&ReplayOwner::Class(class)));
+                if !group_selected && !class_selected {
+                    return;
+                }
+            }
             match declaration {
                 TopTypeDecl::Interface(iface) => {
                     let Some(exact) = binder.exact_declaration_at(
@@ -3995,6 +4173,28 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                         return;
                     };
                     let declaration = exact.id;
+                    if selected.is_none()
+                        && !retain_library_declarations
+                        && binder
+                            .namespaces
+                            .merge_disposition_for_declaration(declaration)
+                            .is_some_and(|disposition| disposition != MergeDisposition::Admitted)
+                    {
+                        let _ =
+                            alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
+                        if group.index() < decls.published_len()
+                            && decls.has_replacement(group.index())
+                        {
+                            return;
+                        }
+                        ensure_type_group_slot(decls, group.index());
+                        terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                        decls[group.index()] = TypeDecl::Unavailable { declaration };
+                        if let Some(slot) = resolved.get_mut(group.index()) {
+                            *slot = None;
+                        }
+                        return;
+                    }
                     let mut fragment = InterfaceFragment {
                         declaration,
                         scope,
@@ -4050,7 +4250,11 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                             interfaces.push(fragment);
                             sort_interface_fragments(binder, group, interfaces);
                         }
-                        Some(TypeDecl::Resolved { .. }) => {
+                        Some(TypeDecl::Resolved {
+                            defaults: inherited_defaults,
+                            ..
+                        }) => {
+                            let inherited_defaults = inherited_defaults.clone();
                             let reserved = interner.reserve_object();
                             if let Some(slot) = resolved.get_mut(group.index()) {
                                 *slot = Some(reserved);
@@ -4086,10 +4290,16 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                 params,
                                 recovery_params: fragment.params.clone(),
                                 recovery_names,
-                                recovery_defaults: vec![
-                                    PublishedTypeParameterDefault::Absent;
-                                    fragment.params.len()
-                                ],
+                                recovery_defaults: if inherited_defaults.len()
+                                    == fragment.params.len()
+                                {
+                                    inherited_defaults
+                                } else {
+                                    vec![
+                                        PublishedTypeParameterDefault::Absent;
+                                        fragment.params.len()
+                                    ]
+                                },
                                 param_slots,
                                 conflict_alternatives: Vec::new(),
                                 defaults,
@@ -4127,6 +4337,28 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                         alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
                     let defaults = vec![None; params.len()];
                     if let (Some(group), Some(declaration)) = (group, declaration) {
+                        if selected.is_none()
+                            && !retain_library_declarations
+                            && binder
+                                .namespaces
+                                .merge_disposition_for_declaration(declaration)
+                                .is_some_and(|disposition| {
+                                    disposition != MergeDisposition::Admitted
+                                })
+                        {
+                            if group.index() < decls.published_len()
+                                && decls.has_replacement(group.index())
+                            {
+                                return;
+                            }
+                            ensure_type_group_slot(decls, group.index());
+                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                            decls[group.index()] = TypeDecl::Unavailable { declaration };
+                            if let Some(slot) = resolved.get_mut(group.index()) {
+                                *slot = None;
+                            }
+                            return;
+                        }
                         ensure_type_group_slot(decls, group.index());
                         if !matches!(decls.get(group.index()), Some(TypeDecl::Resolved { .. })) {
                             terminalize_displaced_type_draft(interner, &decls[group.index()]);
@@ -4135,6 +4367,10 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                 *slot = None;
                             }
                         } else {
+                            // A private replacement must not inherit the published alias memo.
+                            if let Some(slot) = resolved.get_mut(group.index()) {
+                                *slot = None;
+                            }
                             // Reserve recursive templates only after the declaration wins its
                             // group slot; rejected aliases never publish a draft identity.
                             let conditional_template = if matches!(
@@ -4213,6 +4449,21 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                             None => (None, None, _walk_scope),
                         };
                         if let (Some(group), Some(declaration)) = (group, declaration) {
+                            let rejected_global_merge = selected.is_none()
+                                && !retain_library_declarations
+                                && binder
+                                    .namespaces
+                                    .merge_disposition_for_declaration(declaration)
+                                    .is_some_and(|disposition| {
+                                        disposition != MergeDisposition::Admitted
+                                    });
+                            if rejected_global_merge {
+                                let _ = alloc_type_param_ids(
+                                    class.type_parameters.as_deref(),
+                                    next_type_param,
+                                );
+                                return;
+                            }
                             ensure_type_group_slot(decls, group.index());
                             match decls.get(group.index()) {
                                 Some(TypeDecl::Interface {
@@ -4279,7 +4530,11 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                         header_fragments,
                                     };
                                 }
-                                Some(TypeDecl::Resolved { .. }) => {
+                                Some(TypeDecl::Resolved {
+                                    defaults: inherited_defaults,
+                                    ..
+                                }) => {
+                                    let inherited_defaults = inherited_defaults.clone();
                                     // M16: allocate one id per declared type parameter (in source
                                     // order), paired with names when the class body is lowered.
                                     let params = alloc_type_param_ids(
@@ -4309,10 +4564,16 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                         scope,
                                         class_id,
                                         class_params: params.clone(),
-                                        recovery_defaults: vec![
-                                            PublishedTypeParameterDefault::Absent;
-                                            params.len()
-                                        ],
+                                        recovery_defaults: if inherited_defaults.len()
+                                            == params.len()
+                                        {
+                                            inherited_defaults
+                                        } else {
+                                            vec![
+                                                PublishedTypeParameterDefault::Absent;
+                                                params.len()
+                                            ]
+                                        },
                                         recovery_names,
                                         param_slots,
                                         conflict_alternatives: Vec::new(),
@@ -4327,6 +4588,16 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
                                         param_decl: class.type_parameters.as_deref(),
                                         class,
                                     };
+                                }
+                                Some(TypeDecl::Class { .. })
+                                    if group.index() < decls.published_len() =>
+                                {
+                                    // A private collision rebuild has already restored the
+                                    // library class winner for this frozen-prefix group.
+                                    let _ = alloc_type_param_ids(
+                                        class.type_parameters.as_deref(),
+                                        next_type_param,
+                                    );
                                 }
                                 Some(_) => {
                                     // Preserve reservation monotonicity for rejected duplicate
@@ -4357,11 +4628,18 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
 
 fn ensure_type_group_slot<'ast>(decls: &mut TypeDeclTable<'ast>, index: usize) {
     while decls.len() < index {
-        decls.push(TypeDecl::Resolved { params: Vec::new() });
+        decls.push(TypeDecl::Resolved {
+            params: Vec::new(),
+            defaults: Vec::new(),
+        });
     }
     if decls.len() == index {
-        decls.push(TypeDecl::Resolved { params: Vec::new() });
+        decls.push(TypeDecl::Resolved {
+            params: Vec::new(),
+            defaults: Vec::new(),
+        });
     }
+    let _ = decls.get_mut(index);
 }
 
 fn terminalize_displaced_type_draft(interner: &mut Interner, declaration: &TypeDecl<'_>) {
@@ -4451,7 +4729,8 @@ pub(in crate::check::checker) fn walk_type_decls<'ast>(
     program: &'ast Program<'ast>,
     visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
 ) {
-    walk_type_decl_statements(binder, module, module, &program.body, visit);
+    let lexical_root = binder.statement_lexical_root(module);
+    walk_type_decl_statements(binder, module, lexical_root, &program.body, visit);
 }
 
 fn walk_type_decl_statements<'ast>(
@@ -4518,7 +4797,7 @@ fn walk_type_decl_statement<'ast>(
         }
         Statement::TSGlobalDeclaration(global) => {
             let global_scope = binder
-                .global_augmentation_scope(module, global.global_span.start)
+                .global_augmentation_body_scope(module, global.global_span.start)
                 .unwrap_or(scope);
             walk_type_decl_statements(binder, module, global_scope, &global.body.body, visit)
         }
@@ -4572,7 +4851,7 @@ fn walk_type_decl_statement<'ast>(
                 }
                 Declaration::TSGlobalDeclaration(global) => {
                     let global_scope = binder
-                        .global_augmentation_scope(module, global.global_span.start)
+                        .global_augmentation_body_scope(module, global.global_span.start)
                         .unwrap_or(scope);
                     walk_type_decl_statements(
                         binder,
@@ -4755,10 +5034,10 @@ fn walk_type_decl_block<'ast>(
     let Some(&scope) = binder.block_scopes.get(&(module, block.span.start)) else {
         return;
     };
-    debug_assert_eq!(
-        binder.graph.get(scope).and_then(|scope| scope.parent),
-        Some(parent)
-    );
+    // A continued binder can contain the same source offset in an unrelated appended scope.
+    if binder.graph.get(scope).and_then(|scope| scope.parent) != Some(parent) {
+        return;
+    }
     walk_type_decl_statements(binder, module, scope, &block.body, visit);
 }
 
@@ -5067,7 +5346,10 @@ mod topology_tests {
             .expect("frozen HTMLElement group remains visible");
         assert!(html_element.0 < binder.prelude_type_group_count);
         let published = (0..binder.prelude_type_group_count)
-            .map(|_| PublishedTypeDecl { params: Vec::new() })
+            .map(|_| PublishedTypeDecl {
+                params: Vec::new(),
+                defaults: Vec::new(),
+            })
             .collect::<Vec<_>>()
             .into();
         let declarations = TypeDeclTable::with_published(published);

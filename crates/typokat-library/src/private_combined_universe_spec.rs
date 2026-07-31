@@ -102,7 +102,12 @@ const wrongOrdinary: string = parseInt("10");
     ]);
 
     assert_private_replay(&receipt);
-    assert_eq!(receipt.normalized_diagnostics.len(), 3);
+    assert_eq!(
+        receipt.normalized_diagnostics.len(),
+        3,
+        "{:#?}",
+        receipt.normalized_diagnostics
+    );
     assert!(
         receipt
             .normalized_diagnostics
@@ -828,6 +833,7 @@ fn production_route_failures_fall_back_under_one_permit_with_instrumented_eviden
         assert_eq!(fallback.measurement.full_source_fallback_invocations, 1);
         assert_eq!(fallback.measurement.full_source_library_parse_units, 82);
         assert_eq!(fallback.measurement.full_source_library_bind_units, 82);
+        assert!(fallback.measurement.full_base_scan_units > 0);
         assert_eq!(fallback.measurement.private_permit_acquisitions, 1);
         assert_eq!(fallback.measurement.shared_base_mutations, 0);
         assert!(

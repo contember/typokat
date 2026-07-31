@@ -25,7 +25,7 @@ use super::type_syntax::{
     TypeSyntaxLowerer,
 };
 use super::visibility::{has_public_constructor, lower_visibility};
-use crate::binder::declaration::{DeclarationKind, TypeGroupId};
+use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
 use crate::binder::scope::ScopeId;
 use crate::check::checker::context::{
     CheckerEffects, ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder,
@@ -273,6 +273,7 @@ impl<Ticket: Copy> TicketRecord<Ticket> {
 struct Resolver<'a, 'ast, Ticket: Copy> {
     binder: &'a crate::binder::Binder,
     scope: ScopeId,
+    lexical_values: FxHashMap<String, (ValueStorageId, TypeId)>,
     declarations: &'a TypeDeclTable<'ast>,
     resolved: &'a TypeResolvedTable,
     reservations: &'a LexicalReservations<Ticket>,
@@ -288,6 +289,17 @@ struct Resolver<'a, 'ast, Ticket: Copy> {
 }
 
 impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
+    fn resolve_value_type(&self, name: &str) -> Option<TypeId> {
+        if let Some(trace) = &self.replay_trace {
+            trace.demand_root_slot(name, super::super::replay_index::RootSlotKind::Value);
+        }
+        let (storage, ty) = self.lexical_values.get(name).copied()?;
+        if let Some(trace) = &self.replay_trace {
+            trace.demand_at(ReplayOwner::Value(storage), "class-surface-value-terminal");
+        }
+        Some(ty)
+    }
+
     fn resolve_type_group_id(&self, name: &str) -> Option<crate::binder::declaration::TypeGroupId> {
         if let Some(trace) = &self.replay_trace {
             let _observation = trace.observe_typed_demand("class-surface-type-binding");
@@ -459,14 +471,8 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
                 } else {
                     SurfaceNameResolution::Alias {
                         template,
-                        parameters: published
-                            .params
-                            .iter()
-                            .map(|id| ClassTypeParameter {
-                                id: *id,
-                                default: ClassTypeParameterDefault::Absent,
-                            })
-                            .collect(),
+                        parameters: self
+                            .interface_parameters(&published.params, &published.defaults),
                     }
                 };
             }
@@ -513,7 +519,7 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
                     }
                 }
             }
-            TypeDecl::Resolved { params } => {
+            TypeDecl::Resolved { params, defaults } => {
                 let Some(template) = self.resolved.get(id.index()).copied().flatten() else {
                     return SurfaceNameResolution::Poisoned(self.fallback);
                 };
@@ -525,13 +531,7 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
                 } else {
                     SurfaceNameResolution::Alias {
                         template,
-                        parameters: params
-                            .iter()
-                            .map(|id| ClassTypeParameter {
-                                id: *id,
-                                default: ClassTypeParameterDefault::Absent,
-                            })
-                            .collect(),
+                        parameters: self.interface_parameters(params, defaults),
                     }
                 }
             }
@@ -648,6 +648,7 @@ struct InitializerContext {
     annotations: FxHashMap<u32, TypeId>,
     fields: FxHashMap<String, TypeId>,
     methods: FxHashMap<String, EarlierMethodSurface>,
+    lexical_values: FxHashMap<String, TypeId>,
 }
 
 impl SurfaceInitializerContext for InitializerContext {
@@ -667,6 +668,10 @@ impl SurfaceInitializerContext for InitializerContext {
 
     fn earlier_method(&self, name: &str) -> Option<EarlierMethodSurface> {
         self.methods.get(name).copied()
+    }
+
+    fn lexical_value(&self, name: &str) -> Option<TypeId> {
+        self.lexical_values.get(name).copied()
     }
 }
 
@@ -716,6 +721,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
+                lexical_values: FxHashMap::default(),
                 declarations: &drafts.type_decls,
                 resolved: &drafts.type_resolved,
                 reservations: &self.lexical_events,
@@ -755,6 +761,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
+                lexical_values: FxHashMap::default(),
                 declarations: &drafts.type_decls,
                 resolved: &drafts.type_resolved,
                 reservations: &self.lexical_events,
@@ -843,9 +850,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let prepared_interface_groups = self.prepare_class_interface_groups();
         let class_groups: Vec<crate::binder::declaration::TypeGroupId> = self
             .type_decls
-            .iter()
-            .enumerate()
-            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
+            .changed_entries()
+            .into_iter()
             .filter(|(_, declaration)| matches!(declaration, TypeDecl::Class { .. }))
             .map(|(index, _)| {
                 crate::binder::declaration::TypeGroupId(
@@ -984,6 +990,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
+                lexical_values: class
+                    .body
+                    .body
+                    .iter()
+                    .filter_map(|element| {
+                        let ClassElement::PropertyDefinition(property) = element else {
+                            return None;
+                        };
+                        let Expression::Identifier(identifier) = property.value.as_ref()? else {
+                            return None;
+                        };
+                        let storage = self
+                            .binder
+                            .resolve_value(scope, identifier.name.as_str())
+                            .and_then(|symbol| self.binder.symbols.get(symbol))
+                            .and_then(|symbol| symbol.value)?;
+                        self.decl_types
+                            .get(storage)
+                            .map(|ty| (identifier.name.to_string(), (storage, ty)))
+                    })
+                    .collect(),
                 declarations: &type_decls,
                 resolved: &type_resolved,
                 reservations: &self.lexical_events,
@@ -1651,6 +1678,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 continue;
             };
             if let Some(value_decl) = binding.value_decl {
+                let affected = self
+                    .private_collision_affected
+                    .contains(&ReplayOwner::Class(binding.class_id))
+                    || self
+                        .private_collision_affected
+                        .contains(&ReplayOwner::Value(value_decl));
                 assert!(
                     self.class_value_bindings
                         .insert_local(
@@ -1661,7 +1694,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             },
                         )
                         .expect("class value bindings cannot replace a frozen base row")
-                        .is_none(),
+                        .is_none()
+                        || affected,
                     "class value bindings publish once"
                 );
             }
@@ -1682,7 +1716,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             &type_decls,
             &self.class_parents,
         ));
-        for declaration in type_decls.iter() {
+        for (_, declaration) in type_decls.changed_entries() {
             let TypeDecl::Class {
                 class_id, class, ..
             } = declaration
@@ -2176,6 +2210,13 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                     }
                     annotation_ty
                 } else if let Some(value) = property.value.as_ref() {
+                    if let Expression::Identifier(identifier) = value {
+                        if let Some(ty) = resolver.resolve_value_type(identifier.name.as_str()) {
+                            initializer
+                                .lexical_values
+                                .insert(identifier.name.to_string(), ty);
+                        }
+                    }
                     seed_initializer_annotations(factory, resolver, value, frame, &mut initializer);
                     match SurfaceInitializerInferer::new(factory, &mut initializer).infer(
                         value,
@@ -3218,6 +3259,7 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                 let mut resolver = Resolver {
                     binder,
                     scope,
+                    lexical_values: FxHashMap::default(),
                     declarations,
                     resolved,
                     reservations,

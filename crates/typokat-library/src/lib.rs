@@ -27,7 +27,11 @@ pub use crate::source::LibraryFileOrdinal;
 /// ```compile_fail
 /// use typokat_library::LayeredUserDelta;
 /// ```
-pub use base::FrozenLibraryBase;
+pub use base::{
+    compile_complete_source_fallback_runtime, CompleteSourceFallbackRuntime, FrozenLibraryBase,
+    LibraryProjectRouteError, RoutedLibraryProject, RoutedPrivateExecution,
+    RoutedPrivateLibraryProject,
+};
 pub use provider::{
     LibraryBaseProvider, LibraryInitCause, LibraryInitError, LibraryInitStage,
     LibraryProjectBinderContinuation,
@@ -72,9 +76,8 @@ mod collision_preflight_spec;
 #[cfg(test)]
 mod private_route_receipt_spec;
 
-// Activate after the WU5 private combined-universe implementation lands.
-// #[cfg(test)]
-// mod private_combined_universe_spec;
+#[cfg(test)]
+mod private_combined_universe_spec;
 
 #[cfg(test)]
 mod collision_replay_index_spec;
@@ -88,10 +91,8 @@ mod compiler_profile_spec;
 #[cfg(test)]
 mod type_group_ordering_spec;
 
-// Activate after the WU5 replay index and work receipts land.
-// #[cfg(test)]
-// mod private_replay_scale_spec;
+#[cfg(test)]
+mod private_replay_scale_spec;
 
-// Activate with ADR-0020's source-compiled compact collision plan.
-// #[cfg(test)]
-// mod source_compiled_collision_plan_spec;
+#[cfg(test)]
+mod source_compiled_collision_plan_spec;

@@ -47,6 +47,12 @@ struct CandidateCollectionRequest<'a> {
 pub(crate) struct SignatureInferenceResult<T> {
     pub(crate) arguments: T,
     pub(crate) exhaustion: Option<Exhaustion>,
+    pub(crate) constraint_violations: FxHashSet<TypeParamId>,
+}
+
+struct FixedSignatureParams {
+    arguments: FxHashMap<TypeParamId, TypeId>,
+    constraint_violations: FxHashSet<TypeParamId>,
 }
 
 struct CandidateCollectionResult {
@@ -197,9 +203,10 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         queries.rollback();
     }
     match outcome {
-        DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {
-            arguments,
+        DemandOutcome::Ready(fixed) => DemandOutcome::Ready(SignatureInferenceResult {
+            arguments: fixed.arguments,
             exhaustion: collection.exhaustion,
+            constraint_violations: fixed.constraint_violations,
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
     }
@@ -272,6 +279,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         DemandOutcome::Ready(arguments) => DemandOutcome::Ready(SignatureInferenceResult {
             arguments,
             exhaustion: collection.exhaustion,
+            constraint_violations: FxHashSet::default(),
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
     }
@@ -918,13 +926,14 @@ fn fix_signature_params(
     type_params: &[GenericTypeParam],
     fixed: FxHashMap<TypeParamId, TypeId>,
     fresh_exempt: &FxHashSet<TypeParamId>,
-) -> DemandOutcome<FxHashMap<TypeParamId, TypeId>> {
+) -> DemandOutcome<FixedSignatureParams> {
     let wk = interner.well_known();
     // Start from **all** collected candidates — this preserves bindings for parameters
     // NOT in `type_params` (e.g. a derived generic class inheriting its base's
     // constructor, whose parameter belongs to the *base*'s list); the constraint pass
     // below only overrides the declared ones.
     let mut map = fixed;
+    let mut constraint_violations = FxHashSet::default();
     for type_param in type_params {
         let param = type_param.id;
         // The parameter's constraint, substituted with the arguments fixed so far
@@ -954,22 +963,21 @@ fn fix_signature_params(
         let value = match map.get(&param).copied() {
             Some(candidate) => match constraint {
                 Some(c) => {
-                    let satisfies = if fresh_exempt.contains(&param) {
-                        true
-                    } else {
-                        match SemanticQueryCoordinator::new(
-                            interner,
-                            published,
-                            queries,
-                            next_type_param,
-                        )
-                        .is_assignable(candidate, c)
-                        {
-                            RelationOutcome::Yes => true,
-                            RelationOutcome::No(_) => false,
-                            RelationOutcome::Exhausted(exhaustion) => {
-                                return DemandOutcome::Exhausted(exhaustion);
-                            }
+                    let satisfies = match SemanticQueryCoordinator::new(
+                        interner,
+                        published,
+                        queries,
+                        next_type_param,
+                    )
+                    .is_assignable(candidate, c)
+                    {
+                        RelationOutcome::Yes => true,
+                        RelationOutcome::No(_) => {
+                            constraint_violations.insert(param);
+                            false
+                        }
+                        RelationOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion);
                         }
                     };
                     // A violating candidate clamps to the constraint — unless EVERY
@@ -996,7 +1004,10 @@ fn fix_signature_params(
         };
         map.insert(param, value);
     }
-    DemandOutcome::Ready(map)
+    DemandOutcome::Ready(FixedSignatureParams {
+        arguments: map,
+        constraint_violations,
+    })
 }
 
 fn fix_present_signature_params(
@@ -1116,7 +1127,7 @@ mod wu7_measurements {
         count: usize,
         corpus: ConstraintCorpus,
     ) -> (
-        DemandOutcome<FxHashMap<TypeParamId, TypeId>>,
+        DemandOutcome<FixedSignatureParams>,
         QueryDemandMeasure,
         Duration,
     ) {

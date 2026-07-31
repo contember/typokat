@@ -16,9 +16,24 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 /// One owned source handed to the frontend.
+#[derive(Clone)]
 pub struct FileInput {
     pub name: String,
     pub source: String,
+}
+
+/// One owned auxiliary source parsed alongside a user project.
+pub struct AuxiliarySourceInput {
+    pub source_ordinal: usize,
+    pub name: String,
+    pub source: String,
+}
+
+/// One parsed auxiliary unit handed to the project checker.
+pub struct AuxiliaryProgram<'ast> {
+    pub source_ordinal: usize,
+    pub name: &'ast str,
+    pub program: &'ast Program<'ast>,
 }
 
 /// One parsed project unit handed to the serial project checker.
@@ -88,12 +103,34 @@ pub fn run_project_frontend<Product>(
     inputs: Vec<FileInput>,
     consume: impl for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Product,
 ) -> ProjectFrontendRun<Product> {
-    let allocators: Vec<Allocator> = (0..inputs.len()).map(|_| Allocator::default()).collect();
+    run_project_frontend_with_auxiliary(inputs, Vec::new(), |interner, _, units| {
+        consume(interner, units)
+    })
+}
+
+/// Parse auxiliary sources and a local project under one frontend-owned lifetime.
+///
+/// Auxiliary programs retain their input order. They do not participate in user
+/// import resolution or dependency ordering.
+pub fn run_project_frontend_with_auxiliary<Product>(
+    inputs: Vec<FileInput>,
+    auxiliary: Vec<AuxiliarySourceInput>,
+    consume: impl for<'ast> FnOnce(
+        &mut Interner,
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+    ) -> Product,
+) -> ProjectFrontendRun<Product> {
+    let source_count = inputs.len() + auxiliary.len();
+    let allocators: Vec<Allocator> = (0..source_count).map(|_| Allocator::default()).collect();
     let parsed: Vec<_> = inputs
         .iter()
+        .map(|input| input.source.as_str())
+        .chain(auxiliary.iter().map(|input| input.source.as_str()))
         .zip(&allocators)
-        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
+        .map(|(source, allocator)| Parser::new(allocator, source, SourceType::ts()).parse())
         .collect();
+    let (parsed, auxiliary_parsed) = parsed.split_at(inputs.len());
 
     let parse_errors: Vec<Vec<String>> = parsed
         .iter()
@@ -159,9 +196,18 @@ pub fn run_project_frontend<Product>(
                 .collect(),
         })
         .collect();
+    let auxiliary_units: Vec<AuxiliaryProgram<'_>> = auxiliary
+        .iter()
+        .zip(auxiliary_parsed)
+        .map(|(input, parsed)| AuxiliaryProgram {
+            source_ordinal: input.source_ordinal,
+            name: &input.name,
+            program: &parsed.program,
+        })
+        .collect();
 
     let mut interner = Interner::with_intrinsics();
-    let product = consume(&mut interner, &project_units);
+    let product = consume(&mut interner, &auxiliary_units, &project_units);
     ProjectFrontendRun {
         inputs,
         parse_errors,
@@ -229,6 +275,21 @@ fn scan_imports(
         }
     }
     imports
+}
+
+/// Count source-level relative import declarations without performing resolution.
+pub fn relative_import_edge_count(program: &Program<'_>) -> usize {
+    program
+        .body
+        .iter()
+        .filter(|statement| {
+            matches!(
+                statement,
+                Statement::ImportDeclaration(import)
+                    if is_local_relative(import.source.value.as_str())
+            )
+        })
+        .count()
 }
 
 fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast str> {

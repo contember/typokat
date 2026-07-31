@@ -21,7 +21,7 @@ const PIN_PATH: &str = "tests/fixtures/library-owned-records.txt";
 const BLESS: &str = "TYPOKAT_BLESS_LIBRARY_RECORDS";
 
 const PINNED_DIAGNOSTICS: usize = 265;
-const PINNED_INCOMPLETES: usize = 610;
+const PINNED_INCOMPLETES: usize = 433;
 
 fn repository_root() -> PathBuf {
     let root = std::env::current_dir().expect("test process current directory");
@@ -109,14 +109,15 @@ fn every_pinned_entry_names_a_code_and_a_site() {
 ///
 /// This is the production shape, not a reading of the source: `check_project_with_library` and
 /// `check_source_with_library` are the entry points the WU7 cutover moves the CLI onto. The
-/// library contributes 875 records on the way to the base; a user check must see none of them,
+/// library contributes 698 records on the way to the base; a user check must see none of them,
 /// and must still see its own.
 #[test]
 fn no_library_owned_record_reaches_user_output() {
     let census = LibraryRecordCensus::compile_packaged_profile().expect("library record census");
-    assert!(
-        census.entries().len() > 800,
-        "the library must actually own records for this proof to mean anything"
+    assert_eq!(
+        census.entries().len(),
+        PINNED_DIAGNOSTICS + PINNED_INCOMPLETES,
+        "the production-path proof must use the exact named census"
     );
 
     let clean = "export const greeting: string = \"typokat\";\n";

@@ -1,9 +1,12 @@
 //! Test-only library-domain adapter for the shared lexical reservation walk.
 
 use super::events_library::{
-    LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket, LibraryReservedEvent,
+    LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
+    LibraryReplayReservationDomain, LibraryReservedEvent,
 };
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations, SourceSite};
+use super::replay_index::CollisionReplayEventPhase;
+use super::PrivateCombinedRecordTicket;
 use super::{attach_class_bindings, attach_type_decl_owners, ModuleDeclarationSpans};
 use crate::binder::{scope::ScopeId, Binder};
 use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
@@ -33,7 +36,7 @@ impl LibraryLexicalEvidence {
 
 struct LibraryReservationAllocator<'ledger> {
     file_ordinal: LibraryFileOrdinal,
-    ledger: &'ledger mut LibraryEventLedger,
+    reservations: LibraryReplayReservationDomain<'ledger>,
 }
 
 impl LexicalReservationAllocator for LibraryReservationAllocator<'_> {
@@ -48,13 +51,86 @@ impl LexicalReservationAllocator for LibraryReservationAllocator<'_> {
     }
 
     fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket) {
-        let event = self.ledger.reserve_event(self.file_ordinal, source_start);
+        let event = self
+            .reservations
+            .reserve_event(self.file_ordinal, source_start);
         (event, event.primary)
     }
 
     fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error> {
-        self.ledger.reserve_record(event.id)
+        self.reservations.reserve_record(event.id)
     }
+
+    fn record_owner_site(
+        &mut self,
+        ticket: Self::Ticket,
+        span: crate::span::Span,
+        phase: CollisionReplayEventPhase,
+    ) {
+        self.reservations
+            .record_replay_owner_site(ticket, span, phase);
+    }
+}
+
+impl LexicalReservationAllocator for PrivateCombinedLibraryReservationAllocator<'_> {
+    type Event = PrivateCombinedLibraryReservedEvent;
+    type Ticket = PrivateCombinedRecordTicket;
+    type Error = LibraryEventLedgerError;
+
+    fn source_unit(&self) -> SourceUnit {
+        SourceUnit::Library {
+            file_ordinal: self.file_ordinal,
+        }
+    }
+
+    fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket) {
+        let (event, disabled) = self.reservations.reserve_event_with_omission(
+            self.file_ordinal,
+            source_start,
+            self.omitted_owner,
+        );
+        let ticket = if disabled {
+            PrivateCombinedRecordTicket::DisabledLibrary(event.primary)
+        } else {
+            PrivateCombinedRecordTicket::Library(event.primary)
+        };
+        (PrivateCombinedLibraryReservedEvent { event }, ticket)
+    }
+
+    fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error> {
+        self.reservations
+            .reserve_record_with_omission(event.event.id, self.omitted_owner)
+            .map(|(ticket, disabled)| {
+                if disabled {
+                    PrivateCombinedRecordTicket::DisabledLibrary(ticket)
+                } else {
+                    PrivateCombinedRecordTicket::Library(ticket)
+                }
+            })
+    }
+
+    fn record_owner_site(
+        &mut self,
+        ticket: Self::Ticket,
+        span: crate::span::Span,
+        phase: CollisionReplayEventPhase,
+    ) {
+        if let PrivateCombinedRecordTicket::Library(ticket) = ticket {
+            self.reservations
+                .record_replay_owner_site(ticket, span, phase);
+        }
+    }
+}
+
+struct PrivateCombinedLibraryReservationAllocator<'ledger> {
+    file_ordinal: LibraryFileOrdinal,
+    reservations: LibraryReplayReservationDomain<'ledger>,
+    omitted_owner: Option<LibraryEventKey>,
+}
+
+#[derive(Clone, Copy)]
+struct PrivateCombinedLibraryReservedEvent {
+    event: LibraryReservedEvent,
 }
 
 impl LexicalReservations<LibraryRecordTicket> {
@@ -66,7 +142,7 @@ impl LexicalReservations<LibraryRecordTicket> {
     ) -> Result<(), LibraryEventLedgerError> {
         let mut allocator = LibraryReservationAllocator {
             file_ordinal,
-            ledger,
+            reservations: ledger.replay_reservation_domain()?,
         };
         self.reserve_program_with(program, &mut allocator)?;
         let source = SourceSite {
@@ -74,6 +150,11 @@ impl LexicalReservations<LibraryRecordTicket> {
             source_start: program.span.start,
         };
         let (_, owner) = allocator.reserve_event(source.source_start);
+        allocator.record_owner_site(
+            owner,
+            crate::span::Span::from_oxc(program.span),
+            CollisionReplayEventPhase::Immediate,
+        );
         self.retain_source_anchor(source, owner);
         Ok(())
     }
@@ -122,7 +203,25 @@ impl LexicalReservations<LibraryRecordTicket> {
             scope,
             program,
             declarations,
+            None,
         );
+    }
+}
+
+impl LexicalReservations<PrivateCombinedRecordTicket> {
+    pub(crate) fn reserve_private_library_program(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+        ledger: &mut LibraryEventLedger,
+        omitted_owner: Option<LibraryEventKey>,
+    ) -> Result<(), LibraryEventLedgerError> {
+        let mut allocator = PrivateCombinedLibraryReservationAllocator {
+            file_ordinal,
+            reservations: ledger.replay_reservation_domain()?,
+            omitted_owner,
+        };
+        self.reserve_program_with(program, &mut allocator)
     }
 }
 

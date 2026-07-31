@@ -1680,9 +1680,3 @@ id = "class/class-heritage/poisoned-base"
 context = "class heritage base surface is poisoned"
 owner = "shipped"
 witness = "../cases/sr_semantic_duplication/class_initializer_poison.ts"
-
-[[incomplete]]
-id = "bind/frozen-library-global/merge-refused"
-context = "user declaration cannot merge into the frozen default-library global"
-owner = "shipped"
-witness = "../cases/b102_frozen_prefix_writes/library_global_var_merge.ts"

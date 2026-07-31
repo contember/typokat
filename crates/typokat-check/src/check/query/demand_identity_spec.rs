@@ -261,8 +261,15 @@ fn bounded_identity_attempts(
 ) -> Option<DemandOutcome<bool>> {
     let projection_memo = FxHashMap::default();
     let evaluation_memo = FxHashMap::default();
-    let mut planner =
-        ProjectionPlanner::new(interner, published, &projection_memo, &evaluation_memo, 0);
+    let mut planner = ProjectionPlanner::new(
+        interner,
+        published,
+        &projection_memo,
+        &evaluation_memo,
+        0,
+        false,
+        None,
+    );
     for _ in 0..limit {
         match SemanticQueryCoordinator::<PublishedClasses>::identical_attempt(
             planner.interner.store(),

@@ -2,18 +2,8 @@
 # Regenerate: TYPOKAT_BLESS_LIBRARY_RECORDS=1 cargo test --test library_owned_records
 # Columns are tab-separated: kind, name, file:line:column, detail.
 # profile: ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d
-# diagnostics: 265, incompletes: 610, records: 875
+# diagnostics: 265, incompletes: 433, records: 698
 incomplete	annotation-lower/type-reference/default-argument	lib.decorators.d.ts:31:7	type-parameter default unavailable at application
-incomplete	annotation-lower/type-query/typeof	lib.decorators.d.ts:36:26	typeof type query not lowered
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:36:83	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:87:29	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:153:29	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:200:29	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:247:29	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.d.ts:349:29	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.legacy.d.ts:18:73	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.legacy.d.ts:19:74	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.decorators.legacy.d.ts:20:74	symbol keyword type not modeled
 diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:3572:11	Interface 'Animation' incorrectly extends interface 'EventTarget'.
@@ -44,7 +34,6 @@ diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends
 diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'ParentNode'.
 diagnostic	TK2430	lib.dom.d.ts:12554:11	Interface 'Document' incorrectly extends interface 'ParentNode'.
 diagnostic	TK2344	lib.dom.d.ts:12587:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
-incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:12649:42	typeof type query not lowered
 diagnostic	TK2344	lib.dom.d.ts:12692:39	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
 diagnostic	TK2344	lib.dom.d.ts:12705:38	Type '{ [x: string]: any; [x: number]: { ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
 diagnostic	TK2344	lib.dom.d.ts:12742:39	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
@@ -264,8 +253,6 @@ diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends i
 diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'GlobalEventHandlers'.
 diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'WindowEventHandlers'.
 diagnostic	TK2430	lib.dom.d.ts:41172:11	Interface 'Window' incorrectly extends interface 'WindowEventHandlers'.
-incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:41420:29	typeof type query not lowered
-incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:41463:31	typeof type query not lowered
 diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'AbstractWorker'.
 diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'AbstractWorker'.
 diagnostic	TK2430	lib.dom.d.ts:41765:11	Interface 'Worker' incorrectly extends interface 'EventTarget'.
@@ -283,12 +270,7 @@ diagnostic	TK2344	lib.dom.d.ts:42092:31	Type '{ addEventListener: { <K extends k
 diagnostic	TK2344	lib.dom.d.ts:42093:30	Type '{ addEventListener: { <K extends keyof { abort: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => { addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING...' does not satisfy the constraint '{ addEventListener: (type: string, callback: null | { (evt: { AT_TARGET: 2; BUBBLING_PHASE: 3; CAPTURING_PHASE: 1; NONE: 0; bubbles: boolean; cancelBubble: boolean; cancelable: boolean; composed: boolean; composedPath: () => ...[]; currentTarget: null | ...; defaultPrevented: boolean; eventPhase: number; initEvent: ...'.
 diagnostic	TK2430	lib.dom.d.ts:42101:11	Interface 'XMLHttpRequestEventTarget' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:42101:11	Interface 'XMLHttpRequestEventTarget' incorrectly extends interface 'EventTarget'.
-incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.dom.d.ts:42465:5	namespace function duplicates an earlier exported value
 incomplete	annotation-lower/type-syntax/unsupported	lib.dom.d.ts:42546:17	namespace member type syntax could not be lowered
-incomplete	annotation-lower/bigint-keyword/self	lib.dom.d.ts:42742:14	bigint keyword type not modeled
-incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.dom.d.ts:42773:5	namespace function duplicates an earlier exported value
-incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:43605:28	typeof type query not lowered
-incomplete	annotation-lower/type-query/typeof	lib.dom.d.ts:43648:30	typeof type query not lowered
 incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44511:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44515:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44522:6	computed method signature key not visited
@@ -346,7 +328,6 @@ incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:134:20	thi
 incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:27:73	type predicate not lowered
 incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:49:51	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:60:62	this type annotation not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.core.d.ts:317:36	symbol keyword type not modeled
 incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:350:82	type predicate not lowered
 incomplete	signature/method-signature/computed-key	lib.es2015.generator.d.ts:24:6	computed method signature key not visited
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.iterable.d.ts:24:24	unique symbol operator not lowered
@@ -375,20 +356,7 @@ incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:458:
 incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:495:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:532:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:569:6	computed method signature key not visited
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:36:51	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:44:44	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:52:33	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:59:54	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:72:33	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:84:45	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.proxy.d.ts:99:33	symbol keyword type not modeled
-incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.es2015.reflect.d.ts:30:5	namespace function duplicates an earlier exported value
-incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.es2015.reflect.d.ts:44:5	namespace function duplicates an earlier exported value
 incomplete	annotation-lower/type-syntax/unsupported	lib.es2015.reflect.d.ts:111:5	namespace member type syntax could not be lowered
-incomplete	decl/function-declaration/namespace-payload-duplicate-value	lib.es2015.reflect.d.ts:133:5	namespace function duplicates an earlier exported value
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.d.ts:27:38	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.d.ts:34:23	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.d.ts:41:17	symbol keyword type not modeled
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:24:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:30:34	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:36:21	unique symbol operator not lowered
@@ -400,7 +368,6 @@ incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellk
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:72:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:78:27	unique symbol operator not lowered
 incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:85:6	computed method signature key not visited
-incomplete	annotation-lower/symbol-keyword/self	lib.es2015.symbol.wellknown.d.ts:85:41	symbol keyword type not modeled
 incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:87:15	computed property signature key not visited
 incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:95:15	computed property signature key not visited
 incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:105:15	computed property signature key not visited
@@ -452,140 +419,24 @@ incomplete	annotation-lower/type-operator/unique-operand	lib.es2018.asynciterabl
 incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:36:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:43:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:50:6	computed method signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2018.intl.d.ts:79:41	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:116:16	bigint keyword type not modeled
 incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:118:15	computed property signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:122:13	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:122:50	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:131:31	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:131:40	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:138:32	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:138:41	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:169:62	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:172:39	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:182:30	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:192:17	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:192:56	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:201:31	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:212:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:212:116	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:223:34	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:232:33	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:239:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:247:28	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:265:32	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:278:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:278:91	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:40	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:62	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:131	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:290:140	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:302:60	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:45	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:67	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:136	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:314:145	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:326:65	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:329:16	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:336:26	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:353:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:359:26	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:359:37	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:359:57	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:359:66	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:379:29	bigint keyword type not modeled
 incomplete	signature/method-signature/computed-key	lib.es2020.bigint.d.ts:381:6	computed method signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:381:40	bigint keyword type not modeled
 incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:383:15	computed property signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:385:22	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:390:27	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:390:46	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:393:27	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:402:18	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:408:31	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:416:66	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:422:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:430:65	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:460:62	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:463:39	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:473:30	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:483:17	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:483:56	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:492:31	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:503:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:503:117	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:514:34	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:523:33	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:530:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:538:28	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:556:32	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:569:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:569:92	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:40	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:62	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:132	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:581:141	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:593:60	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:45	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:67	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:137	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:605:146	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:617:65	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:620:16	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:627:26	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:644:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:650:26	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:650:37	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:650:57	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:650:66	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:670:29	bigint keyword type not modeled
 incomplete	signature/method-signature/computed-key	lib.es2020.bigint.d.ts:672:6	computed method signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:672:40	bigint keyword type not modeled
 incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:674:15	computed property signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:676:22	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:681:27	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:681:46	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:684:27	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:693:18	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:699:31	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:707:66	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:713:29	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:721:65	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:732:62	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:740:63	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:748:44	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:756:45	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.bigint.d.ts:761:32	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:25:109	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:25:118	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:32:109	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:32:118	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:39:129	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:39:155	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:39:164	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:46:114	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:46:123	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:52:104	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:59:108	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:59:117	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:65:111	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:65:120	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:72:109	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:72:118	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:80:76	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:96:109	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2020.sharedmemory.d.ts:96:118	bigint keyword type not modeled
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2020.symbol.wellknown.d.ts:25:24	unique symbol operator not lowered
 incomplete	signature/method-signature/computed-key	lib.es2020.symbol.wellknown.d.ts:29:6	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.es2020.symbol.wellknown.d.ts:38:6	computed method signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:35:48	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:35:81	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:36:55	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2021.intl.d.ts:36:88	bigint keyword type not modeled
 incomplete	signature/property-signature/computed-key	lib.es2021.weakref.d.ts:20:15	computed property signature key not visited
 incomplete	signature/property-signature/computed-key	lib.es2021.weakref.d.ts:44:15	computed property signature key not visited
-incomplete	annotation-lower/bigint-keyword/self	lib.es2022.array.d.ts:110:24	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2022.array.d.ts:118:24	bigint keyword type not modeled
 incomplete	signature/method-signature/computed-key	lib.es2022.intl.d.ts:60:10	computed method signature key not visited
 incomplete	signature/method-signature/computed-key	lib.es2022.intl.d.ts:79:10	computed method signature key not visited
 incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:27:79	type predicate not lowered
@@ -626,38 +477,14 @@ incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:722:20	this typ
 incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:723:14	type predicate not lowered
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:730:20	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:748:20	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:790:24	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:792:20	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:794:20	this type annotation not modeled
 incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:795:14	type predicate not lowered
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:800:20	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:802:20	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:805:8	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:818:20	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:820:20	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:840:30	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:840:41	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:849:32	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:862:24	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:864:20	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:866:20	this type annotation not modeled
 incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:867:14	type predicate not lowered
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:872:20	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:874:20	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:877:8	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:890:20	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:892:20	this type annotation not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:912:30	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:912:41	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.array.d.ts:921:32	bigint keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es2023.collection.d.ts:18:13	symbol keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:57:32	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:58:39	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:59:37	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:59:82	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:60:44	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2023.intl.d.ts:60:89	bigint keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es2024.sharedmemory.d.ts:38:64	bigint keyword type not modeled
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:60:62	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:70:60	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:80:56	this type annotation not modeled
@@ -690,10 +517,6 @@ incomplete	annotation-lower/type-predicate/self	lib.es2025.iterator.d.ts:54:69	t
 incomplete	annotation-lower/type-predicate/self	lib.es2025.iterator.d.ts:129:67	type predicate not lowered
 incomplete	signature/property-signature/computed-key	lib.es2025.iterator.d.ts:132:19	computed property signature key not visited
 diagnostic	TK2304	lib.es2025.iterator.d.ts:136:43	Cannot find name 'IteratorObjectConstructor'
-incomplete	annotation-lower/symbol-keyword/self	lib.es5.d.ts:103:16	symbol keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es5.d.ts:106:46	symbol keyword type not modeled
-incomplete	annotation-lower/bigint-keyword/self	lib.es5.d.ts:226:92	bigint keyword type not modeled
-incomplete	annotation-lower/symbol-keyword/self	lib.es5.d.ts:226:120	symbol keyword type not modeled
 diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
 diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
 diagnostic	TK2430	lib.es5.d.ts:366:11	Interface 'NewableFunction' incorrectly extends interface 'Function'.

@@ -298,6 +298,17 @@ pub enum RelationAttempt {
 pub trait RelationNormalization {
     fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion>;
 
+    /// Whether the active semantic universe proves that `ty` lacks a callable member.
+    /// The default stays conservative for normalization providers without library data.
+    fn definitely_lacks_callable_member(&self, _store: &Store, _ty: TypeId, _name: &str) -> bool {
+        false
+    }
+
+    /// Whether `ty` is the active library's canonical `Object` interface.
+    fn is_library_object_top(&self, _ty: TypeId) -> bool {
+        false
+    }
+
     /// Return the next unresolved semantic operation for lazy relation planning.
     /// Evaluator/inference queries use `normalize` directly and therefore never
     /// observe this relation-only protocol.
@@ -645,6 +656,36 @@ impl<'a> Relater<'a> {
         };
         // Identity fast path: `T` relates to `T` under every relation.
         if src == tgt {
+            return Relation::Yes;
+        }
+
+        // TypeScript's global `Object` interface is the non-nullish top object
+        // target even though its declaration exposes prototype members.
+        if self
+            .normalization
+            .is_some_and(|normalization| normalization.is_library_object_top(tgt))
+            && (matches!(
+                self.store.tag(src),
+                TypeTag::Literal
+                    | TypeTag::Object
+                    | TypeTag::Function
+                    | TypeTag::Array
+                    | TypeTag::Tuple
+                    | TypeTag::Readonly
+                    | TypeTag::Template
+                    | TypeTag::ClassInstance
+            ) || matches!(
+                self.store.intrinsic_kind(src),
+                Some(
+                    IntrinsicKind::Boolean
+                        | IntrinsicKind::Number
+                        | IntrinsicKind::String
+                        | IntrinsicKind::Object
+                        | IntrinsicKind::BigInt
+                        | IntrinsicKind::Symbol
+                )
+            ))
+        {
             return Relation::Yes;
         }
 
@@ -1384,6 +1425,8 @@ impl<'a> Relater<'a> {
                     | IntrinsicKind::Number
                     | IntrinsicKind::String
                     | IntrinsicKind::Object
+                    | IntrinsicKind::BigInt
+                    | IntrinsicKind::Symbol
             )
         )) {
             return Relation::Yes;
@@ -1514,6 +1557,8 @@ impl<'a> Relater<'a> {
             IntrinsicKind::ThisType => wk.this_type,
             IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
             IntrinsicKind::Object => wk.object,
+            IntrinsicKind::BigInt => wk.bigint,
+            IntrinsicKind::Symbol => wk.symbol,
         }
     }
 }

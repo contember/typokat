@@ -11,9 +11,13 @@ use crate::check::checker::{
 use crate::check::{check_program, check_project_programs, CheckResult};
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
-    run_project_frontend, run_source_frontend, FileInput, ProjectFrontendRun, ProjectProgram,
+    run_project_frontend, run_project_frontend_with_auxiliary, run_source_frontend,
+    AuxiliarySourceInput, FileInput, ProjectFrontendRun, ProjectProgram,
 };
-use crate::library::{FrozenLibraryBase, LibraryBaseProvider};
+use crate::library::{
+    FrozenLibraryBase, LibraryBaseProvider, RoutedLibraryProject, RoutedPrivateExecution,
+    RoutedPrivateLibraryProject,
+};
 #[cfg(test)]
 use crate::span::Span;
 use crate::types::Interner;
@@ -213,8 +217,61 @@ fn check_source_with_library_inner(
     base: &FrozenLibraryBase,
     source: &str,
 ) -> Result<CheckOutput, String> {
+    let route_input = FileInput {
+        name: "input.ts".to_owned(),
+        source: source.to_owned(),
+    };
+    match base
+        .route_user_project(std::slice::from_ref(&route_input))
+        .map_err(|error| error.to_string())?
+    {
+        RoutedLibraryProject::Shared(state) => continue_source_with_library_runtime(state, source),
+        RoutedLibraryProject::Private(private) => {
+            continue_private_source_with_library(private, source)
+        }
+        RoutedLibraryProject::CompleteSourceFallback(fallback) => {
+            continue_complete_source_with_library(
+                *fallback,
+                vec![FileInput {
+                    name: "input.ts".to_owned(),
+                    source: source.to_owned(),
+                }],
+            )
+            .and_then(single_private_source_output)
+        }
+    }
+}
+
+fn continue_private_source_with_library(
+    private: RoutedPrivateLibraryProject,
+    source: &str,
+) -> Result<CheckOutput, String> {
+    let reports = continue_private_project_with_library(
+        private,
+        vec![FileInput {
+            name: "input.ts".to_owned(),
+            source: source.to_owned(),
+        }],
+    )?;
+    single_private_source_output(reports)
+}
+
+fn single_private_source_output(reports: Vec<FileReport>) -> Result<CheckOutput, String> {
+    if reports.len() != 1 {
+        return Err("private single-source check produced an invalid report count".to_owned());
+    }
+    reports
+        .into_iter()
+        .next()
+        .map(|report| report.output)
+        .ok_or_else(|| "private single-source check produced no report".to_owned())
+}
+
+fn continue_source_with_library_runtime(
+    state: crate::check::checker::library_compiler::OwnedLibraryRuntimeState,
+    source: &str,
+) -> Result<CheckOutput, String> {
     let run = run_source_frontend(source, |program| {
-        let state = base.fork_user_delta().map_err(str::to_owned)?;
         crate::check::checker::check_program_with_owned_library(state, program)
             .map_err(str::to_owned)
     });
@@ -255,13 +312,146 @@ fn check_project_with_library_inner(
     base: &FrozenLibraryBase,
     inputs: Vec<FileInput>,
 ) -> Result<Vec<FileReport>, String> {
-    let state = base.fork_user_delta().map_err(str::to_owned)?;
-    // The continuation can refuse the whole run (a `declare global` the frozen base cannot admit).
-    // It has to reach the caller as a typed failure with no partial report (backlog 103).
+    match base
+        .route_user_project(&inputs)
+        .map_err(|error| error.to_string())?
+    {
+        RoutedLibraryProject::Shared(state) => continue_project_with_library_runtime(state, inputs),
+        RoutedLibraryProject::Private(private) => {
+            continue_private_project_with_library(private, inputs)
+        }
+        RoutedLibraryProject::CompleteSourceFallback(fallback) => {
+            continue_complete_source_with_library(*fallback, inputs)
+        }
+    }
+}
+
+fn continue_private_project_with_library(
+    private: RoutedPrivateLibraryProject,
+    inputs: Vec<FileInput>,
+) -> Result<Vec<FileReport>, String> {
+    let runtime = match private.into_runtime_or_complete_source_fallback()? {
+        RoutedPrivateExecution::Sparse(runtime) => *runtime,
+        RoutedPrivateExecution::CompleteSourceFallback(fallback) => {
+            return continue_complete_source_with_library(*fallback, inputs);
+        }
+    };
+    let mut state = runtime.state;
+    let permit = runtime.permit;
+    let fallback_seeds = runtime.fallback_seeds;
+    let fallback_inputs = inputs.clone();
+    let auxiliary = match state.take_private_collision_sources() {
+        Ok(sources) => sources
+            .into_iter()
+            .map(|source| AuxiliarySourceInput {
+                source_ordinal: source.file_ordinal.index(),
+                name: source.name,
+                source: source.source,
+            })
+            .collect(),
+        Err(_) => {
+            let fallback =
+                typokat_library::compile_complete_source_fallback_runtime(permit, &fallback_seeds)?;
+            return continue_complete_source_with_library(fallback, fallback_inputs);
+        }
+    };
+    match check_private_project_reports(state, inputs, auxiliary) {
+        Ok(reports) => Ok(reports),
+        Err(_) => {
+            let fallback =
+                typokat_library::compile_complete_source_fallback_runtime(permit, &fallback_seeds)?;
+            continue_complete_source_with_library(fallback, fallback_inputs)
+        }
+    }
+}
+
+fn continue_complete_source_with_library(
+    fallback: typokat_library::CompleteSourceFallbackRuntime,
+    inputs: Vec<FileInput>,
+) -> Result<Vec<FileReport>, String> {
+    let auxiliary = fallback
+        .sources
+        .iter()
+        .cloned()
+        .map(|source| AuxiliarySourceInput {
+            source_ordinal: source.file_ordinal.index(),
+            name: source.name,
+            source: source.source,
+        })
+        .collect();
+    check_complete_source_project_reports(fallback, inputs, auxiliary).map_err(str::to_owned)
+}
+
+fn check_complete_source_project_reports(
+    fallback: typokat_library::CompleteSourceFallbackRuntime,
+    inputs: Vec<FileInput>,
+    auxiliary: Vec<AuxiliarySourceInput>,
+) -> Result<Vec<FileReport>, &'static str> {
+    let typokat_library::CompleteSourceFallbackRuntime {
+        state,
+        checkpoint,
+        sources: _,
+    } = fallback;
+    let run = run_project_frontend_with_auxiliary(
+        inputs,
+        auxiliary,
+        move |_, library_programs, units| {
+            let project_units_by_slot = units
+                .iter()
+                .map(|unit| unit.module_ordinal.index())
+                .collect::<Vec<_>>();
+            (
+                project_units_by_slot,
+                crate::check::checker::check_complete_source_project_programs_with_library(
+                    state,
+                    checkpoint,
+                    library_programs,
+                    units,
+                ),
+            )
+        },
+    );
+    project_reports_from_frontend_run(run)
+}
+
+fn continue_project_with_library_runtime(
+    state: crate::check::checker::library_compiler::OwnedLibraryRuntimeState,
+    inputs: Vec<FileInput>,
+) -> Result<Vec<FileReport>, String> {
     check_project_reports(inputs, |_, units| {
         crate::check::checker::check_project_programs_with_library(state, units)
     })
     .map_err(str::to_owned)
+}
+
+fn check_private_project_reports(
+    state: crate::check::checker::library_compiler::OwnedLibraryRuntimeState,
+    inputs: Vec<FileInput>,
+    auxiliary: Vec<AuxiliarySourceInput>,
+) -> Result<Vec<FileReport>, &'static str> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let run = run_project_frontend_with_auxiliary(
+        inputs,
+        auxiliary,
+        move |_, library_programs, units| {
+            let project_units_by_slot = units
+                .iter()
+                .map(|unit| unit.module_ordinal.index())
+                .collect::<Vec<_>>();
+            (
+                project_units_by_slot,
+                crate::check::checker::check_private_project_programs_with_library(
+                    state,
+                    library_programs,
+                    units,
+                ),
+            )
+        },
+    );
+    project_reports_from_frontend_run(run)
 }
 
 #[cfg(test)]
@@ -319,17 +509,26 @@ where
         return Ok(Vec::new());
     }
 
+    let run = run_project_frontend(inputs, |interner, units| {
+        let project_units_by_slot = units
+            .iter()
+            .map(|unit| unit.module_ordinal.index())
+            .collect::<Vec<_>>();
+        (project_units_by_slot, check_project(interner, units))
+    });
+    project_reports_from_frontend_run(run)
+}
+
+type CheckedProjectFrontendProduct<E> = (Vec<usize>, Result<Vec<CheckResult>, E>);
+
+fn project_reports_from_frontend_run<E>(
+    run: ProjectFrontendRun<CheckedProjectFrontendProduct<E>>,
+) -> Result<Vec<FileReport>, E> {
     let ProjectFrontendRun {
         inputs,
         parse_errors,
         product: (project_units_by_slot, ordered_results),
-    } = run_project_frontend(inputs, |interner, units| {
-        let project_units_by_slot = units
-            .iter()
-            .map(|unit| unit.module_ordinal)
-            .collect::<Vec<_>>();
-        (project_units_by_slot, check_project(interner, units))
-    });
+    } = run;
     let ordered_results = ordered_results?;
     let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
         (0..inputs.len()).map(|_| Vec::new()).collect();
@@ -339,7 +538,7 @@ where
         let original = result.module_ordinal.index();
         debug_assert_eq!(
             project_units_by_slot.get(result.unit_slot.index()).copied(),
-            Some(result.module_ordinal)
+            Some(result.module_ordinal.index())
         );
         if let Some(slot) = diagnostics_by_original.get_mut(original) {
             *slot = result.diagnostics;
@@ -2158,12 +2357,8 @@ const publishedWrong: boolean = published.value;
         }
     }
 
-    /// Backlog 103, the guard tier. A project the frozen library base cannot admit must reach the
-    /// caller as a typed failure with NO reports — the project path used to `.expect` it into a
-    /// panic while the single-source path already propagated it.
     #[test]
-    fn a_declare_global_project_refuses_the_run_instead_of_panicking() {
-        const REFUSAL: &str = "frozen-library continuation does not yet admit declare global";
+    fn a_declare_global_project_continues_the_frozen_library() {
         let cases: &[(&str, &str)] = &[
             (
                 "a library-owned name",
@@ -2185,19 +2380,170 @@ const publishedWrong: boolean = published.value;
                     source: "export const value: number = 1;\n".to_string(),
                 },
             ];
-            assert_eq!(
-                check_project_with_library(inputs).err().as_deref(),
-                Some(REFUSAL),
-                "{label}: declare global refuses the whole run"
+            let result = check_project_with_library(inputs);
+            assert!(
+                result.is_ok(),
+                "{label}: declare global must bind: {:?}",
+                result.as_ref().err()
             );
+            if let Ok(reports) = result {
+                assert_eq!(reports.len(), 2);
+                assert!(reports
+                    .iter()
+                    .all(|report| report.output.parse_errors.is_empty()));
+            }
         }
 
-        // The single-source path already behaved this way and must keep doing so.
-        assert_eq!(
-            check_source_with_library("export {};\ndeclare global { var b103Solo: number; }\n")
-                .err()
-                .as_deref(),
-            Some(REFUSAL)
+        let result =
+            check_source_with_library("export {};\ndeclare global { var b103Solo: number; }\n");
+        assert!(
+            result.is_ok(),
+            "single-source declare global must bind: {:?}",
+            result.as_ref().err()
         );
+        if let Ok(output) = result {
+            assert!(output.parse_errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn sparse_library_class_collision_keeps_the_library_terminal() {
+        let output = check_source_with_library("class Date {}\nconst value: Date = new Date();\n")
+            .expect("class collision checks in a private epoch");
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn sparse_library_interface_collision_publishes_the_merged_surface() {
+        let output = check_source_with_library(
+            "interface Array<T> { b103Head(): T }\nconst head: number = [1].b103Head();\nconst wrong: string = [1].b103Head();\nconst wrongMapped: string[] = [1].map((value) => value + 1);\n",
+        )
+        .expect("interface collision checks in a private epoch");
+        assert_eq!(output.diagnostics.len(), 2, "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn sparse_library_interface_collision_replays_root_slot_consumers() {
+        let output = check_source_with_library(
+            "interface EventSourceInit { b103Required: string; }\nnew EventSource(\"https://example.invalid\", {});\n",
+        )
+        .expect("EventSourceInit collision checks in a private epoch");
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["TK2345"],
+            "{:?}",
+            output.diagnostics
+        );
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn sparse_library_alias_collision_keeps_the_library_terminal() {
+        let output = check_source_with_library(
+            "type Partial<T> = { b103: T };\nconst kept: Partial<{ value: number }> = {};\nconst rejected: Partial<number> = { b103: 1 };\n",
+        )
+        .expect("alias collision checks in a private epoch");
+        assert_eq!(output.diagnostics.len(), 1);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn sparse_epoch_preserves_legal_class_interface_merges_in_both_orders() {
+        let class = "class B103Merged {\n  fromClass(): string { return \"ok\"; }\n  static version: number = 1;\n}\n";
+        let interface = "interface B103Merged { fromInterface(): number }\n";
+        for declarations in [format!("{class}{interface}"), format!("{interface}{class}")] {
+            let source = format!(
+                "interface Array<T> {{ b103Collision(): T }}\n{declarations}const merged = new B103Merged();\nconst fromClass: string = merged.fromClass();\nconst fromInterface: number = merged.fromInterface();\nconst wrong: string = merged.fromInterface();\nconst version: number = B103Merged.version;\n"
+            );
+            let output =
+                check_source_with_library(&source).expect("class-interface merge private epoch");
+            assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+            assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        }
+    }
+
+    #[test]
+    fn sparse_library_interface_legally_augments_an_inherited_class_surface() {
+        let output = check_source_with_library(
+            "interface SafeArray<T = any> { b103Value(): T }\ndeclare const safe: SafeArray<number>;\nconst value: number = safe.b103Value();\nconst wrong: string = safe.b103Value();\nconst array: number[] = new VBArray(safe).toArray();\n",
+        )
+        .expect("inherited class-interface merge checks in a private epoch");
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn sparse_global_object_replay_publishes_script_contributors() {
+        let result = check_project_with_library(vec![
+            FileInput {
+                name: "00_global.ts".to_owned(),
+                source: "declare var B103GlobalThisValue: { enabled: boolean };\nfunction B103GlobalThisCall(): number { return 1; }\n".to_owned(),
+            },
+            FileInput {
+                name: "99_consume.ts".to_owned(),
+                source: "const enabled: boolean = globalThis.B103GlobalThisValue.enabled;\nconst wrongEnabled: string = globalThis.B103GlobalThisValue.enabled;\nconst called: number = globalThis.B103GlobalThisCall();\nconst wrongCalled: string = globalThis.B103GlobalThisCall();\n".to_owned(),
+            },
+        ]);
+        assert!(result.is_ok(), "{:?}", result.as_ref().err());
+        if let Ok(reports) = result {
+            assert_eq!(reports.len(), 2);
+            assert!(reports[0].output.diagnostics.is_empty());
+            assert_eq!(
+                reports[1]
+                    .output
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.as_str())
+                    .collect::<Vec<_>>(),
+                ["TK2322", "TK2322"]
+            );
+        }
+    }
+
+    #[test]
+    fn sparse_generic_array_replacement_substitutes_fresh_parameters_in_both_file_orders() {
+        let augmentation = "interface Array<T> {\n  b103Self(): Array<T>;\n  b103Cross<U>(value: U): Array<U>;\n}\n";
+        let read = "const selfNumber: number = [1].b103Self()[0];\nconst crossString: string = [1].b103Cross(\"x\")[0];\nconst wrongCross: number = [1].b103Cross(\"x\")[0];\n";
+        let orders = [
+            [
+                FileInput {
+                    name: "00_augment.ts".to_string(),
+                    source: augmentation.to_string(),
+                },
+                FileInput {
+                    name: "99_read.ts".to_string(),
+                    source: read.to_string(),
+                },
+            ],
+            [
+                FileInput {
+                    name: "00_read.ts".to_string(),
+                    source: read.to_string(),
+                },
+                FileInput {
+                    name: "99_augment.ts".to_string(),
+                    source: augmentation.to_string(),
+                },
+            ],
+        ];
+        for inputs in orders {
+            let reports =
+                check_project_with_library(Vec::from(inputs)).expect("generic collision project");
+            let diagnostics = reports
+                .iter()
+                .flat_map(|report| &report.output.diagnostics)
+                .collect::<Vec<_>>();
+            let incomplete = reports
+                .iter()
+                .flat_map(|report| &report.output.incomplete)
+                .collect::<Vec<_>>();
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(incomplete.is_empty(), "{incomplete:?}");
+        }
     }
 }

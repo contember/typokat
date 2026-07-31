@@ -1,6 +1,9 @@
 //! Lexical event reservations retained across class/SCC/body phases.
 
 use super::events::UserRecordTicket;
+use super::replay_index::{
+    CollisionReplayEventPhase, CollisionReplayOwnerSite, CollisionReplaySiteProvenance, ReplayOwner,
+};
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
 };
@@ -284,6 +287,13 @@ pub trait LexicalReservationAllocator {
     fn source_unit(&self) -> SourceUnit;
     fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket);
     fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error>;
+    fn record_owner_site(
+        &mut self,
+        _ticket: Self::Ticket,
+        _span: Span,
+        _phase: CollisionReplayEventPhase,
+    ) {
+    }
 }
 
 /// Persistent source-site table built before class construction, SCCs, and bodies.
@@ -315,6 +325,7 @@ pub struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     callables_by_source: BTreeMap<(SourceOrdinal, u32), Vec<CallableSiteId>>,
     initializers_by_source: FxHashMap<(SourceUnit, u32), usize>,
     declaration_reservations_by_decl: FxHashMap<DeclId, usize>,
+    collision_owner_sites: Vec<CollisionReplayOwnerSite>,
 }
 
 impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
@@ -345,6 +356,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             callables_by_source: BTreeMap::new(),
             initializers_by_source: FxHashMap::default(),
             declaration_reservations_by_decl: FxHashMap::default(),
+            collision_owner_sites: Vec::new(),
         }
     }
 }
@@ -363,6 +375,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         let ordinal = source_ordinal(unit);
         for occurrence in source_declaration_occurrences(program) {
             let (_, owner) = allocator.reserve_event(occurrence.binding_span.start);
+            allocator.record_owner_site(
+                owner,
+                occurrence.binding_span,
+                CollisionReplayEventPhase::Immediate,
+            );
             let index = self.declarations.len();
             self.declarations.push(DeclarationReservation {
                 source: SourceSite {
@@ -481,7 +498,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             unit,
             binding_start,
             InterfaceOccurrenceKind::Header,
-            binding_start,
+            Span::from_oxc(interface.id.span),
             allocator,
         );
         for heritage in &interface.extends {
@@ -489,23 +506,23 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                 unit,
                 binding_start,
                 InterfaceOccurrenceKind::Heritage,
-                heritage.span.start,
+                Span::from_oxc(heritage.span),
                 allocator,
             );
         }
         for member in &interface.body.body {
-            let source_start = match member {
-                TSSignature::TSPropertySignature(signature) => signature.span.start,
-                TSSignature::TSMethodSignature(signature) => signature.span.start,
-                TSSignature::TSCallSignatureDeclaration(signature) => signature.span.start,
-                TSSignature::TSConstructSignatureDeclaration(signature) => signature.span.start,
-                TSSignature::TSIndexSignature(signature) => signature.span.start,
+            let span = match member {
+                TSSignature::TSPropertySignature(signature) => signature.span,
+                TSSignature::TSMethodSignature(signature) => signature.span,
+                TSSignature::TSCallSignatureDeclaration(signature) => signature.span,
+                TSSignature::TSConstructSignatureDeclaration(signature) => signature.span,
+                TSSignature::TSIndexSignature(signature) => signature.span,
             };
             self.reserve_interface_occurrence(
                 unit,
                 binding_start,
                 InterfaceOccurrenceKind::Member,
-                source_start,
+                Span::from_oxc(span),
                 allocator,
             );
         }
@@ -516,12 +533,14 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         unit: SourceUnit,
         binding_start: u32,
         kind: InterfaceOccurrenceKind,
-        source_start: u32,
+        span: Span,
         allocator: &mut Allocator,
     ) where
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
+        let source_start = span.start;
         let (_, owner) = allocator.reserve_event(source_start);
+        allocator.record_owner_site(owner, span, CollisionReplayEventPhase::Immediate);
         let index = self.interface_occurrences.len();
         self.interface_occurrences
             .push(InterfaceOccurrenceReservation {
@@ -555,6 +574,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     for specifier in &export.specifiers {
                         let local_span = Span::from_oxc(specifier.local.span());
                         let (_, owner) = allocator.reserve_event(local_span.start);
+                        allocator.record_owner_site(
+                            owner,
+                            local_span,
+                            CollisionReplayEventPhase::Immediate,
+                        );
                         let index = self.export_aliases.len();
                         self.export_aliases.push(ExportAliasReservation {
                             source: SourceSite {
@@ -638,6 +662,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
+        record_site_ticket_sites(allocator, tickets, Span::from_oxc(statement.span()));
         let mut class_site = None;
         let mut callable = None;
         if let Some(class) = statement_class(statement) {
@@ -788,6 +813,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             };
             let (event, primary) = allocator.reserve_event(source.source_start);
             let tickets = reserve_site_tickets(event, primary, allocator)?;
+            record_site_ticket_sites(allocator, tickets, Span::from_oxc(declarator.span));
             let index = self.declarators.len();
             self.declarators
                 .push(DeclaratorReservation { source, tickets });
@@ -1118,6 +1144,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             source_start: initializer.span().start,
         };
         let (_, owner) = allocator.reserve_event(source.source_start);
+        allocator.record_owner_site(
+            owner,
+            Span::from_oxc(initializer.span()),
+            CollisionReplayEventPhase::Immediate,
+        );
         let index = self.initializers.len();
         self.initializers
             .push(InitializerReservation { source, owner });
@@ -1142,6 +1173,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
+        record_site_ticket_sites(allocator, tickets, Span::from_oxc(function.span));
         self.expression_site_tickets.push(tickets);
         #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
@@ -1168,6 +1200,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
+        record_site_ticket_sites(allocator, tickets, Span::from_oxc(arrow.span));
         self.expression_site_tickets.push(tickets);
         #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
@@ -1196,6 +1229,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         };
         let (event, primary) = allocator.reserve_event(source.source_start);
         let tickets = reserve_site_tickets(event, primary, allocator)?;
+        record_site_ticket_sites(allocator, tickets, Span::from_oxc(class.span));
         self.expression_site_tickets.push(tickets);
         #[cfg(any(test, feature = "test-utils"))]
         self.expression_sources.push(source);
@@ -1268,6 +1302,33 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         self.declaration_reservations_by_decl
             .insert(declaration, index);
         Ok(())
+    }
+
+    pub(in crate::check::checker) fn attach_collision_declaration_site(
+        &mut self,
+        owner: ReplayOwner,
+        file_ordinal: crate::source::LibraryFileOrdinal,
+        declaration: &crate::binder::declaration::LexicalDeclaration,
+        binder_owner: crate::binder::namespace::DeclarationOwner,
+        containing_namespace: Option<crate::binder::namespace::NamespaceId>,
+    ) {
+        self.collision_owner_sites.push(CollisionReplayOwnerSite {
+            owner,
+            file_ordinal,
+            span: declaration.site.declaration_span,
+            provenance: CollisionReplaySiteProvenance::Declaration {
+                declaration: declaration.id,
+                kind: declaration.kind,
+                binder_owner,
+                containing_namespace,
+            },
+        });
+    }
+
+    pub(in crate::check::checker) fn take_collision_owner_sites(
+        &mut self,
+    ) -> Vec<CollisionReplayOwnerSite> {
+        std::mem::take(&mut self.collision_owner_sites)
     }
 
     pub fn export_alias_owner(
@@ -1636,6 +1697,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     source_start: constraint.span().start,
                 };
                 let (_, owner) = allocator.reserve_event(source.source_start);
+                allocator.record_owner_site(
+                    owner,
+                    Span::from_oxc(constraint.span()),
+                    CollisionReplayEventPhase::Deferred,
+                );
                 constraints.push(ClassConstraintReservation {
                     parameter_index,
                     source,
@@ -1648,6 +1714,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                     source_start: default.span().start,
                 };
                 let (_, owner) = allocator.reserve_event(source.source_start);
+                allocator.record_owner_site(
+                    owner,
+                    Span::from_oxc(default.span()),
+                    CollisionReplayEventPhase::Deferred,
+                );
                 defaults.push(ClassDefaultReservation {
                     parameter_index,
                     source,
@@ -1681,6 +1752,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             let (member_event, member_primary) =
                 allocator.reserve_event(element_source.source_start);
             let member_tickets = reserve_site_tickets(member_event, member_primary, allocator)?;
+            record_site_ticket_sites(allocator, member_tickets, Span::from_oxc(element.span()));
             let member_id = MemberSiteId(self.members.len());
             let mut member = MemberReservation {
                 id: member_id,
@@ -1759,6 +1831,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     {
         let id = CallableSiteId(self.callables.len());
         let body = allocator.reserve_record(event)?;
+        allocator.record_owner_site(
+            body,
+            Span::from_oxc(function.span),
+            CollisionReplayEventPhase::Body,
+        );
         self.callables.push(CallableReservation {
             id,
             owner_member,
@@ -1795,6 +1872,11 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     {
         let id = CallableSiteId(self.callables.len());
         let body = allocator.reserve_record(event)?;
+        allocator.record_owner_site(
+            body,
+            Span::from_oxc(arrow.span),
+            CollisionReplayEventPhase::Body,
+        );
         self.callables.push(CallableReservation {
             id,
             owner_member: None,
@@ -1832,6 +1914,22 @@ where
         deferred: allocator.reserve_record(event)?,
         incomplete: allocator.reserve_record(event)?,
     })
+}
+
+fn record_site_ticket_sites<Allocator>(
+    allocator: &mut Allocator,
+    tickets: SiteTickets<Allocator::Ticket>,
+    span: Span,
+) where
+    Allocator: LexicalReservationAllocator,
+{
+    for (ticket, phase) in [
+        (tickets.immediate, CollisionReplayEventPhase::Immediate),
+        (tickets.deferred, CollisionReplayEventPhase::Deferred),
+        (tickets.incomplete, CollisionReplayEventPhase::Incomplete),
+    ] {
+        allocator.record_owner_site(ticket, span, phase);
+    }
 }
 
 fn site_tickets<Ticket: Copy>(tickets: SiteTickets<Ticket>) -> [Ticket; 3] {

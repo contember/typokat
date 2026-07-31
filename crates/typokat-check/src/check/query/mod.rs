@@ -421,11 +421,47 @@ pub struct SemanticQueryState {
     publication_clean: FxHashSet<TypeId>,
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
+    array_definitely_lacks_then: bool,
+    library_object_template: Option<TypeId>,
     journal: Vec<SemanticQueryUndo>,
     savepoints: Vec<usize>,
 }
 
 impl SemanticQueryState {
+    pub(crate) fn set_array_definitely_lacks_then(&mut self, value: bool) {
+        if self.array_definitely_lacks_then == value || !self.savepoints.is_empty() {
+            return;
+        }
+        self.projection_memo.clear();
+        self.evaluation_memo.clear();
+        self.completed_identities.clear();
+        self.relation_cache = RelationCache::new();
+        self.completed_relations.clear();
+        self.completed_relation_no_candidates.clear();
+        self.publication_clean.clear();
+        self.publication_store_identity = None;
+        self.publication_snapshot_identity = None;
+        self.journal.clear();
+        self.array_definitely_lacks_then = value;
+    }
+
+    pub(crate) fn set_library_object_template(&mut self, value: Option<TypeId>) {
+        if self.library_object_template == value || !self.savepoints.is_empty() {
+            return;
+        }
+        self.projection_memo.clear();
+        self.evaluation_memo.clear();
+        self.completed_identities.clear();
+        self.relation_cache = RelationCache::new();
+        self.completed_relations.clear();
+        self.completed_relation_no_candidates.clear();
+        self.publication_clean.clear();
+        self.publication_store_identity = None;
+        self.publication_snapshot_identity = None;
+        self.journal.clear();
+        self.library_object_template = value;
+    }
+
     /// Open a speculative layer. Nothing is copied: later writes are journaled and
     /// the relation cache layers itself, so only this layer's own work is at stake.
     pub fn savepoint(&mut self) {
@@ -713,6 +749,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
+            self.state.array_definitely_lacks_then,
+            self.state.library_object_template,
         )
         .plan_demand(root);
         *self.next_type_param = transaction.next_type_param;
@@ -788,6 +826,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
+            self.state.array_definitely_lacks_then,
+            self.state.library_object_template,
         );
         let mut retry = IdentityRetryState::default();
         let outcome = loop {
@@ -1644,6 +1684,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
+            self.state.array_definitely_lacks_then,
+            self.state.library_object_template,
         );
         planner.prepare_relation_roots(&[src, tgt]);
         let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
@@ -1761,6 +1803,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
+            self.state.array_definitely_lacks_then,
+            self.state.library_object_template,
         )
         .plan(&[source, target]);
         *self.next_type_param = transaction.next_type_param;
@@ -1816,6 +1860,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.projection_memo,
             &self.state.evaluation_memo,
             *self.next_type_param,
+            self.state.array_definitely_lacks_then,
+            self.state.library_object_template,
         );
         planner.prepare_relation_roots(&[overload, implementation]);
         let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
@@ -1912,6 +1958,8 @@ pub struct ProjectionPlan<'a> {
     resolved_evaluations: FxHashSet<TypeId>,
     frontier: FxHashMap<TypeId, Exhaustion>,
     durable_evaluation_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
+    array_definitely_lacks_then: bool,
+    library_object_template: Option<TypeId>,
 }
 
 impl RelationNormalization for ProjectionPlan<'_> {
@@ -1939,6 +1987,18 @@ impl RelationNormalization for ProjectionPlan<'_> {
                 _ => return Ok(current),
             }
         }
+    }
+
+    fn definitely_lacks_callable_member(&self, store: &Store, ty: TypeId, name: &str) -> bool {
+        if name != "then" || !self.array_definitely_lacks_then {
+            return false;
+        }
+        let ty = store.readonly_operand(ty).unwrap_or(ty);
+        matches!(store.tag(ty), TypeTag::Array | TypeTag::Tuple)
+    }
+
+    fn is_library_object_top(&self, ty: TypeId) -> bool {
+        self.library_object_template == Some(ty)
     }
 
     fn relation_demand(&self, store: &Store, ty: TypeId) -> Option<RelationDemand> {
@@ -2044,6 +2104,8 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         durable_projection_memo: &'work FxHashMap<TypeId, TypeId>,
         durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
         next_type_param: u32,
+        array_definitely_lacks_then: bool,
+        library_object_template: Option<TypeId>,
     ) -> Self {
         #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| {
@@ -2058,6 +2120,8 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             next_type_param,
             plan: ProjectionPlan {
                 durable_evaluation_memo: Some(durable_evaluation_memo),
+                array_definitely_lacks_then,
+                library_object_template,
                 ..ProjectionPlan::default()
             },
             pending_projection_writes: FxHashMap::default(),

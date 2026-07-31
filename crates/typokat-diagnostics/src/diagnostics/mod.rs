@@ -362,6 +362,11 @@ pub fn qualified_type_topology_diagnostic(
 }
 
 impl Diagnostic {
+    /// Structured reason-chain lines retained below the diagnostic headline.
+    pub fn elaboration(&self) -> &[String] {
+        &self.elaboration
+    }
+
     fn declaration_merge(code: DiagnosticCode, span: Span, message: String) -> Self {
         Diagnostic {
             code,

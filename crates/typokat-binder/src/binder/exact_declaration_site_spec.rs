@@ -16,8 +16,8 @@
 //! `FxHashMap<(ScopeId, u32, DeclarationKind), DeclId>` together. Its crate-private
 //! `declaration_at_site` performs the raw direct lookup, including unattached inventory rows.
 //! `Binder::exact_declaration_at` delegates to that method and filters for an attached scope. The
-//! exported `Binder` field set must not change: adding a private field would break downstream
-//! struct literals and exhaustive destructuring despite the field itself being private.
+//! exported `Binder` field set is compatibility-sensitive: adding a private field would break
+//! downstream struct literals and exhaustive destructuring despite the field itself being private.
 //!
 //! The key is the syntax-owning module scope, binding-leaf start, and declaration kind.
 //! The returned row owns the canonical [`super::declaration::DeclId`], exact spans, lexical scope,
@@ -28,7 +28,9 @@
 //! It must not resolve through the compilation-global scope, declaration name, `SourceUnitKey`,
 //! group order, or hash iteration. Checker cutover deletes
 //! `exact_type_fragment_at` and replaces the scan inside `visit_bound_type` with this API; the
-//! checker may retain neither a full-scan fallback nor a duplicate exact-site index.
+//! checker may retain neither a full-scan fallback nor a duplicate exact-site index. The
+//! source-compiled binder also exports the one-pass library-root projection required by the
+//! compact collision plan; that projection is not another declaration-site index.
 
 use super::bind::{bind_module_with_prelude, Binder, ProjectBinderBuilder};
 use super::declaration::{
@@ -168,6 +170,7 @@ fn production_cutover_keeps_binder_shape_and_owns_one_table_index() {
         "pubprelude_module:ScopeId,",
         "pubcompilation_global:ScopeId,",
         "pubscript_namespace_root:ScopeId,",
+        "publibrary_root_projection:Option<LibraryRootProjection>,",
         "pubdecl_count:u32,",
         "pubprelude_type_group_count:u32,",
         "pubfn_scopes:FxHashMap<(ScopeId,u32),ScopeId>,",

@@ -301,7 +301,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return Some(PlannedRecipe::ty(ty));
             }
         }
-        let group = self.peek_type_decl_id_untraced(scope, name)?;
+        let group = if self.capture_compact_replay_dependencies {
+            self.compact_type_decl_id_replay(scope, name)?
+        } else {
+            self.type_decl_id_replay(scope, name)?
+        };
         if !self.type_group_construction_is_frozen(group) {
             return None;
         }

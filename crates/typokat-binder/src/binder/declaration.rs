@@ -840,6 +840,13 @@ impl DeclarationTable {
         })
     }
 
+    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            declarations: self.declarations.fork_sparse_delta()?,
+            declarations_by_site: self.declarations_by_site.fork_delta()?,
+        })
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn shares_base_storage_with(&self, other: &Self) -> bool {
         self.declarations.shares_base_with(&other.declarations)
@@ -860,8 +867,8 @@ impl DeclarationTable {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_family_row_counts_for_test(&self) -> [usize; 2] {
         [
-            self.declarations.local_len(),
-            self.declarations_by_site.local_len(),
+            self.declarations.local_len() + self.declarations.replacement_len(),
+            self.declarations_by_site.local_len() + self.declarations_by_site.replacement_len(),
         ]
     }
 }
@@ -970,6 +977,12 @@ impl TypeGroupTable {
         self.groups.iter()
     }
 
+    pub fn prefix_replacements(&self) -> impl Iterator<Item = TypeGroupId> + '_ {
+        self.groups
+            .prefix_replacements()
+            .filter_map(|(index, _)| u32::try_from(index).ok().map(TypeGroupId))
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_groups(&self) -> impl Iterator<Item = &TypeGroup> {
         self.groups.local_iter()
@@ -977,7 +990,7 @@ impl TypeGroupTable {
 
     #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn local_row_count_for_test(&self) -> usize {
-        self.groups.local_len()
+        self.groups.local_len() + self.groups.replacement_len()
     }
 
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
@@ -987,6 +1000,12 @@ impl TypeGroupTable {
     pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             groups: self.groups.fork_delta()?,
+        })
+    }
+
+    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            groups: self.groups.fork_sparse_delta()?,
         })
     }
 

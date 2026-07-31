@@ -6,12 +6,16 @@ use super::events_library::{
     library_record_ticket_key, LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError,
     LibraryRecordTicket, LibrarySemanticReportingAdapter,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use super::lexical_events::LexicalReservationAllocator;
 use super::lexical_events::LexicalReservations;
 use super::lexical_events_library::library_unit;
 #[cfg(any(test, feature = "test-utils"))]
 use super::lexical_events_library::ExactUnit;
 use super::library_identities::LibraryIdentityTerminal;
 use super::library_identities::LibrarySemanticIdentities;
+#[cfg(any(test, feature = "test-utils"))]
+use super::library_reporting::independent_library_reporting_site_descriptors;
 use super::library_reporting::LibraryReportingConsumer;
 #[cfg(test)]
 use super::library_reporting::LibraryReportingFamily;
@@ -21,14 +25,21 @@ use super::library_reporting::LibraryReportingReceipt;
 use super::namespace_values::NamespaceValueRegistry;
 use super::namespace_values::{
     FrozenNamespaceValueTerminalSnapshot, FrozenNamespaceValueTerminalSnapshotRow,
+    FrozenNamespaceValueTerminals,
 };
 #[cfg(test)]
 use super::replay_index::ReplayReverseEdge;
 use super::replay_index::{
     admit_generated_collision_replay_index, baseline_record, AdmittedCollisionReplayIndex,
-    CollisionReplayIndex, ReplayDependencyTrace, ReplayIndexAdmissionError,
+    CollisionReplayConstructionEvidence, CollisionReplayIndex, CollisionReplayOwnerSite,
+    CollisionReplayPlan, OwnerSiteStorageMode, ReplayDependencyTrace, ReplayIndexAdmissionError,
     ReplayIndexAdmissionLimits, ReplayIndexGenerationError, ReplayOwner, ReplayOwnerSite,
     ReplayRootSlot,
+};
+#[cfg(any(test, feature = "test-utils"))]
+use super::replay_index::{
+    canonicalize_collision_replay_owner_sites, CollisionReplayEventPhase,
+    CollisionReplaySiteProvenance,
 };
 use super::reporting_record::CheckerRecord;
 use super::type_groups::{
@@ -37,8 +48,8 @@ use super::type_groups::{
 };
 use super::{
     build_pass_with_tickets, finish_semantic_effects, reserve_type_decls,
-    FrozenCheckerRuntimeMetadata, FrozenCheckerRuntimeSnapshotParts, PassReporting,
-    PassReportingPlan,
+    reserve_type_decls_for_combined_library, FrozenCheckerRuntimeMetadata,
+    FrozenCheckerRuntimeSnapshotParts, PassReporting, PassReportingPlan,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::{check_bound_user_program_with_final_identity_inspector, BoundUserBase};
@@ -59,7 +70,7 @@ use crate::binder::namespace::{
     exact_key, source_file_kind, CompilationUnit, ExactKey, ExportContextKind,
     ExportSyntaxDisposition, ModuleBindingContext, NamespaceId, SourceFileKind,
 };
-use crate::binder::roots::{collect_root_rows, RootNameRow};
+use crate::binder::roots::{collect_root_rows, LibraryRootProjection, RootNameRow};
 use crate::binder::scope::ScopeId;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::symbol::SymbolId;
@@ -71,14 +82,15 @@ use crate::class_semantics::OwnedPublishedClassTerminal;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::diagnostics::render_type;
 use crate::diagnostics::{render_to_writer_with_format, DiagnosticFormat};
+#[cfg(any(test, feature = "test-utils"))]
+use crate::source::SourceUnit;
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
 use crate::span::Span;
 use crate::types::repr::ClassId;
 use crate::types::repr::TypeParamId;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ModifierOp, ObjectType, TypeTag, Visibility,
-};
+use crate::types::repr::{IntrinsicKind, LiteralValue, ModifierOp, TypeTag, Visibility};
+use crate::types::repr::{ObjectType, PropertyType};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::types::store::Store;
 use crate::types::store::TypeId;
@@ -88,9 +100,382 @@ use oxc_parser::{Parser, ParserReturn};
 use oxc_span::SourceType;
 #[cfg(any(test, feature = "test-utils"))]
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
+#[cfg(any(test, feature = "test-utils"))]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Condvar, Mutex};
 #[cfg(any(test, feature = "test-utils"))]
 use std::time::{Duration, Instant};
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static PRIVATE_REPLAY_SCHEDULER_WORK: std::cell::RefCell<Option<BTreeMap<&'static str, u64>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+const PRIVATE_REPLAY_SCHEDULER_FAMILIES: [&str; 10] = [
+    "seed-pushes",
+    "seed-pops",
+    "scc-queue-pushes",
+    "scc-queue-pops",
+    "edge-probes",
+    "owner-set-probes",
+    "owner-set-inserts",
+    "sort-items",
+    "dedup-items",
+    "replay-allocations",
+];
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_private_replay_scheduler_work_for_test(family: &'static str, count: usize) {
+    let count = u64::try_from(count).unwrap_or(u64::MAX);
+    PRIVATE_REPLAY_SCHEDULER_WORK.with_borrow_mut(|active| {
+        let Some(work) = active.as_mut() else {
+            return;
+        };
+        let counter = work.entry(family).or_default();
+        *counter = counter.saturating_add(count);
+    });
+}
+
+#[cfg(not(any(test, feature = "test-utils")))]
+fn record_private_replay_scheduler_work_for_test(_family: &'static str, _count: usize) {}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct PrivateReplaySchedulerWorkScopeForTest;
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PrivateReplaySchedulerWorkScopeForTest {
+    pub fn start() -> Self {
+        PRIVATE_REPLAY_SCHEDULER_WORK.with_borrow_mut(|active| {
+            assert!(
+                active.is_none(),
+                "private replay scheduler scopes do not nest"
+            );
+            *active = Some(
+                PRIVATE_REPLAY_SCHEDULER_FAMILIES
+                    .into_iter()
+                    .map(|family| (family, 0))
+                    .collect(),
+            );
+        });
+        Self
+    }
+
+    pub fn finish(self) -> BTreeMap<&'static str, u64> {
+        PRIVATE_REPLAY_SCHEDULER_WORK
+            .with_borrow_mut(Option::take)
+            .expect("private replay scheduler scope is active")
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn calibrate_private_replay_scheduler_work_for_test() -> BTreeMap<&'static str, u64> {
+    let scope = PrivateReplaySchedulerWorkScopeForTest::start();
+    let mut seed = Vec::new();
+    seed.push(ReplayOwner::GlobalObject);
+    record_private_replay_scheduler_work_for_test("seed-pushes", 1);
+    let _ = seed.pop();
+    record_private_replay_scheduler_work_for_test("seed-pops", 1);
+    let mut queue = Vec::new();
+    queue.push(ReplayOwner::GlobalObject);
+    record_private_replay_scheduler_work_for_test("scc-queue-pushes", 1);
+    let _ = queue.pop();
+    record_private_replay_scheduler_work_for_test("scc-queue-pops", 1);
+    let edge = [(ReplayOwner::GlobalObject, ReplayOwner::GlobalObject)];
+    let _ = edge.first();
+    record_private_replay_scheduler_work_for_test("edge-probes", 1);
+    let mut owners = BTreeSet::new();
+    let _ = owners.contains(&ReplayOwner::GlobalObject);
+    record_private_replay_scheduler_work_for_test("owner-set-probes", 1);
+    let _ = owners.insert(ReplayOwner::GlobalObject);
+    record_private_replay_scheduler_work_for_test("owner-set-inserts", 1);
+    let mut sortable = [1_u8];
+    sortable.sort_unstable();
+    record_private_replay_scheduler_work_for_test("sort-items", sortable.len());
+    let mut deduplicated = vec![1_u8];
+    deduplicated.dedup();
+    record_private_replay_scheduler_work_for_test("dedup-items", deduplicated.len());
+    let allocation = std::iter::once(1_u8).collect::<Vec<_>>();
+    record_private_replay_scheduler_work_for_test("replay-allocations", allocation.len());
+    scope.finish()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CollisionPlanForbiddenWork {
+    library_source_compiles: u64,
+    second_source_censuses: u64,
+    canonical_manifest_bytes: u64,
+    rendered_record_digest_bytes: u64,
+    transitive_terminal_owner_entries: u64,
+    eager_all_owner_scc_memberships: u64,
+    namespace_snapshot_rows: u64,
+    runtime_snapshot_rows: u64,
+    canonical_terminal_rows: u64,
+    full_semantic_projection_rows: u64,
+}
+
+thread_local! {
+    static COLLISION_PLAN_FORBIDDEN_WORK: Cell<CollisionPlanForbiddenWork> =
+        Cell::new(CollisionPlanForbiddenWork::default());
+    #[cfg(any(test, feature = "test-utils"))]
+    static FORCED_COLLISION_PLAN_FAILURE: Cell<Option<ForcedCollisionPlanFailure>> =
+        const { Cell::new(None) };
+    #[cfg(any(test, feature = "test-utils"))]
+    static FULL_COLLISION_PLAN_ORACLE: RefCell<Option<FullCollisionPlanOracleForTest>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FullCollisionPlanOracleForTest {
+    pub owner_sites: Vec<CollisionReplayOwnerSite>,
+    pub baseline_records: Vec<super::replay_index::ReplayBaselineRecord>,
+    pub reverse_edges: Vec<super::replay_index::ReplayReverseEdge>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy)]
+struct IndependentEventMeta {
+    file_ordinal: LibraryFileOrdinal,
+    source_start: u32,
+    event_ordinal: usize,
+    next_record_ordinal: usize,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct IndependentEventOwnerSiteOracle {
+    file_ordinal: LibraryFileOrdinal,
+    events: Vec<IndependentEventMeta>,
+    next_event_ordinal: BTreeMap<LibraryFileOrdinal, usize>,
+    ticket_owners: BTreeMap<(usize, usize), LibraryEventKey>,
+    owner_sites: Vec<CollisionReplayOwnerSite>,
+    invalid_ticket: bool,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl IndependentEventOwnerSiteOracle {
+    fn new() -> Self {
+        Self {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            events: Vec::new(),
+            next_event_ordinal: BTreeMap::new(),
+            ticket_owners: BTreeMap::new(),
+            owner_sites: Vec::new(),
+            invalid_ticket: false,
+        }
+    }
+
+    fn select_file(&mut self, file_ordinal: LibraryFileOrdinal) {
+        self.file_ordinal = file_ordinal;
+    }
+
+    fn reserve_exact_site(&mut self, span: Span, phase: CollisionReplayEventPhase) {
+        let (_, ticket) = self.reserve_event(span.start);
+        self.record_owner_site(ticket, span, phase);
+    }
+
+    fn finish(mut self) -> Result<Vec<CollisionReplayOwnerSite>, InjectedProfileError> {
+        if self.invalid_ticket {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "independent lexical event oracle lost a reservation ticket".to_owned(),
+            ));
+        }
+        canonicalize_collision_replay_owner_sites(&mut self.owner_sites);
+        Ok(self.owner_sites)
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl LexicalReservationAllocator for IndependentEventOwnerSiteOracle {
+    type Event = usize;
+    type Ticket = (usize, usize);
+    type Error = &'static str;
+
+    fn source_unit(&self) -> SourceUnit {
+        SourceUnit::Library {
+            file_ordinal: self.file_ordinal,
+        }
+    }
+
+    fn reserve_event(&mut self, source_start: u32) -> (Self::Event, Self::Ticket) {
+        let event_ordinal = self
+            .next_event_ordinal
+            .entry(self.file_ordinal)
+            .or_insert(0);
+        let event = self.events.len();
+        let key = LibraryEventKey {
+            file_ordinal: self.file_ordinal,
+            source_start,
+            event_ordinal: *event_ordinal,
+            record_ordinal: 0,
+        };
+        *event_ordinal = event_ordinal.saturating_add(1);
+        self.events.push(IndependentEventMeta {
+            file_ordinal: self.file_ordinal,
+            source_start,
+            event_ordinal: key.event_ordinal,
+            next_record_ordinal: 1,
+        });
+        self.ticket_owners.insert((event, 0), key);
+        (event, (event, 0))
+    }
+
+    fn reserve_record(&mut self, event: Self::Event) -> Result<Self::Ticket, Self::Error> {
+        let Some(meta) = self.events.get_mut(event) else {
+            return Err("independent lexical event oracle saw an unknown event");
+        };
+        let record = meta.next_record_ordinal;
+        meta.next_record_ordinal = meta.next_record_ordinal.saturating_add(1);
+        self.ticket_owners.insert(
+            (event, record),
+            LibraryEventKey {
+                file_ordinal: meta.file_ordinal,
+                source_start: meta.source_start,
+                event_ordinal: meta.event_ordinal,
+                record_ordinal: record,
+            },
+        );
+        Ok((event, record))
+    }
+
+    fn record_owner_site(
+        &mut self,
+        ticket: Self::Ticket,
+        span: Span,
+        phase: CollisionReplayEventPhase,
+    ) {
+        let Some(key) = self.ticket_owners.get(&ticket).copied() else {
+            self.invalid_ticket = true;
+            return;
+        };
+        self.owner_sites.push(CollisionReplayOwnerSite {
+            owner: ReplayOwner::Statement(key),
+            file_ordinal: key.file_ordinal,
+            span,
+            provenance: CollisionReplaySiteProvenance::Event { phase },
+        });
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn take_full_collision_plan_oracle_for_test() -> Option<FullCollisionPlanOracleForTest> {
+    FULL_COLLISION_PLAN_ORACLE.with(|oracle| oracle.borrow_mut().take())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn forbidden_projection_callsite_audit_for_test() -> bool {
+    let compiler = include_str!("library_compiler.rs");
+    let replay = include_str!("replay_index.rs");
+    [
+        (compiler, "second_source_censuses =", 2),
+        (compiler, "canonical_record_bytes(", 4),
+        (compiler, "validate_terminal_class_dependencies(", 4),
+        (compiler, "snapshot_namespace_terminals_for_replay(", 4),
+        (compiler, ".snapshot_parts()", 6),
+        (compiler, "canonical_terminals()", 3),
+        (compiler, "full_semantic_projection_rows =", 2),
+        (replay, "record_collision_manifest_bytes(", 1),
+    ]
+    .into_iter()
+    .all(|(source, token, expected)| source.matches(token).count() == expected)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForcedCollisionPlanFailure {
+    UnownedTypedReference,
+    RawSemanticAccess,
+    ForbiddenProjection,
+    EventCaptureCorruption,
+    LateOwnerReservation,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct ForcedCollisionPlanFailureScope;
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Drop for ForcedCollisionPlanFailureScope {
+    fn drop(&mut self) {
+        FORCED_COLLISION_PLAN_FAILURE.set(None);
+    }
+}
+
+struct CollisionPlanForbiddenWorkScope(CollisionPlanForbiddenWork);
+
+impl CollisionPlanForbiddenWorkScope {
+    fn start() -> Self {
+        Self(COLLISION_PLAN_FORBIDDEN_WORK.get())
+    }
+
+    fn finish(self) -> CollisionPlanForbiddenWork {
+        let after = COLLISION_PLAN_FORBIDDEN_WORK.get();
+        CollisionPlanForbiddenWork {
+            library_source_compiles: after
+                .library_source_compiles
+                .saturating_sub(self.0.library_source_compiles),
+            second_source_censuses: after
+                .second_source_censuses
+                .saturating_sub(self.0.second_source_censuses),
+            canonical_manifest_bytes: after
+                .canonical_manifest_bytes
+                .saturating_sub(self.0.canonical_manifest_bytes),
+            rendered_record_digest_bytes: after
+                .rendered_record_digest_bytes
+                .saturating_sub(self.0.rendered_record_digest_bytes),
+            transitive_terminal_owner_entries: after
+                .transitive_terminal_owner_entries
+                .saturating_sub(self.0.transitive_terminal_owner_entries),
+            eager_all_owner_scc_memberships: after
+                .eager_all_owner_scc_memberships
+                .saturating_sub(self.0.eager_all_owner_scc_memberships),
+            namespace_snapshot_rows: after
+                .namespace_snapshot_rows
+                .saturating_sub(self.0.namespace_snapshot_rows),
+            runtime_snapshot_rows: after
+                .runtime_snapshot_rows
+                .saturating_sub(self.0.runtime_snapshot_rows),
+            canonical_terminal_rows: after
+                .canonical_terminal_rows
+                .saturating_sub(self.0.canonical_terminal_rows),
+            full_semantic_projection_rows: after
+                .full_semantic_projection_rows
+                .saturating_sub(self.0.full_semantic_projection_rows),
+        }
+    }
+}
+
+fn record_collision_plan_forbidden_work(update: impl FnOnce(&mut CollisionPlanForbiddenWork)) {
+    COLLISION_PLAN_FORBIDDEN_WORK.set({
+        let mut work = COLLISION_PLAN_FORBIDDEN_WORK.get();
+        update(&mut work);
+        work
+    });
+}
+
+pub(super) fn record_collision_manifest_bytes(bytes: usize) {
+    record_collision_plan_forbidden_work(|work| {
+        work.canonical_manifest_bytes = work
+            .canonical_manifest_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+    });
+}
+
+fn snapshot_namespace_terminals_for_replay(
+    terminals: &FrozenNamespaceValueTerminals,
+) -> Result<Vec<FrozenNamespaceValueTerminalSnapshotRow>, InjectedProfileError> {
+    let rows = terminals
+        .snapshot_parts()
+        .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
+    record_collision_plan_forbidden_work(|work| {
+        work.namespace_snapshot_rows = work
+            .namespace_snapshot_rows
+            .saturating_add(u64::try_from(rows.len()).unwrap_or(u64::MAX));
+    });
+    Ok(rows)
+}
 
 /// Sealed authority for one collision-preflighted frozen-prefix fork.
 pub struct CollisionFreeUserDeltaCapability(());
@@ -111,7 +496,646 @@ pub struct OwnedLibraryRuntimeState {
     next_type_param: u32,
     next_class_id: u32,
     source_file_count: u32,
+    library_modules: std::sync::Arc<[ScopeId]>,
     replay_index: Option<Box<AdmittedCollisionReplayIndex>>,
+    private_collision_epoch: Option<PrivateCollisionEpoch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateCollisionReplaySeed {
+    pub name: String,
+    pub value: bool,
+    pub ty: bool,
+    pub namespace: bool,
+    pub global_object: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateCollisionReplaySource {
+    pub file_ordinal: LibraryFileOrdinal,
+    pub name: String,
+    pub source: String,
+}
+
+#[derive(Clone, Default)]
+pub struct PrivateCollisionReplaySourceRegistry {
+    sources: std::sync::Arc<[PrivateCollisionReplaySource]>,
+}
+
+impl std::fmt::Debug for PrivateCollisionReplaySourceRegistry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrivateCollisionReplaySourceRegistry")
+            .field("source_count", &self.sources.len())
+            .finish()
+    }
+}
+
+impl PrivateCollisionReplaySourceRegistry {
+    pub fn from_sources(sources: Vec<PrivateCollisionReplaySource>) -> Self {
+        Self {
+            sources: sources.into(),
+        }
+    }
+
+    pub fn get(
+        &self,
+        ordinal: LibraryFileOrdinal,
+    ) -> Result<PrivateCollisionReplaySource, &'static str> {
+        #[cfg(any(test, feature = "test-utils"))]
+        if inject_checker_full_source_registry_scan_for_test() {
+            self.measured_full_scan_for_test();
+        }
+        self.sources
+            .get(ordinal.index())
+            .filter(|source| source.file_ordinal == ordinal)
+            .cloned()
+            .ok_or("private replay source registry is not canonical")
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn measured_full_scan_for_test(&self) -> usize {
+        let rows = self.sources.iter().count();
+        record_private_replay_full_base_scan_for_test(rows);
+        rows
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::check::checker) struct PrivateCollisionEpoch {
+    pub(in crate::check::checker) affected_owners: BTreeSet<ReplayOwner>,
+    pub(in crate::check::checker) mutation_owners: BTreeSet<ReplayOwner>,
+    pub(in crate::check::checker) value_winners: BTreeMap<String, ValueStorageId>,
+    pub(in crate::check::checker) owner_sites: Vec<super::replay_index::CollisionReplayOwnerSite>,
+    pub(in crate::check::checker) library_record_baselines:
+        Vec<super::replay_index::ReplayBaselineRecord>,
+    pub(in crate::check::checker) sources: Vec<PrivateCollisionReplaySource>,
+    pub(in crate::check::checker) complete_source_replay: bool,
+    pub(in crate::check::checker) plan: std::sync::Arc<CollisionReplayPlan>,
+    _permit: PrivateCollisionReplayPermitToken,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) state_drop_witness:
+        Option<PrivateCollisionStateDropWitnessForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Debug)]
+pub(in crate::check::checker) struct PrivateCollisionStateDropWitnessForTest;
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Drop for PrivateCollisionStateDropWitnessForTest {
+    fn drop(&mut self) {
+        record_private_replay_scale_hook_for_test(|trace, event| {
+            trace.private_state_dropped = event;
+        });
+    }
+}
+
+impl PrivateCollisionEpoch {
+    fn mutation_owner_requires_authentication(
+        plan: &CollisionReplayPlan,
+        owner: ReplayOwner,
+    ) -> bool {
+        let (boundary, id) = match owner {
+            ReplayOwner::TypeGroup(id) => (6, id.0),
+            ReplayOwner::Namespace(id) => (7, id.0),
+            ReplayOwner::Value(id) => (8, id.0),
+            ReplayOwner::Class(_) | ReplayOwner::GlobalObject | ReplayOwner::Statement(_) => {
+                return true;
+            }
+        };
+        usize::try_from(id).is_ok_and(|id| {
+            plan.prefix_cardinality(boundary)
+                .is_some_and(|boundary| id < boundary)
+        })
+    }
+
+    fn contains_mutation_owner(plan: &CollisionReplayPlan, owner: ReplayOwner) -> bool {
+        plan.contains_mutation_owner(owner)
+    }
+
+    fn mutation_owner_exists(owner: ReplayOwner, owner_ends: [usize; 3]) -> bool {
+        let (end, id) = match owner {
+            ReplayOwner::TypeGroup(id) => (owner_ends[0], id.0),
+            ReplayOwner::Value(id) => (owner_ends[1], id.0),
+            ReplayOwner::Namespace(id) => (owner_ends[2], id.0),
+            ReplayOwner::Class(_) | ReplayOwner::GlobalObject | ReplayOwner::Statement(_) => {
+                return false;
+            }
+        };
+        usize::try_from(id).is_ok_and(|id| id < end)
+    }
+
+    fn close_owners(plan: &CollisionReplayPlan, owners: &mut BTreeSet<ReplayOwner>) {
+        let mut pending = owners.iter().copied().collect::<Vec<_>>();
+        let mut cursor = 0;
+        while let Some(owner) = pending.get(cursor).copied() {
+            cursor += 1;
+            for edge in plan.reverse_consumers(owner) {
+                if owners.insert(edge.consumer) {
+                    pending.push(edge.consumer);
+                }
+            }
+        }
+    }
+
+    fn owner_sites_for(
+        plan: &CollisionReplayPlan,
+        owners: &BTreeSet<ReplayOwner>,
+    ) -> Vec<super::replay_index::CollisionReplayOwnerSite> {
+        let mut sites = Vec::new();
+        for owner in owners {
+            sites.extend_from_slice(plan.owner_sites_for(*owner));
+        }
+        sites
+    }
+
+    fn baselines_for(
+        plan: &CollisionReplayPlan,
+        owners: &BTreeSet<ReplayOwner>,
+    ) -> Vec<super::replay_index::ReplayBaselineRecord> {
+        let mut baselines = Vec::new();
+        for owner in owners {
+            baselines.extend_from_slice(plan.baselines_for(*owner));
+        }
+        baselines
+    }
+
+    pub(in crate::check::checker) fn reclose_after_binding(
+        &mut self,
+        mutation_owners: BTreeSet<ReplayOwner>,
+        owner_ends: [usize; 3],
+        loaded_sources: &BTreeSet<LibraryFileOrdinal>,
+    ) -> Result<(), PrivateReplayScheduleFailure> {
+        self.mutation_owners = mutation_owners;
+        if let Some(owner) = self.mutation_owners.iter().find(|owner| {
+            !Self::mutation_owner_exists(**owner, owner_ends)
+                || (Self::mutation_owner_requires_authentication(&self.plan, **owner)
+                    && !Self::contains_mutation_owner(&self.plan, **owner))
+        }) {
+            return Err(PrivateReplayScheduleFailure::MutationOwnerOutsidePlan(
+                *owner,
+            ));
+        }
+
+        let mut affected = self.affected_owners.clone();
+        affected.extend(self.mutation_owners.iter().copied());
+        Self::close_owners(&self.plan, &mut affected);
+        let owner_sites = Self::owner_sites_for(&self.plan, &affected);
+        let required_sources = owner_sites
+            .iter()
+            .filter(|site| !matches!(site.owner, ReplayOwner::GlobalObject))
+            .map(|site| site.file_ordinal)
+            .collect::<BTreeSet<_>>();
+        if let Some(source) = required_sources
+            .iter()
+            .find(|source| !loaded_sources.contains(source))
+        {
+            return Err(PrivateReplayScheduleFailure::RequiredSourceNotLoaded(
+                *source,
+            ));
+        }
+
+        self.value_winners
+            .retain(|_, value| affected.contains(&ReplayOwner::Value(*value)));
+        self.library_record_baselines = Self::baselines_for(&self.plan, &affected);
+        self.owner_sites = owner_sites;
+        self.affected_owners = affected;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum PrivateReplayScheduleFailure {
+    MutationOwnerOutsidePlan(ReplayOwner),
+    RequiredSourceNotLoaded(LibraryFileOrdinal),
+}
+
+#[derive(Debug)]
+struct PrivateCollisionReplayPermit {
+    occupied: Mutex<bool>,
+    available: Condvar,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Debug, Default)]
+struct PrivateReplayScaleSharedForTest {
+    contenders: std::sync::atomic::AtomicUsize,
+    max_contenders: std::sync::atomic::AtomicUsize,
+    active: std::sync::atomic::AtomicUsize,
+    peak_active: std::sync::atomic::AtomicUsize,
+    acquisitions: std::sync::atomic::AtomicUsize,
+    hook_invocations: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn update_scale_max_for_test(target: &std::sync::atomic::AtomicUsize, observed: usize) {
+    use std::sync::atomic::Ordering;
+
+    let mut current = target.load(Ordering::SeqCst);
+    while observed > current {
+        match target.compare_exchange(current, observed, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrivateReplayScaleRouteTraceForTest {
+    pub production_route_invocations: u64,
+    pub production_work_hook_invocations: u64,
+    pub sparse_replay_invocations: u64,
+    pub full_source_fallback_invocations: u64,
+    pub sparse_library_source_units: u64,
+    pub full_base_scan_units: u64,
+    pub production_visibility_query_invocations: u64,
+    pub epoch_id: Option<usize>,
+    pub permit_acquired: u64,
+    pub private_work_started: u64,
+    pub private_state_dropped: u64,
+    pub permit_released: u64,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct PrivateReplayScaleControlForTest {
+    shared: std::sync::Arc<PrivateReplayScaleSharedForTest>,
+    suppress_permit_instrumentation: bool,
+    inject_checker_full_base_scan: bool,
+    inject_checker_full_plan_scan: bool,
+    inject_checker_full_source_registry_scan: bool,
+    trace: PrivateReplayScaleRouteTraceForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static PRIVATE_REPLAY_SCALE_CONTROL: std::cell::RefCell<Option<PrivateReplayScaleControlForTest>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug)]
+pub struct PrivateReplayScaleRunForTest {
+    shared: std::sync::Arc<PrivateReplayScaleSharedForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PrivateReplayScaleRunForTest {
+    pub fn start() -> Self {
+        Self {
+            shared: std::sync::Arc::new(PrivateReplayScaleSharedForTest::default()),
+        }
+    }
+
+    pub fn acquisitions(&self) -> usize {
+        self.shared
+            .acquisitions
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn hook_invocations(&self) -> u64 {
+        self.shared
+            .hook_invocations
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn max_contenders(&self) -> usize {
+        self.shared
+            .max_contenders
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn peak_active(&self) -> usize {
+        self.shared
+            .peak_active
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct PrivateReplayScaleRouteScopeForTest;
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PrivateReplayScaleRouteScopeForTest {
+    pub fn start(
+        run: &PrivateReplayScaleRunForTest,
+        suppress_permit_instrumentation: bool,
+        inject_checker_full_base_scan: bool,
+        inject_checker_full_plan_scan: bool,
+        inject_checker_full_source_registry_scan: bool,
+    ) -> Result<Self, &'static str> {
+        PRIVATE_REPLAY_SCALE_CONTROL.with_borrow_mut(|active| {
+            if active.is_some() {
+                return Err("private replay scale route scopes do not nest");
+            }
+            *active = Some(PrivateReplayScaleControlForTest {
+                shared: std::sync::Arc::clone(&run.shared),
+                suppress_permit_instrumentation,
+                inject_checker_full_base_scan,
+                inject_checker_full_plan_scan,
+                inject_checker_full_source_registry_scan,
+                trace: PrivateReplayScaleRouteTraceForTest::default(),
+            });
+            Ok(Self)
+        })
+    }
+
+    pub fn finish(self) -> Result<PrivateReplayScaleRouteTraceForTest, &'static str> {
+        PRIVATE_REPLAY_SCALE_CONTROL.with_borrow_mut(|active| {
+            active
+                .take()
+                .map(|control| control.trace)
+                .ok_or("private replay scale route scope is not active")
+        })
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn inject_checker_full_base_scan_for_test() -> bool {
+    PRIVATE_REPLAY_SCALE_CONTROL.with_borrow(|active| {
+        active
+            .as_ref()
+            .is_some_and(|active| active.inject_checker_full_base_scan)
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn inject_checker_full_plan_scan_for_test() -> bool {
+    PRIVATE_REPLAY_SCALE_CONTROL.with_borrow(|active| {
+        active
+            .as_ref()
+            .is_some_and(|active| active.inject_checker_full_plan_scan)
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn inject_checker_full_source_registry_scan_for_test() -> bool {
+    PRIVATE_REPLAY_SCALE_CONTROL.with_borrow(|active| {
+        active
+            .as_ref()
+            .is_some_and(|active| active.inject_checker_full_source_registry_scan)
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn with_private_replay_scale_control_for_test(
+    update: impl FnOnce(&mut PrivateReplayScaleControlForTest),
+) {
+    PRIVATE_REPLAY_SCALE_CONTROL.with_borrow_mut(|active| {
+        if let Some(active) = active.as_mut() {
+            update(active);
+        }
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_private_replay_scale_hook_for_test(
+    update: impl FnOnce(&mut PrivateReplayScaleRouteTraceForTest, u64),
+) {
+    with_private_replay_scale_control_for_test(|active| {
+        if active.suppress_permit_instrumentation {
+            return;
+        }
+        let event = next_private_replay_lifecycle_event_for_test();
+        active.trace.production_work_hook_invocations = active
+            .trace
+            .production_work_hook_invocations
+            .saturating_add(1);
+        update(&mut active.trace, event);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_private_replay_route_invocation_for_test() {
+    with_private_replay_scale_control_for_test(|active| {
+        active.trace.production_route_invocations =
+            active.trace.production_route_invocations.saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_private_replay_fallback_invocation_for_test() {
+    with_private_replay_scale_control_for_test(|active| {
+        active.trace.full_source_fallback_invocations = active
+            .trace
+            .full_source_fallback_invocations
+            .saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_private_replay_visibility_query_for_test() {
+    with_private_replay_scale_control_for_test(|active| {
+        active.trace.production_visibility_query_invocations = active
+            .trace
+            .production_visibility_query_invocations
+            .saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_private_replay_full_base_scan_for_test(units: usize) {
+    with_private_replay_scale_control_for_test(|active| {
+        active.trace.full_base_scan_units = active
+            .trace
+            .full_base_scan_units
+            .saturating_add(u64::try_from(units).unwrap_or(u64::MAX));
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn private_replay_scale_contender_entered_for_test() {
+    with_private_replay_scale_control_for_test(|active| {
+        let contenders = active
+            .shared
+            .contenders
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        update_scale_max_for_test(&active.shared.max_contenders, contenders);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn private_replay_scale_permit_acquired_for_test(epoch_id: usize, acquired_event: u64) {
+    with_private_replay_scale_control_for_test(|active| {
+        active
+            .shared
+            .contenders
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        if active.suppress_permit_instrumentation {
+            return;
+        }
+        active
+            .shared
+            .acquisitions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let active_count = active
+            .shared
+            .active
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        update_scale_max_for_test(&active.shared.peak_active, active_count);
+        active
+            .shared
+            .hook_invocations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        active.trace.production_work_hook_invocations = active
+            .trace
+            .production_work_hook_invocations
+            .saturating_add(1);
+        active.trace.epoch_id = Some(epoch_id);
+        active.trace.permit_acquired = acquired_event;
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn private_replay_scale_permit_released_for_test(released_event: u64) {
+    with_private_replay_scale_control_for_test(|active| {
+        if active.suppress_permit_instrumentation {
+            return;
+        }
+        active
+            .shared
+            .active
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        active
+            .shared
+            .hook_invocations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        active.trace.production_work_hook_invocations = active
+            .trace
+            .production_work_hook_invocations
+            .saturating_add(1);
+        active.trace.permit_released = released_event;
+    });
+}
+
+impl PrivateCollisionReplayPermit {
+    const fn new() -> Self {
+        Self {
+            occupied: Mutex::new(false),
+            available: Condvar::new(),
+        }
+    }
+
+    fn acquire(&'static self) -> Result<PrivateCollisionReplayPermitToken, &'static str> {
+        #[cfg(any(test, feature = "test-utils"))]
+        private_replay_scale_contender_entered_for_test();
+        let mut occupied = self
+            .occupied
+            .lock()
+            .map_err(|_| "private collision replay permit is poisoned")?;
+        while *occupied {
+            occupied = self
+                .available
+                .wait(occupied)
+                .map_err(|_| "private collision replay permit is poisoned")?;
+        }
+        *occupied = true;
+        #[cfg(any(test, feature = "test-utils"))]
+        let epoch_id = PRIVATE_COLLISION_REPLAY_EPOCHS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .saturating_add(1);
+        #[cfg(any(test, feature = "test-utils"))]
+        let acquired_event = next_private_replay_lifecycle_event_for_test();
+        #[cfg(any(test, feature = "test-utils"))]
+        PRIVATE_COLLISION_REPLAY_HOOK_INVOCATIONS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(any(test, feature = "test-utils"))]
+        private_replay_scale_permit_acquired_for_test(epoch_id, acquired_event);
+        Ok(PrivateCollisionReplayPermitToken {
+            _lease: std::sync::Arc::new(PrivateCollisionReplayPermitLease {
+                permit: self,
+                #[cfg(any(test, feature = "test-utils"))]
+                acquired_event,
+            }),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PrivateCollisionReplayPermitToken {
+    _lease: std::sync::Arc<PrivateCollisionReplayPermitLease>,
+}
+
+#[derive(Debug)]
+struct PrivateCollisionReplayPermitLease {
+    permit: &'static PrivateCollisionReplayPermit,
+    #[cfg(any(test, feature = "test-utils"))]
+    acquired_event: u64,
+}
+
+impl Drop for PrivateCollisionReplayPermitLease {
+    fn drop(&mut self) {
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            let event = next_private_replay_lifecycle_event_for_test();
+            PRIVATE_COLLISION_REPLAY_LAST_RELEASE_EVENT
+                .store(event, std::sync::atomic::Ordering::Relaxed);
+            PRIVATE_COLLISION_REPLAY_HOOK_INVOCATIONS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            private_replay_scale_permit_released_for_test(event);
+        }
+        if let Ok(mut occupied) = self.permit.occupied.lock() {
+            *occupied = false;
+            self.permit.available.notify_one();
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+static PRIVATE_COLLISION_REPLAY_EPOCHS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(any(test, feature = "test-utils"))]
+static PRIVATE_COLLISION_REPLAY_LIFECYCLE_EVENTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(any(test, feature = "test-utils"))]
+static PRIVATE_COLLISION_REPLAY_LAST_RELEASE_EVENT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(any(test, feature = "test-utils"))]
+static PRIVATE_COLLISION_REPLAY_HOOK_INVOCATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PrivateCollisionReplayPermitToken {
+    pub fn inner_allocation_identity_for_test(&self) -> usize {
+        std::sync::Arc::as_ptr(&self._lease).addr()
+    }
+
+    pub fn acquired_event_for_test(&self) -> u64 {
+        self._lease.acquired_event
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn next_private_replay_lifecycle_event_for_test() -> u64 {
+    PRIVATE_COLLISION_REPLAY_LIFECYCLE_EVENTS
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .saturating_add(1)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn private_replay_last_release_event_for_test() -> u64 {
+    PRIVATE_COLLISION_REPLAY_LAST_RELEASE_EVENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn private_replay_hook_invocations_for_test() -> u64 {
+    PRIVATE_COLLISION_REPLAY_HOOK_INVOCATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn private_replay_epoch_count_for_test() -> usize {
+    PRIVATE_COLLISION_REPLAY_EPOCHS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+static PRIVATE_COLLISION_REPLAY_PERMIT: PrivateCollisionReplayPermit =
+    PrivateCollisionReplayPermit::new();
+
+pub fn acquire_private_collision_replay_permit(
+) -> Result<PrivateCollisionReplayPermitToken, &'static str> {
+    PRIVATE_COLLISION_REPLAY_PERMIT.acquire()
 }
 
 pub(in crate::check::checker) struct OwnedLibraryRuntimeProductParts {
@@ -573,6 +1597,56 @@ fn validate_owned_library_product_parts(
 }
 
 impl OwnedLibraryRuntimeState {
+    pub fn complete_replay_binder_checkpoint(
+        &self,
+    ) -> Result<LibraryBinderCheckpoint, &'static str> {
+        let binder = self.binder.fork_sparse_collision_delta()?;
+        let library_units = self
+            .library_modules
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(ordinal, module)| {
+                let source = binder
+                    .source_for_module(module)
+                    .ok_or("complete replay module has no retained source key")?;
+                Ok(LibraryBinderUnit {
+                    ordinal: LibraryFileOrdinal::new(ordinal),
+                    source,
+                    module,
+                })
+            })
+            .collect::<Result<Vec<_>, &'static str>>()?;
+        Ok(build_library_binder_checkpoint(binder, library_units))
+    }
+
+    #[cfg(test)]
+    fn collect_library_modules(
+        binder: &Binder,
+        source_file_count: u32,
+    ) -> Result<std::sync::Arc<[ScopeId]>, &'static str> {
+        let count =
+            usize::try_from(source_file_count).map_err(|_| "library source count overflows")?;
+        let mut modules = vec![None; count];
+        for (scope, source) in binder.module_sources().iter() {
+            let Some(index) = source
+                .0
+                .checked_sub(1)
+                .and_then(|source| usize::try_from(source).ok())
+            else {
+                continue;
+            };
+            if let Some(module) = modules.get_mut(index) {
+                *module = Some(*scope);
+            }
+        }
+        modules
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .map(Into::into)
+            .ok_or("library runtime is missing a source module")
+    }
+
     pub(in crate::check::checker) fn into_user_project_base(
         self,
     ) -> (Interner, Binder, super::BoundUserBase) {
@@ -586,7 +1660,9 @@ impl OwnedLibraryRuntimeState {
             next_type_param,
             next_class_id,
             source_file_count: _,
+            library_modules,
             replay_index: _,
+            private_collision_epoch,
         } = self;
         (
             interner,
@@ -599,6 +1675,8 @@ impl OwnedLibraryRuntimeState {
                 next_type_param,
                 next_class_id,
                 runtime,
+                private_collision_epoch,
+                library_modules,
             },
         )
     }
@@ -631,8 +1709,292 @@ impl OwnedLibraryRuntimeState {
             next_type_param: self.next_type_param,
             next_class_id: self.next_class_id,
             source_file_count: self.source_file_count,
+            library_modules: std::sync::Arc::clone(&self.library_modules),
             replay_index: None,
+            private_collision_epoch: None,
         })
+    }
+
+    pub fn fork_sparse_collision_epoch(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            interner: self.interner.fork_delta()?,
+            binder: self.binder.fork_sparse_collision_delta()?,
+            published_types: self.published_types.fork_sparse_delta()?,
+            decl_types: self.decl_types.fork_sparse_delta()?,
+            semantic_identities: self.semantic_identities.clone(),
+            runtime: self.runtime.fork_sparse_delta()?,
+            next_type_param: self.next_type_param,
+            next_class_id: self.next_class_id,
+            source_file_count: self.source_file_count,
+            library_modules: std::sync::Arc::clone(&self.library_modules),
+            replay_index: None,
+            private_collision_epoch: None,
+        })
+    }
+
+    pub fn install_private_collision_replay(
+        self,
+        plan: std::sync::Arc<CollisionReplayPlan>,
+        seeds: Vec<PrivateCollisionReplaySeed>,
+    ) -> Result<Self, &'static str> {
+        let permit = acquire_private_collision_replay_permit()?;
+        self.install_private_collision_replay_with_permit(plan, seeds, permit)
+    }
+
+    pub fn install_private_collision_replay_with_permit(
+        mut self,
+        plan: std::sync::Arc<CollisionReplayPlan>,
+        seeds: Vec<PrivateCollisionReplaySeed>,
+        permit: PrivateCollisionReplayPermitToken,
+    ) -> Result<Self, &'static str> {
+        if self.private_collision_epoch.is_some() || seeds.is_empty() {
+            return Err("private collision replay installs exactly once with nonempty seeds");
+        }
+        let mut affected_owners = BTreeSet::new();
+        let mut value_winners = BTreeMap::new();
+        for seed in &seeds {
+            record_private_replay_scheduler_work_for_test("seed-pops", 1);
+            if seed.global_object {
+                record_private_replay_scheduler_work_for_test("owner-set-probes", 1);
+                if affected_owners.insert(ReplayOwner::GlobalObject) {
+                    record_private_replay_scheduler_work_for_test("owner-set-inserts", 1);
+                    record_private_replay_scheduler_work_for_test("seed-pushes", 1);
+                }
+            }
+            let Some(root) = plan.root_slot(&seed.name) else {
+                continue;
+            };
+            if seed.value {
+                if let Some(value) = root.value {
+                    value_winners.insert(root.name.clone(), value);
+                }
+            }
+            // A same-name global declaration can affect merge disposition across spaces even
+            // when its own syntax contributes only one slot. Seed every retained root meaning;
+            // the compact reverse closure removes no-op consumers later.
+            for owner in [
+                root.value.map(ReplayOwner::Value),
+                root.ty.map(ReplayOwner::TypeGroup),
+                root.namespace.map(ReplayOwner::Namespace),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                record_private_replay_scheduler_work_for_test("owner-set-probes", 1);
+                if affected_owners.insert(owner) {
+                    record_private_replay_scheduler_work_for_test("owner-set-inserts", 1);
+                    record_private_replay_scheduler_work_for_test("seed-pushes", 1);
+                }
+            }
+            // A user reopening a global namespace can mutate rows owned by that namespace
+            // without naming the nested declaration in preflight. Seed every exact library owner
+            // declared directly in the retained namespace; post-bind mutation validation below
+            // still proves that the conservative expansion covered the actual changed rows.
+            if seed.namespace {
+                if let Some(namespace) = root.namespace {
+                    for owner in plan.namespace_direct_owners(namespace) {
+                        if affected_owners.insert(owner) {
+                            record_private_replay_scheduler_work_for_test("owner-set-inserts", 1);
+                            record_private_replay_scheduler_work_for_test("seed-pushes", 1);
+                        }
+                    }
+                }
+            }
+            for consumer in plan.root_consumers(&seed.name) {
+                record_private_replay_scheduler_work_for_test("owner-set-probes", 1);
+                if affected_owners.insert(consumer.consumer) {
+                    record_private_replay_scheduler_work_for_test("owner-set-inserts", 1);
+                    record_private_replay_scheduler_work_for_test("seed-pushes", 1);
+                }
+            }
+        }
+        let mut pending = affected_owners.iter().copied().collect::<Vec<_>>();
+        record_private_replay_scheduler_work_for_test("replay-allocations", pending.len());
+        record_private_replay_scheduler_work_for_test("scc-queue-pushes", pending.len());
+        let mut cursor = 0;
+        while let Some(owner) = pending.get(cursor).copied() {
+            cursor += 1;
+            record_private_replay_scheduler_work_for_test("scc-queue-pops", 1);
+            for edge in plan.reverse_consumers(owner) {
+                record_private_replay_scheduler_work_for_test("edge-probes", 1);
+                record_private_replay_scheduler_work_for_test("owner-set-probes", 1);
+                if affected_owners.insert(edge.consumer) {
+                    record_private_replay_scheduler_work_for_test("owner-set-inserts", 1);
+                    pending.push(edge.consumer);
+                    record_private_replay_scheduler_work_for_test("scc-queue-pushes", 1);
+                }
+            }
+        }
+        let mut owner_sites = Vec::new();
+        for owner in &affected_owners {
+            owner_sites.extend_from_slice(plan.owner_sites_for(*owner));
+        }
+        record_private_replay_scheduler_work_for_test("replay-allocations", 1);
+        let library_record_baselines =
+            PrivateCollisionEpoch::baselines_for(&plan, &affected_owners);
+        self.private_collision_epoch = Some(PrivateCollisionEpoch {
+            affected_owners,
+            mutation_owners: BTreeSet::new(),
+            value_winners,
+            owner_sites,
+            library_record_baselines,
+            sources: Vec::new(),
+            complete_source_replay: false,
+            plan,
+            _permit: permit,
+            #[cfg(any(test, feature = "test-utils"))]
+            state_drop_witness: Some(PrivateCollisionStateDropWitnessForTest),
+        });
+        #[cfg(any(test, feature = "test-utils"))]
+        record_private_replay_scale_hook_for_test(|trace, event| {
+            trace.sparse_replay_invocations = trace.sparse_replay_invocations.saturating_add(1);
+            trace.private_work_started = event;
+        });
+        Ok(self)
+    }
+
+    fn install_complete_source_replay_plan_with_permit(
+        mut self,
+        plan: std::sync::Arc<CollisionReplayPlan>,
+        seeds: &[PrivateCollisionReplaySeed],
+        permit: PrivateCollisionReplayPermitToken,
+    ) -> Result<Self, &'static str> {
+        if self.private_collision_epoch.is_some() {
+            return Err("complete source replay installs exactly once");
+        }
+        let materialized = plan.complete_source_materialization();
+        // A complete continuation can replace an actually colliding root with its user suffix.
+        let mut affected_owners = materialized.owners;
+        for seed in seeds {
+            if seed.global_object {
+                affected_owners.insert(ReplayOwner::GlobalObject);
+            }
+            if !seed.value {
+                continue;
+            }
+            let Some(root) = plan.root_slot(&seed.name) else {
+                continue;
+            };
+            affected_owners.extend(root.value.map(ReplayOwner::Value));
+        }
+        let value_winners = seeds
+            .iter()
+            .filter(|seed| seed.value)
+            .filter_map(|seed| {
+                plan.root_slot(&seed.name)
+                    .and_then(|root| root.value)
+                    .map(|value| (seed.name.clone(), value))
+            })
+            .collect();
+        self.private_collision_epoch = Some(PrivateCollisionEpoch {
+            affected_owners,
+            mutation_owners: BTreeSet::new(),
+            value_winners,
+            owner_sites: materialized.owner_sites,
+            library_record_baselines: materialized.baseline_records,
+            sources: Vec::new(),
+            complete_source_replay: true,
+            plan,
+            _permit: permit,
+            #[cfg(any(test, feature = "test-utils"))]
+            state_drop_witness: Some(PrivateCollisionStateDropWitnessForTest),
+        });
+        Ok(self)
+    }
+
+    pub fn private_collision_source_ordinals(
+        &self,
+    ) -> Result<Vec<LibraryFileOrdinal>, &'static str> {
+        let epoch = self
+            .private_collision_epoch
+            .as_ref()
+            .ok_or("private collision replay is not installed")?;
+        if epoch.complete_source_replay {
+            return Ok((0..self.source_file_count)
+                .map(|ordinal| {
+                    LibraryFileOrdinal::new(usize::try_from(ordinal).unwrap_or(usize::MAX))
+                })
+                .collect());
+        }
+        let mut ordinals = epoch
+            .owner_sites
+            .iter()
+            .filter(|site| !matches!(site.owner, ReplayOwner::GlobalObject))
+            .map(|site| site.file_ordinal)
+            .collect::<Vec<_>>();
+        if ordinals.is_empty() {
+            if let Some(site) = epoch
+                .owner_sites
+                .iter()
+                .find(|site| matches!(site.owner, ReplayOwner::GlobalObject))
+            {
+                ordinals.push(site.file_ordinal);
+            }
+        }
+        ordinals.sort();
+        ordinals.dedup();
+        Ok(ordinals)
+    }
+
+    pub fn install_private_collision_sources(
+        mut self,
+        mut sources: Vec<PrivateCollisionReplaySource>,
+    ) -> Result<Self, &'static str> {
+        let expected = self.private_collision_source_ordinals()?;
+        let epoch = self
+            .private_collision_epoch
+            .as_mut()
+            .ok_or("private collision replay is not installed")?;
+        if !epoch.sources.is_empty() {
+            return Err("private collision sources install exactly once");
+        }
+        sources.sort_by_key(|source| source.file_ordinal);
+        let observed = sources
+            .iter()
+            .map(|source| source.file_ordinal)
+            .collect::<Vec<_>>();
+        if observed != expected {
+            return Err("private collision sources do not cover the scheduled ordinals");
+        }
+        #[cfg(any(test, feature = "test-utils"))]
+        with_private_replay_scale_control_for_test(|active| {
+            active.trace.sparse_library_source_units = active
+                .trace
+                .sparse_library_source_units
+                .saturating_add(u64::try_from(sources.len()).unwrap_or(u64::MAX));
+        });
+        epoch.sources = sources;
+        Ok(self)
+    }
+
+    pub fn take_private_collision_sources(
+        &mut self,
+    ) -> Result<Vec<PrivateCollisionReplaySource>, &'static str> {
+        let epoch = self
+            .private_collision_epoch
+            .as_mut()
+            .ok_or("private collision replay is not installed")?;
+        Ok(std::mem::take(&mut epoch.sources))
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn private_collision_affected_owners_for_test(
+        &self,
+    ) -> Result<BTreeSet<ReplayOwner>, &'static str> {
+        self.private_collision_epoch
+            .as_ref()
+            .map(|epoch| epoch.affected_owners.clone())
+            .ok_or("private collision replay is not installed")
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn private_collision_owner_sites_for_test(
+        &self,
+    ) -> Result<Vec<super::replay_index::CollisionReplayOwnerSite>, &'static str> {
+        self.private_collision_epoch
+            .as_ref()
+            .map(|epoch| epoch.owner_sites.clone())
+            .ok_or("private collision replay is not installed")
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -679,6 +2041,11 @@ impl OwnedLibraryRuntimeState {
                 .as_ref()
                 .map_or(0, |identities| std::ptr::from_ref(identities).addr()),
         ]
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn inner_base_allocation_identity_for_test(&self) -> usize {
+        self.interner.store().base_allocation_identity_for_test()
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -752,6 +2119,63 @@ impl OwnedLibraryRuntimeState {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
+    pub fn normalized_root_projection_for_test(&self, names: &[String]) -> Vec<String> {
+        let mut projection = names
+            .iter()
+            .map(|name| {
+                let symbol = self
+                    .binder
+                    .graph
+                    .get(self.binder.compilation_global)
+                    .and_then(|scope| scope.symbols.get(name))
+                    .and_then(|symbol| self.binder.symbols.get(*symbol));
+                let value = symbol.and_then(|symbol| symbol.value);
+                let namespace = symbol.and_then(|symbol| symbol.ns);
+                let ty = symbol
+                    .and_then(|symbol| symbol.ty)
+                    .and_then(|group| self.published_types.groups().get(group))
+                    .map(|terminal| match terminal {
+                        PublishedTypeGroupTerminal::Ready(group) => match group.surface {
+                            PublishedTypeGroupSurface::Template(template) => {
+                                render_type(self.interner.store(), template, false)
+                            }
+                            PublishedTypeGroupSurface::Class(class) => {
+                                match self.published_types.classes().published_class(class) {
+                                    DemandOutcome::Ready(surface) => render_type(
+                                        self.interner.store(),
+                                        surface.instance_template(),
+                                        false,
+                                    ),
+                                    DemandOutcome::Exhausted(_) => "class:unavailable".to_owned(),
+                                }
+                            }
+                        },
+                        PublishedTypeGroupTerminal::Unavailable(cause) => {
+                            format!("unavailable:{:?}", cause.cause)
+                        }
+                    });
+                format!(
+                    "{name}:value={}:type={}:namespace={}",
+                    value.is_some(),
+                    ty.unwrap_or_else(|| "absent".to_owned()),
+                    namespace.is_some()
+                )
+            })
+            .collect::<Vec<_>>();
+        projection.sort();
+        projection
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn normalized_semantic_identities_for_test(&self) -> Vec<String> {
+        self.semantic_identities
+            .as_ref()
+            .map_or_else(Vec::new, |identities| {
+                identities.normalized_projection_for_test(self.interner.store())
+            })
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn frozen_structural_object_probe_for_test(&self) -> Option<(TypeId, ObjectType)> {
         self.interner.frozen_structural_object_probe_for_test()
     }
@@ -768,9 +2192,9 @@ impl OwnedLibraryRuntimeState {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    fn final_base_family_clone_counts_for_test(
+    fn final_base_family_clone_counts_for_test<Ticket: Copy + PartialEq>(
         &self,
-        pass: &super::context::Pass<'_, '_>,
+        pass: &super::context::Pass<'_, '_, Ticket>,
         final_next_class_id: u32,
     ) -> BTreeMap<&'static str, u64> {
         let store = self
@@ -876,7 +2300,9 @@ impl OwnedLibraryRuntimeState {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    fn final_local_rows_written_for_test(pass: &super::context::Pass<'_, '_>) -> u64 {
+    fn final_local_rows_written_for_test<Ticket: Copy + PartialEq>(
+        pass: &super::context::Pass<'_, '_, Ticket>,
+    ) -> u64 {
         let store = pass.interner.store().local_family_row_counts_for_test();
         let interner = pass.interner.local_index_row_counts_for_test();
         let binder = pass.binder.local_family_row_counts_for_test();
@@ -884,20 +2310,36 @@ impl OwnedLibraryRuntimeState {
             .type_environment
             .published()
             .local_family_row_counts_for_test();
+        let published_replacements = pass
+            .type_environment
+            .published()
+            .replacement_family_row_counts_for_test();
         let rows = store.into_iter().sum::<usize>()
             + interner.into_iter().sum::<usize>()
             + binder.into_iter().sum::<usize>()
             + pass.decl_types.local_len()
+            + pass.decl_types.replacement_len()
             + published.into_iter().sum::<usize>()
+            + published_replacements.into_iter().sum::<usize>()
             + pass.namespace_values.local_terminal_row_count_for_test()
+            + pass
+                .namespace_values
+                .replacement_terminal_row_count_for_test()
             + pass.named_function_symbols.local_len()
             + pass.class_application_parameters.local_len()
+            + pass.class_application_parameters.replacement_len()
             + pass.class_parents.local_len()
+            + pass.class_parents.replacement_len()
             + pass.class_names.local_len()
+            + pass.class_names.replacement_len()
             + pass.class_new_metadata.local_len()
+            + pass.class_new_metadata.replacement_len()
             + pass.class_value_bindings.local_len()
+            + pass.class_value_bindings.replacement_len()
             + pass.class_value_aliases.local_len()
-            + pass.standalone_namespace_value_aliases.local_len();
+            + pass.class_value_aliases.replacement_len()
+            + pass.standalone_namespace_value_aliases.local_len()
+            + pass.standalone_namespace_value_aliases.replacement_len();
         u64::try_from(rows).expect("local row count fits u64")
     }
 
@@ -945,6 +2387,8 @@ impl OwnedLibraryRuntimeState {
         parts: OwnedLibraryRuntimeProductParts,
     ) -> Result<Self, &'static str> {
         validate_owned_library_product_parts(&parts)?;
+        let library_modules =
+            Self::collect_library_modules(&parts.binder, parts.source_file_count)?;
         let decl_types = DeclTypes::from_snapshot_slots(parts.decl_types, parts.binder.decl_count)?;
         let semantic_identities = parts
             .semantic_identities
@@ -966,15 +2410,10 @@ impl OwnedLibraryRuntimeState {
             next_type_param: parts.next_type_param,
             next_class_id: parts.next_class_id,
             source_file_count: parts.source_file_count,
+            library_modules,
             replay_index: None,
+            private_collision_epoch: None,
         })
-    }
-
-    /// Root names published into the compilation-global scope of the compiled library.
-    pub fn library_root_names(&self) -> Result<BTreeSet<String>, &'static str> {
-        collect_root_rows(&self.binder)
-            .map(|rows| rows.into_iter().map(|row| row.name).collect())
-            .map_err(|_| "library binder does not expose a compilation-global root index")
     }
 }
 
@@ -1001,6 +2440,11 @@ pub fn compile_synthetic_padding_base_for_test(
         .map_err(|error| format!("synthetic padding base failed: {error:?}"))?;
     state.freeze_as_library_base().map_err(str::to_owned)?;
     Ok(state)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn with_forced_collision_identity_selection_pending<T>(run: impl FnOnce() -> T) -> T {
+    super::library_identities::with_forced_collision_identity_selection_pending(run)
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -1041,6 +2485,131 @@ thread_local! {
     static USER_SOURCE_BIND_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_SOURCE_CHECK_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static USER_DELTA_FORKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PRIVATE_REPLAY_PRODUCTION_CONTROL:
+        std::cell::RefCell<Option<PrivateReplayProductionControlForTest>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateReplayProductionFaultForTest {
+    None,
+    InjectPostBindMutationOwnerAbsentFromPlan,
+    OmitExpectedBaselineRecordDuringCompletion,
+    DisableSealedExpectedBaselineOwnerBeforeCandidateReservation,
+    OmitScheduledOwner(ReplayOwner),
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, Default)]
+pub struct PrivateReplayProductionTraceForTest {
+    pub bind_completed: bool,
+    pub sparse_candidate_execution_started: bool,
+    pub completion_selection_started: bool,
+    pub mutation_ledger_recorded: u64,
+    pub containment_validation_started: u64,
+    pub plan_owner_intersection_started: u64,
+    pub injected_after_bind: bool,
+    pub injected_owner: Option<ReplayOwner>,
+    pub omitted_expected_baseline: Option<super::replay_index::ReplayBaselineRecord>,
+    pub post_bind_mutation_owners: BTreeSet<ReplayOwner>,
+    pub plan_owners: BTreeSet<ReplayOwner>,
+    pub scheduled_owners: BTreeSet<ReplayOwner>,
+    pub schedule_omission_installed: bool,
+    pub omitted_scheduled_owner: Option<ReplayOwner>,
+    pub completion_or_semantic_query_steps: u64,
+    pub fault_injected: u64,
+    pub candidate_reservation_started: u64,
+    pub candidate_activation_started: u64,
+    pub baseline_validation_started: u64,
+    pub disabled_baseline_owner: Option<ReplayOwner>,
+    pub epoch_library_record_baselines: Vec<super::replay_index::ReplayBaselineRecord>,
+    pub candidate_reserved_library_record_owners: BTreeSet<ReplayOwner>,
+    pub candidate_activated_library_record_owners: BTreeSet<ReplayOwner>,
+    pub failure: Option<PrivateReplayProductionFailureForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateReplayProductionFailureForTest {
+    MutationOwnerOutsidePlan(ReplayOwner),
+    RequiredSourceNotLoaded(LibraryFileOrdinal),
+    BaselineMissing,
+    Other,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct PrivateReplayProductionControlForTest {
+    fault: PrivateReplayProductionFaultForTest,
+    next_event: u64,
+    trace: PrivateReplayProductionTraceForTest,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct PrivateReplayProductionScopeForTest;
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PrivateReplayProductionScopeForTest {
+    pub fn start(fault: PrivateReplayProductionFaultForTest) -> Result<Self, &'static str> {
+        PRIVATE_REPLAY_PRODUCTION_CONTROL.with_borrow_mut(|active| {
+            if active.is_some() {
+                return Err("private replay production scopes do not nest");
+            }
+            *active = Some(PrivateReplayProductionControlForTest {
+                fault,
+                next_event: 0,
+                trace: PrivateReplayProductionTraceForTest::default(),
+            });
+            Ok(Self)
+        })
+    }
+
+    pub fn finish(self) -> Result<PrivateReplayProductionTraceForTest, &'static str> {
+        PRIVATE_REPLAY_PRODUCTION_CONTROL.with_borrow_mut(|active| {
+            active
+                .take()
+                .map(|control| control.trace)
+                .ok_or("private replay production scope is not active")
+        })
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn with_private_replay_production_control_for_test(
+    update: impl FnOnce(&mut PrivateReplayProductionControlForTest),
+) {
+    PRIVATE_REPLAY_PRODUCTION_CONTROL.with_borrow_mut(|active| {
+        if let Some(active) = active.as_mut() {
+            update(active);
+        }
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn private_replay_fault_for_test(
+) -> PrivateReplayProductionFaultForTest {
+    PRIVATE_REPLAY_PRODUCTION_CONTROL.with_borrow(|active| {
+        active
+            .as_ref()
+            .map_or(PrivateReplayProductionFaultForTest::None, |active| {
+                active.fault
+            })
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn private_replay_production_trace_active_for_test() -> bool {
+    PRIVATE_REPLAY_PRODUCTION_CONTROL.with_borrow(|active| active.is_some())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn record_private_replay_trace_for_test(
+    update: impl FnOnce(&mut PrivateReplayProductionTraceForTest, u64),
+) {
+    with_private_replay_production_control_for_test(|active| {
+        active.next_event = active.next_event.saturating_add(1);
+        update(&mut active.trace, active.next_event);
+    });
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -1276,8 +2845,8 @@ fn classify_live_reference(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn final_reference_summary(
-    pass: &super::context::Pass<'_, '_>,
+fn final_reference_summary<Ticket: Copy + PartialEq>(
+    pass: &super::context::Pass<'_, '_, Ticket>,
     base: &OwnedBaseFinalIdentityEnds,
 ) -> OwnedBaseReferenceSummary {
     let mut summary = OwnedBaseReferenceSummary::default();
@@ -1307,7 +2876,7 @@ fn final_reference_summary(
         );
     }
 
-    for (owner, ty) in pass.decl_types.local_slots() {
+    for (owner, ty) in pass.decl_types.changed_slots() {
         classify_live_reference(&mut summary, base, 9, owner.0, 9, owner.0);
         if let Some(ty) = ty {
             classify_live_reference(&mut summary, base, 9, owner.0, 1, ty.0);
@@ -1315,7 +2884,7 @@ fn final_reference_summary(
     }
 
     let published = pass.type_environment.published();
-    for (owner, terminal) in published.local_group_terminals() {
+    for (owner, terminal) in published.changed_group_terminals() {
         classify_live_reference(&mut summary, base, 7, owner.0, 7, owner.0);
         let PublishedTypeGroupTerminal::Ready(group) = terminal else {
             continue;
@@ -1342,7 +2911,7 @@ fn final_reference_summary(
             }
         }
     }
-    for (class, terminal) in published.local_class_terminals() {
+    for (class, terminal) in published.changed_class_terminals() {
         classify_live_reference(&mut summary, base, 3, class.0, 3, class.0);
         let OwnedPublishedClassTerminal::Ready(surface) = &terminal else {
             continue;
@@ -1365,8 +2934,8 @@ fn final_reference_summary(
 
     let namespace_terminals = pass
         .namespace_values
-        .local_terminal_snapshot_parts_for_test()
-        .expect("completed local namespace terminals snapshot");
+        .changed_terminal_snapshot_parts_for_test()
+        .expect("completed changed namespace terminals snapshot");
     for row in namespace_terminals {
         classify_live_reference(&mut summary, base, 8, row.namespace.0, 8, row.namespace.0);
         if let FrozenNamespaceValueTerminalSnapshot::Ready { storage, ty } = row.terminal {
@@ -1643,6 +3212,7 @@ pub enum InjectedProfileError {
     },
     Binder(String),
     Reservation(String),
+    LibraryIdentitySelectionPending,
     Reporting(LibraryEventLedgerError),
     ReplayIndex(ReplayIndexGenerationError),
     ReplayIndexAdmission(ReplayIndexAdmissionError),
@@ -1724,6 +3294,16 @@ pub struct ValueProbe {
 pub struct InjectedProfileRun {
     pub phase_counts: LibraryPhaseCounts,
     #[cfg(any(test, feature = "test-utils"))]
+    pub initial_store_rows: usize,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub initial_published_type_rows: usize,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub initial_replacement_type_rows: usize,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub initial_type_param_id: u32,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub initial_class_id: u32,
+    #[cfg(any(test, feature = "test-utils"))]
     pub phase_timings: LibraryPhaseTimings,
     #[cfg(any(test, feature = "test-utils"))]
     pub reserved_file_ordinals: Vec<LibraryFileOrdinal>,
@@ -1791,6 +3371,52 @@ struct CanonicalInput<'source> {
     source: &'source str,
     kind: SourceFileKind,
     source_key: ExactKey,
+    origin: CompilationOrigin,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn independent_event_owner_sites_for_oracle(
+    canonical: &[CanonicalInput<'_>],
+    parsed: &[ParserReturn<'_>],
+    binder: &Binder,
+) -> Result<Vec<CollisionReplayOwnerSite>, InjectedProfileError> {
+    let mut allocator = IndependentEventOwnerSiteOracle::new();
+    let mut reservations: LexicalReservations<(usize, usize)> = LexicalReservations::default();
+    for (input, parsed) in canonical.iter().zip(parsed) {
+        allocator.select_file(input.file_ordinal);
+        reservations
+            .reserve_program_with(&parsed.program, &mut allocator)
+            .map_err(|message| InjectedProfileError::Reservation(message.to_owned()))?;
+        allocator.reserve_exact_site(
+            Span::from_oxc(parsed.program.span),
+            CollisionReplayEventPhase::Immediate,
+        );
+    }
+    for descriptor in independent_library_reporting_site_descriptors(binder) {
+        allocator.select_file(descriptor.file_ordinal);
+        allocator.reserve_exact_site(descriptor.span, CollisionReplayEventPhase::Immediate);
+    }
+    allocator.finish()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn verify_independent_event_owner_sites(
+    plan: &CollisionReplayPlan,
+    independent: &[CollisionReplayOwnerSite],
+) -> Result<(), InjectedProfileError> {
+    let captured = plan
+        .full_oracle_snapshot_for_test()
+        .owner_sites
+        .iter()
+        .filter(|site| matches!(site.provenance, CollisionReplaySiteProvenance::Event { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    if captured != independent {
+        return Err(InjectedProfileError::ReplayIndex(
+            ReplayIndexGenerationError::IndependentOwnerSiteOracleMismatch,
+        ));
+    }
+    Ok(())
 }
 
 struct CanonicalLibraryFrontend<'source, 'ast> {
@@ -1799,6 +3425,8 @@ struct CanonicalLibraryFrontend<'source, 'ast> {
     binder: Binder,
     module_scopes: Vec<ScopeId>,
     semantic_scopes: Vec<ScopeId>,
+    user_start: Option<usize>,
+    collision_root_provenance: LibraryRootProjection,
     #[cfg(any(test, feature = "test-utils"))]
     parse_elapsed: Duration,
     #[cfg(any(test, feature = "test-utils"))]
@@ -1958,6 +3586,8 @@ fn intrinsic_code(kind: IntrinsicKind) -> u8 {
         IntrinsicKind::ThisType => 14,
         IntrinsicKind::OmitThisParameter => 15,
         IntrinsicKind::Object => 16,
+        IntrinsicKind::BigInt => 17,
+        IntrinsicKind::Symbol => 18,
     }
 }
 
@@ -2282,6 +3912,11 @@ fn canonical_record_bytes(
                 DiagnosticFormat::Compact,
             )
             .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?;
+            record_collision_plan_forbidden_work(|work| {
+                work.rendered_record_digest_bytes = work
+                    .rendered_record_digest_bytes
+                    .saturating_add(u64::try_from(rendered.len()).unwrap_or(u64::MAX));
+            });
             bytes.bytes(&rendered)?;
         }
         CheckerRecord::Incomplete(incomplete) => {
@@ -2293,6 +3928,63 @@ fn canonical_record_bytes(
         }
     }
     Ok(bytes.finish())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn full_structured_record_baseline(
+    owner: ReplayOwner,
+    records: &[&CheckerRecord],
+) -> super::replay_index::ReplayBaselineRecord {
+    fn bytes(hasher: &mut Sha256, value: &[u8]) {
+        hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+        hasher.update(value);
+    }
+
+    fn span(hasher: &mut Sha256, span: Span) {
+        hasher.update(span.start.to_be_bytes());
+        hasher.update(span.end.to_be_bytes());
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"typokat/collision-record-fingerprint/v1");
+    hasher.update(
+        u64::try_from(records.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for record in records {
+        match record {
+            CheckerRecord::Diagnostic(diagnostic) => {
+                hasher.update([0]);
+                bytes(&mut hasher, diagnostic.code.as_str().as_bytes());
+                hasher.update([match diagnostic.severity {
+                    crate::diagnostics::Severity::Error => 0,
+                    crate::diagnostics::Severity::Warning => 1,
+                }]);
+                bytes(&mut hasher, diagnostic.message.as_bytes());
+                span(&mut hasher, diagnostic.span);
+                hasher.update(
+                    u64::try_from(diagnostic.elaboration().len())
+                        .unwrap_or(u64::MAX)
+                        .to_be_bytes(),
+                );
+                for line in diagnostic.elaboration() {
+                    bytes(&mut hasher, line.as_bytes());
+                }
+            }
+            CheckerRecord::Incomplete(incomplete) => {
+                hasher.update([1]);
+                bytes(&mut hasher, incomplete.id.as_bytes());
+                span(&mut hasher, incomplete.span);
+                bytes(&mut hasher, incomplete.context.as_bytes());
+            }
+        }
+    }
+    super::replay_index::ReplayBaselineRecord {
+        owner,
+        record_count: u64::try_from(records.len()).unwrap_or(u64::MAX),
+        digest: hasher.finalize().into(),
+    }
 }
 
 /// Project the library's records onto their canonical byte blobs.
@@ -2785,6 +4477,25 @@ fn validate_terminal_class_dependencies(
         runtime,
         semantic_identities,
     } = inputs;
+    record_collision_plan_forbidden_work(|work| {
+        let projected = binder
+            .type_groups
+            .len()
+            .saturating_add(decl_types.len())
+            .saturating_add(namespace_terminals.len())
+            .saturating_add(runtime.class_application_parameters.len())
+            .saturating_add(runtime.class_new_metadata.len())
+            .saturating_add(runtime.class_parents.len());
+        let projected = u64::try_from(projected).unwrap_or(u64::MAX);
+        work.transitive_terminal_owner_entries = work
+            .transitive_terminal_owner_entries
+            .saturating_add(projected);
+        work.full_semantic_projection_rows =
+            work.full_semantic_projection_rows.saturating_add(projected);
+        work.eager_all_owner_scc_memberships = work
+            .eager_all_owner_scc_memberships
+            .saturating_add(u64::try_from(interner.store().len()).unwrap_or(u64::MAX));
+    });
     const TYPE_DOMAIN: u8 = 1;
     const CLASS_DOMAIN: u8 = 3;
     const DECLARED_RECIPE_DOMAIN: u8 = 10;
@@ -2868,6 +4579,11 @@ fn validate_terminal_class_dependencies(
             "replay generation saw a non-terminal class registry".to_owned(),
         )
     })?;
+    record_collision_plan_forbidden_work(|work| {
+        work.canonical_terminal_rows = work
+            .canonical_terminal_rows
+            .saturating_add(u64::try_from(terminals.len()).unwrap_or(u64::MAX));
+    });
     for (class, terminal) in &terminals {
         let CanonicalPublishedClassTerminal::Ready(surface) = terminal else {
             continue;
@@ -3095,6 +4811,129 @@ fn normalize_source_root_candidates(
     }
 }
 
+fn build_collision_replay_plan(
+    trace: ReplayDependencyTrace,
+    root_provenance: LibraryRootProjection,
+    baselines: Vec<super::replay_index::ReplayBaselineRecord>,
+    prefix_cardinalities: [usize; 9],
+    forbidden_work: CollisionPlanForbiddenWork,
+) -> Result<CollisionReplayPlan, InjectedProfileError> {
+    let LibraryRootProjection {
+        candidates,
+        explicit_global_this,
+        contributor_sites,
+        explicit_global_this_sites,
+        root_rows,
+        canonical_unit_count,
+        source_census_count,
+        uncertain_candidate_count,
+        uncertain_relevant_syntax_count,
+        normalization_issue_count,
+    } = root_provenance;
+    if source_census_count != canonical_unit_count
+        || uncertain_candidate_count != 0
+        || uncertain_relevant_syntax_count != 0
+        || normalization_issue_count != 0
+    {
+        return Err(InjectedProfileError::ReplayIndex(
+            ReplayIndexGenerationError::InvalidRootSlot("<binder-source-census>".to_owned()),
+        ));
+    }
+    if forbidden_work
+        != (CollisionPlanForbiddenWork {
+            library_source_compiles: 1,
+            ..CollisionPlanForbiddenWork::default()
+        })
+    {
+        return Err(InjectedProfileError::ReplayIndex(
+            ReplayIndexGenerationError::BaselinePartitionMismatch,
+        ));
+    }
+    for site in contributor_sites {
+        trace.record_owner_site(CollisionReplayOwnerSite {
+            owner: ReplayOwner::GlobalObject,
+            file_ordinal: site.file_ordinal,
+            span: site.span,
+            provenance: super::replay_index::CollisionReplaySiteProvenance::GlobalContributor {
+                name: site.name,
+                kind: site.kind,
+                binder_owner: crate::binder::namespace::DeclarationOwner::CompilationGlobal,
+            },
+        });
+    }
+    for (file_ordinal, span) in explicit_global_this_sites {
+        trace.record_owner_site(CollisionReplayOwnerSite {
+            owner: ReplayOwner::GlobalObject,
+            file_ordinal,
+            span,
+            provenance: super::replay_index::CollisionReplaySiteProvenance::ExplicitGlobalThis {
+                binder_owner: crate::binder::namespace::DeclarationOwner::CompilationGlobal,
+            },
+        });
+    }
+    validate_root_census(&candidates, &root_rows, explicit_global_this)
+        .map_err(InjectedProfileError::ReplayIndex)?;
+    let mut roots = Vec::with_capacity(root_rows.len());
+    {
+        let _global_scope = trace.scope(ReplayOwner::GlobalObject);
+        for row in root_rows {
+            let candidate = candidates.get(&row.name).ok_or_else(|| {
+                InjectedProfileError::ReplayIndex(ReplayIndexGenerationError::InvalidRootSlot(
+                    row.name.clone(),
+                ))
+            })?;
+            let contributor = candidate.global_object_contributor;
+            if contributor {
+                if let Some(value) = row.value {
+                    trace.demand(ReplayOwner::Value(value));
+                }
+                if let Some(ty) = row.ty {
+                    trace.demand(ReplayOwner::TypeGroup(ty));
+                }
+                if let Some(namespace) = row.namespace {
+                    trace.demand(ReplayOwner::Namespace(namespace));
+                }
+            }
+            roots.push(ReplayRootSlot {
+                explicit_global_this: explicit_global_this && row.name == "globalThis",
+                name: row.name,
+                value: row.value,
+                ty: row.ty,
+                namespace: row.namespace,
+                global_object_contributor: contributor,
+            });
+        }
+    }
+
+    trace
+        .finish_compact_plan(
+            roots,
+            baselines,
+            prefix_cardinalities,
+            CollisionReplayConstructionEvidence {
+                library_source_compiles: forbidden_work.library_source_compiles,
+                binder_source_censuses: u64::try_from(source_census_count).unwrap_or(u64::MAX),
+                canonical_source_units: u64::try_from(canonical_unit_count).unwrap_or(u64::MAX),
+                second_source_censuses: forbidden_work.second_source_censuses,
+                canonical_manifest_bytes: forbidden_work.canonical_manifest_bytes,
+                rendered_record_digest_bytes: forbidden_work.rendered_record_digest_bytes,
+                transitive_terminal_owner_entries: forbidden_work.transitive_terminal_owner_entries,
+                eager_all_owner_scc_memberships: forbidden_work.eager_all_owner_scc_memberships,
+                namespace_snapshot_rows: forbidden_work.namespace_snapshot_rows,
+                runtime_snapshot_rows: forbidden_work.runtime_snapshot_rows,
+                canonical_terminal_rows: forbidden_work.canonical_terminal_rows,
+                full_semantic_projection_rows: forbidden_work.full_semantic_projection_rows,
+                ticket_slots: 0,
+                ticket_owner_ordered_map_inserts: 0,
+                owner_site_inner_heap_allocations: 0,
+                owner_site_dense_slot_writes: 0,
+                owner_site_ordered_map_inserts: 0,
+                trace_domain_sealed_after_binder_reporting: false,
+            },
+        )
+        .map_err(InjectedProfileError::ReplayIndex)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_collision_replay_index(
     trace: ReplayDependencyTrace,
@@ -3109,8 +4948,10 @@ fn build_collision_replay_index(
     parsed: &[oxc_parser::ParserReturn<'_>],
     module_scopes: &[ScopeId],
     class_declarations: &BTreeMap<ClassId, crate::binder::declaration::DeclId>,
-    statement_keys: Vec<LibraryEventKey>,
     records: &[(LibraryEventKey, CheckerRecord)],
+    #[cfg(any(test, feature = "test-utils"))] independent_event_owner_sites: Vec<
+        CollisionReplayOwnerSite,
+    >,
 ) -> Result<CollisionReplayIndex, InjectedProfileError> {
     fn add_owner_site(
         module_ordinals: &rustc_hash::FxHashMap<ScopeId, LibraryFileOrdinal>,
@@ -3127,11 +4968,14 @@ fn build_collision_replay_index(
         }
     }
 
+    let statement_keys = trace.statement_keys();
     let module_ordinals = module_scopes
         .iter()
         .copied()
         .zip(canonical.iter().map(|input| input.file_ordinal))
         .collect::<rustc_hash::FxHashMap<_, _>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut exact_owner_sites = independent_event_owner_sites;
     let mut owners = Vec::new();
     owners.extend((0..binder.type_groups.len()).map(|index| {
         ReplayOwner::TypeGroup(TypeGroupId(
@@ -3177,6 +5021,24 @@ fn build_collision_replay_index(
                     fragment.site.module,
                     fragment.site.declaration_span,
                 );
+                #[cfg(any(test, feature = "test-utils"))]
+                if let (Some(file_ordinal), Some(declaration)) = (
+                    module_ordinals.get(&fragment.site.module).copied(),
+                    binder.declarations.get(fragment.declaration),
+                ) {
+                    let declaration_scope =
+                        declaration.site.scope.unwrap_or(declaration.site.module);
+                    exact_owner_sites.push(CollisionReplayOwnerSite {
+                        owner: ReplayOwner::TypeGroup(group),
+                        file_ordinal,
+                        span: declaration.site.declaration_span,
+                        provenance: collision_declaration_provenance(
+                            binder,
+                            declaration,
+                            declaration_scope,
+                        ),
+                    });
+                }
             }
         }
     }
@@ -3190,6 +5052,20 @@ fn build_collision_replay_index(
                 declaration.site.module,
                 declaration.site.declaration_span,
             );
+            #[cfg(any(test, feature = "test-utils"))]
+            if let Some(file_ordinal) = module_ordinals.get(&declaration.site.module).copied() {
+                let declaration_scope = declaration.site.scope.unwrap_or(declaration.site.module);
+                exact_owner_sites.push(CollisionReplayOwnerSite {
+                    owner: ReplayOwner::Value(storage),
+                    file_ordinal,
+                    span: declaration.site.declaration_span,
+                    provenance: collision_declaration_provenance(
+                        binder,
+                        declaration,
+                        declaration_scope,
+                    ),
+                });
+            }
         }
     }
     for index in 0..binder.namespaces.len() {
@@ -3214,6 +5090,26 @@ fn build_collision_replay_index(
                 declaration.site.module,
                 declaration.site.declaration_span,
             );
+            #[cfg(any(test, feature = "test-utils"))]
+            if let Some(file_ordinal) = module_ordinals.get(&declaration.site.module).copied() {
+                let declaration_scope = declaration.site.scope.unwrap_or(declaration.site.module);
+                let provenance =
+                    collision_declaration_provenance(binder, declaration, declaration_scope);
+                exact_owner_sites.push(CollisionReplayOwnerSite {
+                    owner: ReplayOwner::Namespace(namespace),
+                    file_ordinal,
+                    span: declaration.site.declaration_span,
+                    provenance: provenance.clone(),
+                });
+                if let Some(storage) = binder.namespaces.standalone_value_storage(namespace) {
+                    exact_owner_sites.push(CollisionReplayOwnerSite {
+                        owner: ReplayOwner::Value(storage),
+                        file_ordinal,
+                        span: declaration.site.declaration_span,
+                        provenance,
+                    });
+                }
+            }
             if let Some(storage) = binder.namespaces.standalone_value_storage(namespace) {
                 add_owner_site(
                     &module_ordinals,
@@ -3236,6 +5132,20 @@ fn build_collision_replay_index(
                 declaration.site.module,
                 declaration.site.declaration_span,
             );
+            #[cfg(any(test, feature = "test-utils"))]
+            if let Some(file_ordinal) = module_ordinals.get(&declaration.site.module).copied() {
+                let declaration_scope = declaration.site.scope.unwrap_or(declaration.site.module);
+                exact_owner_sites.push(CollisionReplayOwnerSite {
+                    owner: ReplayOwner::Class(*class),
+                    file_ordinal,
+                    span: declaration.site.declaration_span,
+                    provenance: collision_declaration_provenance(
+                        binder,
+                        declaration,
+                        declaration_scope,
+                    ),
+                });
+            }
         } else {
             invalid_sites = invalid_sites.saturating_add(1);
         }
@@ -3250,6 +5160,9 @@ fn build_collision_replay_index(
             &parsed.program,
             ModuleBindingContext::for_program(&parsed.program, input.kind),
         );
+        record_collision_plan_forbidden_work(|work| {
+            work.second_source_censuses = work.second_source_censuses.saturating_add(1);
+        });
         explicit_global_this |= provenance.census.explicit_global_this;
         contributor_sites.extend(
             provenance
@@ -3302,6 +5215,17 @@ fn build_collision_replay_index(
                 span.start,
                 span.end,
             ));
+            #[cfg(any(test, feature = "test-utils"))]
+            exact_owner_sites.push(CollisionReplayOwnerSite {
+                owner: ReplayOwner::GlobalObject,
+                file_ordinal,
+                span,
+                provenance: super::replay_index::CollisionReplaySiteProvenance::GlobalContributor {
+                    name,
+                    kind,
+                    binder_owner: crate::binder::namespace::DeclarationOwner::CompilationGlobal,
+                },
+            });
         }
     }
     for (file_ordinal, span) in explicit_global_this_sites {
@@ -3311,6 +5235,15 @@ fn build_collision_replay_index(
             span.start,
             span.end,
         ));
+        #[cfg(any(test, feature = "test-utils"))]
+        exact_owner_sites.push(CollisionReplayOwnerSite {
+            owner: ReplayOwner::GlobalObject,
+            file_ordinal,
+            span,
+            provenance: super::replay_index::CollisionReplaySiteProvenance::ExplicitGlobalThis {
+                binder_owner: crate::binder::namespace::DeclarationOwner::CompilationGlobal,
+            },
+        });
     }
     validate_root_census(&candidates, &root_rows, explicit_global_this)
         .map_err(InjectedProfileError::ReplayIndex)?;
@@ -3345,12 +5278,16 @@ fn build_collision_replay_index(
     }
 
     let mut record_bytes = BTreeMap::<LibraryEventKey, Vec<Vec<u8>>>::new();
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut record_rows = BTreeMap::<LibraryEventKey, Vec<&CheckerRecord>>::new();
     for (key, record) in records {
         let input = canonical_input_for_record(canonical, key.file_ordinal)?;
         record_bytes
             .entry(*key)
             .or_default()
             .push(canonical_record_bytes(canonical[input].source, record)?);
+        #[cfg(any(test, feature = "test-utils"))]
+        record_rows.entry(*key).or_default().push(record);
     }
     let baselines = owners
         .iter()
@@ -3365,6 +5302,13 @@ fn build_collision_replay_index(
             baseline_record(owner, records).map_err(InjectedProfileError::ReplayIndex)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(any(test, feature = "test-utils"))]
+    let structured_baselines = record_rows
+        .iter()
+        .map(|(key, records)| {
+            full_structured_record_baseline(ReplayOwner::Statement(*key), records)
+        })
+        .collect::<Vec<_>>();
 
     validate_terminal_class_dependencies(
         Some(&trace),
@@ -3386,16 +5330,46 @@ fn build_collision_replay_index(
             span: Span::new(start, end),
         })
         .collect();
-    trace
-        .finish(
-            owners,
-            roots,
-            owner_sites,
-            statement_keys,
-            baselines,
-            invalid_sites,
-        )
-        .map_err(InjectedProfileError::ReplayIndex)
+    let replay_index = trace
+        .finish(owners, roots, owner_sites, baselines, invalid_sites)
+        .map_err(InjectedProfileError::ReplayIndex)?;
+    #[cfg(any(test, feature = "test-utils"))]
+    {
+        canonicalize_collision_replay_owner_sites(&mut exact_owner_sites);
+        FULL_COLLISION_PLAN_ORACLE.with(|oracle| {
+            *oracle.borrow_mut() = Some(FullCollisionPlanOracleForTest {
+                owner_sites: exact_owner_sites,
+                baseline_records: structured_baselines,
+                reverse_edges: replay_index.reverse_edges.clone(),
+            });
+        });
+    }
+    Ok(replay_index)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn collision_declaration_provenance(
+    binder: &Binder,
+    declaration: &crate::binder::declaration::LexicalDeclaration,
+    declaration_scope: ScopeId,
+) -> super::replay_index::CollisionReplaySiteProvenance {
+    let binder_owner = binder
+        .namespaces
+        .declaration_owner_for_scope(declaration_scope);
+    let containing_namespace = match binder_owner {
+        crate::binder::namespace::DeclarationOwner::NamespacePublic(namespace) => Some(namespace),
+        crate::binder::namespace::DeclarationOwner::NamespacePrivate(fragment) => binder
+            .namespaces
+            .fragment(fragment)
+            .map(|row| row.namespace),
+        _ => None,
+    };
+    super::replay_index::CollisionReplaySiteProvenance::Declaration {
+        declaration: declaration.id,
+        kind: declaration.kind,
+        binder_owner,
+        containing_namespace,
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -3405,15 +5379,98 @@ pub fn run_injected_profile(
     compile_owned_injected_profile(sources).map(|(run, _)| run)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_complete_combined_profile_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+    library_count: usize,
+) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    with_canonical_frontend(sources, Some(library_count), |frontend| {
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::None,
+            LibraryRecordRetention::Collect,
+            OwnerSiteStorageMode::Flat,
+        )
+        .map(|(run, runtime, _)| (run, runtime))
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct CompleteCombinedOracleForTest {
+    pub normalized_records: Vec<(LibraryFileOrdinal, String)>,
+    pub normalized_root_projection: Vec<String>,
+    pub normalized_semantic_identities: Vec<String>,
+    pub initial_store_rows: usize,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_complete_combined_oracle_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+    library_count: usize,
+    root_names: &[String],
+) -> Result<CompleteCombinedOracleForTest, InjectedProfileError> {
+    let (run, runtime) = compile_complete_combined_profile_for_test(sources, library_count)?;
+    if run.initial_store_rows == 0
+        || run.initial_published_type_rows != 0
+        || run.initial_replacement_type_rows != 0
+        || run.initial_type_param_id != 0
+        || run.initial_class_id != 0
+    {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete combined oracle did not start from fixed intrinsics and empty semantic state"
+                .to_owned(),
+        ));
+    }
+    let normalized_records = run
+        .library_records
+        .into_iter()
+        .map(|(key, record)| {
+            let normalized = match record {
+                CheckerRecord::Diagnostic(diagnostic) => {
+                    format!("{} {}", diagnostic.code.as_str(), diagnostic.message)
+                }
+                CheckerRecord::Incomplete(incomplete) => format!("incomplete {incomplete:?}"),
+            };
+            (key.file_ordinal, normalized)
+        })
+        .collect();
+    Ok(CompleteCombinedOracleForTest {
+        normalized_records,
+        normalized_root_projection: runtime.normalized_root_projection_for_test(root_names),
+        normalized_semantic_identities: runtime.normalized_semantic_identities_for_test(),
+        initial_store_rows: run.initial_store_rows,
+    })
+}
+
 fn with_canonical_library_frontend<'source, Output>(
     sources: &[InjectedLibrarySource<'source>],
     consume: impl for<'ast> FnOnce(
         CanonicalLibraryFrontend<'source, 'ast>,
     ) -> Result<Output, InjectedProfileError>,
 ) -> Result<Output, InjectedProfileError> {
+    with_canonical_frontend(sources, None, consume)
+}
+
+fn with_canonical_frontend<'source, Output>(
+    sources: &[InjectedLibrarySource<'source>],
+    user_start: Option<usize>,
+    consume: impl for<'ast> FnOnce(
+        CanonicalLibraryFrontend<'source, 'ast>,
+    ) -> Result<Output, InjectedProfileError>,
+) -> Result<Output, InjectedProfileError> {
     #[cfg(any(test, feature = "test-utils"))]
     let parse_started = Instant::now();
-    let canonical = canonical_inputs(sources)?;
+    let mut canonical = canonical_inputs(sources)?;
+    if let Some(user_start) = user_start {
+        if user_start == 0 || user_start > canonical.len() {
+            return Err(InjectedProfileError::EmptyProfile);
+        }
+        for (index, input) in canonical.iter_mut().enumerate().skip(user_start) {
+            input.origin = CompilationOrigin::User(crate::source::OriginalModuleOrdinal::new(
+                index - user_start,
+            ));
+        }
+    }
     let allocators = (0..canonical.len())
         .map(|_| Allocator::default())
         .collect::<Vec<_>>();
@@ -3484,7 +5541,12 @@ fn with_canonical_library_frontend<'source, Output>(
             Ok((parsed, claims))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let (parsed, claims): (Vec<_>, Vec<_>) = parsed_and_claims.into_iter().unzip();
+    let mut parsed = Vec::with_capacity(parsed_and_claims.len());
+    let mut claims = Vec::with_capacity(parsed_and_claims.len());
+    for (parsed_unit, claims_unit) in parsed_and_claims {
+        parsed.push(parsed_unit);
+        claims.push(claims_unit);
+    }
     let parser_export_claims = claims.into_iter().flatten().collect::<Vec<_>>();
     #[cfg(any(test, feature = "test-utils"))]
     let parse_elapsed = parse_started.elapsed();
@@ -3499,7 +5561,7 @@ fn with_canonical_library_frontend<'source, Output>(
                 &parsed.program,
                 CompilationUnit {
                     source: input.source_key,
-                    origin: CompilationOrigin::Library(input.file_ordinal),
+                    origin: input.origin,
                     binding: ModuleBindingContext::for_program(&parsed.program, input.kind),
                 },
             )
@@ -3508,16 +5570,46 @@ fn with_canonical_library_frontend<'source, Output>(
     let prelude_allocator = Allocator::default();
     let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
     let mut builder = ProjectBinderBuilder::new(&prelude.program);
-    let module_scopes = builder
-        .try_add_library_modules(&units)
+    let library_count = user_start.unwrap_or(units.len());
+    let mut module_scopes = builder
+        .try_add_library_modules(&units[..library_count])
         .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-    let binder = builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)));
+    let mut library_binder = builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)));
+    let collision_root_provenance =
+        library_binder
+            .take_library_root_projection()
+            .ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "library binder did not retain its one-pass root projection".to_owned(),
+                )
+            })?;
+    let library_units = canonical[..library_count]
+        .iter()
+        .zip(module_scopes.iter().copied())
+        .map(|(input, module)| LibraryBinderUnit {
+            ordinal: input.file_ordinal,
+            source: input.source_key,
+            module,
+        })
+        .collect();
+    let checkpoint = build_library_binder_checkpoint(library_binder, library_units);
+    let (mut builder, _) = checkpoint.into_continuation();
+    let binder = if library_count < units.len() {
+        builder.reserve_script_namespace_roots(units[library_count..].iter().copied());
+        for (program, unit) in &units[library_count..] {
+            let (module, _) = builder.add_module(program, &[], *unit);
+            module_scopes.push(module);
+        }
+        builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)))
+    } else {
+        builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)))
+    };
     validate_parser_export_claims(&binder, parser_export_claims, canonical[0].file_ordinal)?;
     let semantic_scopes = units
         .iter()
         .zip(module_scopes.iter().copied())
         .map(|((_, unit), module)| {
-            if unit.binding.external_module {
+            if matches!(unit.origin, CompilationOrigin::User(_)) || unit.binding.external_module {
                 module
             } else {
                 binder.compilation_global
@@ -3548,6 +5640,8 @@ fn with_canonical_library_frontend<'source, Output>(
         binder,
         module_scopes,
         semantic_scopes,
+        user_start,
+        collision_root_provenance,
         #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
         #[cfg(any(test, feature = "test-utils"))]
@@ -3555,27 +5649,26 @@ fn with_canonical_library_frontend<'source, Output>(
     })
 }
 
-/// Whether a compile assembles its collision replay index, or leaves it to the run that needs it.
+/// Whether a compile assembles the legacy full oracle or retains the direct compact plan.
 ///
-/// Assembly is roughly four times the cost of the checking pipeline that produces the semantic
-/// state, and outside a collision nothing reads it. Per ADR-0013 (as narrowly superseded by
-/// ADR-0017) a private collision run seeds a fresh, exclusively owned universe by re-compiling the
-/// profile from source, so that run assembles its own index; the shared default-library base does
-/// not carry one.
+/// Full assembly remains a test oracle. Production consumes the live source trace into the compact
+/// plan retained beside the frozen base (ADR-0020).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayIndexPlan {
     /// Assemble the index as part of this compile.
     Assemble,
-    /// Skip assembly; the run that collides re-compiles from source and assembles then.
+    /// Skip full assembly and consume the live trace into the compact plan.
     Deferred,
+    /// Complete combined-source oracle: retain no replay product.
+    None,
 }
 
 /// Whether a compile hands its own records back, or drops them with the ledger.
 ///
 /// The library's records are not user-facing errors — they are typokat's own model gaps
 /// against a library real `tsc` checks clean — so no process retains them and the pinned
-/// suite census is their sole witness (ADR-0018). Draining the ledger is still the
-/// completeness gate every compile pays; only handing the drained records onward is optional.
+/// suite census is their sole witness (ADR-0018). Every compile completes and fingerprints the
+/// ledger; the drop route releases each record payload immediately after fingerprinting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibraryRecordRetention {
     /// Drop the records with the ledger. The production route to a base uses this.
@@ -3593,24 +5686,186 @@ pub fn compile_owned_injected_profile(
             frontend,
             ReplayIndexPlan::Assemble,
             LibraryRecordRetention::Collect,
+            OwnerSiteStorageMode::Flat,
         )
+        .map(|(run, runtime, _)| (run, runtime))
     })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_complete_source_replay_runtime_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<OwnedLibraryRuntimeState, String> {
+    let (_, mut runtime, plan) = compile_owned_injected_base_profile_with_plan(sources)
+        .map_err(|error| format!("{error:?}"))?;
+    runtime.freeze_as_library_base().map_err(str::to_owned)?;
+    let permit = acquire_private_collision_replay_permit().map_err(str::to_owned)?;
+    runtime
+        .fork_sparse_collision_epoch()
+        .map_err(str::to_owned)?
+        .install_complete_source_replay_plan_with_permit(plan, &[], permit)
+        .map_err(str::to_owned)
+}
+
+pub fn compile_complete_source_replay_runtime(
+    sources: &[InjectedLibrarySource<'_>],
+    seeds: &[PrivateCollisionReplaySeed],
+    permit: PrivateCollisionReplayPermitToken,
+) -> Result<(OwnedLibraryRuntimeState, LibraryBinderCheckpoint), String> {
+    let (_, mut runtime, plan) = compile_owned_injected_base_profile_with_plan(sources)
+        .map_err(|error| format!("{error:?}"))?;
+    runtime.freeze_as_library_base().map_err(str::to_owned)?;
+    let checkpoint = runtime
+        .complete_replay_binder_checkpoint()
+        .map_err(str::to_owned)?;
+    let runtime = runtime
+        .fork_sparse_collision_epoch()
+        .map_err(str::to_owned)?
+        .install_complete_source_replay_plan_with_permit(plan, seeds, permit)
+        .map_err(str::to_owned)?;
+    Ok((runtime, checkpoint))
 }
 
 /// Compile a profile into the runtime state a shared default-library base is sealed from.
 ///
-/// Replay-index assembly is deferred to the run that collides (ADR-0017), and the library's
-/// own records are dropped rather than carried into the base (ADR-0018).
+/// Full-oracle assembly is skipped; the direct compact plan is retained with the base (ADR-0020),
+/// and the library's own records are dropped rather than carried into it (ADR-0018).
 pub fn compile_owned_injected_base_profile(
     sources: &[InjectedLibrarySource<'_>],
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    compile_owned_injected_base_profile_with_plan(sources).map(|(run, runtime, _)| (run, runtime))
+}
+
+pub fn compile_owned_injected_base_profile_with_plan(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<
+    (
+        InjectedProfileRun,
+        OwnedLibraryRuntimeState,
+        std::sync::Arc<CollisionReplayPlan>,
+    ),
+    InjectedProfileError,
+> {
     with_canonical_library_frontend(sources, |frontend| {
         compile_owned_injected_frontend(
             frontend,
             ReplayIndexPlan::Deferred,
             LibraryRecordRetention::Drop,
+            OwnerSiteStorageMode::Flat,
         )
+        .and_then(|(run, runtime, plan)| {
+            plan.map(|plan| (run, runtime, plan)).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "base source compilation did not retain its collision plan".to_owned(),
+                )
+            })
+        })
     })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_owned_injected_base_profile_with_ordered_owner_sites_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<
+    (
+        InjectedProfileRun,
+        OwnedLibraryRuntimeState,
+        std::sync::Arc<CollisionReplayPlan>,
+    ),
+    InjectedProfileError,
+> {
+    with_canonical_library_frontend(sources, |frontend| {
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::Deferred,
+            LibraryRecordRetention::Drop,
+            OwnerSiteStorageMode::Ordered,
+        )
+        .and_then(|(run, runtime, plan)| {
+            plan.map(|plan| (run, runtime, plan)).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "base source compilation did not retain its collision plan".to_owned(),
+                )
+            })
+        })
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_owned_injected_base_profile_with_nested_owner_sites_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+) -> Result<
+    (
+        InjectedProfileRun,
+        OwnedLibraryRuntimeState,
+        std::sync::Arc<CollisionReplayPlan>,
+    ),
+    InjectedProfileError,
+> {
+    with_canonical_library_frontend(sources, |frontend| {
+        compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::Deferred,
+            LibraryRecordRetention::Drop,
+            OwnerSiteStorageMode::Nested,
+        )
+        .and_then(|(run, runtime, plan)| {
+            plan.map(|plan| (run, runtime, plan)).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "base source compilation did not retain its collision plan".to_owned(),
+                )
+            })
+        })
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn force_collision_plan_failure_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+    failure: ForcedCollisionPlanFailure,
+) -> Result<bool, String> {
+    if FORCED_COLLISION_PLAN_FAILURE
+        .replace(Some(failure))
+        .is_some()
+    {
+        return Err("forced collision-plan failure is already active".to_owned());
+    }
+    let _scope = ForcedCollisionPlanFailureScope;
+    let _event_capture_scope = if failure == ForcedCollisionPlanFailure::EventCaptureCorruption {
+        Some(
+            super::events_library::EventCaptureCorruptionScope::start()
+                .map_err(|message| message.to_owned())?,
+        )
+    } else {
+        None
+    };
+    match compile_owned_injected_base_profile_with_plan(sources) {
+        Ok(_) => Ok(false),
+        Err(InjectedProfileError::ReplayIndex(
+            ReplayIndexGenerationError::TypedReferenceCoverage { .. },
+        )) if matches!(
+            failure,
+            ForcedCollisionPlanFailure::UnownedTypedReference
+                | ForcedCollisionPlanFailure::RawSemanticAccess
+        ) =>
+        {
+            Ok(true)
+        }
+        Err(InjectedProfileError::ReplayIndex(
+            ReplayIndexGenerationError::BaselinePartitionMismatch,
+        )) if failure == ForcedCollisionPlanFailure::ForbiddenProjection => Ok(true),
+        Err(InjectedProfileError::ReplayIndex(
+            ReplayIndexGenerationError::IndependentOwnerSiteOracleMismatch,
+        )) if failure == ForcedCollisionPlanFailure::EventCaptureCorruption => Ok(true),
+        Err(InjectedProfileError::Reporting(LibraryEventLedgerError::TraceDomainSealed))
+            if failure == ForcedCollisionPlanFailure::LateOwnerReservation =>
+        {
+            Ok(true)
+        }
+        Err(error) => Err(format!(
+            "forced collision-plan failure reached the wrong guard: {error:?}"
+        )),
+    }
 }
 
 /// Compile a profile for its own records alone, then drop the semantic product.
@@ -3625,22 +5880,67 @@ pub fn compile_owned_injected_records(
             frontend,
             ReplayIndexPlan::Deferred,
             LibraryRecordRetention::Collect,
+            OwnerSiteStorageMode::Flat,
         )
     })
-    .map(|(run, _)| run.library_records)
+    .map(|(run, _, _)| run.library_records)
+}
+
+fn intern_compiled_global_object(
+    pass: &mut super::Pass<'_, '_, LibraryRecordTicket>,
+    projection: &LibraryRootProjection,
+    additional_contributors: &[(String, ValueStorageId)],
+) -> TypeId {
+    let mut contributors = projection
+        .root_rows
+        .iter()
+        .filter(|row| {
+            projection
+                .candidates
+                .get(&row.name)
+                .is_some_and(|candidate| candidate.global_object_contributor)
+        })
+        .filter_map(|row| row.value.map(|storage| (row.name.clone(), storage)))
+        .collect::<BTreeMap<_, _>>();
+    contributors.extend(additional_contributors.iter().cloned());
+    let properties = contributors
+        .into_iter()
+        .filter_map(|(name, storage)| {
+            pass.decl_type_replay(storage)
+                .map(|ty| PropertyType::public(name, ty))
+        })
+        .collect();
+    pass.interner.intern_object(ObjectType {
+        properties,
+        ..Default::default()
+    })
 }
 
 fn compile_owned_injected_frontend(
     frontend: CanonicalLibraryFrontend<'_, '_>,
     replay_index_plan: ReplayIndexPlan,
     record_retention: LibraryRecordRetention,
-) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
+    owner_site_storage_mode: OwnerSiteStorageMode,
+) -> Result<
+    (
+        InjectedProfileRun,
+        OwnedLibraryRuntimeState,
+        Option<std::sync::Arc<CollisionReplayPlan>>,
+    ),
+    InjectedProfileError,
+> {
+    let collision_plan_work_scope = CollisionPlanForbiddenWorkScope::start();
+    record_collision_plan_forbidden_work(|work| {
+        work.library_source_compiles = work.library_source_compiles.saturating_add(1);
+    });
     let CanonicalLibraryFrontend {
         canonical,
         parsed,
         binder,
         module_scopes,
         semantic_scopes,
+        user_start,
+        collision_root_provenance,
         #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
         #[cfg(any(test, feature = "test-utils"))]
@@ -3648,10 +5948,19 @@ fn compile_owned_injected_frontend(
     } = frontend;
     #[cfg(any(test, feature = "test-utils"))]
     CANONICAL_FRONTEND_FULL_PRODUCTS.set(CANONICAL_FRONTEND_FULL_PRODUCTS.get().saturating_add(1));
+    #[cfg(any(test, feature = "test-utils"))]
+    let independent_event_owner_sites = if replay_index_plan == ReplayIndexPlan::None {
+        Vec::new()
+    } else {
+        independent_event_owner_sites_for_oracle(&canonical, &parsed, &binder)?
+    };
 
     #[cfg(any(test, feature = "test-utils"))]
     let reserve_fill_started = Instant::now();
-    let mut ledger = LibraryEventLedger::default();
+    let mut ledger = LibraryEventLedger::new_with_owner_site_storage(
+        matches!(record_retention, LibraryRecordRetention::Collect),
+        owner_site_storage_mode,
+    );
     let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
         LexicalReservations::default();
     for (input, parsed) in canonical.iter().zip(&parsed) {
@@ -3666,22 +5975,47 @@ fn compile_owned_injected_frontend(
     let mut type_decls: super::context::TypeDeclTable<'_> = Vec::new().into();
     let mut type_resolved: super::context::TypeResolvedTable =
         vec![None; binder.type_groups.len()].into();
+    #[cfg(any(test, feature = "test-utils"))]
+    let initial_store_rows = interner.store().len();
+    #[cfg(any(test, feature = "test-utils"))]
+    let initial_published_type_rows = type_decls.published_len();
+    #[cfg(any(test, feature = "test-utils"))]
+    let initial_replacement_type_rows = type_decls.replacement_indices().len();
+    #[cfg(any(test, feature = "test-utils"))]
+    let initial_type_param_id = next_type_param;
+    #[cfg(any(test, feature = "test-utils"))]
+    let initial_class_id = next_class_id;
     let declaration_spans = super::ModuleDeclarationSpans::index(&binder);
     for ((input, parsed), scope) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
     {
-        reserve_type_decls(
-            &mut interner,
-            &binder,
-            scope,
-            &parsed.program,
-            &mut next_type_param,
-            &mut next_class_id,
-            &mut type_decls,
-            &mut type_resolved,
-        );
+        if user_start.is_some() && matches!(input.origin, CompilationOrigin::Library(_)) {
+            reserve_type_decls_for_combined_library(
+                super::decls::TypeDeclReservationState {
+                    interner: &mut interner,
+                    binder: &binder,
+                    next_type_param: &mut next_type_param,
+                    next_class_id: &mut next_class_id,
+                    decls: &mut type_decls,
+                    resolved: &mut type_resolved,
+                },
+                scope,
+                &parsed.program,
+            );
+        } else {
+            reserve_type_decls(
+                &mut interner,
+                &binder,
+                scope,
+                &parsed.program,
+                &mut next_type_param,
+                &mut next_class_id,
+                &mut type_decls,
+                &mut type_resolved,
+            );
+        }
         lexical_events.attach_library_declaration_owners(
             input.file_ordinal,
             &binder,
@@ -3701,19 +6035,29 @@ fn compile_owned_injected_frontend(
         .reserve_callable_type_params(&mut next_type_param)
         .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
 
-    let replay_class_declarations = lexical_events
-        .classes()
-        .iter()
-        .filter_map(|reservation| {
-            let binding = reservation.binding.as_ref()?;
-            let TypeDecl::Class { declaration, .. } = type_decls.get(binding.type_decl.index())?
-            else {
-                return None;
-            };
-            Some((binding.class_id, *declaration))
-        })
-        .collect::<BTreeMap<_, _>>();
+    let replay_class_declarations = if replay_index_plan == ReplayIndexPlan::Assemble {
+        lexical_events
+            .classes()
+            .iter()
+            .filter_map(|reservation| {
+                let binding = reservation.binding.as_ref()?;
+                let TypeDecl::Class { declaration, .. } =
+                    type_decls.get(binding.type_decl.index())?
+                else {
+                    return None;
+                };
+                Some((binding.class_id, *declaration))
+            })
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
 
+    let reporting_receipts = LibraryReportingConsumer::new(&mut ledger)
+        .consume_binder_outcomes(&binder)
+        .map_err(InjectedProfileError::Reporting)?;
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let _ = &reporting_receipts;
     let pending_tickets = lexical_events.library_semantic_tickets();
     let mut pass = build_pass_with_tickets(
         &mut interner,
@@ -3732,7 +6076,66 @@ fn compile_owned_injected_frontend(
             ticket_key: library_record_ticket_key,
         },
     );
-    pass.replay_trace = Some(ReplayDependencyTrace::new(ledger.replay_ticket_owners()));
+    if let Some(user_start) = user_start {
+        let user_modules = module_scopes[user_start..].to_vec();
+        let user_values = binder
+            .declarations
+            .iter()
+            .filter(|declaration| user_modules.contains(&declaration.site.module))
+            .filter_map(|declaration| declaration.value_storage)
+            .collect::<Vec<_>>();
+        for group in collision_root_provenance
+            .root_rows
+            .iter()
+            .filter_map(|row| row.ty)
+        {
+            let user_fragment = binder.type_groups.get(group).is_some_and(|group| {
+                group.fragments.iter().any(|fragment| {
+                    binder
+                        .declarations
+                        .get(fragment.declaration)
+                        .is_some_and(|declaration| user_modules.contains(&declaration.site.module))
+                })
+            });
+            if user_fragment {
+                pass.combined_user_library_type_groups.insert(group);
+            }
+        }
+        for row in &collision_root_provenance.root_rows {
+            let Some(library_participant) = row.value else {
+                continue;
+            };
+            let Some(symbol) = pass
+                .resolve_value_replay(binder.compilation_global, &row.name)
+                .and_then(|symbol| binder.symbols.get(symbol))
+            else {
+                continue;
+            };
+            if symbol.function_values.len() > 1
+                && symbol.function_values.contains(&library_participant)
+                && symbol
+                    .function_values
+                    .iter()
+                    .any(|participant| user_values.contains(participant))
+            {
+                pass.function_group_precedence_tails_by_name
+                    .insert(row.name.clone(), library_participant);
+            }
+        }
+    }
+    let mut replay_trace_seed = ledger
+        .take_replay_trace_seed()
+        .map_err(InjectedProfileError::Reporting)?;
+    #[cfg(any(test, feature = "test-utils"))]
+    if FORCED_COLLISION_PLAN_FAILURE.get() == Some(ForcedCollisionPlanFailure::LateOwnerReservation)
+    {
+        let _late = ledger
+            .replay_reservation_domain()
+            .map_err(InjectedProfileError::Reporting)?;
+    }
+    replay_trace_seed.extend_owner_sites(pass.lexical_events.take_collision_owner_sites());
+    pass.replay_trace = Some(ReplayDependencyTrace::new(replay_trace_seed));
+    pass.capture_compact_replay_dependencies = replay_index_plan != ReplayIndexPlan::None;
 
     let declaration_count = pass.type_decls.len();
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
@@ -3747,13 +6150,46 @@ fn compile_owned_injected_frontend(
         .zip(parsed.iter())
         .map(|(scope, parsed)| (scope, parsed.program.body.as_slice()))
         .collect::<Vec<_>>();
+    if let Some(user_start) = user_start {
+        for ((scope, parsed), input) in module_scopes
+            .iter()
+            .copied()
+            .zip(&parsed)
+            .zip(&canonical)
+            .skip(user_start)
+        {
+            pass.current_module = scope;
+            pass.current_source = library_unit(input.file_ordinal);
+            pass.reserve_local_type_annotation_surfaces(scope, &parsed.program.body);
+        }
+    }
+    pass.combined_user_source = user_start.is_some();
     pass.prepare_project_attached_namespace_values(&module_programs);
     pass.prepare_project_standalone_namespace_values(&module_programs);
+    pass.combined_user_source = false;
     pass.publish_class_surfaces();
-    pass.finalize_standalone_namespace_values();
-    pass.precompute_standalone_namespace_value_aliases(&module_programs);
+    if user_start.is_none() {
+        pass.finalize_standalone_namespace_values();
+        pass.precompute_standalone_namespace_value_aliases(&module_programs);
+    }
     pass.fill_pending_interfaces_range(binder.module, 0, declaration_count);
-    let publication_validations = pass.publish_type_groups();
+    if let Some(user_start) = user_start {
+        let user_namespace_modules = module_scopes[user_start..]
+            .iter()
+            .copied()
+            .collect::<rustc_hash::FxHashSet<_>>();
+        pass.refresh_colliding_standalone_variable_surfaces(
+            &module_programs,
+            &user_namespace_modules,
+        );
+        pass.finalize_standalone_namespace_values();
+        pass.precompute_standalone_namespace_value_aliases(&module_programs);
+    }
+    let publication = pass.publish_type_groups();
+    if publication.library_identity_selection_pending() {
+        return Err(InjectedProfileError::LibraryIdentitySelectionPending);
+    }
+    let publication_validations = publication.publication_validations();
     pass.validate_published_class_surfaces();
     #[cfg(any(test, feature = "test-utils"))]
     let lexical_source_units = pass
@@ -3768,24 +6204,104 @@ fn compile_owned_injected_frontend(
     #[cfg(any(test, feature = "test-utils"))]
     let statement_check_started = Instant::now();
     let mut pass_source_units = Vec::with_capacity(canonical.len());
-    for (((input, parsed), module), semantic_scope) in canonical
+    let mut mixed_semantic_identities = None;
+    let mut mixed_global_object_type = None;
+    let mut user_global_contributors = Vec::new();
+    if let Some(user_start) = user_start {
+        let identities = LibrarySemanticIdentities::select_from_library_roots(
+            &collision_root_provenance,
+            pass.type_environment.published(),
+            pass.interner.store(),
+        );
+        pass.install_library_semantic_identities(identities.clone());
+        mixed_semantic_identities = Some(identities);
+        let base_global_object = pass.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
+            intern_compiled_global_object(pass, &collision_root_provenance, &[])
+        });
+        pass.global_object_type = Some(base_global_object);
+        mixed_global_object_type = Some(base_global_object);
+
+        for (((user_input, user_parsed), _user_module), semantic_scope) in canonical
+            .iter()
+            .zip(&parsed)
+            .zip(module_scopes.iter().copied())
+            .zip(semantic_scopes.iter().copied())
+            .skip(user_start)
+        {
+            let census = source_global_binding_census_with_provenance(
+                &user_parsed.program,
+                ModuleBindingContext::for_program(&user_parsed.program, user_input.kind),
+            );
+            for (name, candidate) in census.census.candidates {
+                if !candidate.global_object_contributor {
+                    continue;
+                }
+                let Some(storage) = pass.value_decl_id_replay(semantic_scope, &name) else {
+                    continue;
+                };
+                user_global_contributors.push((name, storage));
+            }
+        }
+    }
+    let mut surfaces = Vec::with_capacity(canonical.len());
+    for (index, (((input, parsed), module), semantic_scope)) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
         .zip(semantic_scopes.iter().copied())
+        .enumerate()
     {
+        pass.combined_user_source = user_start.is_some_and(|user_start| index >= user_start);
+        pass.current_module = module;
+        pass.current_source = library_unit(input.file_ordinal);
+        let reserved = pass.reserve_function_surfaces(semantic_scope, &parsed.program.body);
+        pass.reserve_var_annotation_surfaces(semantic_scope, &parsed.program.body);
+        surfaces.push(reserved);
+    }
+    pass.combined_user_source = false;
+    if user_start.is_some() {
+        let global_object = pass.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
+            intern_compiled_global_object(
+                pass,
+                &collision_root_provenance,
+                &user_global_contributors,
+            )
+        });
+        pass.global_object_type = Some(global_object);
+        mixed_global_object_type = Some(global_object);
+    }
+    for (index, ((((input, unit_parsed), module), semantic_scope), mut reserved)) in canonical
+        .iter()
+        .zip(&parsed)
+        .zip(module_scopes.iter().copied())
+        .zip(semantic_scopes.iter().copied())
+        .zip(surfaces)
+        .enumerate()
+    {
+        if user_start == Some(index) {
+            pass.combined_user_source = true;
+        }
         pass.current_module = module;
         pass.current_source = library_unit(input.file_ordinal);
         pass_source_units.push(pass.current_source);
-        pass.build_flow_graph(semantic_scope, &parsed.program.body);
-        pass.check_statements(semantic_scope, &parsed.program.body);
+        pass.build_flow_graph(semantic_scope, &unit_parsed.program.body);
+        let mut no_return = None;
+        pass.check_statement_list_with_surfaces(
+            semantic_scope,
+            &unit_parsed.program.body,
+            None,
+            &mut no_return,
+            &mut reserved,
+        );
     }
     let batches = finish_semantic_effects(&mut pass);
-    let semantic_identities = LibrarySemanticIdentities::select(
-        &binder,
-        pass.type_environment.published(),
-        pass.interner.store(),
-    );
+    let semantic_identities = mixed_semantic_identities.unwrap_or_else(|| {
+        LibrarySemanticIdentities::select(
+            &binder,
+            pass.type_environment.published(),
+            pass.interner.store(),
+        )
+    });
     #[cfg(any(test, feature = "test-utils"))]
     let (global_types, module_types) = collect_type_probes(
         &binder,
@@ -3804,17 +6320,25 @@ fn compile_owned_injected_frontend(
     LibrarySemanticReportingAdapter::new(&mut ledger)
         .complete_semantic_batches(batches)
         .map_err(InjectedProfileError::Reporting)?;
-    let reporting_receipts = LibraryReportingConsumer::new(&mut ledger)
-        .consume_binder_outcomes(&binder)
-        .map_err(InjectedProfileError::Reporting)?;
-    #[cfg(not(any(test, feature = "test-utils")))]
-    let _ = &reporting_receipts;
+    let global_object_type = Some(mixed_global_object_type.unwrap_or_else(|| {
+        pass.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
+            intern_compiled_global_object(pass, &collision_root_provenance, &[])
+        })
+    }));
     let snapshot = ledger.snapshot();
-    let statement_keys = ledger
-        .replay_ticket_owners()
-        .into_values()
+    let ledger_output = ledger
+        .finish_with_fingerprints()
+        .map_err(InjectedProfileError::Reporting)?;
+    let library_records = ledger_output.records;
+    let replay_baselines = ledger_output
+        .fingerprints
+        .into_iter()
+        .map(|fingerprint| super::replay_index::ReplayBaselineRecord {
+            owner: ReplayOwner::Statement(fingerprint.key),
+            record_count: fingerprint.record_count,
+            digest: fingerprint.digest,
+        })
         .collect::<Vec<_>>();
-    let library_records = ledger.finish().map_err(InjectedProfileError::Reporting)?;
     #[cfg(any(test, feature = "test-utils"))]
     let statement_check_elapsed = statement_check_started.elapsed();
 
@@ -3822,14 +6346,33 @@ fn compile_owned_injected_frontend(
         .namespace_values
         .try_freeze_terminals()
         .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
-    let namespace_terminal_rows = namespace_terminals
-        .snapshot_parts()
-        .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
     let replay_trace = pass.replay_trace.take().ok_or_else(|| {
         InjectedProfileError::CanonicalProjection(
             "source library compilation lost its replay trace".to_owned(),
         )
     })?;
+    let compact_only_replay_edges = pass.compact_only_replay_edges.borrow().clone();
+    if replay_index_plan == ReplayIndexPlan::Assemble {
+        replay_trace.remove_direct_dependencies(&compact_only_replay_edges);
+    }
+    #[cfg(any(test, feature = "test-utils"))]
+    match FORCED_COLLISION_PLAN_FAILURE.get() {
+        Some(ForcedCollisionPlanFailure::UnownedTypedReference) => {
+            let observation = replay_trace.observe_typed_demand("forced-unowned-typed-reference");
+            drop(observation);
+        }
+        Some(ForcedCollisionPlanFailure::RawSemanticAccess) => {
+            replay_trace.record_raw_semantic_access();
+        }
+        Some(ForcedCollisionPlanFailure::ForbiddenProjection) => {
+            let _ = snapshot_namespace_terminals_for_replay(&namespace_terminals)?;
+        }
+        Some(
+            ForcedCollisionPlanFailure::EventCaptureCorruption
+            | ForcedCollisionPlanFailure::LateOwnerReservation,
+        ) => {}
+        None => {}
+    }
     let super::context::Pass {
         type_environment,
         decl_types,
@@ -3861,15 +6404,35 @@ fn compile_owned_injected_frontend(
         class_names,
         namespace_terminals,
         named_function_symbols: named_function_symbols.into(),
+        global_object_type,
     };
-    let runtime_parts = runtime
-        .snapshot_parts()
-        .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
     let selected_semantic_identities = semantic_identities
         .all_ready()
         .then_some(semantic_identities.clone());
-    let replay_index = match replay_index_plan {
+    let (replay_index, collision_plan) = match replay_index_plan {
         ReplayIndexPlan::Assemble => {
+            let namespace_terminal_rows =
+                snapshot_namespace_terminals_for_replay(&runtime.namespace_terminals)?;
+            let runtime_parts = runtime
+                .snapshot_parts()
+                .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
+            record_collision_plan_forbidden_work(|work| {
+                let rows = runtime_parts
+                    .class_application_parameters
+                    .len()
+                    .saturating_add(runtime_parts.class_new_metadata.len())
+                    .saturating_add(runtime_parts.class_parents.len())
+                    .saturating_add(runtime_parts.class_value_aliases.len())
+                    .saturating_add(runtime_parts.class_value_bindings.len())
+                    .saturating_add(runtime_parts.standalone_namespace_value_aliases.len())
+                    .saturating_add(runtime_parts.class_names.len())
+                    .saturating_add(runtime_parts.namespace_terminals.len())
+                    .saturating_add(runtime_parts.named_function_symbols.len())
+                    .saturating_add(usize::from(runtime_parts.global_object_type.is_some()));
+                work.runtime_snapshot_rows = work
+                    .runtime_snapshot_rows
+                    .saturating_add(u64::try_from(rows).unwrap_or(u64::MAX));
+            });
             let replay_index = build_collision_replay_index(
                 replay_trace,
                 &interner,
@@ -3883,9 +6446,20 @@ fn compile_owned_injected_frontend(
                 &parsed,
                 &module_scopes,
                 &replay_class_declarations,
-                statement_keys,
                 &library_records,
+                #[cfg(any(test, feature = "test-utils"))]
+                independent_event_owner_sites,
             )?;
+            #[cfg(any(test, feature = "test-utils"))]
+            FULL_COLLISION_PLAN_ORACLE.with(|oracle| {
+                if let Some(oracle) = oracle.borrow_mut().as_mut() {
+                    oracle
+                        .reverse_edges
+                        .extend(compact_only_replay_edges.iter().copied());
+                    oracle.reverse_edges.sort();
+                    oracle.reverse_edges.dedup();
+                }
+            });
             let replay_roots = collect_root_rows(&binder)
                 .map_err(|error| InjectedProfileError::CanonicalProjection(error.to_string()))?
                 .into_iter()
@@ -3909,25 +6483,39 @@ fn compile_owned_injected_frontend(
                 None,
             )
             .map_err(InjectedProfileError::ReplayIndexAdmission)?;
-            Some(Box::new(replay_index))
+            (Some(Box::new(replay_index)), None)
         }
-        // Deferred assembly still validates the terminal runtime state the base publishes;
-        // `build_collision_replay_index` performs the same call on the assembling path.
+        // The production path consumes the one live source trace directly into the compact plan.
         ReplayIndexPlan::Deferred => {
-            drop(replay_trace);
-            validate_terminal_class_dependencies(
-                None,
-                &interner,
-                ReplayTerminalValidationInputs {
-                    binder: &binder,
-                    published: &published_types,
-                    decl_types: &decl_types,
-                    namespace_terminals: &namespace_terminal_rows,
-                    runtime: &runtime_parts,
-                    semantic_identities: selected_semantic_identities.as_ref(),
-                },
+            let forbidden_work = collision_plan_work_scope.finish();
+            let prefix_cardinalities = [
+                interner.store().len(),
+                usize::try_from(next_type_param)
+                    .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+                usize::try_from(next_class_id)
+                    .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+                binder.graph.len(),
+                binder.symbols.len(),
+                binder.declarations.len(),
+                binder.type_groups.len(),
+                binder.namespaces.len(),
+                decl_types.len(),
+            ];
+            let plan = build_collision_replay_plan(
+                replay_trace,
+                collision_root_provenance,
+                replay_baselines,
+                prefix_cardinalities,
+                forbidden_work,
             )?;
-            None
+            #[cfg(any(test, feature = "test-utils"))]
+            verify_independent_event_owner_sites(&plan, &independent_event_owner_sites)?;
+            (None, Some(std::sync::Arc::new(plan)))
+        }
+        ReplayIndexPlan::None => {
+            let _ = collision_plan_work_scope.finish();
+            drop(replay_trace);
+            (None, None)
         }
     };
     let runtime_state = OwnedLibraryRuntimeState {
@@ -3941,7 +6529,9 @@ fn compile_owned_injected_frontend(
         next_class_id,
         source_file_count: u32::try_from(canonical.len())
             .map_err(|_| InjectedProfileError::SourceKeyOverflow)?,
+        library_modules: module_scopes.clone().into(),
         replay_index,
+        private_collision_epoch: None,
     };
 
     let run = InjectedProfileRun {
@@ -3953,6 +6543,16 @@ fn compile_owned_injected_frontend(
             publication_validations,
             statement_check_units: pass_source_units.len(),
         },
+        #[cfg(any(test, feature = "test-utils"))]
+        initial_store_rows,
+        #[cfg(any(test, feature = "test-utils"))]
+        initial_published_type_rows,
+        #[cfg(any(test, feature = "test-utils"))]
+        initial_replacement_type_rows,
+        #[cfg(any(test, feature = "test-utils"))]
+        initial_type_param_id,
+        #[cfg(any(test, feature = "test-utils"))]
+        initial_class_id,
         #[cfg(any(test, feature = "test-utils"))]
         phase_timings: LibraryPhaseTimings {
             parse: parse_elapsed,
@@ -3982,7 +6582,7 @@ fn compile_owned_injected_frontend(
         #[cfg(any(test, feature = "test-utils"))]
         semantic_identities,
     };
-    Ok((run, runtime_state))
+    Ok((run, runtime_state, collision_plan))
 }
 
 pub fn compile_library_binder_checkpoint(
@@ -4010,8 +6610,15 @@ pub fn compile_library_binder_checkpoint(
                 module,
             })
             .collect();
-        Ok(LibraryBinderCheckpoint::new(binder, library_units))
+        Ok(build_library_binder_checkpoint(binder, library_units))
     })
+}
+
+fn build_library_binder_checkpoint(
+    binder: Binder,
+    library_units: Vec<LibraryBinderUnit>,
+) -> LibraryBinderCheckpoint {
+    LibraryBinderCheckpoint::new(binder, library_units)
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -4398,7 +7005,9 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         next_type_param,
         next_class_id,
         source_file_count: _,
+        library_modules: _,
         replay_index: _,
+        private_collision_epoch: _,
     } = state;
     let base_store_len = interner.store().len();
     let base_declared_recipe_len = interner.store().all_declared_recipes().count();
@@ -4474,6 +7083,8 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
             next_type_param,
             next_class_id,
             runtime,
+            private_collision_epoch: None,
+            library_modules: std::sync::Arc::from([]),
         },
         |_, _, _, _, _| {},
         |pass, final_next_class_id| {
@@ -4630,6 +7241,7 @@ fn canonical_inputs<'source>(
                 source: source.source,
                 kind: source_file_kind(source.name),
                 source_key,
+                origin: CompilationOrigin::Library(source.file_ordinal),
             })
         })
         .collect()
@@ -5449,11 +8061,8 @@ mod tests {
     #[test]
     fn failed_conditional_alias_recovery_leaves_no_pending_reservation() {
         let source = r#"
-            type FailedAwaited<T> = T extends null | undefined ? T :
-                T extends symbol & {
-                    then(onfulfilled: infer F, ...args: infer _): any;
-                } ? F extends ((value: infer V, ...args: infer _) => any) ?
-                    FailedAwaited<V> : never : T;
+            type FailedAwaited<T> =
+                T extends typeof unsupportedValue ? FailedAwaited<T> : T;
         "#;
         let failure = strict_interner_state_failure("FailedAwaited", source, "FailedAwaited");
         assert!(failure.is_none(), "{failure:#?}");
@@ -5794,7 +8403,7 @@ mod tests {
             "fixture must expose Type -> Recipe -> Type/Class dependency reachability"
         );
 
-        let trace = ReplayDependencyTrace::new(BTreeMap::new());
+        let trace = ReplayDependencyTrace::default();
         let replay = state
             .replay_index()
             .expect("source compiler retains its replay index");
@@ -5824,14 +8433,7 @@ mod tests {
         )
         .expect("terminal validation enumerates canonical references");
         let error = trace
-            .finish(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                0,
-            )
+            .finish(Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0)
             .expect_err("omitting the consumer dependency must fail typed coverage");
         assert!(
             matches!(
@@ -5897,7 +8499,7 @@ mod tests {
             .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
             .collect::<Vec<_>>();
         let replay = trace
-            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .finish(partition, Vec::new(), sites, baselines, 0)
             .expect("cycles and duplicate edges retain both terminal classes");
         assert_eq!(
             replay
@@ -6016,7 +8618,7 @@ mod tests {
             .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
             .collect::<Vec<_>>();
         let replay = trace
-            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .finish(partition, Vec::new(), sites, baselines, 0)
             .expect("cycles and duplicate semantic edges preserve the exact class oracle");
         let expected_edges = owners
             .iter()
@@ -6129,7 +8731,7 @@ mod tests {
             .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
             .collect::<Vec<_>>();
         let replay = trace
-            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .finish(partition, Vec::new(), sites, baselines, 0)
             .expect("repeated class references retain their exact terminal-class oracle");
         let expected_edges = owners
             .iter()
@@ -6242,7 +8844,7 @@ mod tests {
             .map(|owner| baseline_record(owner, &[]).expect("empty owner baseline"))
             .collect::<Vec<_>>();
         let replay = trace
-            .finish(partition, Vec::new(), sites, Vec::new(), baselines, 0)
+            .finish(partition, Vec::new(), sites, baselines, 0)
             .expect("the rooted chain retains its exact terminal-class oracle");
         let expected_edges = rooted_classes
             .iter()
@@ -6373,14 +8975,7 @@ mod tests {
         );
 
         let error = trace
-            .finish(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                0,
-            )
+            .finish(Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0)
             .expect_err("the probe authenticates at most one emitted pair");
         let ReplayIndexGenerationError::TypedReferenceCoverage { count, .. } = error else {
             panic!("terminal closure must report its unauthenticated pairs: {error:?}");
@@ -7930,6 +10525,44 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_collision_identity_selection_emits_no_user_diagnostics() {
+        let (_, mut base) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "owned-mini.d.ts",
+            source: OWNED_MINI_LIBRARY,
+        }])
+        .expect("owned mini library compiles");
+        base.freeze_as_library_base().expect("owned base seals");
+        let collision = base
+            .fork_sparse_collision_epoch()
+            .expect("sparse collision epoch forks");
+        let run = super::super::library_identities::
+            with_forced_collision_identity_selection_pending(|| {
+                check_caller_certified_collision_free_source_with_owned_library(
+                    collision,
+                    "interface Array<T> { replacementMarker(): T }\nconst wrong: string = [1].replacementMarker();\n",
+                )
+            })
+            .expect("collision publication returns a typed incomplete outcome");
+
+        assert!(
+            run.result.diagnostics.is_empty(),
+            "{:?}",
+            run.result.diagnostics
+        );
+        assert_eq!(
+            run.result.incomplete.len(),
+            1,
+            "{:?}",
+            run.result.incomplete
+        );
+        assert_eq!(
+            run.result.incomplete[0].id,
+            "library/publication/semantic-identity-selection-pending"
+        );
+    }
+
+    #[test]
     fn owned_frozen_interface_heritage_projects_into_local_interface() {
         let (_, state) = compile_owned_injected_profile(&[
             InjectedLibrarySource {
@@ -8000,7 +10633,7 @@ const inheritedBad: number = local.elementMarker;
     }
 
     #[test]
-    fn owned_library_continuation_rejects_declare_global_syntax() {
+    fn owned_library_continuation_admits_declare_global_syntax() {
         let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
             name: "owned-mini.d.ts",
@@ -8008,20 +10641,16 @@ const inheritedBad: number = local.elementMarker;
         }])
         .expect("owned mini library compiles");
         let checks_before = super::super::bound_user_check_calls_for_test();
-        let error = match check_caller_certified_collision_free_source_with_owned_library(
+        let run = check_caller_certified_collision_free_source_with_owned_library(
             state,
             "export {}; declare global { interface UserOwnedGlobal { value: string; } }",
-        ) {
-            Ok(_) => panic!("WU5 owns declare-global continuation"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            error,
-            "frozen-library continuation does not yet admit declare global"
-        );
+        )
+        .expect("declare-global continuation binds and checks");
+        assert!(run.result.diagnostics.is_empty());
+        assert!(run.result.incomplete.is_empty());
         assert_eq!(
             super::super::bound_user_check_calls_for_test(),
-            checks_before
+            checks_before + 1
         );
     }
 }

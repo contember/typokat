@@ -11,6 +11,7 @@ use crate::binder::bind::{
 use crate::binder::declaration::{
     DeclId, DeclarationKind, DeclarationSite, TypeFragmentKind, TypeGroupId, ValueStorageId,
 };
+use crate::binder::roots::{LibraryRootProjection, RootNameRow};
 use crate::binder::scope::{FrozenScopeWrite, Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 #[cfg(any(test, feature = "test-utils"))]
@@ -19,13 +20,14 @@ use crate::source::{CompilationOrigin, OriginalModuleOrdinal};
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{
-    Declaration, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program,
-    Statement, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName,
+    Declaration, Expression, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName,
+    Program, Statement, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName,
     TSModuleReference, VariableDeclarationKind,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -353,6 +355,7 @@ thread_local! {
     static MERGE_KEY_NAME_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_PARTICIPANT_ROWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NON_MERGING_MERGE_RECORDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_ORDER_GROUPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PLACEMENT_ROW_REORDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -373,6 +376,8 @@ pub struct MergeSubstrateWorkForTest {
     /// Merge records built for such a group: a classification of one declaration against
     /// itself, plus its `merge_indices` key.
     pub(crate) non_merging_merge_records: u64,
+    /// Placement groups visited by the one-shot instance-state and canonical-order pass.
+    pub(crate) placement_order_groups: u64,
     /// Placement groups the canonical-order pass actually reordered. The rows are appended in
     /// ascending `(source, span)` order, so this stays zero — it is the witness that sorting
     /// them where they live cannot move the canonical row order.
@@ -386,6 +391,7 @@ fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
         merge_key_name_bytes: MERGE_KEY_NAME_BYTES.get(),
         non_merging_participant_rows: NON_MERGING_PARTICIPANT_ROWS.get(),
         non_merging_merge_records: NON_MERGING_MERGE_RECORDS.get(),
+        placement_order_groups: PLACEMENT_ORDER_GROUPS.get(),
         placement_row_reorders: PLACEMENT_ROW_REORDERS.get(),
     }
 }
@@ -393,6 +399,11 @@ fn merge_substrate_work_for_test() -> MergeSubstrateWorkForTest {
 #[cfg(any(test, feature = "test-utils"))]
 fn record_placement_row_reorder() {
     PLACEMENT_ROW_REORDERS.set(PLACEMENT_ROW_REORDERS.get() + 1);
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_placement_order_group() {
+    PLACEMENT_ORDER_GROUPS.set(PLACEMENT_ORDER_GROUPS.get() + 1);
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -443,6 +454,9 @@ impl MergeSubstrateWorkScopeForTest {
             non_merging_merge_records: end
                 .non_merging_merge_records
                 .saturating_sub(self.0.non_merging_merge_records),
+            placement_order_groups: end
+                .placement_order_groups
+                .saturating_sub(self.0.placement_order_groups),
             placement_row_reorders: end
                 .placement_row_reorders
                 .saturating_sub(self.0.placement_row_reorders),
@@ -593,6 +607,20 @@ pub struct CompilationUnit {
     pub source: SourceUnitKey,
     pub origin: CompilationOrigin,
     pub binding: ModuleBindingContext,
+}
+
+/// A source-origin index write that cannot participate in semantic checking.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum CompilationOriginIndexConflict {
+    ConflictingOrigin {
+        source: SourceUnitKey,
+        retained: CompilationOrigin,
+        attempted: CompilationOrigin,
+    },
+    SealedPrefixWrite {
+        source: SourceUnitKey,
+        attempted: CompilationOrigin,
+    },
 }
 
 impl CompilationUnit {
@@ -1055,6 +1083,7 @@ pub struct UmdNamespaceExport {
     pub name: String,
     pub span: Span,
     pub context: UmdContext,
+    pub export_assignment_target: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -1209,6 +1238,7 @@ pub struct NamespaceValueAttachment<'a> {
 pub struct StandaloneNamespaceValueMember<'a> {
     pub member: NamespaceMemberId,
     pub declaration: Option<DeclId>,
+    pub symbol: Option<SymbolId>,
     pub name: Option<&'a str>,
     pub source: SourceUnitKey,
     pub site: Option<DeclarationSite>,
@@ -1278,9 +1308,8 @@ pub struct NamespaceTable {
     /// Interned merge-group names, indexed by [`NameId`]. The `Arc` is the single owner of the
     /// text: `names`, `name_ids` and every `MergeRecord` share one allocation per name.
     names: LayeredVec<Arc<str>>,
-    /// Reverse index for [`NamespaceTable::intern_name`]. Not layered — a fork clones the
-    /// lookup table but shares every name allocation through the `Arc`.
-    name_ids: FxHashMap<Arc<str>, NameId>,
+    /// Reverse index for [`NamespaceTable::intern_name`], shared by frozen-prefix forks.
+    name_ids: LayeredMap<Arc<str>, NameId>,
     placements: LayeredMap<MergeKey, Arc<Vec<MergeParticipant>>>,
     /// Row index of every placement participant, keyed by its group and declaration, so finding
     /// the row a declaration already owns is a lookup instead of a scan of the group.
@@ -1293,6 +1322,7 @@ pub struct NamespaceTable {
     placement_rows_indexed: FxHashMap<MergeKey, usize>,
     merges: LayeredVec<MergeRecord>,
     merge_indices: LayeredMap<MergeKey, usize>,
+    merge_keys_by_declaration: LayeredMap<DeclId, MergeKey>,
     standalone_storage_namespaces: LayeredMap<ValueStorageId, NamespaceId>,
     declaration_owners_by_scope: LayeredMap<ScopeId, DeclarationOwner>,
     fragments_by_declaration: LayeredMap<DeclId, NamespaceFragmentId>,
@@ -1308,6 +1338,8 @@ pub struct NamespaceTable {
     umd_exports: LayeredVec<UmdNamespaceExport>,
     export_contexts: LayeredVec<ExportContext>,
     source_units: LayeredVec<SourceUnitRecord>,
+    compilation_origins_by_source: LayeredMap<SourceUnitKey, CompilationOrigin>,
+    compilation_origin_conflicts: Vec<CompilationOriginIndexConflict>,
     canonical_source_units: LayeredVec<usize>,
     canonical_globals: LayeredVec<GlobalAugmentationId>,
     canonical_deferred_modules: LayeredVec<DeferredModuleId>,
@@ -1367,10 +1399,6 @@ pub(crate) struct NamespaceReferenceRows {
 }
 
 impl NamespaceTable {
-    pub(crate) fn global_augmentation_count(&self) -> usize {
-        self.globals.len()
-    }
-
     /// Store `name` once and hand back its id. A name the table already holds costs a hash
     /// lookup and nothing else — no allocation, no second copy of the text.
     fn intern_name(&mut self, name: &str) -> NameId {
@@ -1382,7 +1410,7 @@ impl NamespaceTable {
         record_merge_key_name_allocation(name);
         let id = NameId(u32::try_from(self.names.len()).expect("interned name count fits u32"));
         self.names.push_local(Arc::clone(&text));
-        self.name_ids.insert(text, id);
+        let _ = self.name_ids.insert_local(text, id);
         id
     }
 
@@ -1418,6 +1446,12 @@ impl NamespaceTable {
             .filter_map(|id| self.namespaces.get(id.index()))
     }
 
+    pub fn prefix_namespace_replacements(&self) -> impl Iterator<Item = NamespaceId> + '_ {
+        self.namespaces
+            .prefix_replacements()
+            .filter_map(|(index, _)| u32::try_from(index).ok().map(NamespaceId))
+    }
+
     /// Whole-group instantiation after joining every reopening.
     pub fn aggregate_instance_state(&self, id: NamespaceId) -> Option<NamespaceInstanceState> {
         self.aggregate_instance_states.get(id.index()).copied()
@@ -1448,16 +1482,21 @@ impl NamespaceTable {
     }
 
     pub fn local_merges(&self) -> impl Iterator<Item = &MergeRecord> {
-        self.merges.local_iter().inspect(|_| {
-            #[cfg(any(test, feature = "test-utils"))]
-            record_continuation_merge_row();
-        })
+        self.merges
+            .changed_iter()
+            .map(|(_, record)| record)
+            .inspect(|_| {
+                #[cfg(any(test, feature = "test-utils"))]
+                record_continuation_merge_row();
+            })
     }
 
     pub(crate) fn is_admitted_compilation_global_name(&self, name: &str) -> bool {
-        let Some(name) = self.name_id(name) else {
-            return false;
-        };
+        self.compilation_global_merge_disposition(name) == Some(MergeDisposition::Admitted)
+    }
+
+    pub fn compilation_global_merge_disposition(&self, name: &str) -> Option<MergeDisposition> {
+        let name = self.name_id(name)?;
         let key = MergeKey {
             owner: DeclarationOwner::CompilationGlobal,
             name,
@@ -1465,7 +1504,25 @@ impl NamespaceTable {
         self.merge_indices
             .get(&key)
             .and_then(|index| self.merges.get(*index))
-            .is_some_and(|record| record.classification.disposition == MergeDisposition::Admitted)
+            .map(|record| record.classification.disposition)
+    }
+
+    pub fn merge_disposition_for_declaration(
+        &self,
+        declaration: DeclId,
+    ) -> Option<MergeDisposition> {
+        let key = self.merge_keys_by_declaration.get(&declaration)?;
+        self.merge_indices
+            .get(key)
+            .and_then(|index| self.merges.get(*index))
+            .map(|record| record.classification.disposition)
+    }
+
+    pub fn declaration_owner_for_scope(&self, scope: ScopeId) -> DeclarationOwner {
+        self.declaration_owners_by_scope
+            .get(&scope)
+            .copied()
+            .unwrap_or(DeclarationOwner::Lexical(scope))
     }
 
     /// Exact source-ordered placement outcomes ready for checker emission.
@@ -1486,7 +1543,8 @@ impl NamespaceTable {
     pub fn local_placement_issues(&self) -> impl Iterator<Item = &PlacementIssue> {
         let mut issues = self
             .merges
-            .local_iter()
+            .changed_iter()
+            .map(|(_, record)| record)
             .inspect(|_| {
                 #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_placement_merge_row();
@@ -1504,16 +1562,49 @@ impl NamespaceTable {
             .filter_map(|index| self.source_units.get(*index))
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn compilation_origin_for_source(
         &self,
         source: SourceUnitKey,
     ) -> Option<CompilationOrigin> {
-        self.source_units
-            .iter()
-            .rev()
-            .find(|unit| unit.source == source)
-            .map(|unit| unit.origin)
+        self.compilation_origins_by_source.get(&source).copied()
+    }
+
+    pub fn compilation_origin_conflicts(&self) -> &[CompilationOriginIndexConflict] {
+        &self.compilation_origin_conflicts
+    }
+
+    pub fn validate_compilation_origin_index(&self) -> Result<(), CompilationOriginIndexConflict> {
+        self.compilation_origin_conflicts
+            .first()
+            .copied()
+            .map_or(Ok(()), Err)
+    }
+
+    fn record_compilation_origin(&mut self, source: SourceUnitKey, origin: CompilationOrigin) {
+        if let Some(retained) = self.compilation_origins_by_source.get(&source).copied() {
+            if retained != origin {
+                self.compilation_origin_conflicts.push(
+                    CompilationOriginIndexConflict::ConflictingOrigin {
+                        source,
+                        retained,
+                        attempted: origin,
+                    },
+                );
+                return;
+            }
+        }
+        if self
+            .compilation_origins_by_source
+            .insert_local(source, origin)
+            .is_err()
+        {
+            self.compilation_origin_conflicts.push(
+                CompilationOriginIndexConflict::SealedPrefixWrite {
+                    source,
+                    attempted: origin,
+                },
+            );
+        }
     }
 
     pub fn globals(&self) -> impl Iterator<Item = &GlobalAugmentation> {
@@ -1542,7 +1633,8 @@ impl NamespaceTable {
         graph: &mut ScopeGraph,
         symbols: &mut SymbolTable,
         refused: &mut Vec<FrozenPrefixWrite>,
-    ) {
+        mut root_projection: Option<&mut LibraryRootProjection>,
+    ) -> Vec<RootNameRow> {
         let compilation_global = self
             .compilation_global
             .expect("compilation-global scope allocated");
@@ -1554,12 +1646,19 @@ impl NamespaceTable {
             .expect("script namespace root scope exists");
         assert_eq!(script_root.kind, ScopeKind::ScriptNamespaceRoot);
         assert_eq!(script_root.parent, Some(compilation_global));
-        let mut unsafe_names = rustc_hash::FxHashSet::default();
-        for record in self
-            .merges
-            .iter()
-            .filter(|record| record.owner == DeclarationOwner::CompilationGlobal)
-        {
+        let mut unsafe_names = BTreeSet::new();
+        let mut namespace_contributors = BTreeSet::new();
+        let mut classify_record = |record: &MergeRecord| {
+            if let Some(projection) = root_projection.as_deref_mut() {
+                projection.observe_finalized_global_merge(
+                    record,
+                    self,
+                    &mut namespace_contributors,
+                );
+            }
+            if record.owner != DeclarationOwner::CompilationGlobal {
+                return;
+            }
             let safe = if self.uses_library_shared_globals() {
                 record.classification.disposition == MergeDisposition::Admitted
             } else {
@@ -1578,26 +1677,54 @@ impl NamespaceTable {
             if !safe {
                 unsafe_names.insert(record.name.to_string());
             }
+        };
+        if self.merges.prefix_overrides_enabled() {
+            for (_, record) in self.merges.changed_iter() {
+                classify_record(record);
+            }
+        } else {
+            for record in self.merges.iter() {
+                classify_record(record);
+            }
+        }
+        if let Some(projection) = root_projection.as_deref_mut() {
+            projection.finish_namespace_normalization(&namespace_contributors);
         }
 
         let (safe_symbols, blocked_names) = {
-            let global = graph
-                .get_mut(compilation_global)
-                .expect("compilation-global scope exists");
             let mut blocked_names = Vec::new();
             for name in unsafe_names {
-                if let Some(previous) = global.symbols.remove(&name) {
-                    blocked_names.push((name, previous));
+                match graph.remove(compilation_global, &name) {
+                    Ok(Some(previous)) => blocked_names.push((name, previous)),
+                    Ok(None) => {}
+                    Err(FrozenScopeWrite) => refused.push(FrozenPrefixWrite {
+                        declaration: None,
+                        site: FrozenPrefixWriteSite::ScopeDeclaration,
+                    }),
                 }
             }
-            (
+            let Some(global) = graph.get(compilation_global) else {
+                refused.push(FrozenPrefixWrite {
+                    declaration: None,
+                    site: FrozenPrefixWriteSite::ScopeDeclaration,
+                });
+                return Vec::new();
+            };
+            let safe_symbols: Vec<(String, SymbolId)> = if global.symbols.prefix_overrides_enabled()
+            {
+                global
+                    .symbols
+                    .changed_iter()
+                    .map(|(name, symbol)| (name.clone(), *symbol))
+                    .collect()
+            } else {
                 global
                     .symbols
                     .iter()
                     .map(|(name, symbol)| (name.clone(), *symbol))
-                    .collect::<Vec<_>>(),
-                blocked_names,
-            )
+                    .collect()
+            };
+            (safe_symbols, blocked_names)
         };
 
         // Prevent deferred globals from falling through to module-local names.
@@ -1646,6 +1773,7 @@ impl NamespaceTable {
             }
         }
 
+        self.publish_local_umd_export_assignment_aliases(graph, script_namespace_root, refused);
         for unit in &self.source_units {
             let module = graph
                 .get_mut(unit.module)
@@ -1653,6 +1781,22 @@ impl NamespaceTable {
             assert_eq!(module.kind, ScopeKind::Module);
             module.parent = Some(script_namespace_root);
         }
+        let mut root_rows = Vec::with_capacity(safe_symbols.len());
+        for (name, symbol) in safe_symbols {
+            if let Some(symbol) = symbols.get(symbol) {
+                root_rows.push(RootNameRow {
+                    name,
+                    value: symbol.value,
+                    ty: symbol.ty,
+                    namespace: symbol.ns,
+                });
+            } else if let Some(projection) = root_projection.as_deref_mut() {
+                projection.normalization_issue_count =
+                    projection.normalization_issue_count.saturating_add(1);
+            }
+        }
+        root_rows.sort_by(|left, right| left.name.cmp(&right.name));
+        root_rows
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1689,6 +1833,40 @@ impl NamespaceTable {
             .filter_map(|index| self.umd_exports.get(*index))
     }
 
+    pub(crate) fn publish_local_umd_export_assignment_aliases(
+        &self,
+        graph: &mut ScopeGraph,
+        script_namespace_root: ScopeId,
+        refused: &mut Vec<FrozenPrefixWrite>,
+    ) {
+        let aliases = self
+            .local_umd_exports()
+            .filter(|export| {
+                export.context == UmdContext::DeferredValidBacklog15
+                    && export.export_assignment_target.as_deref() == Some(export.name.as_str())
+            })
+            .filter_map(|export| {
+                graph
+                    .get(export.module)
+                    .and_then(|module| module.lookup_local(&export.name))
+                    .map(|symbol| (export.name.clone(), symbol))
+            })
+            .collect::<Vec<_>>();
+        for (name, symbol) in aliases {
+            match graph.declare(script_namespace_root, name, symbol) {
+                Ok(replaced) => assert_idempotent_overlay_publication(
+                    replaced,
+                    symbol,
+                    "UMD export alias cannot replace a different script-root symbol",
+                ),
+                Err(FrozenScopeWrite) => refused.push(FrozenPrefixWrite {
+                    declaration: None,
+                    site: FrozenPrefixWriteSite::ScopeDeclaration,
+                }),
+            }
+        }
+    }
+
     pub fn export_contexts(&self) -> impl Iterator<Item = &ExportContext> {
         self.canonical_export_contexts
             .iter()
@@ -1716,6 +1894,8 @@ impl NamespaceTable {
     }
 
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        self.validate_compilation_origin_index()
+            .map_err(|_| "namespace source-origin index contains a conflict")?;
         self.namespaces.freeze_as_base()?;
         self.aggregate_instance_states.freeze_as_base()?;
         self.standalone_value_storages.freeze_as_base()?;
@@ -1724,9 +1904,11 @@ impl NamespaceTable {
         self.namespace_keys.freeze_as_base()?;
         self.canonical_namespaces.freeze_as_base()?;
         self.names.freeze_as_base()?;
+        self.name_ids.freeze_as_base()?;
         self.placements.freeze_as_base()?;
         self.merges.freeze_as_base()?;
         self.merge_indices.freeze_as_base()?;
+        self.merge_keys_by_declaration.freeze_as_base()?;
         self.standalone_storage_namespaces.freeze_as_base()?;
         self.declaration_owners_by_scope.freeze_as_base()?;
         self.fragments_by_declaration.freeze_as_base()?;
@@ -1742,6 +1924,7 @@ impl NamespaceTable {
         self.umd_exports.freeze_as_base()?;
         self.export_contexts.freeze_as_base()?;
         self.source_units.freeze_as_base()?;
+        self.compilation_origins_by_source.freeze_as_base()?;
         self.canonical_source_units.freeze_as_base()?;
         self.canonical_globals.freeze_as_base()?;
         self.canonical_deferred_modules.freeze_as_base()?;
@@ -1761,12 +1944,13 @@ impl NamespaceTable {
             namespace_keys: self.namespace_keys.fork_delta()?,
             canonical_namespaces: self.canonical_namespaces.fork_delta()?,
             names: self.names.fork_delta()?,
-            name_ids: self.name_ids.clone(),
+            name_ids: self.name_ids.fork_delta()?,
             placements: self.placements.fork_delta()?,
             placement_rows: FxHashMap::default(),
             placement_rows_indexed: FxHashMap::default(),
             merges: self.merges.fork_delta()?,
             merge_indices: self.merge_indices.fork_delta()?,
+            merge_keys_by_declaration: self.merge_keys_by_declaration.fork_delta()?,
             standalone_storage_namespaces: self.standalone_storage_namespaces.fork_delta()?,
             declaration_owners_by_scope: self.declaration_owners_by_scope.fork_delta()?,
             fragments_by_declaration: self.fragments_by_declaration.fork_delta()?,
@@ -1782,12 +1966,62 @@ impl NamespaceTable {
             umd_exports: self.umd_exports.fork_delta()?,
             export_contexts: self.export_contexts.fork_delta()?,
             source_units: self.source_units.fork_delta()?,
+            compilation_origins_by_source: self.compilation_origins_by_source.fork_delta()?,
+            compilation_origin_conflicts: Vec::new(),
             canonical_source_units: self.canonical_source_units.fork_delta()?,
             canonical_globals: self.canonical_globals.fork_delta()?,
             canonical_deferred_modules: self.canonical_deferred_modules.fork_delta()?,
             canonical_deferred_children: self.canonical_deferred_children.fork_delta()?,
             canonical_umd_exports: self.canonical_umd_exports.fork_delta()?,
             canonical_export_contexts: self.canonical_export_contexts.fork_delta()?,
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            library_shared_globals: self.library_shared_globals,
+        })
+    }
+
+    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            namespaces: self.namespaces.fork_sparse_delta()?,
+            aggregate_instance_states: self.aggregate_instance_states.fork_sparse_delta()?,
+            standalone_value_storages: self.standalone_value_storages.fork_sparse_delta()?,
+            fragments: self.fragments.fork_sparse_delta()?,
+            members: self.members.fork_sparse_delta()?,
+            namespace_keys: self.namespace_keys.fork_delta()?,
+            canonical_namespaces: self.canonical_namespaces.fork_sparse_delta()?,
+            names: self.names.fork_sparse_delta()?,
+            name_ids: self.name_ids.fork_delta()?,
+            placements: self.placements.fork_sparse_delta()?,
+            placement_rows: FxHashMap::default(),
+            placement_rows_indexed: FxHashMap::default(),
+            merges: self.merges.fork_sparse_delta()?,
+            merge_indices: self.merge_indices.fork_sparse_delta()?,
+            merge_keys_by_declaration: self.merge_keys_by_declaration.fork_sparse_delta()?,
+            standalone_storage_namespaces: self.standalone_storage_namespaces.fork_delta()?,
+            declaration_owners_by_scope: self.declaration_owners_by_scope.fork_delta()?,
+            fragments_by_declaration: self.fragments_by_declaration.fork_delta()?,
+            fragment_private_scopes_by_site: self.fragment_private_scopes_by_site.fork_delta()?,
+            global_augmentations_by_site: self.global_augmentations_by_site.fork_delta()?,
+            umd_exports_by_site: self.umd_exports_by_site.fork_delta()?,
+            source_keys_by_module: self.source_keys_by_module.fork_delta()?,
+            library_export_default_sites: self.library_export_default_sites.fork_delta()?,
+            library_module_reporting_sites: self.library_module_reporting_sites.fork_delta()?,
+            globals: self.globals.fork_sparse_delta()?,
+            deferred_modules: self.deferred_modules.fork_sparse_delta()?,
+            deferred_children: self.deferred_children.fork_sparse_delta()?,
+            umd_exports: self.umd_exports.fork_sparse_delta()?,
+            export_contexts: self.export_contexts.fork_sparse_delta()?,
+            source_units: self.source_units.fork_sparse_delta()?,
+            compilation_origins_by_source: self
+                .compilation_origins_by_source
+                .fork_sparse_delta()?,
+            compilation_origin_conflicts: Vec::new(),
+            canonical_source_units: self.canonical_source_units.fork_sparse_delta()?,
+            canonical_globals: self.canonical_globals.fork_sparse_delta()?,
+            canonical_deferred_modules: self.canonical_deferred_modules.fork_sparse_delta()?,
+            canonical_deferred_children: self.canonical_deferred_children.fork_sparse_delta()?,
+            canonical_umd_exports: self.canonical_umd_exports.fork_sparse_delta()?,
+            canonical_export_contexts: self.canonical_export_contexts.fork_sparse_delta()?,
             compilation_global: self.compilation_global,
             script_namespace_root: self.script_namespace_root,
             library_shared_globals: self.library_shared_globals,
@@ -1810,9 +2044,13 @@ impl NamespaceTable {
                 .canonical_namespaces
                 .shares_base_with(&other.canonical_namespaces)
             && self.names.shares_base_with(&other.names)
+            && self.name_ids.shares_base_with(&other.name_ids)
             && self.placements.shares_base_with(&other.placements)
             && self.merges.shares_base_with(&other.merges)
             && self.merge_indices.shares_base_with(&other.merge_indices)
+            && self
+                .merge_keys_by_declaration
+                .shares_base_with(&other.merge_keys_by_declaration)
             && self
                 .standalone_storage_namespaces
                 .shares_base_with(&other.standalone_storage_namespaces)
@@ -1853,6 +2091,9 @@ impl NamespaceTable {
                 .shares_base_with(&other.export_contexts)
             && self.source_units.shares_base_with(&other.source_units)
             && self
+                .compilation_origins_by_source
+                .shares_base_with(&other.compilation_origins_by_source)
+            && self
                 .canonical_source_units
                 .shares_base_with(&other.canonical_source_units)
             && self
@@ -1886,9 +2127,13 @@ impl NamespaceTable {
             && self
                 .canonical_namespaces
                 .shares_base_with(&other.canonical_namespaces)
+            && self.name_ids.shares_base_with(&other.name_ids)
             && self.placements.shares_base_with(&other.placements)
             && self.merges.shares_base_with(&other.merges)
             && self.merge_indices.shares_base_with(&other.merge_indices)
+            && self
+                .merge_keys_by_declaration
+                .shares_base_with(&other.merge_keys_by_declaration)
             && self
                 .standalone_storage_namespaces
                 .shares_base_with(&other.standalone_storage_namespaces)
@@ -1913,6 +2158,9 @@ impl NamespaceTable {
                 .export_contexts
                 .shares_base_with(&other.export_contexts)
             && self.source_units.shares_base_with(&other.source_units)
+            && self
+                .compilation_origins_by_source
+                .shares_base_with(&other.compilation_origins_by_source)
             && self
                 .canonical_source_units
                 .shares_base_with(&other.canonical_source_units)
@@ -1952,36 +2200,74 @@ impl NamespaceTable {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_family_row_counts_for_test(&self) -> [usize; 2] {
         let indexes = self.aggregate_instance_states.local_len()
+            + self.aggregate_instance_states.replacement_len()
             + self.standalone_value_storages.local_len()
+            + self.standalone_value_storages.replacement_len()
             + self.fragments.local_len()
+            + self.fragments.replacement_len()
             + self.members.local_len()
+            + self.members.replacement_len()
             + self.namespace_keys.local_len()
+            + self.namespace_keys.replacement_len()
             + self.canonical_namespaces.local_len()
+            + self.canonical_namespaces.replacement_len()
+            + self.name_ids.local_len()
+            + self.name_ids.replacement_len()
             + self.placements.local_len()
+            + self.placements.replacement_len()
             + self.merges.local_len()
+            + self.merges.replacement_len()
             + self.merge_indices.local_len()
+            + self.merge_indices.replacement_len()
+            + self.merge_keys_by_declaration.local_len()
+            + self.merge_keys_by_declaration.replacement_len()
             + self.standalone_storage_namespaces.local_len()
+            + self.standalone_storage_namespaces.replacement_len()
             + self.declaration_owners_by_scope.local_len()
+            + self.declaration_owners_by_scope.replacement_len()
             + self.fragments_by_declaration.local_len()
+            + self.fragments_by_declaration.replacement_len()
             + self.fragment_private_scopes_by_site.local_len()
+            + self.fragment_private_scopes_by_site.replacement_len()
             + self.globals.local_len()
+            + self.globals.replacement_len()
             + self.deferred_modules.local_len()
+            + self.deferred_modules.replacement_len()
             + self.deferred_children.local_len()
+            + self.deferred_children.replacement_len()
             + self.umd_exports.local_len()
+            + self.umd_exports.replacement_len()
             + self.export_contexts.local_len()
+            + self.export_contexts.replacement_len()
             + self.source_units.local_len()
+            + self.source_units.replacement_len()
+            + self.compilation_origins_by_source.local_len()
+            + self.compilation_origins_by_source.replacement_len()
             + self.canonical_source_units.local_len()
+            + self.canonical_source_units.replacement_len()
             + self.canonical_globals.local_len()
+            + self.canonical_globals.replacement_len()
             + self.canonical_deferred_modules.local_len()
+            + self.canonical_deferred_modules.replacement_len()
             + self.canonical_deferred_children.local_len()
+            + self.canonical_deferred_children.replacement_len()
             + self.canonical_umd_exports.local_len()
+            + self.canonical_umd_exports.replacement_len()
             + self.canonical_export_contexts.local_len()
+            + self.canonical_export_contexts.replacement_len()
             + self.global_augmentations_by_site.local_len()
+            + self.global_augmentations_by_site.replacement_len()
             + self.umd_exports_by_site.local_len()
+            + self.umd_exports_by_site.replacement_len()
             + self.source_keys_by_module.local_len()
+            + self.source_keys_by_module.replacement_len()
             + self.library_export_default_sites.local_len()
+            + self.library_export_default_sites.replacement_len()
             + self.library_module_reporting_sites.local_len();
-        [self.namespaces.local_len(), indexes]
+        [
+            self.namespaces.local_len() + self.namespaces.replacement_len(),
+            indexes + self.library_module_reporting_sites.replacement_len(),
+        ]
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -2147,7 +2433,7 @@ impl NamespaceTable {
         self.rebuild_local_statement_site_indexes()?;
         self.compute_namespace_instance_states();
         let library_order = self.uses_library_shared_globals();
-        for namespace in self.namespaces.local_iter_mut() {
+        for (_, namespace) in self.namespaces.changed_iter_mut() {
             if library_order {
                 namespace.fragments.sort_by_key(|fragment| {
                     let fragment = self
@@ -2214,9 +2500,12 @@ impl NamespaceTable {
                 });
         }
         self.merges.clear_local();
-        let local_merges = self
+        // `clear_local` invalidates every suffix index. Keep only sealed-prefix keys so a sparse
+        // continuation can still replace an affected base row at its stable index.
+        self.merge_indices.clear_local();
+        let changed_merges = self
             .placements
-            .local_iter()
+            .changed_iter()
             .map(|(key, participants)| {
                 #[cfg(any(test, feature = "test-utils"))]
                 record_finalization_merge_participant_rows(participants.len());
@@ -2232,16 +2521,29 @@ impl NamespaceTable {
                 let declarations = Arc::clone(participants);
                 let classification = classify_group(&declarations);
                 let placement_issues = placement_issues(&declarations);
-                MergeRecord {
-                    owner: key.owner,
-                    name: Arc::clone(self.name_text(key.name)),
-                    declarations,
-                    classification,
-                    placement_issues,
-                }
+                (
+                    *key,
+                    MergeRecord {
+                        owner: key.owner,
+                        name: Arc::clone(self.name_text(key.name)),
+                        declarations,
+                        classification,
+                        placement_issues,
+                    },
+                )
             })
             .collect::<Vec<_>>();
-        for merge in local_merges {
+        for (key, merge) in changed_merges {
+            for participant in merge.declarations.iter() {
+                self.merge_keys_by_declaration
+                    .insert_local(participant.declaration, key)?;
+            }
+            if let Some(index) = self.merge_indices.get(&key).copied() {
+                if let Some(slot) = self.merges.get_mut_local(index) {
+                    *slot = merge;
+                    continue;
+                }
+            }
             self.merges.push_local(merge);
         }
         if library_order {
@@ -2704,7 +3006,9 @@ impl NamespaceTable {
             }
         }
         let library_order = self.uses_library_shared_globals();
-        for participants in self.placements.local_values_mut() {
+        for participants in self.placements.changed_values_mut() {
+            #[cfg(any(test, feature = "test-utils"))]
+            record_placement_order_group();
             // Binding still owns every group here — the merge records that share these vectors
             // are rebuilt after this pass — so `make_mut` never copies.
             let participants = Arc::make_mut(participants);
@@ -2932,6 +3236,21 @@ fn ambient_member_union(
 }
 
 impl Binder {
+    pub fn namespace_fragment_terminal_input(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Option<(NamespaceId, ScopeId, bool)> {
+        let declaration =
+            self.exact_declaration_at(module, binding_start, DeclarationKind::Namespace)?;
+        let fragment = self
+            .namespaces
+            .fragments_by_declaration
+            .get(&declaration.id)
+            .and_then(|fragment| self.namespaces.fragment(*fragment))?;
+        Some((fragment.namespace, fragment.private_scope, fragment.ambient))
+    }
+
     pub fn namespace_fragment_private_scope(
         &self,
         module: ScopeId,
@@ -2956,8 +3275,9 @@ impl Binder {
         &self,
     ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
         self.namespaces
-            .canonical_namespaces
-            .local_iter()
+            .namespaces
+            .changed_iter()
+            .map(|(_, namespace)| &namespace.id)
             .inspect(|_| {
                 #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_attachment_namespace_row();
@@ -2987,6 +3307,7 @@ impl Binder {
                         StandaloneNamespaceValueMember {
                             member: member.id,
                             declaration,
+                            symbol: member.symbol,
                             name: member.name.as_deref(),
                             source: member.source,
                             site: lexical.map(|declaration| declaration.site),
@@ -3065,6 +3386,49 @@ impl Binder {
             .map(|global| global.overlay_scope)
     }
 
+    /// The lexical root the binder used when walking statements from `module`.
+    pub fn statement_lexical_root(&self, module: ScopeId) -> ScopeId {
+        let is_script_continuation = self.namespaces.uses_library_shared_globals()
+            && self
+                .namespaces
+                .source_keys_by_module
+                .get(&module)
+                .and_then(|source| source.0.checked_sub(1))
+                .and_then(|index| usize::try_from(index).ok())
+                .and_then(|index| self.namespaces.source_units.get(index))
+                .is_some_and(|unit| !unit.context.external_module)
+            && self.graph.get(module).and_then(|scope| scope.parent)
+                == Some(self.script_namespace_root);
+        if is_script_continuation {
+            self.graph
+                .get(self.script_namespace_root)
+                .and_then(|scope| scope.parent)
+                .unwrap_or(module)
+        } else {
+            module
+        }
+    }
+
+    pub fn global_augmentation_body_scope(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Option<ScopeId> {
+        #[cfg(any(test, feature = "test-utils"))]
+        record_continuation_global_statement_query();
+        self.namespaces
+            .global_augmentations_by_site
+            .get(&(module, binding_start))
+            .and_then(|global| self.namespaces.globals.get(global.index()))
+            .map(|global| {
+                if global.issues.is_empty() && self.namespaces.uses_library_shared_globals() {
+                    global.target_scope
+                } else {
+                    global.overlay_scope
+                }
+            })
+    }
+
     pub fn global_augmentation_requires_incomplete(
         &self,
         module: ScopeId,
@@ -3105,6 +3469,38 @@ impl Binder {
         })
     }
 
+    pub fn global_augmentation_value_storages(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Vec<ValueStorageId> {
+        let Some(global) = self
+            .namespaces
+            .global_augmentations_by_site
+            .get(&(module, binding_start))
+            .and_then(|global| self.namespaces.globals.get(global.index()))
+        else {
+            return Vec::new();
+        };
+        global
+            .members
+            .iter()
+            .filter_map(|member| self.namespaces.member(*member))
+            .filter_map(|member| {
+                member
+                    .declaration
+                    .and_then(|declaration| self.declarations.get(declaration))
+                    .and_then(|declaration| declaration.value_storage)
+                    .or_else(|| {
+                        member
+                            .symbol
+                            .and_then(|symbol| self.symbols.get(symbol))
+                            .and_then(|symbol| symbol.value)
+                    })
+            })
+            .collect()
+    }
+
     pub fn umd_export_requires_incomplete(&self, module: ScopeId, span_start: u32) -> bool {
         #[cfg(any(test, feature = "test-utils"))]
         record_continuation_umd_statement_query();
@@ -3115,10 +3511,11 @@ impl Binder {
             .is_some_and(|export| export.context == UmdContext::DeferredValidBacklog15)
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn library_export_default_reporting_owns(&self, module: ScopeId, span_start: u32) -> bool {
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_library_source_lookup();
         let source = self.namespaces.source_keys_by_module.get(&module).copied();
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_library_reporting_lookup();
         source.is_some_and(|source| {
             self.namespaces
@@ -3127,8 +3524,8 @@ impl Binder {
         })
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     pub fn library_module_reporting_owns(&self, module: ScopeId, source_start: u32) -> bool {
+        #[cfg(any(test, feature = "test-utils"))]
         record_continuation_library_reporting_lookup();
         self.namespaces
             .library_module_reporting_sites
@@ -4028,6 +4425,9 @@ pub(super) fn collect_namespace_metadata(
     script_namespace_root: ScopeId,
     root: NamespaceMetadataRoot,
 ) {
+    state
+        .namespaces
+        .record_compilation_origin(unit.source, unit.origin);
     state.namespaces.source_units.push_local(SourceUnitRecord {
         source: unit.source,
         origin: unit.origin,
@@ -4068,6 +4468,20 @@ pub(super) fn collect_namespace_metadata(
         direct_top_level: true,
     };
     walk_statements(state, &program.body, context, unit, compilation_global);
+    let export_assignment_target = program.body.iter().find_map(|statement| {
+        let Statement::TSExportAssignment(assignment) = statement else {
+            return None;
+        };
+        let Expression::Identifier(identifier) = &assignment.expression else {
+            return None;
+        };
+        Some(identifier.name.to_string())
+    });
+    for export in state.namespaces.umd_exports.local_slice_mut() {
+        if export.source == unit.source {
+            export.export_assignment_target = export_assignment_target.clone();
+        }
+    }
 }
 
 pub(super) fn finalize_namespace_metadata(state: &mut BindState) {
@@ -4830,6 +5244,7 @@ fn walk_statement(
                 name: export.id.name.to_string(),
                 span: Span::from_oxc(export.span),
                 context: umd_context,
+                export_assignment_target: None,
             });
         }
         Statement::BlockStatement(_)
@@ -6563,6 +6978,81 @@ mod tests {
     use oxc_span::SourceType;
 
     #[test]
+    fn compilation_origin_index_preserves_layers_and_rejects_invalid_republication() {
+        let inherited_source = SourceUnitKey(700_001);
+        let inherited_origin = CompilationOrigin::Library(LibraryFileOrdinal::new(17));
+        let mut base = NamespaceTable::default();
+        base.record_compilation_origin(inherited_source, inherited_origin);
+        base.freeze_as_base().expect("namespace origin base seals");
+
+        let mut delta = base.fork_delta().expect("ordinary namespace delta forks");
+        assert_eq!(
+            delta.compilation_origin_for_source(inherited_source),
+            Some(inherited_origin)
+        );
+        let fresh_source = SourceUnitKey(900_001);
+        let fresh_origin = CompilationOrigin::User(OriginalModuleOrdinal::new(23));
+        delta.record_compilation_origin(fresh_source, fresh_origin);
+        assert_eq!(
+            delta.compilation_origin_for_source(fresh_source),
+            Some(fresh_origin)
+        );
+        assert_eq!(
+            delta.compilation_origin_for_source(SourceUnitKey(u32::MAX)),
+            None
+        );
+        delta.record_compilation_origin(inherited_source, inherited_origin);
+        assert_eq!(
+            delta.validate_compilation_origin_index(),
+            Err(CompilationOriginIndexConflict::SealedPrefixWrite {
+                source: inherited_source,
+                attempted: inherited_origin,
+            })
+        );
+
+        let mut sparse = base
+            .fork_sparse_delta()
+            .expect("sparse namespace delta forks");
+        sparse.record_compilation_origin(inherited_source, inherited_origin);
+        assert_eq!(sparse.validate_compilation_origin_index(), Ok(()));
+        assert_eq!(
+            sparse.local_family_row_counts_for_test(),
+            [0, 1],
+            "the sparse same-key override is epoch-owned index work"
+        );
+        assert_eq!(
+            sparse.compilation_origin_for_source(inherited_source),
+            Some(inherited_origin)
+        );
+
+        let attempted = CompilationOrigin::Library(LibraryFileOrdinal::new(18));
+        sparse.record_compilation_origin(inherited_source, attempted);
+        assert_eq!(
+            sparse.validate_compilation_origin_index(),
+            Err(CompilationOriginIndexConflict::ConflictingOrigin {
+                source: inherited_source,
+                retained: inherited_origin,
+                attempted,
+            })
+        );
+        assert_eq!(
+            sparse.compilation_origin_for_source(inherited_source),
+            Some(inherited_origin),
+            "a rejected origin cannot replace the retained exact owner"
+        );
+
+        let mut conflicted_base = NamespaceTable::default();
+        conflicted_base.record_compilation_origin(inherited_source, inherited_origin);
+        conflicted_base.record_compilation_origin(inherited_source, attempted);
+        assert!(conflicted_base.freeze_as_base().is_err());
+        assert_eq!(
+            conflicted_base.compilation_origin_for_source(inherited_source),
+            Some(inherited_origin),
+            "failed publication retains the first exact owner"
+        );
+    }
+
+    #[test]
     fn frozen_global_overlay_republication_accepts_only_the_same_symbol() {
         assert_idempotent_overlay_publication(None, SymbolId(7), "first publication is admitted");
         assert_idempotent_overlay_publication(
@@ -6595,7 +7085,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             layered_fields.len(),
-            32,
+            35,
             "layered namespace field inventory"
         );
 
@@ -6663,6 +7153,35 @@ mod tests {
         };
         let (module, _) = builder.add_module(&parsed.program, &[], unit);
         builder.finish(module)
+    }
+
+    #[test]
+    fn merge_disposition_lookup_is_exact_and_does_not_scan_merge_rows() {
+        let binder = bind(
+            "interface Shared { left: string }\ninterface Shared { right: number }\ntype Rejected = string;\ntype Rejected = number;\n",
+            false,
+        );
+        let declarations = binder
+            .namespaces
+            .merges()
+            .flat_map(|record| {
+                record.declarations.iter().map(move |participant| {
+                    (participant.declaration, record.classification.disposition)
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(declarations.len(), 4);
+
+        let work = NamespaceContinuationWorkScopeForTest::start();
+        for (declaration, disposition) in declarations {
+            assert_eq!(
+                binder
+                    .namespaces
+                    .merge_disposition_for_declaration(declaration),
+                Some(disposition)
+            );
+        }
+        assert_eq!(work.finish().merge_rows, 0);
     }
 
     /// `DeclId` is dense, so locating the placement row of a single declaration must
@@ -6742,11 +7261,19 @@ mod tests {
         }
     }
 
+    fn assert_one_shot_placement_order_work(work: MergeSubstrateWorkForTest, groups: u64) {
+        assert_eq!(
+            work.placement_order_groups, groups,
+            "the instance-state and canonical-order pass visited {} groups for {groups} changed \
+             placement groups ({work:?})",
+            work.placement_order_groups
+        );
+    }
+
     /// The three by-declaration lookups this guard covers all resolve through
-    /// `push_placement` now. Only the one-shot instance-state pass may still walk every
-    /// placement row, so a reintroduced per-declaration scan cannot slip past the counter.
-    /// That pass now carries a second job — leaving each group in its canonical order so the
-    /// merge record can share the vector — and it must stay *one* pass, not two.
+    /// `push_placement` now. Only the one-shot instance-state pass may still walk every changed
+    /// placement group. That pass also leaves each group in canonical order so the merge record
+    /// can share its vector, and the calibrated counter rejects a second pass.
     #[test]
     fn placement_rows_are_scanned_only_by_the_one_shot_instance_state_pass() {
         // The escaped needle never matches itself, so the split isolates production code.
@@ -6756,20 +7283,43 @@ mod tests {
             .expect("production region precedes the test module");
         assert_eq!(
             production
-                .matches("self.placements.local_values_mut()")
+                .matches("self.placements.changed_values_mut()")
                 .count(),
             1,
-            "the only surviving full pass is the instance-state back-patch and row ordering"
+            "the only surviving changed-group pass is the instance-state back-patch and ordering"
+        );
+        assert_eq!(
+            production
+                .matches("placements.changed_values_mut()")
+                .count(),
+            1,
+            "no caller may add another scan over every changed placement group"
         );
         assert_eq!(
             production.matches("placements.local_values_mut()").count(),
-            1,
-            "no caller may reintroduce a per-declaration scan over every placement"
+            0,
+            "the canonical-order pass must not bypass sparse prefix overrides"
         );
         assert_eq!(
             production.matches("placements.local_iter()").count(),
             0,
             "the by-declaration read resolves through the placement index"
+        );
+
+        let fixture = vec!["export {};\ninterface Merged { left: number; }\n\
+             interface Merged { right: number; }\n"
+            .to_string()];
+        let work = merge_substrate_work(&fixture);
+        assert_one_shot_placement_order_work(work, 1);
+
+        let mut deliberately_repeated = work;
+        deliberately_repeated.placement_order_groups += 1;
+        let rejected = std::panic::catch_unwind(|| {
+            assert_one_shot_placement_order_work(deliberately_repeated, 1);
+        });
+        assert!(
+            rejected.is_err(),
+            "the one-shot calibration admitted a deliberately repeated placement-group pass"
         );
     }
 

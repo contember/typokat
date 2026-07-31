@@ -91,10 +91,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             !self.function_groups.requires_demand_intercept(symbol),
             "unpublished function groups must not enter durable flow resolution"
         );
-        self.binder
-            .symbols
-            .get(symbol)
-            .and_then(|s| s.value)
+        self.private_collision_value_winners
+            .get(&symbol)
+            .copied()
+            .or_else(|| {
+                self.binder
+                    .symbols
+                    .get(symbol)
+                    .and_then(|binding| binding.value)
+            })
             .and_then(|decl_id| self.decl_type_replay(decl_id))
             .unwrap_or_else(|| self.interner.well_known().error)
     }

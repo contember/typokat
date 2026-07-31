@@ -15,6 +15,11 @@ struct InterfaceMethodOverloadAccumulator {
     unavailable: bool,
 }
 
+pub(super) struct LoweredInterfaceMembers {
+    pub(super) object: ObjectType,
+    pub(super) unavailable: bool,
+}
+
 fn flatten_qualified_heritage_expression<'a>(
     expression: &'a Expression<'_>,
     segments: &mut Vec<QualifiedTypeSegment<'a>>,
@@ -243,6 +248,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         heritage: &TSInterfaceHeritage<'_>,
     ) -> Option<ObjectType> {
         let base_ty = self.resolve_heritage_type(scope, heritage)?;
+        if self.interner.store().array_type(base_ty).is_some() {
+            return self
+                .project_library_heritage_surface(base_ty)
+                .and_then(|projected| self.project_interface_heritage_type(projected))
+                .or_else(|| self.project_interface_heritage_type(base_ty));
+        }
         self.project_interface_heritage_type(base_ty)
     }
 
@@ -346,6 +357,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         members: &[TSSignature<'_>],
     ) -> ObjectType {
         self.lower_interface_members_inner(scope, members, None)
+            .object
     }
 
     pub(super) fn lower_interface_declaration_members(
@@ -353,7 +365,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         declaration: crate::binder::declaration::DeclId,
         scope: ScopeId,
         members: &[TSSignature<'_>],
-    ) -> ObjectType {
+    ) -> LoweredInterfaceMembers {
         self.lower_interface_members_inner(scope, members, Some(declaration))
     }
 
@@ -362,8 +374,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         members: &[TSSignature<'_>],
         declaration: Option<crate::binder::declaration::DeclId>,
-    ) -> ObjectType {
+    ) -> LoweredInterfaceMembers {
         let mut object = ObjectType::default();
+        let mut unavailable = false;
         let overloaded_method_names = self.overloaded_method_names(members);
         let mut overloads: FxHashMap<String, InterfaceMethodOverloadAccumulator> =
             FxHashMap::default();
@@ -372,6 +385,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut lower = |pass: &mut Self| match member {
                 TSSignature::TSPropertySignature(sig) => {
                     if sig.computed {
+                        unavailable = true;
                         pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
                             pass.lower_annotation(scope, &annotation.type_annotation);
@@ -379,6 +393,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         return;
                     }
                     let Some(name) = sig.key.static_name() else {
+                        unavailable = true;
                         pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
                             pass.lower_annotation(scope, &annotation.type_annotation);
@@ -399,6 +414,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         });
                         if lowered.is_none() {
                             overload.unavailable = true;
+                            unavailable = true;
                         }
                         return;
                     }
@@ -417,6 +433,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 let Some(ty) =
                                     pass.lower_annotation(scope, &annotation.type_annotation)
                                 else {
+                                    unavailable = true;
                                     return;
                                 };
                                 ty
@@ -448,10 +465,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // un-lowerable value) is **skipped** (lenient, like an out-of-subset
                 // property), so the interface keeps the members it can express.
                 TSSignature::TSIndexSignature(sig) => {
-                    let _ = pass.lower_index_signature(scope, sig, &mut object);
+                    if pass
+                        .lower_index_signature(scope, sig, &mut object)
+                        .is_none()
+                    {
+                        unavailable = true;
+                    }
                 }
                 TSSignature::TSMethodSignature(sig) => {
                     if sig.computed {
+                        unavailable = true;
                         pass.record_method_signature_computed_key(&sig.key);
                         pass.lower_generic_strict_signature_function_type(
                             scope,
@@ -463,6 +486,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         return;
                     }
                     let Some(name) = sig.key.static_name() else {
+                        unavailable = true;
                         pass.record_method_signature_computed_key(&sig.key);
                         pass.lower_generic_strict_signature_function_type(
                             scope,
@@ -497,22 +521,31 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 overload.call_signatures.push(signature);
                             }
                             Some(_) => {}
-                            None => overload.unavailable = true,
+                            None => {
+                                overload.unavailable = true;
+                                unavailable = true;
+                            }
                         }
                         return;
                     }
                     if let Some(prop) = pass.lower_method_signature_property(scope, sig) {
                         object.properties.push(prop);
+                    } else {
+                        unavailable = true;
                     }
                 }
                 TSSignature::TSCallSignatureDeclaration(sig) => {
                     if let Some(signature) = pass.lower_call_signature(scope, sig) {
                         object.call_signatures.push(signature);
+                    } else {
+                        unavailable = true;
                     }
                 }
                 TSSignature::TSConstructSignatureDeclaration(sig) => {
                     if let Some(signature) = pass.lower_construct_signature(scope, sig) {
                         object.construct_signatures.push(signature);
+                    } else {
+                        unavailable = true;
                     }
                 }
             };
@@ -547,7 +580,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             object.properties.push(PropertyType::public(name, ty));
         }
-        object
+        LoweredInterfaceMembers {
+            object,
+            unavailable,
+        }
     }
 }
 
@@ -641,7 +677,7 @@ pub(super) fn compose_base_members_first(bases: &[&ObjectType]) -> ObjectType {
 /// Materialize the apparent object of an intersection without a semantic query.
 /// This is the construction-time counterpart of `intersection_apparent_object`:
 /// duplicate member/index types intersect and every distinct member is retained.
-pub(super) fn merge_intersection_objects(
+pub(in crate::check::checker) fn merge_intersection_objects(
     interner: &mut Interner,
     objects: Vec<ObjectType>,
 ) -> ObjectType {

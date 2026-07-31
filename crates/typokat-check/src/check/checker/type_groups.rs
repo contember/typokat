@@ -1,12 +1,16 @@
 use super::context::{
     ConstructionDrafts, Pass, PublishedTypeDecl, TypeDecl, TypeDeclTable, TypeResolvedTable,
 };
+use super::replay_index::{ReplayClassLookup, ReplayOwner};
 use crate::binder::declaration::TypeGroupId;
+use crate::check::query::PublishedClassLookup;
 use crate::class_semantics::OwnedPublishedClassTerminal;
-use crate::class_semantics::PublishedClasses;
+use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
 use crate::types::layered::LayeredVec;
 use crate::types::repr::{ClassId, TypeParamId};
 use crate::types::store::TypeId;
+use crate::types::substitute;
+use rustc_hash::FxHashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum PublishedTypeGroupSurface {
@@ -84,6 +88,13 @@ impl PublishedTypeGroups {
     ) -> Option<&PublishedTypeGroupTerminal> {
         self.entries.get(group.index())
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn is_replaced_for_test(&self, group: TypeGroupId) -> bool {
+        self.entries
+            .changed_iter()
+            .any(|(index, _)| index == group.index())
+    }
 }
 
 /// The only query-visible type environment. Class and named-type registries become
@@ -107,6 +118,29 @@ pub(in crate::check::checker) enum TypeEnvironmentState<'ast> {
     Published(PublishedTypeEnvironment),
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum TypeGroupPublicationOutcome {
+    Ready { publication_validations: usize },
+    LibraryIdentitySelectionPending { publication_validations: usize },
+}
+
+impl TypeGroupPublicationOutcome {
+    pub(in crate::check::checker) fn publication_validations(self) -> usize {
+        match self {
+            Self::Ready {
+                publication_validations,
+            }
+            | Self::LibraryIdentitySelectionPending {
+                publication_validations,
+            } => publication_validations,
+        }
+    }
+
+    pub(in crate::check::checker) fn library_identity_selection_pending(self) -> bool {
+        matches!(self, Self::LibraryIdentitySelectionPending { .. })
+    }
+}
+
 impl<'ast> TypeEnvironmentState<'ast> {
     pub(in crate::check::checker) fn constructing(drafts: ConstructionDrafts<'ast>) -> Self {
         Self::Constructing {
@@ -125,6 +159,19 @@ impl<'ast> TypeEnvironmentState<'ast> {
                 inherited: None, ..
             } => panic!("inherited environment is being consumed"),
             Self::Published(_) => panic!("published phase has no construction-only inherited view"),
+        }
+    }
+
+    fn inherited_mut(&mut self) -> Option<&mut PublishedTypeEnvironment> {
+        match self {
+            Self::Constructing {
+                inherited: Some(inherited),
+                ..
+            } => Some(inherited),
+            Self::Constructing {
+                inherited: None, ..
+            }
+            | Self::Published(_) => None,
         }
     }
 
@@ -293,6 +340,17 @@ impl PublishedTypeEnvironment {
         })
     }
 
+    pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            classes: self.classes.fork_sparse_delta()?,
+            groups: PublishedTypeGroups {
+                entries: self.groups.entries.fork_sparse_delta()?,
+                declarations: self.groups.declarations.fork_sparse_delta()?,
+                resolved: self.groups.resolved.fork_sparse_delta()?,
+            },
+        })
+    }
+
     #[cfg(test)]
     pub(in crate::check::checker) fn shares_base_with(&self, other: &Self) -> bool {
         self.classes.shares_base_with(&other.classes)
@@ -334,25 +392,34 @@ impl PublishedTypeEnvironment {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_group_terminals(
+    pub(in crate::check::checker) fn replacement_family_row_counts_for_test(&self) -> [usize; 2] {
+        [
+            self.groups.entries.replacement_len()
+                + self.groups.declarations.replacement_len()
+                + self.groups.resolved.replacement_len(),
+            self.classes.replacement_row_count_for_test(),
+        ]
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn changed_group_terminals(
         &self,
     ) -> impl Iterator<Item = (TypeGroupId, &PublishedTypeGroupTerminal)> {
-        let base_len = self.groups.entries.base_len();
         self.groups
             .entries
-            .local_iter()
-            .enumerate()
-            .map(move |(index, terminal)| {
-                let id = u32::try_from(base_len + index).expect("type group id fits u32");
-                (TypeGroupId(id), terminal)
+            .changed_iter()
+            .filter_map(|(index, terminal)| {
+                u32::try_from(index)
+                    .ok()
+                    .map(|index| (TypeGroupId(index), terminal))
             })
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn local_class_terminals(
+    pub(in crate::check::checker) fn changed_class_terminals(
         &self,
     ) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
-        self.classes.local_owned_terminals()
+        self.classes.changed_owned_terminals()
     }
 }
 
@@ -381,15 +448,20 @@ fn construction_terminal(
         PublishedTypeGroupTerminal::Ready(group) => (
             PublishedTypeDecl {
                 params: group.parameters.clone(),
+                defaults: group.parameter_defaults.clone(),
             },
             match group.surface {
                 PublishedTypeGroupSurface::Template(template) => Some(template),
                 PublishedTypeGroupSurface::Class(_) => None,
             },
         ),
-        PublishedTypeGroupTerminal::Unavailable(_) => {
-            (PublishedTypeDecl { params: Vec::new() }, None)
-        }
+        PublishedTypeGroupTerminal::Unavailable(_) => (
+            PublishedTypeDecl {
+                params: Vec::new(),
+                defaults: Vec::new(),
+            },
+            None,
+        ),
     }
 }
 
@@ -400,12 +472,25 @@ enum TypeGroupConstructionSlot {
     Frozen(PublishedTypeGroupTerminal),
 }
 
+enum InheritedClassAugmentation {
+    NotClass,
+    Ready(PublishedTypeGroup),
+    Unavailable,
+}
+
+enum InheritedTemplateAugmentation {
+    NotTemplate,
+    Ready(PublishedTypeGroup),
+    Unavailable,
+}
+
 /// Private, single-use construction authority for one exact type-group epoch.
 pub(in crate::check::checker) struct TypeGroupConstruction {
     expected: usize,
     base: Option<PublishedTypeGroups>,
     base_len: usize,
     slots: Vec<TypeGroupConstructionSlot>,
+    replacements: FxHashMap<usize, TypeGroupConstructionSlot>,
 }
 
 impl TypeGroupConstruction {
@@ -415,6 +500,7 @@ impl TypeGroupConstruction {
             base: None,
             base_len: 0,
             slots: Vec::new(),
+            replacements: FxHashMap::default(),
         }
     }
 
@@ -422,7 +508,8 @@ impl TypeGroupConstruction {
         assert!(self.base.is_none());
         assert!(base.len() <= self.expected);
         self.base_len = base.len();
-        let entries = if base.entries.is_sealed() {
+        let sparse = base.entries.prefix_overrides_enabled();
+        let mut entries = if base.entries.is_sealed() {
             base.entries
                 .fork_delta()
                 .expect("installed type-group base has no suffix")
@@ -434,7 +521,10 @@ impl TypeGroupConstruction {
                 .expect("source-compiled type-group prefix seals once");
             entries
         };
-        let (declarations, resolved) = if base.entries.is_sealed() {
+        if sparse {
+            entries.enable_prefix_overrides();
+        }
+        let (mut declarations, mut resolved) = if base.entries.is_sealed() {
             (
                 base.declarations
                     .fork_delta()
@@ -456,6 +546,10 @@ impl TypeGroupConstruction {
                 .expect("source-compiled resolution prefix seals once");
             (declarations, resolved)
         };
+        if sparse {
+            declarations.enable_prefix_overrides();
+            resolved.enable_prefix_overrides();
+        }
         self.base = Some(PublishedTypeGroups {
             entries,
             declarations,
@@ -478,6 +572,15 @@ impl TypeGroupConstruction {
         if self.base.is_none() && self.slots.is_empty() {
             self.slots = vec![TypeGroupConstructionSlot::Pending; self.expected];
         }
+        if group.index() < self.base_len {
+            let slot = self
+                .replacements
+                .entry(group.index())
+                .or_insert(TypeGroupConstructionSlot::Pending);
+            assert_eq!(*slot, TypeGroupConstructionSlot::Pending);
+            *slot = TypeGroupConstructionSlot::Building;
+            return;
+        }
         let slot = self
             .slots
             .get_mut(
@@ -496,6 +599,22 @@ impl TypeGroupConstruction {
     }
 
     fn freeze(&mut self, group: TypeGroupId, terminal: PublishedTypeGroupTerminal) {
+        if group.index() < self.base_len {
+            match self.replacements.entry(group.index()) {
+                std::collections::hash_map::Entry::Occupied(mut entry)
+                    if *entry.get() == TypeGroupConstructionSlot::Building =>
+                {
+                    entry.insert(TypeGroupConstructionSlot::Frozen(terminal));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.insert(TypeGroupConstructionSlot::Pending);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(TypeGroupConstructionSlot::Pending);
+                }
+            }
+            return;
+        }
         let slot = self
             .slots
             .get_mut(
@@ -511,7 +630,10 @@ impl TypeGroupConstruction {
 
     fn is_pending(&self, group: TypeGroupId) -> bool {
         if group.index() < self.base_len {
-            return false;
+            return self
+                .replacements
+                .get(&group.index())
+                .is_some_and(|slot| *slot == TypeGroupConstructionSlot::Pending);
         }
         if self.slots.is_empty() {
             return group.index() < self.expected;
@@ -521,9 +643,16 @@ impl TypeGroupConstruction {
             .is_some_and(|slot| *slot == TypeGroupConstructionSlot::Pending)
     }
 
+    fn has_replacement(&self, group: TypeGroupId) -> bool {
+        self.replacements.contains_key(&group.index())
+    }
+
     fn is_frozen(&self, group: TypeGroupId) -> bool {
         if group.index() < self.base_len {
-            return true;
+            return self
+                .replacements
+                .get(&group.index())
+                .is_none_or(|slot| matches!(slot, TypeGroupConstructionSlot::Frozen(_)));
         }
         self.slots
             .get(group.index() - self.base_len)
@@ -534,7 +663,7 @@ impl TypeGroupConstruction {
         if self.expected != expected || self.base_len + self.slots.len() != expected {
             return None;
         }
-        let mut publication_validations = self.base_len;
+        let mut publication_validations = 0;
         let (mut entries, mut declarations, mut resolved) = match self.base {
             Some(base) => (base.entries, base.declarations, base.resolved),
             None => (
@@ -543,6 +672,16 @@ impl TypeGroupConstruction {
                 LayeredVec::default(),
             ),
         };
+        for (index, slot) in self.replacements {
+            let TypeGroupConstructionSlot::Frozen(terminal) = slot else {
+                return None;
+            };
+            publication_validations += 1;
+            let (declaration, resolution) = construction_terminal(&terminal);
+            *entries.get_mut_local(index)? = terminal;
+            *declarations.get_mut_local(index)? = declaration;
+            *resolved.get_mut_local(index)? = resolution;
+        }
         for slot in self.slots {
             let terminal = match slot {
                 TypeGroupConstructionSlot::Frozen(terminal) => {
@@ -569,15 +708,30 @@ impl TypeGroupConstruction {
     }
 
     fn unfinished_groups(&self) -> Vec<(usize, &'static str)> {
-        self.slots
+        let mut unfinished = self
+            .replacements
             .iter()
-            .enumerate()
             .filter_map(|(index, slot)| match slot {
-                TypeGroupConstructionSlot::Pending => Some((self.base_len + index, "pending")),
-                TypeGroupConstructionSlot::Building => Some((self.base_len + index, "building")),
+                TypeGroupConstructionSlot::Pending => Some((*index, "pending")),
+                TypeGroupConstructionSlot::Building => Some((*index, "building")),
                 TypeGroupConstructionSlot::Frozen(_) => None,
             })
-            .collect()
+            .collect::<Vec<_>>();
+        unfinished.extend(
+            self.slots
+                .iter()
+                .enumerate()
+                .filter_map(|(index, slot)| match slot {
+                    TypeGroupConstructionSlot::Pending => Some((self.base_len + index, "pending")),
+                    TypeGroupConstructionSlot::Building => {
+                        Some((self.base_len + index, "building"))
+                    }
+                    TypeGroupConstructionSlot::Frozen(_) => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        unfinished.sort_by_key(|(index, _)| *index);
+        unfinished
     }
 }
 
@@ -610,6 +764,140 @@ fn parameter_defaults(
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    fn augment_inherited_template_surface(
+        &mut self,
+        group: TypeGroupId,
+        augmentation: TypeId,
+        augmentation_parameters: &[TypeParamId],
+        conflict_alternatives: &[InterfaceTypedAlternative],
+    ) -> InheritedTemplateAugmentation {
+        let inherited = self.type_environment.inherited().groups().get(group);
+        let Some(PublishedTypeGroupTerminal::Ready(published)) = inherited else {
+            return InheritedTemplateAugmentation::NotTemplate;
+        };
+        let PublishedTypeGroupSurface::Template(inherited_template) = published.surface else {
+            return InheritedTemplateAugmentation::NotTemplate;
+        };
+        let mut published = published.clone();
+        if augmentation_parameters.len() != published.parameters.len() {
+            return InheritedTemplateAugmentation::Unavailable;
+        }
+        let substitutions = augmentation_parameters
+            .iter()
+            .copied()
+            .zip(published.parameters.iter().copied())
+            .enumerate()
+            .map(|(index, (source, target))| {
+                let name = published
+                    .parameter_names
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("T{index}"));
+                (source, self.interner.intern_type_param(target, name))
+            })
+            .collect::<FxHashMap<_, _>>();
+        let augmentation = substitute(self.interner, augmentation, &substitutions);
+        let objects = [inherited_template, augmentation]
+            .into_iter()
+            .map(|ty| self.interner.store().object_type(ty).cloned())
+            .collect::<Option<Vec<_>>>();
+        let Some(objects) = objects else {
+            return InheritedTemplateAugmentation::Unavailable;
+        };
+        let merged = super::decls::interface::merge_intersection_objects(self.interner, objects);
+        published.surface =
+            PublishedTypeGroupSurface::Template(self.interner.intern_object(merged));
+        published
+            .conflict_alternatives
+            .extend(
+                conflict_alternatives
+                    .iter()
+                    .cloned()
+                    .map(|mut alternative| {
+                        alternative.types = alternative
+                            .types
+                            .into_iter()
+                            .map(|ty| substitute(self.interner, ty, &substitutions))
+                            .collect();
+                        alternative
+                    }),
+            );
+        InheritedTemplateAugmentation::Ready(published)
+    }
+
+    fn augment_inherited_class_surface(
+        &mut self,
+        group: TypeGroupId,
+        augmentation: TypeId,
+        augmentation_parameters: &[TypeParamId],
+    ) -> InheritedClassAugmentation {
+        let inherited = self.type_environment.inherited().groups().get(group);
+        let Some(PublishedTypeGroupTerminal::Ready(published)) = inherited else {
+            return InheritedClassAugmentation::NotClass;
+        };
+        let PublishedTypeGroupSurface::Class(class) = published.surface else {
+            return InheritedClassAugmentation::NotClass;
+        };
+        let published = published.clone();
+        if augmentation_parameters.len() != published.parameters.len() {
+            return InheritedClassAugmentation::Unavailable;
+        }
+        let class_lookup = ReplayClassLookup::new(
+            self.type_environment.inherited().classes(),
+            self.replay_trace.clone(),
+        );
+        let DemandOutcome::Ready(surface) =
+            PublishedClassLookup::published_class(&class_lookup, class)
+        else {
+            return InheritedClassAugmentation::Unavailable;
+        };
+        let surface = surface.clone();
+        let substitutions = augmentation_parameters
+            .iter()
+            .copied()
+            .zip(published.parameters.iter().copied())
+            .enumerate()
+            .map(|(index, (source, target))| {
+                let name = published
+                    .parameter_names
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| format!("T{index}"));
+                (source, self.interner.intern_type_param(target, name))
+            })
+            .collect::<FxHashMap<_, _>>();
+        let augmentation = substitute(self.interner, augmentation, &substitutions);
+        let objects = [surface.instance_template(), augmentation]
+            .into_iter()
+            .map(|ty| self.interner.store().object_type(ty).cloned())
+            .collect::<Option<Vec<_>>>();
+        let Some(objects) = objects else {
+            return InheritedClassAugmentation::Unavailable;
+        };
+        let merged = super::decls::interface::merge_intersection_objects(self.interner, objects);
+        let replacement = PublishedClassSurface::new(
+            class,
+            surface.type_params().to_vec(),
+            self.interner.intern_object(merged),
+            surface.static_template(),
+            surface.constructor_template(),
+        );
+        let replaced = self
+            .type_environment
+            .inherited_mut()
+            .is_some_and(|environment| {
+                environment
+                    .classes
+                    .replace_published_surface(replacement)
+                    .is_ok()
+            });
+        if replaced {
+            InheritedClassAugmentation::Ready(published)
+        } else {
+            InheritedClassAugmentation::Unavailable
+        }
+    }
+
     pub(in crate::check::checker) fn install_published_type_environment_base(
         &mut self,
         base: PublishedTypeEnvironment,
@@ -643,7 +931,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> bool {
         self.type_group_construction
             .as_ref()
-            .is_some_and(|construction| construction.is_pending(group))
+            .is_some_and(|construction| {
+                construction.is_pending(group)
+                    || (self.type_decls.has_replacement(group.index())
+                        && !construction.has_replacement(group))
+            })
     }
 
     pub(in crate::check::checker) fn type_group_construction_is_frozen(
@@ -652,13 +944,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> bool {
         self.type_group_construction
             .as_ref()
-            .is_some_and(|construction| construction.is_frozen(group))
+            .is_some_and(|construction| {
+                if self.type_decls.has_replacement(group.index())
+                    && !construction.has_replacement(group)
+                {
+                    false
+                } else {
+                    construction.is_frozen(group)
+                }
+            })
     }
 
     pub(in crate::check::checker) fn freeze_type_group(&mut self, group: TypeGroupId) {
         let declaration = self
             .type_decls
             .get(group.index())
+            .cloned()
             .expect("type group draft must exist");
         let name = self
             .binder
@@ -667,7 +968,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .expect("type group metadata must exist")
             .name
             .clone();
-        let terminal = match declaration {
+        let terminal = match &declaration {
             TypeDecl::Interface {
                 reserved,
                 recovery_params,
@@ -675,14 +976,65 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 recovery_defaults,
                 conflict_alternatives,
                 ..
-            } => PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
-                name,
-                surface: PublishedTypeGroupSurface::Template(*reserved),
-                parameters: recovery_params.clone(),
-                parameter_names: recovery_names.clone(),
-                parameter_defaults: recovery_defaults.clone(),
-                conflict_alternatives: conflict_alternatives.clone(),
-            }),
+            } => {
+                if self
+                    .private_collision_affected
+                    .contains(&ReplayOwner::TypeGroup(group))
+                {
+                    PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                        name,
+                        surface: PublishedTypeGroupSurface::Template(*reserved),
+                        parameters: recovery_params.clone(),
+                        parameter_names: recovery_names.clone(),
+                        parameter_defaults: recovery_defaults.clone(),
+                        conflict_alternatives: conflict_alternatives.clone(),
+                    })
+                } else {
+                    match self.augment_inherited_class_surface(group, *reserved, recovery_params) {
+                        InheritedClassAugmentation::Ready(mut inherited) => {
+                            inherited
+                                .conflict_alternatives
+                                .extend(conflict_alternatives.clone());
+                            PublishedTypeGroupTerminal::Ready(inherited)
+                        }
+                        InheritedClassAugmentation::NotClass => {
+                            match self.augment_inherited_template_surface(
+                                group,
+                                *reserved,
+                                recovery_params,
+                                conflict_alternatives,
+                            ) {
+                                InheritedTemplateAugmentation::Ready(inherited) => {
+                                    PublishedTypeGroupTerminal::Ready(inherited)
+                                }
+                                InheritedTemplateAugmentation::NotTemplate => {
+                                    PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                                        name,
+                                        surface: PublishedTypeGroupSurface::Template(*reserved),
+                                        parameters: recovery_params.clone(),
+                                        parameter_names: recovery_names.clone(),
+                                        parameter_defaults: recovery_defaults.clone(),
+                                        conflict_alternatives: conflict_alternatives.clone(),
+                                    })
+                                }
+                                InheritedTemplateAugmentation::Unavailable => {
+                                    PublishedTypeGroupTerminal::Unavailable(
+                                        PublishedTypeGroupUnavailable {
+                                            cause:
+                                                TypeGroupUnavailableCause::UnsupportedComposition,
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        InheritedClassAugmentation::Unavailable => {
+                            PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
+                                cause: TypeGroupUnavailableCause::UnsupportedComposition,
+                            })
+                        }
+                    }
+                }
+            }
             TypeDecl::Alias {
                 params,
                 defaults,
@@ -732,7 +1084,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     conflict_alternatives: Vec::new(),
                 })
             }
-            TypeDecl::Resolved { params } => {
+            TypeDecl::Resolved { params, defaults } => {
                 PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
                     name,
                     surface: PublishedTypeGroupSurface::Template(
@@ -744,7 +1096,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ),
                     parameters: params.clone(),
                     parameter_names: Vec::new(),
-                    parameter_defaults: vec![PublishedTypeParameterDefault::Absent; params.len()],
+                    parameter_defaults: defaults.clone(),
                     conflict_alternatives: Vec::new(),
                 })
             }
@@ -798,9 +1150,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     pub(in crate::check::checker) fn freeze_seeded_type_groups(&mut self) {
         let groups: Vec<TypeGroupId> = self
             .type_decls
-            .iter()
-            .enumerate()
-            .map(|(index, declaration)| (self.type_decls.published_len() + index, declaration))
+            .changed_entries()
+            .into_iter()
             .filter(|(_, declaration)| matches!(declaration, TypeDecl::Resolved { .. }))
             .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
             .collect();
@@ -810,11 +1161,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    pub(in crate::check::checker) fn publish_type_groups(&mut self) -> usize {
+    pub(in crate::check::checker) fn publish_type_groups(&mut self) -> TypeGroupPublicationOutcome {
         let owned_parameters: Vec<TypeParamId> = self
             .type_decls
-            .iter()
-            .flat_map(|declaration| match declaration {
+            .changed_entries()
+            .into_iter()
+            .flat_map(|(_, declaration)| match declaration {
                 TypeDecl::Interface {
                     recovery_params, ..
                 } => recovery_params.as_slice(),
@@ -826,7 +1178,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.interner
             .freeze_type_param_metadata(&owned_parameters)
             .expect("type-group binders freeze once as one validated epoch batch");
-        for declaration in self.type_decls.iter() {
+        for (_, declaration) in self.type_decls.changed_entries() {
             if let TypeDecl::Class { params, .. } = declaration {
                 assert!(params
                     .iter()
@@ -837,6 +1189,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .type_group_construction
             .take()
             .expect("type-group construction is consumed exactly once");
+        let replaced_prefix = !construction.replacements.is_empty();
         let unfinished: Vec<_> = construction
             .unfinished_groups()
             .into_iter()
@@ -862,8 +1215,42 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .staged_published_classes
             .take()
             .expect("class registry must be staged before type publication");
+        let mut identity_selection_pending = false;
+        let groups = if replaced_prefix {
+            let identities_were_installed = self.library_semantic_identities.is_some();
+            let preview = PublishedTypeEnvironment {
+                classes: self.type_environment.inherited().classes.clone(),
+                groups,
+            };
+            let selected =
+                super::library_identities::LibrarySemanticIdentities::select_for_collision_publication(
+                    self.binder,
+                    &preview,
+                    self.interner.store(),
+                );
+            if selected.all_ready() {
+                self.semantic_queries
+                    .set_library_object_template(selected.object_template());
+                self.library_semantic_identities = Some(selected);
+            } else {
+                self.semantic_queries.set_library_object_template(None);
+                identity_selection_pending = identities_were_installed;
+                self.library_semantic_identities = None;
+            }
+            preview.groups
+        } else {
+            groups
+        };
         self.type_environment.publish(groups, staged_classes);
-        publication_validations
+        if identity_selection_pending {
+            TypeGroupPublicationOutcome::LibraryIdentitySelectionPending {
+                publication_validations,
+            }
+        } else {
+            TypeGroupPublicationOutcome::Ready {
+                publication_validations,
+            }
+        }
     }
 }
 
@@ -933,7 +1320,7 @@ mod tests {
 
         let (inherited, publication_validations) =
             construction.consume(1).expect("installed base is terminal");
-        assert_eq!(publication_validations, 1);
+        assert_eq!(publication_validations, 0);
         assert_eq!(inherited.get(TypeGroupId(0)), Some(&terminal));
     }
 
@@ -958,10 +1345,32 @@ mod tests {
             construction.freeze(group, base_terminal.clone());
         }
         let (published, validations) = construction.consume(3).expect("dense suffix publishes");
-        assert_eq!(validations, 3);
+        assert_eq!(validations, 2);
         assert_eq!(published.entries.base_len(), 1);
         assert_eq!(published.entries.local_len(), 2);
         assert_eq!(published.get(TypeGroupId(0)), Some(&base_terminal));
         assert_eq!(second.groups().len(), 1);
+    }
+
+    #[test]
+    fn sparse_publication_validates_only_replacements_and_dense_suffix_rows() {
+        let terminal = PublishedTypeGroupTerminal::Unavailable(PublishedTypeGroupUnavailable {
+            cause: TypeGroupUnavailableCause::UnsupportedComposition,
+        });
+        let mut base =
+            PublishedTypeEnvironment::from_explicit_terminals_for_test(vec![terminal.clone(); 64]);
+        base.freeze_as_base().expect("published base seals");
+        let sparse = base.fork_sparse_delta().expect("sparse publication epoch");
+        let mut construction = TypeGroupConstruction::new(65);
+        construction.install_base(sparse.groups());
+        construction.begin(TypeGroupId(17));
+        construction.freeze(TypeGroupId(17), terminal.clone());
+        construction.begin(TypeGroupId(64));
+        construction.freeze(TypeGroupId(64), terminal);
+
+        let (published, validations) = construction.consume(65).expect("changed rows publish");
+        assert_eq!(validations, 2);
+        assert_eq!(published.entries.replacement_len(), 1);
+        assert_eq!(published.entries.local_len(), 1);
     }
 }

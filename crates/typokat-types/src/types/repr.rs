@@ -163,12 +163,16 @@ pub enum IntrinsicKind {
     /// The non-primitive `object` keyword. Kept distinct from the structural
     /// empty object type `{}`, which accepts represented non-nullish primitives.
     Object,
+    /// The primitive `bigint` keyword type.
+    BigInt,
+    /// The primitive `symbol` keyword type.
+    Symbol,
 }
 
 impl IntrinsicKind {
     /// The full set in canonical interning order. Adding a kind here is the only
     /// place that defines the well-known id assignment.
-    pub const ALL: [IntrinsicKind; 17] = [
+    pub const ALL: [IntrinsicKind; 19] = [
         IntrinsicKind::Error,
         IntrinsicKind::Any,
         IntrinsicKind::Unknown,
@@ -186,6 +190,8 @@ impl IntrinsicKind {
         IntrinsicKind::ThisType,
         IntrinsicKind::OmitThisParameter,
         IntrinsicKind::Object,
+        IntrinsicKind::BigInt,
+        IntrinsicKind::Symbol,
     ];
 
     /// Display name used by the type renderer (`tests/cases/README.md` →
@@ -212,6 +218,8 @@ impl IntrinsicKind {
             IntrinsicKind::ThisType => "ThisType",
             IntrinsicKind::OmitThisParameter => "OmitThisParameter",
             IntrinsicKind::Object => "object",
+            IntrinsicKind::BigInt => "bigint",
+            IntrinsicKind::Symbol => "symbol",
         }
     }
 }

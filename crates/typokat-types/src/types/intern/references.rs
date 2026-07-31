@@ -9,7 +9,7 @@ use super::*;
 use crate::types::repr::DeclaredRecipeNode;
 
 #[cfg(any(test, feature = "test-utils"))]
-const WELL_KNOWN_COUNT: usize = 17;
+const WELL_KNOWN_COUNT: usize = 19;
 
 // Reference-record domains. These discriminants are append-only.
 const CONTAINER_DOMAIN: u8 = 0;
@@ -608,6 +608,8 @@ fn well_known_ids(well_known: WellKnown) -> [TypeId; WELL_KNOWN_COUNT] {
         well_known.this_type,
         well_known.omit_this_parameter,
         well_known.object,
+        well_known.bigint,
+        well_known.symbol,
     ]
 }
 

@@ -16,6 +16,7 @@ use crate::binder::namespace::{
     collect_namespace_metadata, fill_namespace_value_attachments, finalize_namespace_metadata,
     plan_namespace_value_attachments, replay_namespace_value_attachments, NamespaceMetadataRoot,
 };
+use crate::binder::roots::{LibraryRootContributorSite, LibraryRootProjection};
 use crate::binder::scope::{Scope, ScopeGraph, ScopeId, ScopeKind};
 use crate::binder::symbol::{Symbol, SymbolId, SymbolTable};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
@@ -210,6 +211,8 @@ pub struct Binder {
     pub compilation_global: ScopeId,
     /// Shared identity owner for direct top-level namespaces in script files.
     pub script_namespace_root: ScopeId,
+    /// One-pass source/root projection retained by source-compiled library binders.
+    pub library_root_projection: Option<LibraryRootProjection>,
     /// Number of value storage slots (`ValueStorageId`s run
     /// `0..decl_count`). Includes variable bindings, function declaration names,
     /// function parameters, and dormant standalone namespace slots.
@@ -236,7 +239,6 @@ pub struct Binder {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
 pub struct LibraryBinderCheckpointEnds {
     pub scopes: usize,
     pub symbols: usize,
@@ -312,7 +314,6 @@ fn type_group_fragment_ordering_identity_for_test(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
 impl LibraryBinderCheckpoint {
     pub fn new(binder: Binder, library_units: Vec<LibraryBinderUnit>) -> Self {
         let ends = binder.checkpoint_ends();
@@ -438,6 +439,7 @@ impl LibraryBinderCheckpoint {
             prelude_module,
             compilation_global,
             script_namespace_root,
+            library_root_projection,
             decl_count,
             prelude_type_group_count,
             fn_scopes,
@@ -474,12 +476,12 @@ impl LibraryBinderCheckpoint {
                 // Nothing is sealed on the checkpoint path, so it keeps its own routing.
                 delta_compilation_global: None,
                 script_namespace_root,
+                library_root_projection,
                 prelude_type_group_count,
                 use_mode: BuilderUseMode::Continuation,
                 empty_prelude: true,
                 continuation_publication_plans: FxHashMap::default(),
                 pending_namespace_modules: Vec::new(),
-                frozen_global_augmentation_count: None,
             },
             library_units,
         )
@@ -508,7 +510,38 @@ pub enum ValueResolution {
 }
 
 impl Binder {
-    #[cfg_attr(not(test), allow(dead_code, reason = "staged WU5 continuation seam"))]
+    pub fn source_for_module(&self, module: ScopeId) -> Option<SourceUnitKey> {
+        self.module_sources.get(&module).copied()
+    }
+
+    /// Exact semantic owners whose frozen binder rows were replaced in a sparse epoch.
+    pub fn sparse_prefix_mutation_owners(
+        &self,
+    ) -> std::collections::BTreeSet<crate::binder::roots::FrozenLibraryMutationOwner> {
+        use crate::binder::roots::FrozenLibraryMutationOwner;
+
+        let mut owners = self
+            .type_groups
+            .prefix_replacements()
+            .map(FrozenLibraryMutationOwner::TypeGroup)
+            .chain(
+                self.namespaces
+                    .prefix_namespace_replacements()
+                    .map(FrozenLibraryMutationOwner::Namespace),
+            )
+            .collect::<std::collections::BTreeSet<_>>();
+        for symbol in self.symbols.prefix_replacements() {
+            owners.extend(symbol.value.map(FrozenLibraryMutationOwner::Value));
+            owners.extend(symbol.ty.map(FrozenLibraryMutationOwner::TypeGroup));
+            owners.extend(symbol.ns.map(FrozenLibraryMutationOwner::Namespace));
+        }
+        owners
+    }
+
+    pub fn take_library_root_projection(&mut self) -> Option<LibraryRootProjection> {
+        self.library_root_projection.take()
+    }
+
     pub fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {
         LibraryBinderCheckpointEnds {
             scopes: self.graph.len(),
@@ -544,6 +577,30 @@ impl Binder {
             prelude_module: self.prelude_module,
             compilation_global: self.compilation_global,
             script_namespace_root: self.script_namespace_root,
+            library_root_projection: self.library_root_projection.clone(),
+            decl_count: self.decl_count,
+            prelude_type_group_count: self.prelude_type_group_count,
+            fn_scopes: FxHashMap::default(),
+            fn_decl_ids: FxHashMap::default(),
+            block_scopes: FxHashMap::default(),
+            module_sources: self.module_sources.fork_delta()?,
+            next_source_key: self.next_source_key,
+            frozen_prefix_writes: Vec::new(),
+        })
+    }
+
+    pub fn fork_sparse_collision_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            graph: self.graph.fork_sparse_delta()?,
+            symbols: self.symbols.fork_sparse_delta()?,
+            declarations: self.declarations.fork_sparse_delta()?,
+            type_groups: self.type_groups.fork_sparse_delta()?,
+            namespaces: self.namespaces.fork_sparse_delta()?,
+            module: self.module,
+            prelude_module: self.prelude_module,
+            compilation_global: self.compilation_global,
+            script_namespace_root: self.script_namespace_root,
+            library_root_projection: self.library_root_projection.clone(),
             decl_count: self.decl_count,
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: FxHashMap::default(),
@@ -593,14 +650,14 @@ impl Binder {
         let declarations = self.declarations.local_family_row_counts_for_test();
         let namespaces = self.namespaces.local_family_row_counts_for_test();
         [
-            self.graph.local_scopes().count(),
-            self.symbols.local_symbols().count(),
+            self.graph.local_scopes().count() + self.graph.replacement_row_count_for_test(),
+            self.symbols.local_symbols().count() + self.symbols.replacement_row_count_for_test(),
             declarations[0],
             declarations[1],
             self.type_groups.local_row_count_for_test(),
             namespaces[0],
             namespaces[1],
-            self.module_sources.local_len(),
+            self.module_sources.local_len() + self.module_sources.replacement_len(),
         ]
     }
 
@@ -678,6 +735,7 @@ impl Binder {
             prelude_module,
             compilation_global,
             script_namespace_root,
+            library_root_projection: None,
             decl_count,
             prelude_type_group_count,
             fn_scopes,
@@ -1257,7 +1315,7 @@ pub struct ProjectBinderBuilder<'ast> {
     /// Modules collected but not yet classified. Only `finish`/`finish_frozen_library_continuation`
     /// drain this, so a project cannot reach a `Binder` without exactly one classification pass.
     pending_namespace_modules: Vec<PendingNamespaceModule<'ast>>,
-    frozen_global_augmentation_count: Option<usize>,
+    library_root_projection: Option<LibraryRootProjection>,
 }
 
 /// One collected module awaiting the project-wide classification pass.
@@ -1333,7 +1391,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             empty_prelude: prelude.body.is_empty(),
             continuation_publication_plans: FxHashMap::default(),
             pending_namespace_modules: Vec::new(),
-            frozen_global_augmentation_count: None,
+            library_root_projection: None,
         }
     }
 
@@ -1609,6 +1667,10 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         }
 
         let mut bound_units = Vec::with_capacity(canonical_units.len());
+        let projection = self
+            .library_root_projection
+            .get_or_insert_with(LibraryRootProjection::default);
+        projection.canonical_unit_count = canonical_units.len();
         for (file_ordinal, input_index, program, unit) in canonical_units {
             let module = self
                 .state
@@ -1623,6 +1685,36 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 .type_group_library_ordinals
                 .insert(module, file_ordinal);
             self.state.record_source_declarations(program);
+            let provenance = source_global_binding_census_with_provenance(program, unit.binding);
+            projection.source_census_count = projection.source_census_count.saturating_add(1);
+            projection.uncertain_candidate_count = projection
+                .uncertain_candidate_count
+                .saturating_add(provenance.census.uncertain_candidates.len());
+            projection.uncertain_relevant_syntax_count = projection
+                .uncertain_relevant_syntax_count
+                .saturating_add(usize::from(provenance.census.uncertain_relevant_syntax));
+            projection.explicit_global_this |= provenance.census.explicit_global_this;
+            for (name, candidate) in provenance.census.candidates {
+                let aggregate = projection.candidates.entry(name).or_default();
+                aggregate.slots.extend(candidate.slots);
+                aggregate.global_object_contributor |= candidate.global_object_contributor;
+            }
+            projection
+                .contributor_sites
+                .extend(provenance.contributor_sites.into_iter().map(|site| {
+                    LibraryRootContributorSite {
+                        name: site.name,
+                        kind: site.kind,
+                        file_ordinal,
+                        span: site.span,
+                    }
+                }));
+            projection.explicit_global_this_sites.extend(
+                provenance
+                    .explicit_global_this_sites
+                    .into_iter()
+                    .map(|span| (file_ordinal, span)),
+            );
             let ordinary_scope = if unit.binding.external_module {
                 module
             } else {
@@ -1672,11 +1764,15 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     pub fn finish(mut self, module: ScopeId) -> Binder {
         self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
-        self.state.namespaces.finalize_global_scopes(
+        let root_rows = self.state.namespaces.finalize_global_scopes(
             &mut self.state.graph,
             &mut self.state.symbols,
             &mut self.state.frozen_prefix_writes,
+            self.library_root_projection.as_mut(),
         );
+        if let Some(projection) = self.library_root_projection.as_mut() {
+            projection.root_rows = root_rows;
+        }
         Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
@@ -1687,6 +1783,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             prelude_module: self.prelude_module,
             compilation_global: self.compilation_global,
             script_namespace_root: self.script_namespace_root,
+            library_root_projection: self.library_root_projection,
             decl_count: self.state.next_value_storage,
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: self.state.fn_scopes,
@@ -1711,6 +1808,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             prelude_module,
             compilation_global,
             script_namespace_root,
+            library_root_projection,
             decl_count,
             prelude_type_group_count: _,
             fn_scopes: _,
@@ -1732,7 +1830,6 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         ));
         let prelude_type_group_count =
             u32::try_from(type_groups.len()).expect("frozen type group count fits u32");
-        let frozen_global_augmentation_count = namespaces.global_augmentation_count();
         (
             Self {
                 state: BindState {
@@ -1764,7 +1861,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 empty_prelude: true,
                 continuation_publication_plans: FxHashMap::default(),
                 pending_namespace_modules: Vec::new(),
-                frozen_global_augmentation_count: Some(frozen_global_augmentation_count),
+                library_root_projection,
             },
             next_source,
         )
@@ -1776,15 +1873,15 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         module: ScopeId,
     ) -> Result<Binder, &'static str> {
         assert_eq!(self.use_mode, BuilderUseMode::Continuation);
-        if self.state.namespaces.global_augmentation_count()
-            != self
-                .frozen_global_augmentation_count
-                .expect("continuation records its frozen global prefix")
-        {
-            return Err("frozen-library continuation does not yet admit declare global");
-        }
         self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
+        self.state
+            .namespaces
+            .publish_local_umd_export_assignment_aliases(
+                &mut self.state.graph,
+                self.script_namespace_root,
+                &mut self.state.frozen_prefix_writes,
+            );
         self.state
             .graph
             .get_mut(module)
@@ -1800,6 +1897,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             prelude_module: self.prelude_module,
             compilation_global: self.compilation_global,
             script_namespace_root: self.script_namespace_root,
+            library_root_projection: self.library_root_projection,
             decl_count: self.state.next_value_storage,
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: self.state.fn_scopes,
@@ -3393,7 +3491,7 @@ with (source) { var RegExp = 1; }
                     fragment_scope_lookups: 1,
                     placement_merge_rows: 9,
                     global_rows: 0,
-                    umd_rows: 1,
+                    umd_rows: 2,
                     ambient_alias_member_rows: 6,
                     umd_statement_queries: 1,
                     global_statement_queries: 2,
@@ -5142,11 +5240,8 @@ namespace Standalone { export const value = 1; }
         }
     }
 
-    /// The `declare global` half. The frozen base cannot admit a new global augmentation at all,
-    /// so the continuation refuses the whole run — a typed `Err`, which the project path used to
-    /// turn into a panic.
     #[test]
-    fn frozen_library_continuation_refuses_declare_global() {
+    fn frozen_library_continuation_admits_declare_global() {
         let (base, _library_allocator) = frozen_merge_target_base();
 
         for source in [
@@ -5163,10 +5258,11 @@ namespace Standalone { export const value = 1; }
             let unit = CompilationUnit::implementation(key, &user.program);
             builder.reserve_script_namespace_roots([(&user.program, unit)]);
             let (module, _) = builder.add_module(&user.program, &[], unit);
-            assert_eq!(
-                builder.finish_frozen_library_continuation(module).err(),
-                Some("frozen-library continuation does not yet admit declare global"),
-                "declare global is refused, not bound: {source}"
+            let result = builder.finish_frozen_library_continuation(module);
+            assert!(
+                result.is_ok(),
+                "declare global must bind: {source}: {:?}",
+                result.err()
             );
         }
     }

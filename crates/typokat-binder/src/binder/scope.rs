@@ -5,8 +5,7 @@
 //! parallel checking.
 
 use crate::binder::symbol::SymbolId;
-use crate::types::layered::LayeredVec;
-use rustc_hash::FxHashMap;
+use crate::types::layered::{LayeredMap, LayeredVec};
 
 /// A refused write into a scope that belongs to the frozen library prefix.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -53,7 +52,20 @@ pub struct Scope {
     /// Shared public namespace surface consulted before the lexical parent.
     pub namespace_public: Option<ScopeId>,
     pub kind: ScopeKind,
-    pub symbols: FxHashMap<String, SymbolId>,
+    pub symbols: LayeredMap<String, SymbolId>,
+}
+
+impl Clone for Scope {
+    fn clone(&self) -> Self {
+        let mut symbols = self.symbols.clone();
+        symbols.enable_prefix_overrides();
+        Self {
+            parent: self.parent,
+            namespace_public: self.namespace_public,
+            kind: self.kind,
+            symbols,
+        }
+    }
 }
 
 impl Scope {
@@ -62,7 +74,7 @@ impl Scope {
             parent,
             namespace_public: None,
             kind,
-            symbols: FxHashMap::default(),
+            symbols: LayeredMap::default(),
         }
     }
 
@@ -136,13 +148,27 @@ impl ScopeGraph {
             })
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn replacement_row_count_for_test(&self) -> usize {
+        self.scopes.replacement_len()
+    }
+
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
+        for scope in self.scopes.local_iter_mut() {
+            scope.symbols.freeze_as_base()?;
+        }
         self.scopes.freeze_as_base()
     }
 
     pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             scopes: self.scopes.fork_delta()?,
+        })
+    }
+
+    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            scopes: self.scopes.fork_sparse_delta()?,
         })
     }
 
@@ -162,9 +188,24 @@ impl ScopeGraph {
         symbol: SymbolId,
     ) -> Result<Option<SymbolId>, FrozenScopeWrite> {
         match self.get_mut(scope) {
-            Some(s) => Ok(s.symbols.insert(name.into(), symbol)),
+            Some(s) => s
+                .symbols
+                .insert_local(name.into(), symbol)
+                .map_err(|_| FrozenScopeWrite),
             None => Err(FrozenScopeWrite),
         }
+    }
+
+    pub fn remove(
+        &mut self,
+        scope: ScopeId,
+        name: &String,
+    ) -> Result<Option<SymbolId>, FrozenScopeWrite> {
+        self.get_mut(scope)
+            .ok_or(FrozenScopeWrite)?
+            .symbols
+            .remove_visible(name)
+            .map_err(|_| FrozenScopeWrite)
     }
 
     /// Resolve `name` through local, namespace-public, then lexical-parent scopes.

@@ -9,6 +9,7 @@ use super::function_groups::{
     FunctionNamespacePayload,
 };
 use super::lexical_events::LexicalOwnerPhase;
+use super::replay_index::ReplayOwner;
 use crate::binder::declaration::{DeclarationKind, ValueStorageId};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
@@ -21,8 +22,8 @@ use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, Function, ObjectPropertyKind, Statement,
-    TSModuleDeclaration, TSModuleDeclarationBody, TryStatement, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    TSModuleDeclaration, TSModuleDeclarationBody, TSType, TSTypeName, TryStatement,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -143,6 +144,24 @@ impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    fn selected_global_augmentation_requires_incomplete(&self, binding_start: u32) -> bool {
+        if !self
+            .binder
+            .global_augmentation_requires_incomplete(self.current_module, binding_start)
+        {
+            return false;
+        }
+        self.private_collision_affected.is_empty()
+            || self
+                .binder
+                .global_augmentation_value_storages(self.current_module, binding_start)
+                .into_iter()
+                .any(|storage| {
+                    self.private_collision_affected
+                        .contains(&ReplayOwner::Value(storage))
+                })
+    }
+
     pub(in crate::check::checker) fn precompute_standalone_namespace_value_aliases(
         &mut self,
         modules: &[(ScopeId, &'ast [Statement<'ast>])],
@@ -438,7 +457,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if !self.check_prepared_namespace_declaration(declaration)
                     && !module_declaration_is_type_only(declaration) =>
             {
-                #[cfg(test)]
                 if self
                     .binder
                     .library_module_reporting_owns(self.current_module, declaration.span.start)
@@ -453,10 +471,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             Statement::TSModuleDeclaration(_) => {}
             Statement::TSGlobalDeclaration(global)
-                if self.binder.global_augmentation_requires_incomplete(
-                    self.current_module,
-                    global.global_span.start,
-                ) =>
+                if self
+                    .selected_global_augmentation_requires_incomplete(global.global_span.start) =>
             {
                 self.record_incomplete(
                     "decl/global-declaration/self",
@@ -480,7 +496,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             Statement::ExportDefaultDeclaration(_) => {
-                #[cfg(test)]
                 if self
                     .binder
                     .library_export_default_reporting_owns(self.current_module, stmt.span().start)
@@ -575,7 +590,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if !self.check_prepared_namespace_declaration(declaration)
                     && !module_declaration_is_type_only(declaration) =>
             {
-                #[cfg(test)]
                 if self
                     .binder
                     .library_module_reporting_owns(self.current_module, declaration.span.start)
@@ -590,10 +604,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             Declaration::TSModuleDeclaration(_) => {}
             Declaration::TSGlobalDeclaration(global)
-                if self.binder.global_augmentation_requires_incomplete(
-                    self.current_module,
-                    global.global_span.start,
-                ) =>
+                if self
+                    .selected_global_augmentation_requires_incomplete(global.global_span.start) =>
             {
                 self.record_incomplete(
                     "decl/global-declaration/self",
@@ -1056,6 +1068,80 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
+    pub(in crate::check::checker) fn reserve_local_type_annotation_surfaces(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+    ) {
+        for statement in statements {
+            let declaration = match statement {
+                Statement::VariableDeclaration(declaration) => declaration,
+                Statement::ExportNamedDeclaration(export) => {
+                    let Some(Declaration::VariableDeclaration(declaration)) = &export.declaration
+                    else {
+                        continue;
+                    };
+                    declaration
+                }
+                _ => continue,
+            };
+            for declarator in &declaration.declarations {
+                let Some(type_annotation) = &declarator.type_annotation else {
+                    continue;
+                };
+                let TSType::TSTypeReference(reference) = &type_annotation.type_annotation else {
+                    continue;
+                };
+                let TSTypeName::IdentifierReference(identifier) = &reference.type_name else {
+                    continue;
+                };
+                let group = if self.capture_compact_replay_dependencies {
+                    self.compact_type_decl_id_replay(scope, identifier.name.as_str())
+                } else {
+                    self.type_decl_id_replay(scope, identifier.name.as_str())
+                };
+                let Some(group) = group else {
+                    continue;
+                };
+                let Some(TypeDecl::Interface {
+                    reserved, params, ..
+                }) = self.type_decls.get(group.index())
+                else {
+                    continue;
+                };
+                if group.index() < self.type_decls.published_len() || !params.is_empty() {
+                    continue;
+                }
+                let Some(decl_id) = variable_declaration_decl_id(
+                    self.binder,
+                    scope,
+                    declaration.kind,
+                    &declarator.id,
+                ) else {
+                    continue;
+                };
+                let surface_key = (self.current_module, declarator.span.start);
+                if self.var_annotation_surfaces.contains_key(&surface_key) {
+                    continue;
+                }
+                let reserved = *reserved;
+                self.reserve_variable_annotation_type(
+                    scope,
+                    declaration.kind,
+                    &declarator.id,
+                    decl_id,
+                    reserved,
+                );
+                self.var_annotation_surfaces.insert(
+                    surface_key,
+                    VarAnnotationSurface {
+                        annotation: Some(reserved),
+                    },
+                );
+            }
+        }
+    }
+
     fn reserve_var_annotation_statement(&mut self, scope: ScopeId, statement: &Statement<'_>) {
         match statement {
             Statement::VariableDeclaration(decl) => {
@@ -1135,9 +1221,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         declaration: &VariableDeclaration<'_>,
     ) {
-        if !declaration.kind.is_var() {
-            return;
-        }
         for declarator in &declaration.declarations {
             let Some(type_annotation) = &declarator.type_annotation else {
                 continue;
@@ -1177,12 +1260,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Return the already-lowered explicit `var` annotation at source execution.
     fn take_var_annotation_surface(
         &mut self,
-        kind: VariableDeclarationKind,
+        _kind: VariableDeclarationKind,
         declarator: &VariableDeclarator<'_>,
     ) -> Option<Option<TypeId>> {
-        if !kind.is_var() {
-            return None;
-        }
         let surface = self
             .var_annotation_surfaces
             .remove(&(self.current_module, declarator.span.start))?;
@@ -1200,30 +1280,46 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         decl_id: ValueStorageId,
         ty: TypeId,
     ) {
+        let replay_decl_id = match (kind.is_var(), pattern) {
+            (true, BindingPattern::BindingIdentifier(identifier)) => self
+                .private_collision_value_winners_by_name
+                .get(identifier.name.as_str())
+                .copied()
+                .filter(|winner| {
+                    self.private_collision_affected
+                        .contains(&ReplayOwner::Value(*winner))
+                })
+                .unwrap_or(decl_id),
+            _ => decl_id,
+        };
         if kind.is_var() {
             if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
-                self.set_variable_decl_type(scope, kind, pattern, decl_id, function_ty);
+                self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, function_ty);
                 self.var_value_type_states
-                    .insert(decl_id, VarValueTypeState::Existing);
+                    .insert(replay_decl_id, VarValueTypeState::Existing);
                 return;
             }
-            match self.var_value_type_states.get(&decl_id) {
+            match self.var_value_type_states.get(&replay_decl_id) {
                 Some(VarValueTypeState::Source) | Some(VarValueTypeState::Existing) => {
                     return;
                 }
                 Some(VarValueTypeState::Provisional) => {}
-                None if self.decl_type_replay(decl_id).is_some() => {
+                None if self.decl_type_replay(replay_decl_id).is_some()
+                    && !self
+                        .private_collision_affected
+                        .contains(&ReplayOwner::Value(replay_decl_id)) =>
+                {
                     self.var_value_type_states
-                        .insert(decl_id, VarValueTypeState::Existing);
+                        .insert(replay_decl_id, VarValueTypeState::Existing);
                     return;
                 }
                 None => {}
             }
         }
-        self.set_variable_decl_type(scope, kind, pattern, decl_id, ty);
+        self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, ty);
         if kind.is_var() {
             self.var_value_type_states
-                .insert(decl_id, VarValueTypeState::Source);
+                .insert(replay_decl_id, VarValueTypeState::Source);
         }
     }
 
@@ -1237,25 +1333,41 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         decl_id: ValueStorageId,
         ty: TypeId,
     ) {
+        let replay_decl_id = match (kind.is_var(), pattern) {
+            (true, BindingPattern::BindingIdentifier(identifier)) => self
+                .private_collision_value_winners_by_name
+                .get(identifier.name.as_str())
+                .copied()
+                .filter(|winner| {
+                    self.private_collision_affected
+                        .contains(&ReplayOwner::Value(*winner))
+                })
+                .unwrap_or(decl_id),
+            _ => decl_id,
+        };
         if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
-            self.set_variable_decl_type(scope, kind, pattern, decl_id, function_ty);
+            self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, function_ty);
             self.var_value_type_states
-                .insert(decl_id, VarValueTypeState::Existing);
+                .insert(replay_decl_id, VarValueTypeState::Existing);
             return;
         }
-        match self.var_value_type_states.get(&decl_id) {
+        match self.var_value_type_states.get(&replay_decl_id) {
             Some(VarValueTypeState::Source) | Some(VarValueTypeState::Existing) => return,
             Some(VarValueTypeState::Provisional) => return,
-            None if self.decl_type_replay(decl_id).is_some() => {
+            None if self.decl_type_replay(replay_decl_id).is_some()
+                && !self
+                    .private_collision_affected
+                    .contains(&ReplayOwner::Value(replay_decl_id)) =>
+            {
                 self.var_value_type_states
-                    .insert(decl_id, VarValueTypeState::Existing);
+                    .insert(replay_decl_id, VarValueTypeState::Existing);
                 return;
             }
             None => {}
         }
-        self.set_variable_decl_type(scope, kind, pattern, decl_id, ty);
+        self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, ty);
         self.var_value_type_states
-            .insert(decl_id, VarValueTypeState::Provisional);
+            .insert(replay_decl_id, VarValueTypeState::Provisional);
     }
 
     /// A `var` merged with a function keeps the callable surface in the value slot.
@@ -1379,13 +1491,55 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         name: &str,
     ) -> Option<FunctionGroupIdentity> {
-        let identity =
+        let mut identity =
             super::function_groups::FunctionGroupRegistry::<Ticket>::function_namespace_identity(
                 self.binder,
                 scope,
                 name,
             )?;
+        if let Some(tail) = self
+            .function_group_precedence_tails_by_name
+            .get(name)
+            .copied()
+        {
+            identity
+                .participants
+                .sort_by_key(|participant| *participant == tail);
+        }
+        let inherited_winner =
+            matches!(self.current_source, crate::source::SourceUnit::User { .. })
+                .then(|| {
+                    self.private_collision_value_winners_by_name
+                        .get(name)
+                        .copied()
+                })
+                .flatten();
+        let inherited_participants = if inherited_winner.is_some() {
+            identity
+                .participants
+                .iter()
+                .copied()
+                .filter(|declaration| self.decl_type_replay(*declaration).is_some())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let inherited_call_signatures = inherited_winner
+            .and_then(|declaration| self.decl_type_replay(declaration))
+            .and_then(|ty| {
+                self.interner
+                    .store()
+                    .object_type(ty)
+                    .map(|object| object.call_signatures.clone())
+                    .or_else(|| self.interner.store().function_type(ty).map(|_| vec![ty]))
+            })
+            .unwrap_or_default();
         self.function_groups.register(identity.clone());
+        self.function_groups.seed_inherited_publication(
+            identity.symbol,
+            &inherited_participants,
+            inherited_call_signatures,
+        );
         Some(identity)
     }
 
@@ -1621,7 +1775,46 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     fn publish_function_type(&mut self, scope: ScopeId, func: &Function<'_>, function_ty: TypeId) {
+        let root_winner = func.id.as_ref().and_then(|id| {
+            self.private_collision_value_winners_by_name
+                .get(id.name.as_str())
+                .copied()
+        });
+        if matches!(
+            self.current_source,
+            crate::source::SourceUnit::Library { .. }
+        ) {
+            if let Some(winner) = root_winner {
+                self.publish_copied_decl_type_replay(winner, function_ty);
+            }
+        }
         if let Some(decl_id) = self.function_decl_id(func) {
+            let inherited = matches!(self.current_source, crate::source::SourceUnit::User { .. })
+                .then_some(root_winner)
+                .flatten()
+                .and_then(|winner| {
+                    self.decl_type_replay(winner)
+                        .map(|inherited| (winner, inherited))
+                });
+            let function_ty = inherited
+                .map(|(winner, inherited)| {
+                    let merged = if let Some(mut object) =
+                        self.interner.store().object_type(inherited).cloned()
+                    {
+                        object.call_signatures.push(function_ty);
+                        self.interner.intern_object(object)
+                    } else if self.interner.store().function_type(inherited).is_some() {
+                        self.interner.intern_object(ObjectType {
+                            call_signatures: vec![inherited, function_ty],
+                            ..Default::default()
+                        })
+                    } else {
+                        function_ty
+                    };
+                    self.publish_copied_decl_type_replay(winner, merged);
+                    merged
+                })
+                .unwrap_or(function_ty);
             if let Some(symbol_id) = func
                 .id
                 .as_ref()
@@ -1679,8 +1872,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             });
         }
         for declaration in &publication.participants {
+            if publication.prepublished_participants.contains(declaration) {
+                continue;
+            }
             assert!(
-                self.decl_type_replay(*declaration).is_none(),
+                self.decl_type_replay(*declaration).is_none()
+                    || (self
+                        .private_collision_affected
+                        .contains(&super::replay_index::ReplayOwner::Value(*declaration))
+                        && self.decl_types.is_unoverridden_frozen_slot(*declaration)),
                 "function group participant was published before the atomic object"
             );
         }
@@ -1724,6 +1924,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .fn_decl_ids
             .get(&(self.current_module, func.span.start))
             .copied()
+            .or_else(|| {
+                let crate::source::SourceUnit::Library { file_ordinal } = self.current_source
+                else {
+                    return None;
+                };
+                self.private_library_value_owner_by_site
+                    .get(&(file_ordinal, func.span.start))
+                    .copied()
+                    .flatten()
+            })
     }
 
     fn publish_reserved_overload_group(

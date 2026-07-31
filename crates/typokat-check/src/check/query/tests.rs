@@ -161,6 +161,8 @@ fn regular_application_cycle_costs_one_budget_unit() {
         &projection_memo,
         &evaluator_memo,
         0,
+        false,
+        None,
     )
     .plan(&[application]);
 
@@ -243,6 +245,8 @@ fn non_regular_application_exhausts_exactly_at_129_and_writes_nothing() {
         &projection_memo,
         &evaluator_memo,
         0,
+        false,
+        None,
     )
     .plan(&[application]);
     assert_eq!(transaction.pending_projection_writes.len(), 128);
@@ -2141,8 +2145,16 @@ fn borrowed_durable_identity_requires_explicit_admission() {
 
     let published = PublishedClasses::empty();
     let projection = FxHashMap::default();
-    let transaction = ProjectionPlanner::new(&mut interner, &published, &projection, &durable, 0)
-        .plan(&[conditional]);
+    let transaction = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection,
+        &durable,
+        0,
+        false,
+        None,
+    )
+    .plan(&[conditional]);
     assert_eq!(transaction.plan.normalize(conditional), Ok(conditional));
     assert_eq!(
         transaction
@@ -2174,6 +2186,8 @@ fn local_evaluation_override_wins_and_commits_only_the_delta() {
             &projection,
             &state.evaluation_memo,
             0,
+            false,
+            None,
         );
         planner.record_evaluation(conditional, wk.string);
         planner.finish()
@@ -2336,7 +2350,15 @@ fn normalization_follows_borrowed_durable_chain_without_local_copies() {
     let durable = FxHashMap::from_iter([(first, second), (second, wk.string)]);
     let published = PublishedClasses::empty();
     let projection = FxHashMap::default();
-    let planner = ProjectionPlanner::new(&mut interner, &published, &projection, &durable, 0);
+    let planner = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection,
+        &durable,
+        0,
+        false,
+        None,
+    );
     assert_eq!(planner.plan.normalize(first), Ok(wk.string));
     assert!(planner.working_evaluation_memo.is_empty());
     assert!(planner.plan.evaluation_overlay.is_empty());

@@ -3,7 +3,7 @@
 use super::profile::{ExactLibraryProfile, ExactLibrarySource};
 use crate::binder::bind::LibraryBinderCheckpoint;
 use crate::check::checker::library_compiler::{
-    compile_owned_injected_base_profile, compile_owned_injected_profile,
+    compile_owned_injected_base_profile_with_plan, compile_owned_injected_profile,
     freeze_library_runtime_product, CompiledLibraryRuntimeProduct, InjectedLibrarySource,
     OwnedLibraryRuntimeState,
 };
@@ -268,12 +268,18 @@ impl LibraryCompiler {
 /// Compile a profile straight into the owned runtime state the frozen base is sealed from.
 ///
 /// This is the production route to a default-library base: no artifact is admitted, the
-/// collision replay index `compile` assembles is deferred to the run that collides (ADR-0017),
+/// live source trace becomes the compact collision plan retained by the frozen base (ADR-0020),
 /// and the library's own records are dropped rather than retained (ADR-0018) — the pinned suite
 /// census in `tests/library_owned_records.rs` is their witness.
 pub(crate) fn compile_owned_library_runtime(
     profile: &ExactLibraryProfile,
-) -> Result<OwnedLibraryRuntimeState, LibraryCompilerError> {
+) -> Result<
+    (
+        OwnedLibraryRuntimeState,
+        std::sync::Arc<crate::check::checker::replay_index::CollisionReplayPlan>,
+    ),
+    LibraryCompilerError,
+> {
     #[cfg(test)]
     {
         COMPILER_INVOCATIONS.set(COMPILER_INVOCATIONS.get().saturating_add(1));
@@ -284,16 +290,15 @@ pub(crate) fn compile_owned_library_runtime(
     }
     let owned_sources = owned_library_sources(profile.sources())?;
     let injected = injected_library_sources(&owned_sources);
-    let (run, runtime) = compile_owned_injected_base_profile(&injected).map_err(|error| {
-        LibraryCompilerError::Compilation {
-            message: format!("{error:?}"),
-        }
+    let (run, runtime, collision_plan) = compile_owned_injected_base_profile_with_plan(&injected)
+        .map_err(|error| LibraryCompilerError::Compilation {
+        message: format!("{error:?}"),
     })?;
     #[cfg(test)]
     record_phase_counts(&run.phase_counts);
     #[cfg(not(test))]
     let _ = run;
-    Ok(runtime)
+    Ok((runtime, collision_plan))
 }
 
 pub(super) type OwnedLibrarySource = (LibraryFileOrdinal, String, String);
@@ -426,17 +431,17 @@ mod tests {
             digest(&evidence.diagnostics),
             "79ef18a2496c296b380e3d37dd71e589ad036614ce2fe0f9b49073cc3bf5d427"
         );
-        assert_eq!(run.library_records.len() - diagnostic_count, 610);
-        assert_eq!(evidence.incompletes.len(), 97_796);
+        assert_eq!(run.library_records.len() - diagnostic_count, 433);
+        assert_eq!(evidence.incompletes.len(), 69_619);
         assert_eq!(
             digest(&evidence.incompletes),
-            "8c268088f8afd8048690584008c40a49cd3337b91f345b2e879d625525ccf6d8"
+            "6febf130a617d6108b40e28e6aaecacb9aa247218a183e5ce0de11f274d18e51"
         );
-        assert_eq!(run.library_records.len(), 875);
-        assert_eq!(evidence.ledger.len(), 223_016);
+        assert_eq!(run.library_records.len(), 698);
+        assert_eq!(evidence.ledger.len(), 194_839);
         assert_eq!(
             digest(&evidence.ledger),
-            "33204da8512a79ba77cc647f1f5641c91726e4a6aaa7b7a394d0851e5f7bd31c"
+            "dbfe5132c3d37c5378c177df22b9f00ec1fab26713ce9b80a57c43a7dccb50e3"
         );
         assert_eq!(owned_sources.len(), 82);
     }

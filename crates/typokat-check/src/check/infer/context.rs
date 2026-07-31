@@ -98,6 +98,30 @@ impl<'query> InferenceContext<'query> {
             return;
         }
 
+        // Call-site inference treats `null`/`undefined` as non-inference members when a
+        // nullable union has exactly one substantive target. Contextual argument walking
+        // uses the same target, so fresh literals retain their structural candidates.
+        if !self.union_target_descent && interner.store().tag(target) == TypeTag::Union {
+            let substantive = interner
+                .store()
+                .union_members(target)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|member| {
+                    !matches!(
+                        interner.store().intrinsic_kind(*member),
+                        Some(IntrinsicKind::Null | IntrinsicKind::Undefined)
+                    )
+                })
+                .collect::<Vec<_>>();
+            if let [member] = substantive.as_slice() {
+                self.infer(interner, source, *member, candidates);
+                self.visited.remove(&(source, target));
+                return;
+            }
+        }
+
         // M25 conditional mode: a union target descends into members. Naked infer
         // members are low-priority whole-check candidates and are dropped when a
         // structural member of THIS union bound the same binder.

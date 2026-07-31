@@ -156,7 +156,9 @@ fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
     let base_array = base.intern_array(wk.string);
     let base_literal = base.intern_literal(LiteralValue::String("base".to_owned()));
     let base_parameter_id = TypeParamId(90_001);
-    let _base_parameter = base.intern_type_param(base_parameter_id, "T");
+    let base_parameter = base.intern_type_param(base_parameter_id, "T");
+    assert_eq!(base.store().type_param_name(base_parameter_id), Some("T"));
+    assert_eq!(base.store().type_param_name(TypeParamId(90_999)), None);
     assert!(base.set_type_param_constraint(base_parameter_id, wk.string));
 
     let base_reserved = base.reserve_object();
@@ -181,6 +183,17 @@ fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
     let mut second = base.fork_delta().expect("second private suffix forks");
     assert!(first.store().shares_base_rows_with(second.store()));
     assert!(first.shares_base_indexes_with(&second));
+    assert_eq!(first.store().type_param_name(base_parameter_id), Some("T"));
+    assert_eq!(second.store().type_param_name(base_parameter_id), Some("T"));
+    assert_eq!(
+        first.intern_type_param(base_parameter_id, "RenamedBase"),
+        base_parameter
+    );
+    assert_eq!(
+        first.store().type_param_name(base_parameter_id),
+        Some("T"),
+        "the exact index preserves the first rendering name"
+    );
     assert!(!Arc::ptr_eq(
         first.store().semantic_graph_identity(),
         &old_graph
@@ -212,6 +225,22 @@ fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
     );
     let next_local = first.intern_array(first_local);
     assert_eq!(next_local, TypeId(prefix_id + 1));
+    let suffix_parameter_id = TypeParamId(900_001);
+    let suffix_parameter = first.intern_type_param(suffix_parameter_id, "Suffix");
+    assert_eq!(
+        first.store().type_param_name(suffix_parameter_id),
+        Some("Suffix")
+    );
+    assert_eq!(
+        first.intern_type_param(suffix_parameter_id, "RenamedSuffix"),
+        suffix_parameter
+    );
+    assert_eq!(
+        first.store().type_param_name(suffix_parameter_id),
+        Some("Suffix")
+    );
+    assert_eq!(second.store().type_param_name(suffix_parameter_id), None);
+    assert_eq!(first.store().type_param_name(TypeParamId(u32::MAX)), None);
     assert_eq!(
         second.store().len(),
         prefix_len,

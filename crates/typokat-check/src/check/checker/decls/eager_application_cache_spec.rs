@@ -109,6 +109,7 @@ fn inherited_constructing_pass<'a>(
         binder,
         vec![TypeDecl::Resolved {
             params: vec![param],
+            defaults: vec![PublishedTypeParameterDefault::Absent],
         }],
         vec![None],
         super::super::context::DeclTypes::new(binder.decl_count),

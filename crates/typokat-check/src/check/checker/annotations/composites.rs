@@ -565,6 +565,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         operand: &TSType<'_>,
     ) -> Option<TypeId> {
+        if self.capture_compact_replay_dependencies {
+            let _ = self.compact_type_decl_id_replay(scope, "Array");
+        }
         match operand {
             TSType::TSArrayType(array) => {
                 let element =

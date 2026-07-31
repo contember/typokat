@@ -310,13 +310,12 @@ and validated the same way.
 ### Frozen default-library prefix (backlog `102` / `103`)
 
 On the `Library` base the library's binder tables are a sealed prefix a user delta may never
-mutate ([ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)). Backlog `102`
-made every refused write **recorded** rather than silent: the declaration reports
-`incomplete[bind/frozen-library-global/merge-refused]` at its own binding, and the run exits
-`3`. What the merge should have *produced* is backlog `103`'s, so these remain divergences.
-Fresh script-scope globals are unaffected — they publish into the delta global layer and are
-ordinary declarations. Every row below is pinned by the `b102_frozen_prefix_writes/` corpus and
-cross-checked against `tsc 6.0.3 --strict --target es2025 --noEmit`.
+mutate ([ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)). Backlog `102` made
+every attempted write visible to routing; backlog `103` now rebuilds the affected closure in a
+private epoch. Fresh script-scope globals still publish through the ordinary delta. The remaining
+rows below are duplicate-declaration diagnostics typokat does not yet emit, pinned by the
+`b102_frozen_prefix_writes/` corpus and cross-checked against
+`tsc 6.0.3 --strict --target es2025 --noEmit`.
 
 - `TK2403` *subsequent variable declarations must have the same type* is not emitted when a
   script `var` redeclares a library global with a different type; the library declaration wins
@@ -328,40 +327,6 @@ cross-checked against `tsc 6.0.3 --strict --target es2025 --noEmit`.
 - `TK2300` *duplicate identifier* is not emitted when a script declaration collides with a
   library declaration in another declaration space.
   <!-- div: id=library/duplicate-identifier dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_duplicate_identifier.ts -->
-- **Over-report:** a user overload of a library function cannot be appended to the frozen
-  symbol, so calls that match only the user's signature are rejected against the library
-  signature (`TK2554`/`TK2345`) where tsc is clean. The safe direction, but a false positive on
-  legal input.
-  <!-- div: id=library/refused-overload-arity dir=over scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_function_overload_merge.ts -->
-
-Backlog `103`'s **guard tier** extends the same channel to the shapes that used to *panic*: an
-`interface`/`type`/`class`/`namespace` merging into a library-owned name. Those are now refusals
-too, pinned by the `b103_library_merge_refusals/` corpora against the same `tsc` invocation. The
-merge itself still does not happen, which is what the rows below record; making it happen is
-backlog `103`'s correctness tier.
-
-- **Over-report:** a user `interface` that reopens a library-owned type group (`Array`, `String`,
-  `Window`, …) cannot append its fragment, so reads of the augmented member are rejected with
-  `TK2339` where tsc accepts them. The safe direction, but a false positive on legal input.
-  <!-- div: id=library/refused-interface-merge dir=over scope=s-member-access owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b103_library_merge_refusals/library_interface_merge.ts -->
-- **Over-report:** a user `namespace`/`declare namespace` that reopens a library namespace cannot
-  append its fragment, so its own members are not reachable through the namespace and qualified
-  reads report `TK2694` where tsc is clean.
-  <!-- div: id=library/refused-namespace-merge dir=over scope=b-namespaces owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b103_library_merge_refusals/library_namespace_merge.ts -->
-- An `interface` whose name is a library **value** (`interface console`) cannot take the frozen
-  symbol's type slot, so the annotation degrades to an error type and every member read through it
-  is **not reported** — including members that were never declared. tsc types the annotation as
-  the user's interface and checks those reads.
-  <!-- div: id=library/refused-value-name-type-slot dir=under scope=s-member-access owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b103_library_merge_refusals/library_value_name_interface_merge.ts -->
-- `declare global` is **not supported** on the library base at all: the frozen prefix admits no new
-  global augmentation, so the whole run fails closed with
-  `frozen-library continuation does not yet admit declare global` and renders no user results
-  (CLI exit `2`). tsc checks the file normally. This is a refusal, not silence — but it means no
-  diagnostics for that project are produced at all. Pinned by
-  `driver::tests::a_declare_global_project_refuses_the_run_instead_of_panicking`, because a marker
-  fixture cannot express a run-level failure.
-  <!-- div: id=library/declare-global-unsupported dir=under scope=b-namespaces owner=../backlog/103-library-merge-panics-and-routing.md witness=../../crates/typokat-driver/src/driver.rs -->
-
 ### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,

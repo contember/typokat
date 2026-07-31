@@ -39,6 +39,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// conditionals and other types are unchanged. Exhaustion reports `TK2589` at
     /// the demand span, a documented tsc span divergence.
     pub(in crate::check::checker) fn evaluate_type(&mut self, ty: TypeId) -> DemandOutcome<TypeId> {
+        let array_definitely_lacks_then =
+            self.library_semantic_identities
+                .as_ref()
+                .is_some_and(|identities| {
+                    identities.array_definitely_lacks_then(self.interner.store())
+                });
+        self.semantic_queries
+            .set_array_definitely_lacks_then(array_definitely_lacks_then);
         self.with_semantic_query(|query| query.demand(ty))
     }
 
@@ -103,6 +111,9 @@ enum Task {
     /// result object type, and push it. The metadata carries each property's name +
     /// resolved optional/readonly flags.
     BuildMappedObject(Vec<MappedProp>),
+    /// M26: materialize a non-homomorphic `K in string`/`K in number` key source as
+    /// the corresponding index signature after evaluating its value template.
+    BuildMappedIndex { string: bool, number: bool },
     /// M28: the deferred keyof `id`'s operand is on the value stack (freshly
     /// evaluated). Pop it and resolve: an object operand keys through the SHARED
     /// keyof computation; error/any degrades to the error type; anything else stays a
@@ -304,6 +315,14 @@ impl<'a> ConditionalEvaluator<'a> {
                     let vals: Vec<TypeId> = values.split_off(start);
                     values.push(self.build_mapped_object(&meta, &vals));
                 }
+                Task::BuildMappedIndex { string, number } => {
+                    let value = values.pop().unwrap_or(error);
+                    values.push(self.interner.intern_object(ObjectType {
+                        string_index: string.then_some(value),
+                        number_index: number.then_some(value),
+                        ..Default::default()
+                    }));
+                }
                 Task::BuildKeyof(id) => {
                     self.build_keyof(id, &mut values, error);
                 }
@@ -389,7 +408,8 @@ impl<'a> ConditionalEvaluator<'a> {
         // Poisoned (cross-binder nested infer — backlog 26 stopgap): stays deferred
         // unless an infer-free intersection conjunct independently proves the false
         // branch without observing the captured binder.
-        let poisoned_false = cond.poisoned && self.poisoned_false_branch_proven(&cond);
+        let poisoned_false =
+            cond.poisoned && self.poisoned_false_branch_proven(&cond, normalization);
         if cond.poisoned && !poisoned_false {
             values.push(ty);
             return;
@@ -598,7 +618,11 @@ impl<'a> ConditionalEvaluator<'a> {
     /// A poisoned node may still take its false branch when one top-level
     /// intersection conjunct contains no `infer` binder and rejects the concrete
     /// check on its own. This never manufactures a captured-infer true branch.
-    fn poisoned_false_branch_proven(&self, cond: &ConditionalType) -> bool {
+    fn poisoned_false_branch_proven(
+        &self,
+        cond: &ConditionalType,
+        normalization: &dyn RelationNormalization,
+    ) -> bool {
         let wk = self.interner.well_known();
         let primitive_check = matches!(
             self.interner.store().intrinsic_kind(cond.check),
@@ -615,11 +639,36 @@ impl<'a> ConditionalEvaluator<'a> {
             self.interner.store().tag(cond.check),
             TypeTag::Literal | TypeTag::Template
         );
-        primitive_check
+        if primitive_check
             && self
                 .interner
                 .store()
                 .intersection_members(cond.extends_ty)
                 .is_some_and(|conjuncts| conjuncts.contains(&wk.object))
+        {
+            return true;
+        }
+        if !normalization.definitely_lacks_callable_member(
+            self.interner.store(),
+            cond.check,
+            "then",
+        ) {
+            return false;
+        }
+        self.interner
+            .store()
+            .intersection_members(cond.extends_ty)
+            .into_iter()
+            .flatten()
+            .filter_map(|member| self.interner.store().object_type(*member))
+            .any(|object| {
+                object.property("then").is_some_and(|property| {
+                    !property.optional
+                        && matches!(
+                            self.interner.store().tag(property.ty),
+                            TypeTag::Function | TypeTag::Object
+                        )
+                })
+            })
     }
 }

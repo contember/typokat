@@ -269,13 +269,14 @@ temporary siblings of the production ones — one library base, one compiler, a 
 point* rather than a second ambient-loading path — and they go away when backlog 14 cuts
 production over. Everything else stays on the prelude path, byte for byte.
 
-The enabled backlog-14 slice follows the usual per-fixture convention: eight of the fourteen
-flat fixtures (`generic_application_cache_diagnostics.ts`, `global_values.ts`,
+The enabled backlog-14 slice follows the usual per-fixture convention: nine of the fourteen
+flat fixtures (`arrays_tuples_readonly.ts`, `generic_application_cache_diagnostics.ts`, `global_values.ts`,
 `iterator_library_local_nonleak.ts`, `library_identity_shadowing.ts`,
 `native_array_annotation_identity.ts`, `primitive_object_function_members.ts`,
 `promise_iterators_generators.ts`, `regexp_literals.ts`)
-and one of the twelve projects (`duplicate_global_deferred`). The rest wait on the loader defect
-families.
+and two of the twelve projects (`duplicate_global_deferred`, `fast_external_module`). The remaining
+fixtures await WU6 isolated verification and expectation reconciliation, with residual model gaps
+kept disabled.
 
 `native_array_annotation_identity.ts` pins the annotation side of the native-array bridge:
 `Array<T>` and `ReadonlyArray<T>` name the intrinsic array types themselves, so an annotation
@@ -286,10 +287,7 @@ the *member* surface `project_library_member_surface` projects — the fixture k
 `map`, and the readonly `push` withholding as the non-permissive controls. The role is keyed on
 the universe-local declaration identity selected from the library's compilation-global scope, so
 `library_identity_shadowing.ts` (a module-local `interface Array<T>`) remains the negative
-witness and is unaffected. Markers are code-only wherever a side is an array or alias layout. Five
-projects — `declare_global`, `declare_global_value_deferred`, `script_collision_forward`,
-`script_collision_reverse`, `unsupported_merge_no_prefix` — now produce typed refusals instead of
-internal panics. They remain disabled until backlog `103` makes their merges work.
+witness and is unaffected. Markers are code-only wherever a side is an array or alias layout.
 
 ## Bug-fix / backlog corpora
 
@@ -348,12 +346,10 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
 | `b14_full_lib_loading/` | backlog `14` WU0A (9 of 14 enabled, `Library` base) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
 | `b14_full_lib_loading_project/` | backlog `14` WU0A (2 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
-| `b102_frozen_prefix_writes/` | backlog `102` (enabled, `Library` base) | fresh script globals reach a writable delta scope; a write aimed at a library-owned row is recorded, never dropped |
+| `b102_frozen_prefix_writes/` | backlog `102`/`103` regression net (enabled, `Library` base) | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
 | `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped, `Library` base) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
-| `b103_library_merge_refusals/` | backlog `103` guard tier (enabled, `Library` base) | merging an interface/alias/class/namespace into a library-owned name is a recorded refusal, never a panic |
-| `b103_library_merge_refusals_project/` | backlog `103` guard tier (enabled, project-shaped, `Library` base) | split merges in both input orders, the two `full-lib-bench` workload shapes, and the publish/shadow controls |
-| `b103_library_merge_correctness/` | backlog `103` correctness tier (disabled, `Library` base) | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
-| `b103_library_merge_correctness_project/` | backlog `103` correctness tier (disabled, project-shaped, `Library` base) | both input orders, `declare global`, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
+| `b103_library_merge_correctness/` | backlog `103` correctness tier (enabled, `Library` base) | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
+| `b103_library_merge_correctness_project/` | backlog `103` correctness tier (enabled, project-shaped, `Library` base) | both input orders, `declare global`, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -384,45 +380,15 @@ controls are the shapes that must NOT publish: an external module's `interface A
 module-local `Date`/`class` shadow inside their own file and stay invisible to a sibling script
 file, whose `Array`/`Date` surfaces must remain the library ones.
 
-The **fail-closed** half is flat. `declare var document: number`, `const JSON = 1`,
-`declare var isNaN: number`, and a user overload of `parseInt` each target a row inside the frozen
-library prefix, which ADR-0011 forbids mutating. The write cannot happen, so each fixture pins the
-`incomplete[bind/frozen-library-global/merge-refused]` record at its declaration plus the
-diagnostics the surviving library declaration produces. Each header records tsc's own verdict —
-`TS2403`, `TS2451` x4, `TS2300` x2, and (for `parseInt`) a clean file — and the resulting
-under/over-reports are ledgered in
-[`divergences.md`](../../docs/reference/divergences.md) under backlog `103`, which owns making the
-merge actually work. The typed refusal itself is additionally pinned by direct binder tests
-(`frozen_prefix_writes_are_recorded_instead_of_dropped`,
-`fresh_script_globals_publish_without_refusing_a_frozen_write`), because a marker fixture observes
-only the downstream surface.
+The flat library-collision fixtures now route through backlog `103`'s sparse private epoch. Legal
+merges and overloads expose the user fragment alongside the library surface; illegal `var`,
+lexical, type-alias, and class collisions preserve the library winner and the remaining missing
+duplicate-declaration diagnostics stay ledgered in
+[`divergences.md`](../../docs/reference/divergences.md). The binder's frozen-write ledger remains
+an internal mutation witness, not a user-facing incomplete channel.
 
-`b103_library_merge_refusals/` and `b103_library_merge_refusals_project/` are backlog-`103`'s
-**guard tier**, on the same `Library` base. Where `b102` covered the writes that were silently
-dropped, these cover the ones that **panicked**: an `interface` reopening a library type group
-(`Array`, `String`, `Window`), a `type` alias and a `class` colliding with a library name, an
-`interface` whose name is a library *value* (`console`), and a `namespace`/`declare namespace`
-reopening a library namespace. Each pins the
-`incomplete[bind/frozen-library-global/merge-refused]` record at its own declaration plus whatever
-the surviving library declaration produces, with tsc's own verdict in the header. Reads go through
-a `Window` **annotation**, never the global `window` value: on the library base `window` is not
-modelled and every read through it is silent, which would make the witnesses vacuous.
-
-The project half adds the split shapes — two files merging into two different library names, in
-both input orders — and the two `tooling/full-lib-bench/` workloads (`collision`, `fanout`) that
-exited `101` before the guard. Its controls are backlog `102`'s regression net: fresh cross-file
-script globals must still publish, and module-scope `interface Array<T>`/`class Date` must still
-shadow inside their own file without publishing or refusing anything.
-
-`declare global` has **no fixture**: on the library base it fails the whole run rather than
-producing per-file records, so it is pinned by direct tests instead
-(`binder::bind::tests::frozen_library_continuation_refuses_declare_global`,
-`driver::tests::a_declare_global_project_refuses_the_run_instead_of_panicking`). The refusal
-*sequence* for every panic shape is likewise pinned directly, by
-`binder::bind::tests::frozen_library_merges_are_refused_instead_of_panicking`.
-
-`b103_library_merge_correctness/` and its project sibling are the disabled replacement contract.
-They remove every guard-tier refusal and require the user fragment to be visible alongside the
+`b103_library_merge_correctness/` and its project sibling are the production acceptance contract.
+They require the user fragment to be visible alongside the
 unchanged library surface. Every positive read has a wrong-type or missing-member sibling, so an
 error-type recovery cannot satisfy the fixture. The illegal `type Partial` and `class Date`
 collisions deliberately keep the library declaration as the observable winner; typokat's missing

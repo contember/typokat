@@ -1160,6 +1160,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         | IntrinsicKind::Undefined
                         | IntrinsicKind::Void
                         | IntrinsicKind::Object
+                        | IntrinsicKind::BigInt
+                        | IntrinsicKind::Symbol
                 )
             ),
             _ => false,
@@ -1210,9 +1212,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 args,
                 call_receiver: receiver.inference_source(),
                 commit_constraints: true,
+                reject_inferred_constraint_violations: false,
             }) {
                 Ok(candidate) => DemandOutcome::Ready(Some(candidate)),
                 Err(CandidateBuildFailure::Constraint)
+                | Err(CandidateBuildFailure::InferredConstraint)
                 | Err(CandidateBuildFailure::Unavailable) => DemandOutcome::Ready(None),
                 Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
                     DemandOutcome::Exhausted(exhaustion)
@@ -1234,6 +1238,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     args,
                     call_receiver: receiver.inference_source(),
                     commit_constraints: false,
+                    reject_inferred_constraint_violations: true,
                 })
             });
             let candidate = match built {
@@ -1263,6 +1268,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     saw_non_arity_failure = true;
                     continue;
                 }
+                Err(CandidateBuildFailure::InferredConstraint) => {
+                    effects.records.discard();
+                    saw_non_arity_failure = true;
+                    continue;
+                }
                 Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
                     effects.records.discard();
                     return DemandOutcome::Exhausted(exhaustion);
@@ -1288,6 +1298,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             args,
                             call_receiver: receiver.inference_source(),
                             commit_constraints: true,
+                            reject_inferred_constraint_violations: true,
                         })
                     });
                     return match committed {
@@ -1302,6 +1313,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         Err(CandidateBuildFailure::Constraint)
                         | Err(CandidateBuildFailure::Unavailable) => {
                             self.merge_candidate_effects(effects);
+                            DemandOutcome::Ready(None)
+                        }
+                        Err(CandidateBuildFailure::InferredConstraint) => {
+                            effects.records.discard();
                             DemandOutcome::Ready(None)
                         }
                         Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
@@ -1345,6 +1360,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             args,
             call_receiver,
             commit_constraints,
+            reject_inferred_constraint_violations,
         } = request;
         #[cfg(not(test))]
         let _ = commit_constraints;
@@ -1524,6 +1540,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         DemandOutcome::Ready(result) => {
                             if inference_exhaustion.is_none() {
                                 inference_exhaustion = result.exhaustion;
+                            }
+                            if reject_inferred_constraint_violations
+                                && !result.constraint_violations.is_empty()
+                            {
+                                return Err(CandidateBuildFailure::InferredConstraint);
                             }
                             result.arguments
                         }
@@ -3799,6 +3820,7 @@ struct SignatureCandidateRequest<'a, 'ast> {
     args: PreparedCallArgs<'a, 'ast>,
     call_receiver: Option<TypeId>,
     commit_constraints: bool,
+    reject_inferred_constraint_violations: bool,
 }
 
 enum CandidateTrial {
@@ -3810,6 +3832,7 @@ enum CandidateTrial {
 
 enum CandidateBuildFailure {
     Constraint,
+    InferredConstraint,
     Exhausted(Exhaustion),
     Unavailable,
 }
@@ -4007,5 +4030,7 @@ pub(in crate::check::checker) fn intrinsic_id(wk: WellKnown, kind: IntrinsicKind
         IntrinsicKind::ThisType => wk.this_type,
         IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
         IntrinsicKind::Object => wk.object,
+        IntrinsicKind::BigInt => wk.bigint,
+        IntrinsicKind::Symbol => wk.symbol,
     }
 }

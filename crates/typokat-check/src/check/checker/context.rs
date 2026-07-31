@@ -9,7 +9,7 @@ use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
-use crate::source::SourceUnit;
+use crate::source::{LibraryFileOrdinal, SourceUnit};
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{ClassId, PropertyType, TypeParamId, Visibility};
@@ -17,8 +17,8 @@ use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::sync::Arc;
 
@@ -248,6 +248,7 @@ pub(in crate::check::checker) enum ProvisionalArgumentWalk<Ticket: Copy = UserRe
 
 pub(in crate::check::checker) struct CheckerEffects<Ticket: Copy = UserRecordTicket> {
     pub(in crate::check::checker) records: CheckerRecordBatch<Ticket>,
+    activated: bool,
     pub(in crate::check::checker) obligations: Vec<DeferredRelationObligation>,
     pub(in crate::check::checker) constraint_checks: Vec<ConstraintCheckObligation>,
     pub(in crate::check::checker) interface_relations: Vec<InterfaceRelationObligation>,
@@ -307,6 +308,7 @@ impl<Ticket: Copy> CheckerEffects<Ticket> {
     pub(in crate::check::checker) fn new(owner: Ticket) -> Self {
         Self {
             records: CheckerRecordBatch::new(owner),
+            activated: false,
             obligations: Vec::new(),
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
@@ -322,6 +324,7 @@ impl CheckerEffects<UserRecordTicket> {
         let (owner, records) = records.into_parts();
         Self {
             records: CheckerRecordBatch::from_parts(owner, records),
+            activated: true,
             obligations: Vec::new(),
             constraint_checks: Vec::new(),
             interface_relations: Vec::new(),
@@ -333,7 +336,16 @@ impl CheckerEffects<UserRecordTicket> {
 }
 
 impl<Ticket: Copy + PartialEq> CheckerEffects<Ticket> {
+    pub(in crate::check::checker) fn activate(&mut self) {
+        self.activated = true;
+    }
+
+    pub(in crate::check::checker) const fn is_activated(&self) -> bool {
+        self.activated
+    }
+
     pub(in crate::check::checker) fn merge(&mut self, mut child: CheckerEffects<Ticket>) {
+        self.activated |= child.activated;
         merge_replay_owner_column(
             &mut self.replay_owners,
             &mut child.replay_owners,
@@ -576,6 +588,7 @@ fn observe_declaration(
 #[derive(Clone)]
 pub(in crate::check::checker) struct DeclTypes {
     base: Arc<[Option<TypeId>]>,
+    overrides: Option<FxHashMap<ValueStorageId, Option<TypeId>>>,
     local: Vec<Option<TypeId>>,
     sealed: bool,
 }
@@ -584,6 +597,7 @@ impl DeclTypes {
     pub(in crate::check::checker) fn new(count: u32) -> Self {
         DeclTypes {
             base: Arc::from([]),
+            overrides: None,
             local: vec![None; count as usize],
             sealed: false,
         }
@@ -592,6 +606,17 @@ impl DeclTypes {
     /// The single mutator: every declaration-type change in the checker reaches the
     /// table through here, so the observation log cannot fall behind.
     fn put(&mut self, id: ValueStorageId, value: Option<TypeId>) {
+        if id.index() < self.base.len() {
+            let previous = self.untracked_get(id);
+            let Some(overrides) = self.overrides.as_mut() else {
+                return;
+            };
+            if previous != value {
+                overrides.insert(id, value);
+                observe_declaration(id, previous, value, true);
+            }
+            return;
+        };
         let Some(slot) = id
             .index()
             .checked_sub(self.base.len())
@@ -615,11 +640,25 @@ impl DeclTypes {
     /// check, which asks what a slot holds *now* rather than depending on it.
     fn untracked_get(&self, id: ValueStorageId) -> Option<TypeId> {
         let index = id.index();
-        self.base
-            .get(index)
-            .or_else(|| self.local.get(index - self.base.len()))
-            .copied()
-            .flatten()
+        if index < self.base.len() {
+            return self
+                .overrides
+                .as_ref()
+                .and_then(|overrides| overrides.get(&id).copied())
+                .unwrap_or_else(|| self.base.get(index).copied().flatten());
+        }
+        self.local.get(index - self.base.len()).copied().flatten()
+    }
+
+    pub(in crate::check::checker) fn is_unoverridden_frozen_slot(
+        &self,
+        id: ValueStorageId,
+    ) -> bool {
+        id.index() < self.base.len()
+            && self
+                .overrides
+                .as_ref()
+                .is_some_and(|overrides| !overrides.contains_key(&id))
     }
 
     /// Open/close the observation log. The checker keeps it open for exactly the
@@ -747,9 +786,9 @@ impl DeclTypes {
 
     pub(in crate::check::checker) fn get(&self, id: ValueStorageId) -> Option<TypeId> {
         let value = self.untracked_get(id);
-        // A slot in the frozen base is immutable for the whole pass — `put` refuses to
-        // write one — so depending on it is vacuous and recording it is pure cost.
-        if id.index() >= self.base.len() {
+        // Shared-prefix slots are immutable, but a sparse collision epoch can replace
+        // one after a memoized walk reads it.
+        if id.index() >= self.base.len() || self.overrides.is_some() {
             observe_declaration(id, value, value, false);
         }
         value
@@ -774,7 +813,20 @@ impl DeclTypes {
     }
 
     pub(in crate::check::checker) fn snapshot_slots(&self) -> Vec<Option<TypeId>> {
-        self.base.iter().chain(&self.local).copied().collect()
+        let mut slots = self
+            .base
+            .iter()
+            .chain(&self.local)
+            .copied()
+            .collect::<Vec<_>>();
+        if let Some(overrides) = &self.overrides {
+            for (id, value) in overrides {
+                if let Some(slot) = slots.get_mut(id.index()) {
+                    *slot = *value;
+                }
+            }
+        }
+        slots
     }
 
     #[cfg(test)]
@@ -790,6 +842,7 @@ impl DeclTypes {
         }
         Ok(Self {
             base: Arc::from([]),
+            overrides: None,
             local: slots,
             sealed: false,
         })
@@ -818,9 +871,16 @@ impl DeclTypes {
         }
         Ok(Self {
             base: Arc::clone(&self.base),
+            overrides: None,
             local: Vec::new(),
             sealed: true,
         })
+    }
+
+    pub(in crate::check::checker) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        let mut delta = self.fork_delta()?;
+        delta.overrides = Some(FxHashMap::default());
+        Ok(delta)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -846,6 +906,21 @@ impl DeclTypes {
                 let id = u32::try_from(base_len + index).expect("value storage id fits u32");
                 (ValueStorageId(id), ty)
             })
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn changed_slots(
+        &self,
+    ) -> impl Iterator<Item = (ValueStorageId, Option<TypeId>)> + '_ {
+        self.overrides
+            .iter()
+            .flat_map(|overrides| overrides.iter().map(|(&id, &ty)| (id, ty)))
+            .chain(self.local_slots())
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn replacement_len(&self) -> usize {
+        self.overrides.as_ref().map_or(0, FxHashMap::len)
     }
 }
 
@@ -1002,12 +1077,16 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
     /// Any other unsupported multi-kind group has no permissive semantic surface.
     Unavailable { declaration: DeclId },
     /// A declaration already resolved by an earlier compilation unit, such as the prelude.
-    Resolved { params: Vec<TypeParamId> },
+    Resolved {
+        params: Vec<TypeParamId>,
+        defaults: Vec<PublishedTypeParameterDefault>,
+    },
 }
 
 #[derive(Clone)]
 pub(in crate::check::checker) struct PublishedTypeDecl {
     pub(in crate::check::checker) params: Vec<TypeParamId>,
+    pub(in crate::check::checker) defaults: Vec<PublishedTypeParameterDefault>,
 }
 
 pub(in crate::check::checker) enum TypeDeclView<'table, 'ast> {
@@ -1017,6 +1096,7 @@ pub(in crate::check::checker) enum TypeDeclView<'table, 'ast> {
 
 pub(in crate::check::checker) struct TypeDeclTable<'ast> {
     published: LayeredVec<PublishedTypeDecl>,
+    replacements: FxHashMap<usize, TypeDecl<'ast>>,
     local: Vec<TypeDecl<'ast>>,
 }
 
@@ -1028,6 +1108,7 @@ impl<'ast> Clone for TypeDeclTable<'ast> {
         record_copied_decl_rows_for_test(self.published.local_len() + self.local.len());
         Self {
             published: self.published.clone(),
+            replacements: self.replacements.clone(),
             local: self.local.clone(),
         }
     }
@@ -1067,6 +1148,7 @@ impl<'ast> TypeDeclTable<'ast> {
     ) -> Self {
         Self {
             published,
+            replacements: FxHashMap::default(),
             local: Vec::new(),
         }
     }
@@ -1076,11 +1158,16 @@ impl<'ast> TypeDeclTable<'ast> {
     }
 
     pub(in crate::check::checker) fn get(&self, index: usize) -> Option<&TypeDecl<'ast>> {
+        if index < self.published.len() {
+            return self.replacements.get(&index);
+        }
         self.local.get(index.checked_sub(self.published.len())?)
     }
 
     pub(in crate::check::checker) fn view(&self, index: usize) -> Option<TypeDeclView<'_, 'ast>> {
-        if let Some(published) = self.published.get(index) {
+        if let Some(replacement) = self.replacements.get(&index) {
+            Some(TypeDeclView::Local(replacement))
+        } else if let Some(published) = self.published.get(index) {
             Some(TypeDeclView::Published(published))
         } else {
             self.get(index).map(TypeDeclView::Local)
@@ -1091,7 +1178,22 @@ impl<'ast> TypeDeclTable<'ast> {
         &mut self,
         index: usize,
     ) -> Option<&mut TypeDecl<'ast>> {
-        self.local.get_mut(index.checked_sub(self.published.len())?)
+        if index < self.published.len() {
+            if !self.published.prefix_overrides_enabled() {
+                return None;
+            }
+            let published = self.published.get(index)?;
+            return Some(
+                self.replacements
+                    .entry(index)
+                    .or_insert(TypeDecl::Resolved {
+                        params: published.params.clone(),
+                        defaults: published.defaults.clone(),
+                    }),
+            );
+        }
+        let local_index = index.checked_sub(self.published.len())?;
+        self.local.get_mut(local_index)
     }
 
     pub(in crate::check::checker) fn push(&mut self, declaration: TypeDecl<'ast>) {
@@ -1102,6 +1204,32 @@ impl<'ast> TypeDeclTable<'ast> {
         &self,
     ) -> impl DoubleEndedIterator<Item = &TypeDecl<'ast>> + ExactSizeIterator + Clone {
         self.local.iter()
+    }
+
+    pub(in crate::check::checker) fn changed_entries(&self) -> Vec<(usize, &TypeDecl<'ast>)> {
+        let mut entries = self
+            .replacements
+            .iter()
+            .map(|(index, declaration)| (*index, declaration))
+            .chain(
+                self.local
+                    .iter()
+                    .enumerate()
+                    .map(|(index, declaration)| (self.published.len() + index, declaration)),
+            )
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(index, _)| *index);
+        entries
+    }
+
+    pub(in crate::check::checker) fn has_replacement(&self, index: usize) -> bool {
+        self.replacements.contains_key(&index)
+    }
+
+    pub(in crate::check::checker) fn replacement_indices(&self) -> Vec<usize> {
+        let mut indices = self.replacements.keys().copied().collect::<Vec<_>>();
+        indices.sort_unstable();
+        indices
     }
 
     pub(in crate::check::checker) fn published_len(&self) -> usize {
@@ -1120,6 +1248,7 @@ impl<'ast> From<Vec<TypeDecl<'ast>>> for TypeDeclTable<'ast> {
     fn from(local: Vec<TypeDecl<'ast>>) -> Self {
         Self {
             published: LayeredVec::default(),
+            replacements: FxHashMap::default(),
             local,
         }
     }
@@ -1169,6 +1298,9 @@ impl TypeResolvedTable {
         &mut self,
         index: usize,
     ) -> Option<&mut Option<TypeId>> {
+        if index < self.published.len() {
+            return self.published.get_mut_local(index);
+        }
         self.local.get_mut(index.checked_sub(self.published.len())?)
     }
 }
@@ -1200,6 +1332,7 @@ impl IndexMut<usize> for TypeResolvedTable {
 #[derive(Clone)]
 pub(in crate::check::checker) struct TemplateFillTable {
     published_len: usize,
+    replacements: FxHashMap<usize, ClassFillState>,
     local: Vec<ClassFillState>,
 }
 
@@ -1207,14 +1340,25 @@ impl TemplateFillTable {
     pub(in crate::check::checker) fn new(published_len: usize, local: Vec<ClassFillState>) -> Self {
         Self {
             published_len,
+            replacements: FxHashMap::default(),
             local,
+        }
+    }
+
+    pub(in crate::check::checker) fn install_replacement(
+        &mut self,
+        index: usize,
+        state: ClassFillState,
+    ) {
+        if index < self.published_len {
+            self.replacements.insert(index, state);
         }
     }
 
     pub(in crate::check::checker) fn get(&self, index: usize) -> Option<&ClassFillState> {
         static DONE: ClassFillState = ClassFillState::Done;
         if index < self.published_len {
-            Some(&DONE)
+            self.replacements.get(&index).or(Some(&DONE))
         } else {
             self.local.get(index - self.published_len)
         }
@@ -1224,6 +1368,9 @@ impl TemplateFillTable {
         &mut self,
         index: usize,
     ) -> Option<&mut ClassFillState> {
+        if index < self.published_len {
+            return self.replacements.get_mut(&index);
+        }
         self.local.get_mut(index.checked_sub(self.published_len)?)
     }
 }
@@ -1610,6 +1757,33 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) current_source: SourceUnit,
     /// Present only while the source-backed library compiler generates replay evidence.
     pub(in crate::check::checker) replay_trace: Option<ReplayDependencyTrace>,
+    /// Extra dependency reads consumed only by the compact private-replay plan.
+    pub(in crate::check::checker) capture_compact_replay_dependencies: bool,
+    pub(in crate::check::checker) compact_only_replay_edges:
+        RefCell<BTreeSet<super::replay_index::ReplayReverseEdge>>,
+    pub(in crate::check::checker) compact_demand_capture: Cell<bool>,
+    pub(in crate::check::checker) compact_demand_added: Cell<bool>,
+    /// Exact affected prefix closure admitted for this private collision epoch.
+    pub(in crate::check::checker) private_collision_affected: BTreeSet<ReplayOwner>,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) private_collision_state_drop_witness:
+        Option<super::library_compiler::PrivateCollisionStateDropWitnessForTest>,
+    /// Exact frozen value owner at each retained library binding site.
+    pub(in crate::check::checker) private_library_value_owner_by_site:
+        BTreeMap<(LibraryFileOrdinal, u32), Option<ValueStorageId>>,
+    /// Affected type groups whose user augmentation could not be represented.
+    pub(in crate::check::checker) private_collision_unavailable_type_groups: BTreeSet<TypeGroupId>,
+    /// Library groups with user fragments in a fresh combined-source construction.
+    pub(in crate::check::checker) combined_user_library_type_groups: BTreeSet<TypeGroupId>,
+    /// The fresh combined-source pass is currently checking its user suffix.
+    pub(in crate::check::checker) combined_user_source: bool,
+    /// Library-owned value selected by each affected sealed root slot.
+    pub(in crate::check::checker) private_collision_value_winners:
+        FxHashMap<SymbolId, ValueStorageId>,
+    pub(in crate::check::checker) private_collision_value_winners_by_name:
+        FxHashMap<String, ValueStorageId>,
+    /// Published `globalThis` object, augmented only inside a private collision epoch.
+    pub(in crate::check::checker) global_object_type: Option<TypeId>,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
     pub(in crate::check::checker) effect_stack: Vec<CheckerEffects<Ticket>>,
     /// Per in-flight call/`new`, the raw argument walk's held effects, indexed like
@@ -1698,6 +1872,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) decl_types: DeclTypes,
     /// Construction and single-publication state for admitted function/namespace groups.
     pub(in crate::check::checker) function_groups: FunctionGroupRegistry<Ticket>,
+    /// Earlier declaration-group participants that follow later groups in overload precedence.
+    pub(in crate::check::checker) function_group_precedence_tails_by_name:
+        FxHashMap<String, ValueStorageId>,
     /// Published function-group names inherited without construction drafts or tickets.
     pub(in crate::check::checker) named_function_symbols: LayeredSet<SymbolId>,
     /// Immutable namespace value surfaces awaiting their exact class-owned draft.
@@ -1961,6 +2138,41 @@ mod tests {
         assert_eq!(second.len(), 3);
         assert_eq!(second.get(ValueStorageId(3)), None);
         assert_eq!(base.len(), 3);
+    }
+
+    #[test]
+    fn sparse_prefix_reads_invalidate_memos_after_an_override() {
+        let mut base = DeclTypes::new(1);
+        base.set(ValueStorageId(0), TypeId(10));
+        base.freeze_as_base().expect("declaration prefix seals");
+        let mut sparse = base
+            .fork_sparse_delta()
+            .expect("sparse declaration epoch forks");
+
+        DeclTypes::open_log();
+        let mark = DeclTypes::log_mark();
+        assert_eq!(sparse.get(ValueStorageId(0)), Some(TypeId(10)));
+        let dependencies = DeclTypes::dependencies_since(mark);
+        assert_eq!(dependencies, [(ValueStorageId(0), Some(TypeId(10)))]);
+        assert!(sparse.dependencies_hold(&dependencies));
+
+        sparse.set(ValueStorageId(0), TypeId(20));
+        assert!(!sparse.dependencies_hold(&dependencies));
+        assert_eq!(sparse.get(ValueStorageId(0)), Some(TypeId(20)));
+        let writes = DeclTypes::net_writes_since(mark);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].id, ValueStorageId(0));
+        assert_eq!(writes[0].previous, Some(TypeId(10)));
+        assert_eq!(writes[0].value, Some(TypeId(20)));
+
+        sparse.set(ValueStorageId(0), TypeId(10));
+        assert!(DeclTypes::net_writes_since(mark).is_empty());
+        DeclTypes::close_log();
+
+        let sibling = base
+            .fork_sparse_delta()
+            .expect("sibling declaration epoch forks");
+        assert_eq!(sibling.get(ValueStorageId(0)), Some(TypeId(10)));
     }
 
     #[test]

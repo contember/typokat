@@ -111,6 +111,10 @@ impl SymbolTable {
         self.symbols.is_empty()
     }
 
+    pub fn prefix_replacements(&self) -> impl Iterator<Item = &Symbol> {
+        self.symbols.prefix_replacements().map(|(_, symbol)| symbol)
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_symbols(&self) -> impl Iterator<Item = (SymbolId, &Symbol)> {
         let base_len = self.symbols.base_len();
@@ -123,6 +127,11 @@ impl SymbolTable {
             })
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn replacement_row_count_for_test(&self) -> usize {
+        self.symbols.replacement_len()
+    }
+
     pub(crate) fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         self.symbols.freeze_as_base()
     }
@@ -130,6 +139,12 @@ impl SymbolTable {
     pub(crate) fn fork_delta(&self) -> Result<Self, &'static str> {
         Ok(Self {
             symbols: self.symbols.fork_delta()?,
+        })
+    }
+
+    pub(crate) fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            symbols: self.symbols.fork_sparse_delta()?,
         })
     }
 

@@ -515,3 +515,87 @@ fn concurrent_scale_gate_rejects_suppressed_production_permit_instrumentation() 
     ));
     assert_eq!(base.storage_identity_for_test(), shared_identity_before);
 }
+
+#[test]
+fn concurrent_scale_gate_rejects_a_checker_phase_layered_base_scan() {
+    let owned = fanout_projects(1);
+    let projects = owned
+        .iter()
+        .map(|project| {
+            project
+                .iter()
+                .map(|(path, source)| input(path, source))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let rejected = acquire()
+        .run_all_colliding_projects_concurrently_for_test(
+            &projects,
+            ConcurrentPrivateProductionFaultForTest::InjectCheckerFullBaseScan,
+        )
+        .expect_err("a checker-phase Layered base iteration must fail scale admission");
+    assert!(matches!(
+        rejected,
+        ConcurrentPrivateProductionFailureForTest::FullBaseScanObserved {
+            attempted_projects: 1,
+            observed_full_base_scan_units,
+        } if observed_full_base_scan_units > 0
+    ));
+}
+
+#[test]
+fn concurrent_scale_gate_rejects_an_instrumented_full_plan_scan() {
+    let owned = fanout_projects(1);
+    let projects = owned
+        .iter()
+        .map(|project| {
+            project
+                .iter()
+                .map(|(path, source)| input(path, source))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let rejected = acquire()
+        .run_all_colliding_projects_concurrently_for_test(
+            &projects,
+            ConcurrentPrivateProductionFaultForTest::InjectCheckerFullPlanScan,
+        )
+        .expect_err("an instrumented complete replay-plan iteration must fail scale admission");
+    assert!(matches!(
+        rejected,
+        ConcurrentPrivateProductionFailureForTest::FullBaseScanObserved {
+            attempted_projects: 1,
+            observed_full_base_scan_units,
+        } if observed_full_base_scan_units > 0
+    ));
+}
+
+#[test]
+fn concurrent_scale_gate_rejects_a_full_source_registry_scan() {
+    let owned = fanout_projects(1);
+    let projects = owned
+        .iter()
+        .map(|project| {
+            project
+                .iter()
+                .map(|(path, source)| input(path, source))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let rejected = acquire()
+        .run_all_colliding_projects_concurrently_for_test(
+            &projects,
+            ConcurrentPrivateProductionFaultForTest::InjectCheckerFullSourceRegistryScan,
+        )
+        .expect_err("a complete private source-registry iteration must fail scale admission");
+    assert!(matches!(
+        rejected,
+        ConcurrentPrivateProductionFailureForTest::FullBaseScanObserved {
+            attempted_projects: 1,
+            observed_full_base_scan_units,
+        } if observed_full_base_scan_units > 0
+    ));
+}

@@ -123,6 +123,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if ident.name.as_str() == "undefined" {
                     return Some((well_known.undefined, span));
                 }
+                if ident.name.as_str() == "globalThis" {
+                    if let Some(global_object) = self.global_object_type {
+                        return Some((global_object, span));
+                    }
+                }
                 match self.resolve_value_binding_replay(scope, ident.name.as_str()) {
                     ValueResolution::TypeOnlyNamespace { .. } => {
                         self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
@@ -132,7 +137,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         Some((well_known.error, span))
                     }
                     ValueResolution::Resolved {
-                        symbol: symbol_id, ..
+                        symbol: _,
+                        kind: ResolvedValueKind::StandaloneNamespace { namespace, storage },
+                    } => match self.standalone_namespace_terminal_replay(namespace) {
+                        Some(super::namespace_values::StandaloneNamespaceTerminal::Ready {
+                            storage: terminal_storage,
+                            ty,
+                        }) if terminal_storage == storage => Some((ty, span)),
+                        Some(
+                            super::namespace_values::StandaloneNamespaceTerminal::Unavailable {
+                                ..
+                            },
+                        ) => Some((well_known.error, span)),
+                        Some(
+                            super::namespace_values::StandaloneNamespaceTerminal::Planned
+                            | super::namespace_values::StandaloneNamespaceTerminal::Ready { .. },
+                        )
+                        | None => {
+                            self.record_incomplete(
+                                "expr-infer/identifier/standalone-namespace-unavailable",
+                                span,
+                                "standalone namespace value terminal is unavailable",
+                            );
+                            Some((well_known.error, span))
+                        }
+                    },
+                    ValueResolution::Resolved {
+                        symbol: symbol_id,
+                        kind: ResolvedValueKind::Ordinary,
                     } => match self.demand_function_group_replay(symbol_id) {
                         FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty) => {
                             Some((ty, span))
@@ -2330,11 +2362,15 @@ pub(in crate::check::checker) fn contextual_literal_target(store: &Store, ty: Ty
     };
     let mut shape = None;
     for &member in members {
+        let member = store.readonly_operand(member).unwrap_or(member);
         if is_contextual_literal_shape(store, member) {
             if shape.replace(member).is_some() {
                 return ty;
             }
-        } else if store.intrinsic_kind(member) != Some(IntrinsicKind::Undefined) {
+        } else if !matches!(
+            store.intrinsic_kind(member),
+            Some(IntrinsicKind::Null | IntrinsicKind::Undefined)
+        ) {
             return ty;
         }
     }

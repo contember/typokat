@@ -65,6 +65,7 @@ pub struct Store {
     /// Type-parameter types (M9). Addressed by the `payload` of a
     /// `TypeParam`-tagged row. Each entry's identity is its `TypeParamId`.
     type_params: LayeredVec<TypeParamType>,
+    type_param_names: LayeredMap<TypeParamId, String>,
     /// Array types (M17). Addressed by the `payload` of an `Array`-tagged row. Each
     /// entry's identity is its element `TypeId` (so `number[]` hash-conses to one id
     /// and `number[]` ≠ `string[]`).
@@ -189,6 +190,7 @@ impl Store {
         self.intersections.freeze_as_base()?;
         self.functions.freeze_as_base()?;
         self.type_params.freeze_as_base()?;
+        self.type_param_names.freeze_as_base()?;
         self.arrays.freeze_as_base()?;
         self.tuples.freeze_as_base()?;
         self.conditionals.freeze_as_base()?;
@@ -220,6 +222,7 @@ impl Store {
             intersections: self.intersections.fork_delta()?,
             functions: self.functions.fork_delta()?,
             type_params: self.type_params.fork_delta()?,
+            type_param_names: self.type_param_names.fork_delta()?,
             arrays: self.arrays.fork_delta()?,
             tuples: self.tuples.fork_delta()?,
             conditionals: self.conditionals.fork_delta()?,
@@ -249,6 +252,7 @@ impl Store {
                 || self.intersections.local_len() != 0
                 || self.functions.local_len() != 0
                 || self.type_params.local_len() != 0
+                || self.type_param_names.local_len() != 0
                 || self.arrays.local_len() != 0
                 || self.tuples.local_len() != 0
                 || self.conditionals.local_len() != 0
@@ -282,6 +286,9 @@ impl Store {
             && self.intersections.shares_base_with(&other.intersections)
             && self.functions.shares_base_with(&other.functions)
             && self.type_params.shares_base_with(&other.type_params)
+            && self
+                .type_param_names
+                .shares_base_with(&other.type_param_names)
             && self.arrays.shares_base_with(&other.arrays)
             && self.tuples.shares_base_with(&other.tuples)
             && self.conditionals.shares_base_with(&other.conditionals)
@@ -309,6 +316,11 @@ impl Store {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
+    pub fn base_allocation_identity_for_test(&self) -> usize {
+        self.tag.base_allocation_identity_for_test()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn base_family_sharing_with(&self, other: &Self) -> [bool; 5] {
         let rows = self.tag.shares_base_with(&other.tag)
             && self.flags.shares_base_with(&other.flags)
@@ -319,6 +331,9 @@ impl Store {
             && self.intersections.shares_base_with(&other.intersections)
             && self.functions.shares_base_with(&other.functions)
             && self.type_params.shares_base_with(&other.type_params)
+            && self
+                .type_param_names
+                .shares_base_with(&other.type_param_names)
             && self.arrays.shares_base_with(&other.arrays)
             && self.tuples.shares_base_with(&other.tuples)
             && self.conditionals.shares_base_with(&other.conditionals)
@@ -359,6 +374,7 @@ impl Store {
                 + self.intersections.local_len()
                 + self.functions.local_len()
                 + self.type_params.local_len()
+                + self.type_param_names.local_len()
                 + self.arrays.local_len()
                 + self.tuples.local_len()
                 + self.conditionals.local_len()
@@ -440,10 +456,7 @@ impl Store {
     /// signature binders keep ids in their structural representation while names
     /// remain rendering-only on the interned parameter node.
     pub fn type_param_name(&self, id: TypeParamId) -> Option<&str> {
-        self.type_params
-            .iter()
-            .find(|param| param.id == id)
-            .map(|param| param.name.as_str())
+        self.type_param_names.get(&id).map(String::as_str)
     }
 
     /// The `ArrayType` (its element id) of an array type, or `None` if `id` is not
@@ -746,8 +759,14 @@ impl Store {
 
     /// Append a type-parameter row (M9). Internal — `Interner` owns dedup (by
     /// `TypeParamId`).
-    pub fn push_type_param(&mut self, param: TypeParamType, flags: TypeFlags) -> TypeId {
+    pub fn push_type_param(&mut self, mut param: TypeParamType, flags: TypeFlags) -> TypeId {
         let payload = self.type_params.len() as u32;
+        if let Some(retained_name) = self
+            .type_param_names
+            .insert_append_only(param.id, param.name.clone())
+        {
+            param.name = retained_name;
+        }
         self.type_params.push_local(param);
         self.push(TypeTag::TypeParam, flags, payload)
     }

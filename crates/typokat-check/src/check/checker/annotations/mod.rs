@@ -16,7 +16,7 @@ use oxc_ast::ast::{
     TSConstructSignatureDeclaration, TSConstructorType, TSInferType, TSLiteral, TSMappedType,
     TSMappedTypeModifierOperator, TSMethodSignature, TSMethodSignatureKind, TSSignature,
     TSTemplateLiteralType, TSThisParameter, TSTupleElement, TSType, TSTypeAnnotation, TSTypeName,
-    TSTypeOperatorOperator, UnaryOperator,
+    TSTypeOperatorOperator, TSTypeQueryExprName, UnaryOperator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -100,6 +100,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // nests), then interned as an array type. A non-lowerable element (out of
             // subset) aborts the whole annotation (`None`), matching the other lowerings.
             TSType::TSArrayType(array) => {
+                if self.capture_compact_replay_dependencies {
+                    let _ = self.compact_type_decl_id_replay(scope, "Array");
+                }
                 let element =
                     self.with_indirection(|p| p.lower_annotation(scope, &array.element_type))?;
                 return Some(self.interner.intern_array(element));
@@ -109,6 +112,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // tuple elements are out of the M18 subset and abort the whole annotation
             // (`None`) — see [`lower_tuple_annotation`].
             TSType::TSTupleType(tuple) => {
+                if self.capture_compact_replay_dependencies {
+                    let _ = self.compact_type_decl_id_replay(scope, "Array");
+                }
                 return self.lower_tuple_annotation(scope, &tuple.element_types);
             }
             // M5/M9: a type reference (`Point`, `Num`, `List`, `Box<number>`, an
@@ -187,6 +193,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // before degrading to `None` (→ the error type) so an unsupported annotation
             // can no longer exit clean. Each id is the inventory identity for the variant.
             TSType::TSTypeQuery(query) => {
+                if query.type_arguments.is_none()
+                    && matches!(
+                        &query.expr_name,
+                        TSTypeQueryExprName::IdentifierReference(identifier)
+                            if identifier.name == "globalThis"
+                    )
+                {
+                    return self.global_object_type;
+                }
                 self.record_incomplete(
                     "annotation-lower/type-query/typeof",
                     Span::from_oxc(query.span),
@@ -218,22 +233,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 return None;
             }
-            TSType::TSSymbolKeyword(kw) => {
-                self.record_incomplete(
-                    "annotation-lower/symbol-keyword/self",
-                    Span::from_oxc(kw.span),
-                    "symbol keyword type not modeled",
-                );
-                return None;
-            }
-            TSType::TSBigIntKeyword(kw) => {
-                self.record_incomplete(
-                    "annotation-lower/bigint-keyword/self",
-                    Span::from_oxc(kw.span),
-                    "bigint keyword type not modeled",
-                );
-                return None;
-            }
+            TSType::TSSymbolKeyword(_) => return Some(self.interner.well_known().symbol),
+            TSType::TSBigIntKeyword(_) => return Some(self.interner.well_known().bigint),
             TSType::TSObjectKeyword(_) => return Some(self.interner.well_known().object),
             TSType::TSIntrinsicKeyword(kw) => {
                 self.record_incomplete(

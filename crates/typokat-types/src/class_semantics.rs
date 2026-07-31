@@ -195,9 +195,9 @@ impl PublishedClasses {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub fn local_owned_terminals(&self) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
+    pub fn changed_owned_terminals(&self) -> Vec<(ClassId, OwnedPublishedClassTerminal)> {
         self.states
-            .local_iter()
+            .changed_iter()
             .filter_map(|(&class, state)| match state {
                 ClassConstructionState::Published => self
                     .surfaces
@@ -219,6 +219,13 @@ impl PublishedClasses {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn local_row_count_for_test(&self) -> usize {
         self.states.local_len() + self.surfaces.local_len() + self.poison.local_len()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn replacement_row_count_for_test(&self) -> usize {
+        self.states.replacement_len()
+            + self.surfaces.replacement_len()
+            + self.poison.replacement_len()
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -384,6 +391,33 @@ impl PublishedClasses {
             poison: self.poison.fork_delta()?,
             identity: Arc::clone(&self.identity),
         })
+    }
+
+    pub fn fork_sparse_delta(&self) -> Result<Self, &'static str> {
+        Ok(Self {
+            states: self.states.fork_sparse_delta()?,
+            surfaces: self.surfaces.fork_sparse_delta()?,
+            poison: self.poison.fork_sparse_delta()?,
+            identity: Arc::new(()),
+        })
+    }
+
+    pub fn replace_published_surface(
+        &mut self,
+        surface: PublishedClassSurface,
+    ) -> Result<(), &'static str> {
+        let class = surface.class();
+        if !self.states.prefix_overrides_enabled()
+            || !self.surfaces.prefix_overrides_enabled()
+            || !matches!(self.published_class(class), DemandOutcome::Ready(_))
+        {
+            return Err("class surface replacement requires a published sparse prefix");
+        }
+        self.states
+            .insert_local(class, ClassConstructionState::Published)?;
+        self.surfaces.insert_local(class, surface)?;
+        self.identity = Arc::new(());
+        Ok(())
     }
 
     #[cfg(any(test, feature = "test-utils"))]

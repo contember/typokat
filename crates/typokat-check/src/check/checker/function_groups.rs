@@ -16,6 +16,7 @@ pub(in crate::check::checker) struct FunctionGroupIdentity {
     pub(in crate::check::checker) symbol: SymbolId,
     pub(in crate::check::checker) name: String,
     pub(in crate::check::checker) participants: Vec<ValueStorageId>,
+    namespace_payload_required: bool,
 }
 
 /// Namespace-side input frozen before a merged function can be published.
@@ -55,6 +56,7 @@ pub(in crate::check::checker) struct FunctionGroupPublication {
     pub(in crate::check::checker) participants: Vec<ValueStorageId>,
     pub(in crate::check::checker) properties: Vec<PropertyType>,
     pub(in crate::check::checker) call_signatures: Vec<TypeId>,
+    pub(in crate::check::checker) prepublished_participants: Vec<ValueStorageId>,
 }
 
 /// Terminal result of one unannotated ordinary function body.
@@ -106,6 +108,7 @@ struct FunctionGroupDraft<Ticket: Copy> {
     symbol: SymbolId,
     name: String,
     participants: Vec<FunctionParticipantSlot>,
+    inherited_call_signatures: Vec<TypeId>,
     namespace_payload: NamespacePayloadState,
     state: FunctionGroupState<Ticket>,
 }
@@ -144,23 +147,29 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
         scope: ScopeId,
         name: &str,
     ) -> Option<FunctionGroupIdentity> {
-        let attachment = binder.namespace_value_attachment(scope, name)?;
-        match attachment.disposition {
-            NamespaceValueAttachmentDisposition::AdmittedFunction => {}
-            NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42 => {}
-            NamespaceValueAttachmentDisposition::AdmittedClass
-            | NamespaceValueAttachmentDisposition::TypeContainerOnly
-            | NamespaceValueAttachmentDisposition::Rejected(_) => return None,
-        }
-        let symbol = attachment.symbol;
+        let attachment = binder.namespace_value_attachment(scope, name);
+        let (symbol, namespace_payload_required) = match attachment {
+            Some(attachment) => {
+                match attachment.disposition {
+                    NamespaceValueAttachmentDisposition::AdmittedFunction => {}
+                    NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42 => {}
+                    NamespaceValueAttachmentDisposition::AdmittedClass
+                    | NamespaceValueAttachmentDisposition::TypeContainerOnly
+                    | NamespaceValueAttachmentDisposition::Rejected(_) => return None,
+                }
+                (attachment.symbol, true)
+            }
+            None => (binder.graph.resolve(scope, name)?, false),
+        };
         let binding = binder.symbols.get(symbol)?;
-        if binding.function_values.is_empty() {
+        if binding.function_values.len() < 2 && !namespace_payload_required {
             return None;
         }
         Some(FunctionGroupIdentity {
             symbol,
             name: name.to_owned(),
             participants: binding.function_values.clone(),
+            namespace_payload_required,
         })
     }
 
@@ -202,10 +211,44 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                         state: FunctionParticipantState::Unseen,
                     })
                     .collect(),
-                namespace_payload: NamespacePayloadState::Missing,
+                inherited_call_signatures: Vec::new(),
+                namespace_payload: if identity.namespace_payload_required {
+                    NamespacePayloadState::Missing
+                } else {
+                    NamespacePayloadState::Ready(Vec::new())
+                },
                 state: FunctionGroupState::Building,
             },
         );
+    }
+
+    pub(in crate::check::checker) fn seed_inherited_publication(
+        &mut self,
+        symbol: SymbolId,
+        participants: &[ValueStorageId],
+        call_signatures: Vec<TypeId>,
+    ) {
+        let Some(draft) = self.groups.get_mut(&symbol) else {
+            return;
+        };
+        if !matches!(draft.state, FunctionGroupState::Building) || call_signatures.is_empty() {
+            return;
+        }
+        if !draft.inherited_call_signatures.is_empty() {
+            return;
+        }
+        draft.inherited_call_signatures = call_signatures;
+        for declaration in participants {
+            if let Some(participant) = draft
+                .participants
+                .iter_mut()
+                .find(|participant| participant.declaration == *declaration)
+            {
+                if matches!(participant.state, FunctionParticipantState::Unseen) {
+                    participant.state = FunctionParticipantState::ValidationOnly;
+                }
+            }
+        }
     }
 
     pub(in crate::check::checker) fn install_namespace_payload(
@@ -472,7 +515,7 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
         }) {
             return None;
         }
-        let call_signatures = draft
+        let mut call_signatures = draft
             .participants
             .iter()
             .filter_map(|participant| match participant.state {
@@ -482,6 +525,7 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                 | FunctionParticipantState::WaitingForBody => None,
             })
             .collect::<Vec<_>>();
+        call_signatures.extend(draft.inherited_call_signatures.iter().copied());
         if call_signatures.is_empty() {
             return None;
         }
@@ -494,6 +538,12 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                 .collect(),
             properties: properties.clone(),
             call_signatures,
+            prepublished_participants: draft
+                .participants
+                .iter()
+                .filter(|participant| participant.state == FunctionParticipantState::ValidationOnly)
+                .map(|participant| participant.declaration)
+                .collect(),
         })
     }
 
@@ -510,10 +560,10 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                     FunctionParticipantState::Unseen | FunctionParticipantState::WaitingForBody
                 )
             })
-            || !draft
-                .participants
-                .iter()
-                .any(|participant| matches!(participant.state, FunctionParticipantState::Public(_)))
+            || (draft.inherited_call_signatures.is_empty()
+                && !draft.participants.iter().any(|participant| {
+                    matches!(participant.state, FunctionParticipantState::Public(_))
+                }))
         {
             return;
         }
@@ -570,6 +620,7 @@ mod tests {
             symbol: SymbolId(3),
             name: "Merged".to_owned(),
             participants: vec![ValueStorageId(4), ValueStorageId(7)],
+            namespace_payload_required: true,
         }
     }
 
@@ -693,6 +744,7 @@ mod tests {
             symbol: SymbolId(8),
             name: "Dependency".to_owned(),
             participants: vec![ValueStorageId(12)],
+            namespace_payload_required: true,
         });
         registry.wait_for_body(SymbolId(3), ValueStorageId(4));
         registry.wait_for_body(SymbolId(8), ValueStorageId(12));
@@ -761,6 +813,23 @@ mod tests {
         assert_eq!(
             registry.demand(SymbolId(3)),
             FunctionGroupDemand::Ready(TypeId(30))
+        );
+    }
+
+    #[test]
+    fn private_replay_places_new_overloads_before_inherited_rows() {
+        let mut registry = registry();
+        registry.register(identity());
+        registry.seed_inherited_publication(SymbolId(3), &[ValueStorageId(4)], vec![TypeId(10)]);
+        registry
+            .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
+        registry.reserve_public_row(SymbolId(3), ValueStorageId(7), TypeId(11));
+
+        assert_eq!(
+            registry
+                .publication_plan(SymbolId(3))
+                .map(|publication| publication.call_signatures),
+            Some(vec![TypeId(11), TypeId(10)])
         );
     }
 

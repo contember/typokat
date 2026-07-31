@@ -142,5 +142,7 @@ fn intrinsic_id(interner: &Interner, kind: crate::types::repr::IntrinsicKind) ->
         IntrinsicKind::ThisType => wk.this_type,
         IntrinsicKind::OmitThisParameter => wk.omit_this_parameter,
         IntrinsicKind::Object => wk.object,
+        IntrinsicKind::BigInt => wk.bigint,
+        IntrinsicKind::Symbol => wk.symbol,
     }
 }

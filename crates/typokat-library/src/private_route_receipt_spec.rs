@@ -111,6 +111,9 @@ declare var document: Document;
     let private = match routed {
         RoutedLibraryProject::Private(private) => private,
         RoutedLibraryProject::Shared(_) => panic!("colliding input escaped to the shared route"),
+        RoutedLibraryProject::CompleteSourceFallback(_) => {
+            panic!("healthy collision route escaped to complete-source fallback")
+        }
     };
     let receipt = private.route_receipt_for_test();
     assert_eq!(
@@ -153,6 +156,9 @@ fn shared_route_does_not_manufacture_a_private_receipt_or_repeat_library_work() 
     match routed {
         RoutedLibraryProject::Shared(_) => {}
         RoutedLibraryProject::Private(_) => panic!("fresh input manufactured a private receipt"),
+        RoutedLibraryProject::CompleteSourceFallback(_) => {
+            panic!("fresh input manufactured a complete-source fallback")
+        }
     }
 }
 

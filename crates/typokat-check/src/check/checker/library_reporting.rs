@@ -9,6 +9,7 @@ use crate::binder::namespace::{
 use crate::binder::Binder;
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::source::{CompilationOrigin, LibraryFileOrdinal};
+use crate::span::Span;
 use std::collections::BTreeMap;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,6 +29,61 @@ pub(crate) struct LibraryReportingReceipt {
     pub(crate) file_ordinal: LibraryFileOrdinal,
     pub(crate) observed_outcomes: usize,
     pub(crate) emitted_records: usize,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LibraryReportingSiteDescriptor {
+    pub(crate) file_ordinal: LibraryFileOrdinal,
+    pub(crate) span: Span,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) fn independent_library_reporting_site_descriptors(
+    binder: &Binder,
+) -> Vec<LibraryReportingSiteDescriptor> {
+    fn push(
+        sites: &mut Vec<LibraryReportingSiteDescriptor>,
+        origin: CompilationOrigin,
+        span: Span,
+    ) {
+        if let CompilationOrigin::Library(file_ordinal) = origin {
+            sites.push(LibraryReportingSiteDescriptor { file_ordinal, span });
+        }
+    }
+
+    let mut sites = Vec::new();
+    for failure in binder.local_ambient_export_alias_failures() {
+        push(&mut sites, failure.origin, failure.local_span);
+    }
+    for issue in binder.namespaces.placement_issues() {
+        push(&mut sites, issue.origin, issue.span);
+    }
+    for global in binder.namespaces.globals() {
+        push(&mut sites, global.origin, global.diagnostic_span);
+    }
+    for export in binder.namespaces.umd_exports() {
+        push(&mut sites, export.origin, export.span);
+    }
+    for context in binder.namespaces.export_contexts() {
+        push(&mut sites, context.origin, context.span);
+    }
+    let mut members = binder.namespaces.members().collect::<Vec<_>>();
+    members.sort_by_key(|member| (member.origin, member.declaration_span.start, member.id));
+    for member in members {
+        push(&mut sites, member.origin, member.declaration_span);
+    }
+    let mut standalone_members = binder
+        .local_standalone_namespace_value_attachments()
+        .into_iter()
+        .flat_map(|attachment| attachment.members)
+        .collect::<Vec<_>>();
+    standalone_members
+        .sort_by_key(|member| (member.origin, member.declaration_span.start, member.member));
+    for member in standalone_members {
+        push(&mut sites, member.origin, member.declaration_span);
+    }
+    sites
 }
 
 pub(crate) struct LibraryReportingConsumer<'ledger> {
@@ -58,7 +114,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::LocalAmbientExportAliasFailure,
                 failure.origin,
-                failure.local_span.start,
+                failure.local_span,
                 vec![CheckerRecord::Diagnostic(diagnostic)],
             )?;
         }
@@ -73,7 +129,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::PlacementIssue,
                 issue.origin,
-                issue.span.start,
+                issue.span,
                 vec![CheckerRecord::Diagnostic(diagnostic)],
             )?;
         }
@@ -97,7 +153,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::GlobalAugmentation,
                 global.origin,
-                global.diagnostic_span.start,
+                global.diagnostic_span,
                 records,
             )?;
         }
@@ -116,7 +172,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::UmdExportContext,
                 export.origin,
-                export.span.start,
+                export.span,
                 records,
             )?;
         }
@@ -143,7 +199,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::ExportContext,
                 context.origin,
-                context.span.start,
+                context.span,
                 records,
             )?;
         }
@@ -155,7 +211,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::NamespaceMember,
                 member.origin,
-                member.declaration_span.start,
+                member.declaration_span,
                 Vec::new(),
             )?;
         }
@@ -172,11 +228,12 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
                 &mut receipts,
                 LibraryReportingFamily::StandaloneNamespaceValueMember,
                 member.origin,
-                member.declaration_span.start,
+                member.declaration_span,
                 Vec::new(),
             )?;
         }
 
+        self.ledger.mark_binder_reporting_complete();
         Ok(receipts.into_values().collect())
     }
 
@@ -188,7 +245,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
         >,
         family: LibraryReportingFamily,
         origin: CompilationOrigin,
-        source_start: u32,
+        span: Span,
         records: Vec<CheckerRecord>,
     ) -> Result<(), LibraryEventLedgerError> {
         let file_ordinal = match origin {
@@ -196,7 +253,16 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
             CompilationOrigin::User(_) => return Ok(()),
         };
         let emitted_records = records.len();
-        let event = self.ledger.reserve_event(file_ordinal, source_start);
+        let event = {
+            let mut reservations = self.ledger.replay_reservation_domain()?;
+            let event = reservations.reserve_event(file_ordinal, span.start);
+            reservations.record_replay_owner_site(
+                event.primary,
+                span,
+                super::replay_index::CollisionReplayEventPhase::Immediate,
+            );
+            event
+        };
         self.ledger.complete(event.primary, records)?;
         let receipt = receipts
             .entry((file_ordinal, family))

@@ -5,6 +5,7 @@ use super::type_groups::{
     PublishedTypeEnvironment, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
 };
 use crate::binder::declaration::TypeGroupId;
+use crate::binder::roots::LibraryRootProjection;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::span::Span;
@@ -14,6 +15,12 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static FORCE_COLLISION_IDENTITY_SELECTION_PENDING: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LibraryIdentityUnavailable {
@@ -98,6 +105,57 @@ impl LibrarySemanticIdentities {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn normalized_projection_for_test(
+        &self,
+        store: &Store,
+    ) -> Vec<String> {
+        [
+            ("Array", &self.inner.array),
+            ("ReadonlyArray", &self.inner.readonly_array),
+            ("String", &self.inner.string),
+            ("Number", &self.inner.number),
+            ("Boolean", &self.inner.boolean),
+            ("RegExp", &self.inner.regexp),
+            ("Object", &self.inner.object),
+            ("CallableFunction", &self.inner.callable_function),
+        ]
+        .into_iter()
+        .map(|(name, terminal)| match terminal {
+            LibraryIdentityTerminal::Ready(identity) => format!(
+                "{name}:{}:{}",
+                identity.parameters.len(),
+                crate::diagnostics::render_type(store, identity.template, false)
+            ),
+            LibraryIdentityTerminal::Unavailable(cause) => {
+                format!("{name}:unavailable:{cause:?}")
+            }
+        })
+        .collect()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(in crate::check::checker) fn group_for_name_for_test(
+        &self,
+        name: &str,
+    ) -> Option<TypeGroupId> {
+        let terminal = match name {
+            "Array" => &self.inner.array,
+            "ReadonlyArray" => &self.inner.readonly_array,
+            "String" => &self.inner.string,
+            "Number" => &self.inner.number,
+            "Boolean" => &self.inner.boolean,
+            "RegExp" => &self.inner.regexp,
+            "Object" => &self.inner.object,
+            "CallableFunction" => &self.inner.callable_function,
+            _ => return None,
+        };
+        match terminal {
+            LibraryIdentityTerminal::Ready(identity) => Some(identity.group),
+            LibraryIdentityTerminal::Unavailable(_) => None,
+        }
+    }
+
     /// Select roots once from the library compilation-global scope. Consumer scopes
     /// never participate, so same-named user declarations cannot hijack native syntax.
     pub(in crate::check::checker) fn select(
@@ -106,6 +164,49 @@ impl LibrarySemanticIdentities {
         store: &Store,
     ) -> Self {
         Self::select_from_scope(binder, binder.compilation_global, published, store)
+    }
+
+    pub(in crate::check::checker) fn select_for_collision_publication(
+        binder: &Binder,
+        published: &PublishedTypeEnvironment,
+        store: &Store,
+    ) -> Self {
+        let selected = Self::select(binder, published, store);
+        #[cfg(any(test, feature = "test-utils"))]
+        if FORCE_COLLISION_IDENTITY_SELECTION_PENDING.get() {
+            let mut parts = selected.product_parts();
+            parts[0] =
+                LibraryIdentityTerminal::Unavailable(LibraryIdentityUnavailable::Unpublished);
+            return Self::from_explicit_parts(parts);
+        }
+        selected
+    }
+
+    pub(in crate::check::checker) fn select_from_library_roots(
+        projection: &LibraryRootProjection,
+        published: &PublishedTypeEnvironment,
+        store: &Store,
+    ) -> Self {
+        let select = |name: &str, arity| {
+            let group = projection
+                .root_rows
+                .iter()
+                .find(|row| row.name == name)
+                .and_then(|row| row.ty);
+            select_exact_group(published, store, group, arity)
+        };
+        Self {
+            inner: Arc::new(LibrarySemanticIdentityRows {
+                array: select("Array", 1),
+                readonly_array: select("ReadonlyArray", 1),
+                string: select("String", 0),
+                number: select("Number", 0),
+                boolean: select("Boolean", 0),
+                regexp: select("RegExp", 0),
+                object: select("Object", 0),
+                callable_function: select("CallableFunction", 0),
+            }),
+        }
     }
 
     pub(in crate::check::checker) fn select_from_scope(
@@ -182,6 +283,26 @@ impl LibrarySemanticIdentities {
         }
     }
 
+    pub(in crate::check::checker) fn array_definitely_lacks_then(&self, store: &Store) -> bool {
+        [&self.inner.array, &self.inner.object]
+            .into_iter()
+            .all(|terminal| {
+                let LibraryIdentityTerminal::Ready(identity) = terminal else {
+                    return false;
+                };
+                store.object_type(identity.template).is_some_and(|object| {
+                    object.property("then").is_none() && object.string_index.is_none()
+                })
+            })
+    }
+
+    pub(in crate::check::checker) fn object_template(&self) -> Option<TypeId> {
+        match &self.inner.object {
+            LibraryIdentityTerminal::Ready(identity) => Some(identity.template),
+            LibraryIdentityTerminal::Unavailable(_) => None,
+        }
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn callable_function_group(&self) -> Option<TypeGroupId> {
         match &self.inner.callable_function {
@@ -192,6 +313,11 @@ impl LibrarySemanticIdentities {
 
     #[cfg(test)]
     pub(crate) fn from_explicit_for_test(terminals: [LibraryIdentityTerminal; 8]) -> Self {
+        Self::from_explicit_parts(terminals)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn from_explicit_parts(terminals: [LibraryIdentityTerminal; 8]) -> Self {
         let [array, readonly_array, string, number, boolean, regexp, object, callable_function] =
             terminals;
         Self {
@@ -242,6 +368,23 @@ impl LibrarySemanticIdentities {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) fn with_forced_collision_identity_selection_pending<T>(run: impl FnOnce() -> T) -> T {
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FORCE_COLLISION_IDENTITY_SELECTION_PENDING.set(false);
+        }
+    }
+
+    FORCE_COLLISION_IDENTITY_SELECTION_PENDING.set(true);
+    let reset = Reset;
+    let result = run();
+    drop(reset);
+    result
+}
+
 fn select_in_scope(
     binder: &Binder,
     scope: ScopeId,
@@ -256,6 +399,15 @@ fn select_in_scope(
         .and_then(|scope| scope.lookup_local(name))
         .and_then(|symbol| binder.symbols.get(symbol))
         .and_then(|symbol| symbol.ty);
+    select_exact_group(published, store, group, arity)
+}
+
+fn select_exact_group(
+    published: &PublishedTypeEnvironment,
+    store: &Store,
+    group: Option<TypeGroupId>,
+    arity: usize,
+) -> LibraryIdentityTerminal {
     let Some(group) = group else {
         return LibraryIdentityTerminal::Unavailable(LibraryIdentityUnavailable::MissingGlobal);
     };
@@ -317,6 +469,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         identities: LibrarySemanticIdentities,
     ) {
         assert!(self.library_semantic_identities.is_none());
+        self.semantic_queries
+            .set_library_object_template(identities.object_template());
         self.library_semantic_identities = Some(identities);
     }
 
@@ -364,6 +518,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             );
             return LibraryMemberProjection::Unavailable;
         };
+        if (matches!(self.current_source, crate::source::SourceUnit::User { .. })
+            || self.combined_user_source)
+            && self
+                .private_collision_unavailable_type_groups
+                .contains(&identity.group)
+        {
+            self.record_incomplete(
+                incomplete_id,
+                span,
+                "native member surface is unavailable in the private collision epoch",
+            );
+            return LibraryMemberProjection::Unavailable;
+        }
         let projected = match argument {
             Some(argument) => {
                 let Some(parameter) = identity.parameters.first().copied() else {
@@ -386,12 +553,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         LibraryMemberProjection::Ready(projected)
     }
 
+    pub(in crate::check::checker) fn project_library_heritage_surface(
+        &mut self,
+        ty: TypeId,
+    ) -> Option<TypeId> {
+        let identities = self.library_semantic_identities.clone()?;
+        let NativeMemberBridge::Generic {
+            terminal, argument, ..
+        } = native_bridge(self.interner, ty, &identities)?
+        else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(identity) = terminal else {
+            return None;
+        };
+        let parameter = identity.parameters.first().copied()?;
+        let substitutions = FxHashMap::from_iter([(parameter, argument)]);
+        Some(self.substitute_ready_type_group_application(
+            identity.template,
+            &identity.parameters,
+            &substitutions,
+        ))
+    }
+
     pub(in crate::check::checker) fn lookup_library_composed_member(
         &mut self,
         ty: TypeId,
         property: &str,
         span: Span,
     ) -> LibraryComposedMember {
+        #[cfg(any(test, feature = "test-utils"))]
+        super::library_compiler::record_private_replay_visibility_query_for_test();
         if self.library_semantic_identities.is_none() {
             return LibraryComposedMember::NotInstalled;
         }

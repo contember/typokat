@@ -32,7 +32,7 @@ command = "target/debug/typokat check --format compact tests/fixtures/lib-es5-6.
 exit_code = 3
 parse_errors = 0
 diagnostics = 4
-incompletes = 181
+incompletes = 177
 
 [measurements.synthetic_typokat]
 checker_revision = "23bad42"
@@ -40,7 +40,7 @@ command = "target/debug/typokat check --format compact $COMBINED"
 exit_code = 3
 parse_errors = 0
 diagnostics = 70
-incompletes = 181
+incompletes = 177
 artifact_diagnostics = 4
 witness_diagnostics = 66
 tk2304 = 0
@@ -174,15 +174,6 @@ ids = [
 "pair.Uint8ClampedArray.value" = { oracle = "TS2322", typokat = "TK2322" }
 
 [[residual]]
-id = "annotation-bigint-keyword"
-outcome = "incomplete"
-surface = "annotation-lower/bigint-keyword/self"
-count = 1
-owner = "../../../docs/backlog/75-scope-surface-tail.md"
-witness = "lib.es5.d.ts:226:92"
-actual_cause = "The bigint keyword type is not modeled."
-
-[[residual]]
 id = "annotation-intrinsic-keyword"
 outcome = "incomplete"
 surface = "annotation-lower/intrinsic-keyword/self"
@@ -190,15 +181,6 @@ count = 5
 owner = "../../../docs/backlog/75-scope-surface-tail.md"
 witness = "lib.es5.d.ts:1658:36"
 actual_cause = "Intrinsic keyword declarations are not modeled."
-
-[[residual]]
-id = "annotation-symbol-keyword"
-outcome = "incomplete"
-surface = "annotation-lower/symbol-keyword/self"
-count = 3
-owner = "../../../docs/backlog/75-scope-surface-tail.md"
-witness = "lib.es5.d.ts:103:16"
-actual_cause = "The symbol keyword type is not modeled."
 
 [[residual]]
 id = "annotation-this-type"

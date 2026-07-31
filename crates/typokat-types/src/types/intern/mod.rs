@@ -286,6 +286,8 @@ pub struct WellKnown {
     pub omit_this_parameter: TypeId,
     /// The non-primitive `object` keyword.
     pub object: TypeId,
+    pub bigint: TypeId,
+    pub symbol: TypeId,
 }
 
 impl WellKnown {
@@ -370,6 +372,8 @@ impl Interner {
                 this_type: TypeId(0),
                 omit_this_parameter: TypeId(0),
                 object: TypeId(0),
+                bigint: TypeId(0),
+                symbol: TypeId(0),
             },
             #[cfg(any(test, feature = "test-utils"))]
             user_delta_drop_witness: None,
@@ -407,6 +411,8 @@ impl Interner {
             this_type: id_of(IntrinsicKind::ThisType),
             omit_this_parameter: id_of(IntrinsicKind::OmitThisParameter),
             object: id_of(IntrinsicKind::Object),
+            bigint: id_of(IntrinsicKind::BigInt),
+            symbol: id_of(IntrinsicKind::Symbol),
         };
 
         interner

@@ -1,11 +1,5 @@
 //! Source-only routing preflight for frozen-library user checks.
 
-#![cfg_attr(
-    not(test),
-    allow(dead_code, reason = "activated by the WU5 private-route cutover")
-)]
-
-#[cfg(test)]
 use crate::binder::declaration::SourceBindingSlot;
 use crate::binder::declaration::{source_global_binding_census, SourceGlobalBindingCandidate};
 use crate::binder::namespace::{source_file_kind, ModuleBindingContext};
@@ -16,19 +10,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::check::checker::library_compiler::CollisionFreeUserDeltaCapability;
 
-/// Certify a fork whose user sources the caller has already vouched for.
-///
-/// The preflight runs over an empty input set, so the returned capability asserts only that the
-/// caller takes responsibility for collision-freedom. Real source-driven routing is WU5's.
+/// Certify a fork used only by focused immutable-prefix tests.
+#[cfg(test)]
 pub(super) fn issue_caller_certified_capability() -> CollisionFreeUserDeltaCapability {
     preflight_project(&BTreeSet::new(), &[], false).take_capability()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ModuleClassification {
-    Script,
-    External,
-}
+use super::base::{
+    PrivateCollisionCandidate, PrivateCollisionModuleClassification,
+    PrivateCollisionModuleClassificationEntry, PrivateCollisionRouteReceipt, PrivateCollisionSlot,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CollisionRoute {
@@ -48,18 +39,124 @@ struct CollisionPreflightWork {
 struct CollisionPreflightOutcome {
     route: CollisionRoute,
     capability: Option<CollisionFreeUserDeltaCapability>,
-    module_classifications: Vec<(String, ModuleClassification)>,
+    module_classifications: Vec<(String, PrivateCollisionModuleClassification)>,
     candidates: BTreeMap<String, SourceGlobalBindingCandidate>,
     reasons: BTreeSet<String>,
+    relative_import_edges: usize,
+    #[cfg(test)]
     work: CollisionPreflightWork,
 }
 
 impl CollisionPreflightOutcome {
+    fn take_route(
+        mut self,
+    ) -> (
+        CollisionRoute,
+        Option<CollisionFreeUserDeltaCapability>,
+        PrivateCollisionRouteReceipt,
+    ) {
+        let receipt = PrivateCollisionRouteReceipt {
+            module_classifications: self
+                .module_classifications
+                .into_iter()
+                .map(
+                    |(path, classification)| PrivateCollisionModuleClassificationEntry {
+                        path,
+                        classification,
+                    },
+                )
+                .collect(),
+            candidates: self
+                .candidates
+                .into_iter()
+                .map(|(name, candidate)| PrivateCollisionCandidate {
+                    name,
+                    slots: candidate.slots.into_iter().map(map_slot).collect(),
+                    global_object_contributor: candidate.global_object_contributor,
+                })
+                .collect(),
+            reasons: self.reasons,
+            relative_import_edges: self.relative_import_edges,
+        };
+        (self.route, self.capability.take(), receipt)
+    }
+
+    #[cfg(test)]
     fn take_capability(mut self) -> CollisionFreeUserDeltaCapability {
         self.capability
             .take()
             .expect("shared preflight issues its capability")
     }
+}
+
+pub(super) enum RoutedProjectPreflight {
+    Shared(CollisionFreeUserDeltaCapability),
+    Private(PrivateCollisionRouteReceipt),
+    Rejected { reasons: BTreeSet<String> },
+}
+
+pub(super) fn preflight_file_inputs(
+    root_names: &BTreeSet<String>,
+    inputs: &[crate::frontend::FileInput],
+) -> RoutedProjectPreflight {
+    let inputs = inputs
+        .iter()
+        .map(|input| PreflightInput {
+            path: &input.name,
+            source: &input.source,
+        })
+        .collect::<Vec<_>>();
+    let (route, capability, receipt) = preflight_project(root_names, &inputs, false).take_route();
+    match route {
+        CollisionRoute::SharedDelta => match capability {
+            Some(capability) => RoutedProjectPreflight::Shared(capability),
+            None => RoutedProjectPreflight::Rejected {
+                reasons: BTreeSet::from(["missing-shared-capability".to_owned()]),
+            },
+        },
+        CollisionRoute::PrivateCombined => RoutedProjectPreflight::Private(receipt),
+        CollisionRoute::RejectedBeforeSemantics => RoutedProjectPreflight::Rejected {
+            reasons: receipt.reasons,
+        },
+    }
+}
+
+#[cfg(test)]
+pub(super) fn preflight_file_inputs_with_omitted_candidate_for_test(
+    root_names: &BTreeSet<String>,
+    inputs: &[crate::frontend::FileInput],
+    omitted_name: &str,
+) -> (RoutedProjectPreflight, bool) {
+    let authoritative = inputs
+        .iter()
+        .map(|input| PreflightInput {
+            path: &input.name,
+            source: &input.source,
+        })
+        .collect::<Vec<_>>();
+    let (_, _, mut receipt) = preflight_project(root_names, &authoritative, false).take_route();
+    let omitted = receipt
+        .candidates
+        .iter()
+        .position(|candidate| candidate.name == omitted_name)
+        .map(|index| receipt.candidates.remove(index));
+    let guard_fired = omitted
+        .as_ref()
+        .is_some_and(|candidate| root_names.contains(&candidate.name));
+    (
+        if guard_fired {
+            RoutedProjectPreflight::Private(
+                preflight_project(root_names, &authoritative, false)
+                    .take_route()
+                    .2,
+            )
+        } else {
+            RoutedProjectPreflight::Rejected {
+                reasons: BTreeSet::from(["candidate-omission-control-did-not-fire".to_owned()]),
+            }
+        },
+        guard_fired,
+    )
 }
 
 struct PreflightInput<'source> {
@@ -78,6 +175,7 @@ fn preflight_project(
     let mut candidates = BTreeMap::new();
     let mut reasons = BTreeSet::new();
     let mut module_classifications = Vec::with_capacity(inputs.len());
+    let mut relative_import_edges = 0_usize;
     let mut work = CollisionPreflightWork::default();
     let mut rejected = false;
 
@@ -87,9 +185,9 @@ fn preflight_project(
         let context =
             ModuleBindingContext::for_program(&parsed.program, source_file_kind(input.path));
         let classification = if context.external_module {
-            ModuleClassification::External
+            PrivateCollisionModuleClassification::External
         } else {
-            ModuleClassification::Script
+            PrivateCollisionModuleClassification::Script
         };
         module_classifications.push((input.path.to_owned(), classification));
 
@@ -101,6 +199,8 @@ fn preflight_project(
         if !parsed.diagnostics.is_empty() {
             reasons.insert("classifier-uncertainty".to_owned());
         }
+        relative_import_edges = relative_import_edges
+            .saturating_add(crate::frontend::relative_import_edge_count(&parsed.program));
         let census = source_global_binding_census(&parsed.program, context);
         work.source_nodes_visited = work
             .source_nodes_visited
@@ -162,7 +262,17 @@ fn preflight_project(
         module_classifications,
         candidates,
         reasons,
+        relative_import_edges,
+        #[cfg(test)]
         work,
+    }
+}
+
+fn map_slot(slot: SourceBindingSlot) -> PrivateCollisionSlot {
+    match slot {
+        SourceBindingSlot::Value => PrivateCollisionSlot::Value,
+        SourceBindingSlot::Type => PrivateCollisionSlot::Type,
+        SourceBindingSlot::Namespace => PrivateCollisionSlot::Namespace,
     }
 }
 
@@ -173,9 +283,7 @@ pub(super) fn preflight_for_test(
     inject_uncertainty: bool,
 ) -> super::base::CollisionPreflightReceiptForTest {
     use super::base::{
-        CollisionCandidateForTest, CollisionPreflightReceiptForTest, CollisionPreflightWorkForTest,
-        CollisionRouteForTest, ModuleClassificationEntryForTest, ModuleClassificationForTest,
-        PreflightSlotForTest,
+        CollisionPreflightReceiptForTest, CollisionPreflightWorkForTest, CollisionRouteForTest,
     };
 
     let inputs = inputs
@@ -187,8 +295,11 @@ pub(super) fn preflight_for_test(
         .collect::<Vec<_>>();
     let outcome = preflight_project(root_names, &inputs, inject_uncertainty);
     let capability_issued = outcome.capability.is_some();
+    let route = outcome.route;
+    let work = outcome.work.clone();
+    let (_, _, receipt) = outcome.take_route();
     CollisionPreflightReceiptForTest {
-        route: match outcome.route {
+        route: match route {
             CollisionRoute::SharedDelta => CollisionRouteForTest::SharedDelta,
             CollisionRoute::PrivateCombined => CollisionRouteForTest::PrivateCombined,
             CollisionRoute::RejectedBeforeSemantics => {
@@ -196,43 +307,14 @@ pub(super) fn preflight_for_test(
             }
         },
         capability_issued,
-        module_classifications: outcome
-            .module_classifications
-            .into_iter()
-            .map(|(path, classification)| {
-                let classification = match classification {
-                    ModuleClassification::Script => ModuleClassificationForTest::Script,
-                    ModuleClassification::External => ModuleClassificationForTest::External,
-                };
-                ModuleClassificationEntryForTest {
-                    path,
-                    classification,
-                }
-            })
-            .collect(),
-        candidates: outcome
-            .candidates
-            .into_iter()
-            .map(|(name, candidate)| CollisionCandidateForTest {
-                name,
-                slots: candidate
-                    .slots
-                    .into_iter()
-                    .map(|slot| match slot {
-                        SourceBindingSlot::Value => PreflightSlotForTest::Value,
-                        SourceBindingSlot::Type => PreflightSlotForTest::Type,
-                        SourceBindingSlot::Namespace => PreflightSlotForTest::Namespace,
-                    })
-                    .collect(),
-                global_object_contributor: candidate.global_object_contributor,
-            })
-            .collect(),
-        reasons: outcome.reasons,
+        module_classifications: receipt.module_classifications,
+        candidates: receipt.candidates,
+        reasons: receipt.reasons,
         work: CollisionPreflightWorkForTest {
-            parse_units: outcome.work.parse_units,
-            source_nodes_visited: outcome.work.source_nodes_visited,
-            binding_leaves_visited: outcome.work.binding_leaves_visited,
-            frozen_name_probes: outcome.work.frozen_name_probes,
+            parse_units: work.parse_units,
+            source_nodes_visited: work.source_nodes_visited,
+            binding_leaves_visited: work.binding_leaves_visited,
+            frozen_name_probes: work.frozen_name_probes,
             ..CollisionPreflightWorkForTest::default()
         },
     }
