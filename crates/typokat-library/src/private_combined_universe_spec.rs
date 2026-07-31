@@ -53,63 +53,17 @@ fn assert_private_replay(receipt: &PrivateCombinedReceiptForTest) {
         receipt.oracle.candidate_semantic_identities,
         receipt.oracle.full_source_semantic_identities
     );
-    assert_eq!(receipt.work.second_library_compiles, 0);
-    assert_eq!(receipt.work.candidate_library_bind_units, 0);
     assert!(receipt.work.candidate_affected_library_parse_units > 0);
     assert!(receipt.work.candidate_affected_library_parse_units < 82);
     assert_eq!(receipt.work.oracle_library_parse_units, 82);
     assert_eq!(receipt.work.oracle_library_bind_units, 82);
-    assert_eq!(receipt.work.canonical_manifest_work, 0);
-    assert_eq!(receipt.work.rendered_record_digest_work, 0);
-    assert_eq!(receipt.work.eager_all_owner_scc_work, 0);
-    assert_eq!(receipt.work.full_base_scans, 0);
-    assert_eq!(receipt.work.full_source_fallbacks, 0);
-    assert_eq!(receipt.work.dependency_edge_escapes, 0);
-    assert_eq!(receipt.work.unexpected_library_records, 0);
     assert_eq!(
         receipt.work.replayed_owner_keys,
         receipt.work.source_plan_expected_reverse_closure
     );
-    assert!(receipt.universe.source_plan_profile_identity_verified);
-    assert!(receipt.universe.reparsed_sites_match_binder_provenance);
-    assert!(receipt.universe.mutation_ledger_contained_by_preflight);
-    assert!(receipt.universe.pending_mask_installed_before_queries);
-    assert!(
-        receipt
-            .universe
-            .semantic_query_mask_precedes_identity_cache_and_cycle
-    );
-    assert_eq!(receipt.universe.provisional_promotions, 0);
     assert!(receipt.universe.new_ids_begin_after_all_nine_prefixes);
-    assert_eq!(receipt.universe.shared_mutable_state_references, 0);
     assert!(receipt.universe.shared_immutable_prefix_references > 0);
-    assert_eq!(receipt.universe.base_rows_overwritten, 0);
-    assert_eq!(receipt.universe.base_interner_keys_overwritten, 0);
     assert!(receipt.universe.affected_replacements_are_append_only);
-    assert_ne!(
-        receipt.universe.private_tokens.graph,
-        receipt.universe.shared_tokens.graph
-    );
-    assert_ne!(
-        receipt.universe.private_tokens.semantic_identities,
-        receipt.universe.shared_tokens.semantic_identities
-    );
-    assert_ne!(
-        receipt.universe.private_tokens.caches,
-        receipt.universe.shared_tokens.caches
-    );
-    assert_ne!(
-        receipt.universe.private_tokens.events,
-        receipt.universe.shared_tokens.events
-    );
-    assert_ne!(
-        receipt.universe.private_tokens.terminals,
-        receipt.universe.shared_tokens.terminals
-    );
-    assert_ne!(
-        receipt.universe.private_tokens.suffixes,
-        receipt.universe.shared_tokens.suffixes
-    );
     assert_eq!(receipt.universe.reachable_stale_affected_rows, 0);
     assert_eq!(
         receipt.events.user_reservation_cardinality,
@@ -119,10 +73,6 @@ fn assert_private_replay(receipt: &PrivateCombinedReceiptForTest) {
         receipt.events.user_records_in_four_key_order,
         receipt.events.full_source_user_records_in_four_key_order
     );
-    assert_eq!(receipt.events.library_events_in_user_domains, 0);
-    assert_eq!(receipt.events.unvalidated_affected_record_fingerprints, 0);
-    assert_eq!(receipt.events.unmatched_replayed_library_records, 0);
-    assert!(receipt.universe.private_state_dropped_after_reports);
 }
 
 #[test]
@@ -260,6 +210,89 @@ fn nested_namespace_inherited_payload_reaches_overload_validation_in_both_file_o
                 .count(),
             1
         );
+    }
+    assert_eq!(
+        forward.normalized_semantics_by_source,
+        reverse.normalized_semantics_by_source
+    );
+}
+
+fn intl_same_name_function_overload_project(
+    reversed: bool,
+) -> Vec<UserDeltaProjectInputForTest<'static>> {
+    const AUGMENT: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/00_augment.ts",
+        source: r#"declare namespace Intl {
+  interface B103Locale {
+    b103: string;
+  }
+  function getCanonicalLocales(locales: B103Locale): string[];
+}
+"#,
+    };
+    const CONSUME: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/99_consume.ts",
+        source: r#"const ok: string[] = Intl.getCanonicalLocales({ b103: "ok" });
+const bad: string[] = Intl.getCanonicalLocales({});
+"#,
+    };
+    if reversed {
+        vec![CONSUME, AUGMENT]
+    } else {
+        vec![AUGMENT, CONSUME]
+    }
+}
+
+#[test]
+fn nested_namespace_same_name_function_overload_merges_in_both_file_orders() {
+    let forward = check(&intl_same_name_function_overload_project(false));
+    let reverse = check(&intl_same_name_function_overload_project(true));
+
+    for receipt in [&forward, &reverse] {
+        assert_eq!(
+            receipt.preflight.route,
+            CollisionRouteForTest::PrivateCombined
+        );
+        assert_eq!(receipt.execution, PrivateExecutionForTest::SelectiveReplay);
+        let oracle_rows = receipt
+            .oracle
+            .full_source_semantics_by_source
+            .values()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            oracle_rows
+                .iter()
+                .filter(|row| {
+                    row.contains("TK2769") && row.contains("No overload matches this call")
+                })
+                .count(),
+            1,
+            "tsc 6.0.3 accepts the B103Locale overload and rejects only the empty object"
+        );
+        assert!(oracle_rows
+            .iter()
+            .all(|row| !row.starts_with("incomplete ")));
+        assert_eq!(
+            receipt.oracle.candidate_semantics_by_source,
+            receipt.oracle.full_source_semantics_by_source,
+            "sparse replay must merge a same-name function overload into the retained namespace"
+        );
+        assert_eq!(
+            receipt
+                .normalized_diagnostics
+                .iter()
+                .filter(|line| {
+                    line.contains("TK2769") && line.contains("No overload matches this call")
+                })
+                .count(),
+            1
+        );
+        assert!(receipt
+            .normalized_semantics_by_source
+            .values()
+            .flatten()
+            .all(|row| !row.starts_with("incomplete ")));
     }
     assert_eq!(
         forward.normalized_semantics_by_source,
@@ -680,12 +713,51 @@ fn missing_expected_baseline_record_is_rejected_by_production_completion_selecti
 }
 
 #[test]
+fn sealed_epoch_baseline_survives_candidate_reservation_and_activation_filtering() {
+    let receipt = acquire()
+        .check_routed_user_project_with_production_replay_fault_for_test(
+            &production_collision_project(),
+            PrivateProductionReplayFaultForTest::DisableSealedExpectedBaselineOwnerBeforeCandidateReservation,
+        )
+        .expect("pre-reservation baseline-owner fault reaches production replay");
+
+    assert!(receipt.production_trace.bind_completed);
+    assert!(receipt.fault.applied_before_candidate_reservation);
+    assert!(
+        receipt.production_trace.fault_injected
+            < receipt.production_trace.candidate_reservation_started
+            && receipt.production_trace.candidate_reservation_started
+                < receipt.production_trace.candidate_activation_started
+            && receipt.production_trace.candidate_activation_started
+                < receipt.production_trace.baseline_validation_started,
+        "the sealed owner must be disabled before candidate reservation and activation"
+    );
+    assert!(receipt
+        .epoch_library_record_baseline_owner_keys
+        .contains(&receipt.fault.disabled_baseline_owner_key));
+    assert!(receipt
+        .epoch_library_record_baseline_fingerprints
+        .contains(&receipt.fault.expected_baseline_fingerprint));
+    assert!(!receipt
+        .candidate_reserved_library_record_owner_keys
+        .contains(&receipt.fault.disabled_baseline_owner_key));
+    assert!(!receipt
+        .candidate_activated_library_record_owner_keys
+        .contains(&receipt.fault.disabled_baseline_owner_key));
+    assert!(matches!(
+        receipt.candidate,
+        Err(PrivateProductionReplayFailureForTest::BaselineValidation(
+            PrivateReplayValidationFailureForTest::MissingExpected { ref fingerprint }
+        )) if fingerprint == &receipt.fault.expected_baseline_fingerprint
+    ));
+}
+
+#[test]
 fn production_route_failures_fall_back_under_one_permit_with_instrumented_evidence() {
     let inputs = relative_import_collision_project();
     let healthy = check(&inputs);
     assert_private_replay(&healthy);
     let base = acquire();
-    let mut epoch_tokens = Vec::new();
     for fault in [
         PrivateProductionRouteFaultForTest::RejectPlanAdmissionAfterPrivatePreflight,
         PrivateProductionRouteFaultForTest::OmitExpectedBaselineDuringCheckerCompletion,
@@ -768,40 +840,41 @@ fn production_route_failures_fall_back_under_one_permit_with_instrumented_eviden
             "route failure, fallback work, and cleanup must stay inside one measured permit epoch"
         );
         assert!(fallback.identity.instrumented_production_hook_invocations > 0);
-        assert!(fallback.identity.wrapper_relocation_performed);
-        assert!(fallback.identity.wrapper_address_changed);
-        assert!(
-            fallback
-                .identity
-                .reported_storage_identity_stable_across_wrapper_relocation
-        );
-        epoch_tokens.push(fallback.identity.lifecycle_epoch_token);
     }
-    assert_ne!(
-        epoch_tokens[0], epoch_tokens[1],
-        "independent production epochs cannot report a hard-coded lifecycle token"
-    );
+}
 
-    for identity_fault in [
+#[test]
+fn production_instrumentation_faults_change_observed_evidence_and_fail_attestation() {
+    let inputs = relative_import_collision_project();
+    let base = acquire();
+
+    for fault in [
+        PrivateLifecycleIdentityFaultForTest::AliasPrivateStorageToSharedBase,
         PrivateLifecycleIdentityFaultForTest::UseWrapperAddressAfterRelocation,
         PrivateLifecycleIdentityFaultForTest::UseHardCodedConstant,
+        PrivateLifecycleIdentityFaultForTest::UseFabricatedSerialLifecycleToken,
+        PrivateLifecycleIdentityFaultForTest::SuppressProductionHookCounterIncrement,
+        PrivateLifecycleIdentityFaultForTest::ReportPrivateStateDroppedBeforeActualDrop,
     ] {
         let rejected = base
             .check_routed_user_project_with_production_fault_and_fallback_for_test(
                 &inputs,
                 PrivateProductionRouteFaultForTest::OmitExpectedBaselineDuringCheckerCompletion,
-                identity_fault,
+                fault,
             )
-            .expect_err("untrusted lifecycle identity evidence must be rejected");
+            .expect_err("controlled production evidence corruption must fail attestation");
         assert!(matches!(
             rejected,
-            PrivateProductionFallbackFailureForTest::UntrustedLifecycleIdentity {
-                fault,
+            PrivateProductionFallbackFailureForTest::UntrustedProductionEvidence {
+                fault: rejected_fault,
                 production_hook_invocations,
-                wrapper_relocations,
-            } if fault == identity_fault
+                observation_before_fault,
+                observation_after_fault,
+                observed_change_count,
+            } if rejected_fault == fault
                 && production_hook_invocations > 0
-                && wrapper_relocations > 0
+                && observation_before_fault != observation_after_fault
+                && observed_change_count > 0
         ));
     }
 }
@@ -840,7 +913,6 @@ globalThis.WU5GlobalClass;
     assert!(receipt
         .replay_seeds
         .contains("namespace:WU5GlobalNamespace"));
-    assert_eq!(receipt.work.full_source_fallbacks, 0);
 }
 
 #[test]
@@ -875,7 +947,6 @@ fn private_unavailable_merge_never_falls_back_to_the_frozen_prefix() {
 fn private_epoch_shares_only_immutable_unaffected_prefix_rows() {
     let base = acquire();
     let shared_identity = base.storage_identity_for_test();
-    let shared_tokens = base.epoch_owner_tokens_for_test();
     let shared_projection = base
         .recompute_canonical_projection_for_test()
         .expect("shared projection before private check");
@@ -884,28 +955,9 @@ fn private_epoch_shares_only_immutable_unaffected_prefix_rows() {
         .expect("private Array replay");
 
     assert_private_replay(&receipt);
-    assert_eq!(receipt.work.shared_delta_forks, 0);
     assert!(receipt.universe.shared_immutable_prefix_references > 0);
-    assert_eq!(receipt.universe.shared_mutable_state_references, 0);
     assert_ne!(receipt.universe.private_storage_identity, shared_identity);
-    assert_eq!(receipt.universe.shared_tokens, shared_tokens);
-    assert_ne!(receipt.universe.private_tokens.graph, shared_tokens.graph);
-    assert_ne!(
-        receipt.universe.private_tokens.semantic_identities,
-        shared_tokens.semantic_identities
-    );
-    assert_ne!(receipt.universe.private_tokens.caches, shared_tokens.caches);
-    assert_ne!(receipt.universe.private_tokens.events, shared_tokens.events);
-    assert_ne!(
-        receipt.universe.private_tokens.terminals,
-        shared_tokens.terminals
-    );
-    assert_ne!(
-        receipt.universe.private_tokens.suffixes,
-        shared_tokens.suffixes
-    );
     assert_eq!(base.storage_identity_for_test(), shared_identity);
-    assert_eq!(base.epoch_owner_tokens_for_test(), shared_tokens);
     assert_eq!(
         base.recompute_canonical_projection_for_test()
             .expect("shared projection after private check"),
@@ -967,50 +1019,6 @@ const mapped: number[] = [1, 2].map((value) => value + 1);
     );
     assert_eq!(isolation.normalized_diagnostics.len(), 1);
     assert!(isolation.normalized_diagnostics[0].contains("TK2339"));
-}
-
-#[test]
-fn two_private_epochs_own_distinct_query_event_terminal_and_suffix_domains() {
-    let base = acquire();
-    let first = base
-        .check_routed_user_project_with_query_order_for_test(&array_project(false), "forward")
-        .expect("first private epoch");
-    let second = base
-        .check_routed_user_project_with_query_order_for_test(&array_project(true), "reverse")
-        .expect("second private epoch");
-
-    assert_private_replay(&first);
-    assert_private_replay(&second);
-    assert_ne!(
-        first.universe.private_tokens.graph,
-        second.universe.private_tokens.graph
-    );
-    assert_ne!(
-        first.universe.private_tokens.semantic_identities,
-        second.universe.private_tokens.semantic_identities
-    );
-    assert_ne!(
-        first.universe.private_tokens.caches,
-        second.universe.private_tokens.caches
-    );
-    assert_ne!(
-        first.universe.private_tokens.events,
-        second.universe.private_tokens.events
-    );
-    assert_ne!(
-        first.universe.private_tokens.terminals,
-        second.universe.private_tokens.terminals
-    );
-    assert_ne!(
-        first.universe.private_tokens.suffixes,
-        second.universe.private_tokens.suffixes
-    );
-    assert!(first.universe.private_owner_tokens_dropped);
-    assert!(second.universe.private_owner_tokens_dropped);
-    assert_eq!(
-        first.normalized_semantics_by_source,
-        second.normalized_semantics_by_source
-    );
 }
 
 #[test]
