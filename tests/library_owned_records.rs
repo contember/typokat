@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use typokat::driver::{check_project_with_library, check_source_with_library};
+use typokat::driver::{check_project, check_source};
 use typokat::frontend::FileInput;
 use typokat::library::LibraryRecordCensus;
 
@@ -22,6 +22,8 @@ const BLESS: &str = "TYPOKAT_BLESS_LIBRARY_RECORDS";
 
 const PINNED_DIAGNOSTICS: usize = 265;
 const PINNED_INCOMPLETES: usize = 433;
+const FULL_LIBRARY_CLEAN: &str =
+    include_str!("../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 
 fn repository_root() -> PathBuf {
     let root = std::env::current_dir().expect("test process current directory");
@@ -105,12 +107,10 @@ fn every_pinned_entry_names_a_code_and_a_site() {
     assert_eq!(records, PINNED_DIAGNOSTICS + PINNED_INCOMPLETES);
 }
 
-/// No library-owned record reaches a user's output on the library-backed driver path.
+/// No library-owned record reaches a user's output on the production driver path.
 ///
-/// This is the production shape, not a reading of the source: `check_project_with_library` and
-/// `check_source_with_library` are the entry points the WU7 cutover moves the CLI onto. The
-/// library contributes 698 records on the way to the base; a user check must see none of them,
-/// and must still see its own.
+/// The library contributes 698 records on the way to the base; a user check must see none of
+/// them, and must still see its own.
 #[test]
 fn no_library_owned_record_reaches_user_output() {
     let census = LibraryRecordCensus::compile_packaged_profile().expect("library record census");
@@ -122,7 +122,7 @@ fn no_library_owned_record_reaches_user_output() {
 
     let clean = "export const greeting: string = \"typokat\";\n";
     let faulty = "export const count: number = \"not a number\";\n";
-    let reports = check_project_with_library(vec![
+    let reports = check_project(vec![
         FileInput {
             name: "/probe/clean.ts".to_owned(),
             source: clean.to_owned(),
@@ -132,7 +132,7 @@ fn no_library_owned_record_reaches_user_output() {
             source: faulty.to_owned(),
         },
     ])
-    .expect("the library-backed project path publishes its base");
+    .expect("the production project path publishes its base");
 
     assert_eq!(reports.len(), 2);
     let clean_report = &reports[0];
@@ -156,7 +156,7 @@ fn no_library_owned_record_reaches_user_output() {
     let user_length = u32::try_from(faulty.len()).expect("probe source length");
     assert!(reported.span.start < user_length && reported.span.end <= user_length);
 
-    let single = check_source_with_library(clean).expect("the library-backed single-file path");
+    let single = check_source(clean).expect("the production single-file path");
     assert!(
         single.diagnostics.is_empty()
             && single.incomplete.is_empty()
@@ -166,15 +166,15 @@ fn no_library_owned_record_reaches_user_output() {
 
 /// The same proof at the process boundary: the CLI prints nothing for a clean file.
 ///
-/// The CLI still forks from `crates/typokat-check/src/prelude.ts` until the WU7 cutover, so this is the weaker half
-/// of the pair above — it holds the boundary while the entry point moves.
+/// The source requires declarations absent from the retired minimal prelude, so silence also proves
+/// that this process boundary reached the full production base whose 698 records stay internal.
 #[test]
 fn the_cli_prints_no_record_for_a_clean_file() {
     let probe = std::env::temp_dir().join(format!(
         "typokat-cli-record-probe-{}.ts",
         std::process::id()
     ));
-    fs::write(&probe, "export const greeting: string = \"typokat\";\n").expect("write CLI probe");
+    fs::write(&probe, FULL_LIBRARY_CLEAN).expect("write CLI probe");
 
     let output = Command::new(env!("CARGO_BIN_EXE_typokat"))
         .args(["check", "--format", "compact"])

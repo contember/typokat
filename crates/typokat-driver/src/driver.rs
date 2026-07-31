@@ -570,6 +570,9 @@ fn project_reports_from_frontend_run<E>(
 }
 
 #[cfg(test)]
+mod wu7_provider_lifecycle_spec;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

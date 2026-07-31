@@ -251,3 +251,6 @@ fn check_paths(paths: &[String], format: DiagnosticFormat) -> Result<CheckStatus
         CheckStatus::Clean
     })
 }
+
+#[cfg(test)]
+mod wu7_cli_fault_spec;
