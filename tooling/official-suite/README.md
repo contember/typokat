@@ -14,10 +14,17 @@ matters is the in-scope **matched %** rising as milestones land, and the
 
 ## Why it can run while the checker is being refactored
 
-The harness never imports or builds the `typokat` crate. It shells out to the
-**prebuilt binary** (`typokat check <file>`) and parses the rendered text. Point
-`--bin` at any binary; the default is `target/release/typokat`. So a broken
-work-in-progress `src/` does not block it.
+The harness never imports or builds the `typokat` crate. It starts the **prebuilt
+binary** once as `typokat official-batch` and sends isolated schema-1 JSONL cases
+through that process. Point `--bin` at any binary; the default is
+`target/release/typokat`. So a broken work-in-progress `src/` does not block it.
+
+Each response attests the worker PID, production default-library route, and pinned
+profile SHA. Requests and responses are capped at 2 MiB; per-case rendered output
+is capped at 1 MiB. A crash, timeout, malformed/mismatched frame, or infrastructure
+response fails the run. After a middle-case failure the supervisor starts one
+replacement worker and checks the remaining cases for additional failures, but it
+still exposes no partial result and never retries the failed case.
 
 ## Usage
 
@@ -67,7 +74,7 @@ needs Python 3 and the binary.
 
 1. **Unit parsing (line fidelity).** TS strips `// @option: value` directive lines
    from the test content, which shifts every following line up. The harness
-   replicates this and runs typokat on the **stripped** content, so typokat's line
+   replicates this and checks the **stripped** content, so typokat's line
    N equals baseline line N. `@filename:` splits multi-file tests.
 
 2. **Gating ("discover").** Each test lands in exactly one bucket:

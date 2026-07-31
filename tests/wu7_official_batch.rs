@@ -179,6 +179,32 @@ fn official_batch_rejects_malformed_requests_without_partial_case_output() {
             "no partial case output: {output:#?}"
         );
     }
+
+    let prefix = r#"{"schema":1,"case_id":"boundary","name":"boundary.ts","source":"//"#;
+    let suffix = "\"}\n";
+    let padding = MAX_BATCH_FRAME_BYTES - prefix.len() - suffix.len();
+    let exact = format!("{prefix}{}{suffix}", "x".repeat(padding));
+    assert_eq!(exact.len(), MAX_BATCH_FRAME_BYTES);
+    let (_, exact_output) = run_official_batch(&exact);
+    assert_eq!(
+        exact_output.status.code(),
+        Some(0),
+        "exact-cap frame must be accepted: {exact_output:#?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&exact_output.stdout)
+            .lines()
+            .count(),
+        1
+    );
+
+    let oversized = format!("{prefix}{}{suffix}", "x".repeat(padding + 1));
+    assert_eq!(oversized.len(), MAX_BATCH_FRAME_BYTES + 1);
+    let (_, oversized_output) = run_official_batch(&oversized);
+    assert_eq!(oversized_output.status.code(), Some(2));
+    assert!(oversized_output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&oversized_output.stderr)
+        .contains("error: malformed official-batch request:"));
 }
 
 #[test]

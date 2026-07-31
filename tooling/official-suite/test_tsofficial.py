@@ -17,6 +17,7 @@ import os
 import stat
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
@@ -93,6 +94,21 @@ for raw in sys.stdin:
         f.write(script)
     os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC | stat.S_IXGRP)
     return path
+
+
+def fake_clean_batch_binary():
+    return fake_batch_binary("""
+print(json.dumps({
+    "schema": 1,
+    "case_id": request["case_id"],
+    "worker_pid": os.getpid(),
+    "provider_route": provider_route,
+    "profile_sha256": provider_profile_sha256,
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+}), flush=True)
+""")
 
 
 # Emits a well-formed diagnostic header + a location line referencing the tmp
@@ -665,7 +681,7 @@ class FetchIntegrityTests(unittest.TestCase):
             self._write_full_manifest(["conformance/x/a.ts"])
             with open(ts.SCOREBOARD, "w") as f:
                 f.write("# TS @ " + "0" * 40 + "\nIN\t0 0 0 0\t|\tstale.ts\n")
-            binary = fake_binary("exit 0\n")
+            binary = fake_clean_batch_binary()
             try:
                 ts.cmd_run(self._args(save=True, rebaseline=True, binary=binary))
             finally:
@@ -676,7 +692,7 @@ class FetchIntegrityTests(unittest.TestCase):
                 self.assertIn(f"# TS @ {ts.PINNED_SHA}\n", f.read())
 
             os.unlink(ts.SCOREBOARD)
-            binary = fake_binary("exit 0\n")
+            binary = fake_clean_batch_binary()
             try:
                 ts.cmd_run(self._args(save=True, rebaseline=True, binary=binary))
             finally:
@@ -717,7 +733,7 @@ class FetchIntegrityTests(unittest.TestCase):
         with self._isolated_paths():
             self._write_full_manifest(["conformance/x/a.ts"])
             ts.write_scoreboard([rec("conformance/x/a.ts")])
-            binary = fake_binary("exit 0\n")
+            binary = fake_clean_batch_binary()
             try:
                 ts.cmd_run(self._args(check=True, binary=binary))
             finally:
@@ -735,7 +751,7 @@ class FetchIntegrityTests(unittest.TestCase):
             self._write_full_manifest(["conformance/x/a.ts"])
             ts.write_scoreboard([rec("conformance/x/a.ts", matched=1, expected=1,
                                      matched_detail=[(1, 2322)])])
-            binary = fake_binary("exit 0\n")
+            binary = fake_clean_batch_binary()
             try:
                 with self.assertRaises(SystemExit) as exited:
                     ts.cmd_run(self._args(check=True, binary=binary))
@@ -1088,6 +1104,44 @@ print(json.dumps({{
                     ["1:first.ts", "1:middle.ts", "2:last.ts"],
                 )
 
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX process groups")
+    def test_crashed_worker_descendant_inheriting_pipes_is_killed_with_group(self):
+        with tempfile.TemporaryDirectory() as root:
+            descendant = os.path.join(root, "descendant")
+            failure = (
+                "child = os.fork()\n"
+                "    if child == 0:\n"
+                "        time.sleep(10)\n"
+                "        os._exit(0)\n"
+                f"    open({descendant!r}, 'w').write(str(child))\n"
+                "    os.kill(os.getpid(), signal.SIGKILL)"
+            )
+            binary, boots, cases = self._failing_middle_worker(root, failure)
+            with self.assertRaises(ts.HarnessFailure):
+                self._run(binary, [
+                    ("first.ts", "const first = 1;\n"),
+                    ("middle.ts", "const middle = 2;\n"),
+                    ("last.ts", "const last = 3;\n"),
+                ], timeout=0.1)
+            with open(boots) as f:
+                self.assertEqual(f.read(), "2")
+            with open(cases) as f:
+                self.assertEqual(
+                    f.read().splitlines(),
+                    ["1:first.ts", "1:middle.ts", "2:last.ts"],
+                )
+            with open(descendant) as f:
+                child_pid = int(f.read())
+            deadline = time.monotonic() + 1
+            while True:
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                if time.monotonic() >= deadline:
+                    self.fail(f"worker descendant {child_pid} survived group termination")
+                time.sleep(0.01)
+
     def test_middle_case_timeout_restarts_and_collects_the_following_case(self):
         with tempfile.TemporaryDirectory() as root:
             binary, boots, cases = self._failing_middle_worker(root, "time.sleep(1)")
@@ -1240,6 +1294,13 @@ if request["case_id"] == "first.ts":
             ])
 
     def test_request_names_sources_and_total_frame_size_are_validated_before_send(self):
+        empty_frame = ts._validate_batch_cases([("boundary.ts", "")])[0][1]
+        exact_source = "x" * (self.MAX_FRAME_BYTES - len(empty_frame))
+        exact_frame = ts._validate_batch_cases([("boundary.ts", exact_source)])[0][1]
+        self.assertEqual(len(exact_frame), self.MAX_FRAME_BYTES)
+        with self.assertRaises(ts.HarnessFailure):
+            ts._validate_batch_cases([("boundary.ts", exact_source + "x")])
+
         invalid_cases = [
             [("", "const value = 1;\n")],
             [(7, "const value = 1;\n")],

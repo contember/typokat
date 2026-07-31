@@ -3,9 +3,10 @@
 typokat × official TypeScript conformance suite — black-box harness.
 
 This tool treats the typokat *binary* as a black box: it never imports or builds
-the checker crate, it shells out to `typokat check <file>` and parses the rendered
-diagnostics. That keeps it usable while the checker source is mid-refactor — point
-it at any prebuilt binary (default: target/release/typokat).
+the checker crate. It supervises one `typokat official-batch` JSONL worker and
+parses ordinary rendered diagnostics from each isolated response. That keeps it
+usable while the checker source is mid-refactor — point it at any prebuilt binary
+(default: target/release/typokat).
 
 Two subcommands:
 
@@ -29,11 +30,14 @@ See README.md for the design and the gating rules.
 import argparse
 import json
 import os
+import queue
 import re
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
@@ -201,6 +205,13 @@ INC_ID_RE = re.compile(r"^[a-z0-9-]+(?:/[a-z0-9-]+)+$")
 # (OOS:unsupported), never a crash — but with unparseable output it is still a hard
 # failure, and it never becomes a silent success path.
 OK_EXIT_CODES = (0, 1, 3)
+OFFICIAL_BATCH_SCHEMA = 1
+OFFICIAL_BATCH_MAX_FRAME_BYTES = 2 * 1024 * 1024
+OFFICIAL_BATCH_MAX_OUTPUT_BYTES = 1024 * 1024
+OFFICIAL_BATCH_PROVIDER_ROUTE = "production-default-library"
+OFFICIAL_BATCH_PROFILE_SHA256 = (
+    "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+)
 
 
 class HarnessFailure(Exception):
@@ -236,8 +247,12 @@ def run_typokat(binary, content, rel="<unknown>"):
     finally:
         os.unlink(tmp)
 
-    tmp_base = os.path.basename(tmp)
-    loc_re = re.compile(re.escape(tmp_base) + r":(\d+):(\d+)")
+    return _parse_typokat_output(out, returncode, os.path.basename(tmp), rel)
+
+
+def _parse_typokat_output(out, returncode, rendered_name, rel):
+    """Parse and validate one ordinary CLI-shaped result, independent of transport."""
+    loc_re = re.compile(re.escape(rendered_name) + r":(\d+):(\d+)")
     parse_errors = []
     diags = []
     incompletes = []
@@ -305,6 +320,263 @@ def run_typokat(binary, content, rel="<unknown>"):
             f"parsed (unparseable / lost output)\n"
             f"--- captured output ---\n{out}")
     return parse_errors, diags, incompletes
+
+
+def _run_with_timeout(operation, timeout, description):
+    """Run one blocking pipe operation with a deadline controlled by the supervisor."""
+    result = queue.Queue(maxsize=1)
+
+    def invoke():
+        try:
+            result.put((True, operation()))
+        except (BrokenPipeError, OSError, ValueError) as error:
+            result.put((False, error))
+
+    worker = threading.Thread(target=invoke, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise HarnessFailure(f"{description} timed out after {timeout}s")
+    succeeded, value = result.get()
+    if not succeeded:
+        raise HarnessFailure(f"{description} failed: {value}")
+    return value
+
+
+def _spawn_batch_worker(binary):
+    try:
+        return subprocess.Popen(
+            [binary, "official-batch"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=(os.name == "posix"),
+        )
+    except OSError as error:
+        raise HarnessFailure(f"cannot start typokat official-batch worker: {error}") from error
+
+
+def _kill_batch_worker_group(process):
+    """Kill the worker and every descendant that inherited its protocol pipes."""
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif process.poll() is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _bounded_collect_after_kill(process):
+    """Drain killed-worker pipes with a fixed deadline and no unbounded fallback."""
+    try:
+        return process.communicate(timeout=1)
+    except subprocess.TimeoutExpired:
+        _kill_batch_worker_group(process)
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired as error:
+            raise HarnessFailure(
+                "official-batch worker group did not terminate after SIGKILL"
+            ) from error
+        return b"", b"worker pipes did not close after group termination"
+
+
+def _stop_batch_worker(process):
+    """Terminate one untrusted worker group and collect bounded failure context."""
+    _kill_batch_worker_group(process)
+    _stdout, stderr = _bounded_collect_after_kill(process)
+    if len(stderr) > OFFICIAL_BATCH_MAX_OUTPUT_BYTES:
+        stderr = stderr[:OFFICIAL_BATCH_MAX_OUTPUT_BYTES] + b"...[truncated]"
+    return stderr.decode("utf-8", errors="replace")
+
+
+def _finish_batch_worker(process, timeout):
+    """Close a healthy session and reject trailing protocol output or worker stderr."""
+    if process.stdin is not None:
+        process.stdin.close()
+        process.stdin = None
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        _kill_batch_worker_group(process)
+        _bounded_collect_after_kill(process)
+        raise HarnessFailure(
+            f"official-batch worker did not exit after input closed within {timeout}s"
+        ) from error
+    if process.returncode != 0:
+        _kill_batch_worker_group(process)
+        raise HarnessFailure(
+            f"official-batch worker exited with code {process.returncode} after the session\n"
+            f"--- worker stderr ---\n{stderr.decode('utf-8', errors='replace')}"
+        )
+    if stdout:
+        _kill_batch_worker_group(process)
+        raise HarnessFailure("official-batch worker printed an extra response frame")
+    if stderr:
+        _kill_batch_worker_group(process)
+        raise HarnessFailure(
+            "official-batch worker contaminated stderr during a successful session\n"
+            f"--- worker stderr ---\n{stderr.decode('utf-8', errors='replace')}"
+        )
+
+
+def _validate_batch_cases(cases):
+    frames = []
+    seen = set()
+    for case in cases:
+        if not isinstance(case, (tuple, list)) or len(case) != 2:
+            raise HarnessFailure("official-batch cases must be (name, source) pairs")
+        name, source = case
+        if not isinstance(name, str) or not name:
+            raise HarnessFailure("official-batch case names must be non-empty strings")
+        if not isinstance(source, str):
+            raise HarnessFailure(f"{name!r}: official-batch source must be a string")
+        if name in seen:
+            raise HarnessFailure(f"duplicate official-batch case id {name!r}")
+        seen.add(name)
+        request = {
+            "schema": OFFICIAL_BATCH_SCHEMA,
+            "case_id": name,
+            "name": name,
+            "source": source,
+        }
+        frame = (json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(frame) > OFFICIAL_BATCH_MAX_FRAME_BYTES:
+            raise HarnessFailure(
+                f"{name}: official-batch request exceeds "
+                f"{OFFICIAL_BATCH_MAX_FRAME_BYTES} bytes"
+            )
+        frames.append((name, frame))
+    return frames
+
+
+def _exchange_batch_case(process, name, frame, timeout):
+    if process.stdin is None or process.stdout is None:
+        raise HarnessFailure(f"{name}: official-batch worker pipes are unavailable")
+
+    def write_request():
+        process.stdin.write(frame)
+        process.stdin.flush()
+
+    _run_with_timeout(write_request, timeout, f"{name}: official-batch request write")
+    raw = _run_with_timeout(
+        lambda: process.stdout.readline(OFFICIAL_BATCH_MAX_FRAME_BYTES + 2),
+        timeout,
+        f"{name}: official-batch response",
+    )
+    if not raw:
+        raise HarnessFailure(
+            f"{name}: official-batch worker exited before returning a response"
+        )
+    if len(raw) > OFFICIAL_BATCH_MAX_FRAME_BYTES or not raw.endswith(b"\n"):
+        raise HarnessFailure(
+            f"{name}: official-batch response is oversized or not newline-framed"
+        )
+    try:
+        response = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HarnessFailure(f"{name}: malformed official-batch response: {error}") from error
+    if not isinstance(response, dict):
+        raise HarnessFailure(f"{name}: official-batch response must be an object")
+    expected_keys = {
+        "schema", "case_id", "worker_pid", "provider_route", "profile_sha256",
+        "exit_code", "stdout", "stderr",
+    }
+    if set(response) != expected_keys:
+        raise HarnessFailure(
+            f"{name}: official-batch response has invalid keys {sorted(response)}"
+        )
+    schema = response["schema"]
+    worker_pid = response["worker_pid"]
+    exit_code = response["exit_code"]
+    if type(schema) is not int or schema != OFFICIAL_BATCH_SCHEMA:
+        raise HarnessFailure(f"{name}: invalid official-batch schema {schema!r}")
+    if not isinstance(response["case_id"], str) or response["case_id"] != name:
+        raise HarnessFailure(
+            f"{name}: official-batch case-id mismatch {response['case_id']!r}"
+        )
+    if type(worker_pid) is not int or worker_pid <= 0 or worker_pid != process.pid:
+        raise HarnessFailure(f"{name}: invalid official-batch worker PID {worker_pid!r}")
+    if (not isinstance(response["provider_route"], str)
+            or response["provider_route"] != OFFICIAL_BATCH_PROVIDER_ROUTE):
+        raise HarnessFailure(
+            f"{name}: untrusted provider route {response['provider_route']!r}"
+        )
+    if (not isinstance(response["profile_sha256"], str)
+            or response["profile_sha256"] != OFFICIAL_BATCH_PROFILE_SHA256):
+        raise HarnessFailure(
+            f"{name}: untrusted library profile {response['profile_sha256']!r}"
+        )
+    if type(exit_code) is not int or exit_code not in OK_EXIT_CODES:
+        raise HarnessFailure(f"{name}: invalid official-batch exit code {exit_code!r}")
+    stdout = response["stdout"]
+    stderr = response["stderr"]
+    if not isinstance(stdout, str) or not isinstance(stderr, str):
+        raise HarnessFailure(f"{name}: official-batch stdout/stderr must be strings")
+    if len(stdout.encode("utf-8")) > OFFICIAL_BATCH_MAX_OUTPUT_BYTES:
+        raise HarnessFailure(f"{name}: official-batch stdout exceeds its bound")
+    if len(stderr.encode("utf-8")) > OFFICIAL_BATCH_MAX_OUTPUT_BYTES:
+        raise HarnessFailure(f"{name}: official-batch stderr exceeds its bound")
+    if stdout:
+        raise HarnessFailure(f"{name}: official-batch response contaminated stdout")
+    return _parse_typokat_output(stderr + stdout, exit_code, name, name)
+
+
+def run_typokat_batch(binary, cases, timeout=30):
+    """Check isolated cases through persistent JSONL workers, resuming after one failure.
+
+    A failed case is never retried. If a trustworthy prefix exists, one replacement
+    worker checks every following case so supervision does not hide further failures;
+    the function still raises and exposes no partial mapping to its caller.
+    """
+    frames = _validate_batch_cases(cases)
+    if not frames:
+        return {}
+
+    process = _spawn_batch_worker(binary)
+    observed = {}
+    first_failure = None
+    successful_cases = 0
+    replacement_started = False
+    worker_fresh = True
+
+    for index, (name, frame) in enumerate(frames):
+        try:
+            # The first response includes interpreter/process startup. Keep the
+            # caller's per-case timeout exact after that one bounded startup grace.
+            response_timeout = timeout + 0.1 if worker_fresh else timeout
+            observed[name] = _exchange_batch_case(
+                process, name, frame, response_timeout
+            )
+            successful_cases += 1
+            worker_fresh = False
+        except HarnessFailure as error:
+            stderr = _stop_batch_worker(process)
+            detail = f"{error}\n--- worker stderr ---\n{stderr}" if stderr else str(error)
+            if first_failure is None:
+                first_failure = detail
+            if successful_cases == 0 or replacement_started or index + 1 == len(frames):
+                raise HarnessFailure(first_failure) from error
+            process = _spawn_batch_worker(binary)
+            replacement_started = True
+            worker_fresh = True
+
+    try:
+        _finish_batch_worker(process, timeout)
+    except HarnessFailure as error:
+        if first_failure is None:
+            raise
+        raise HarnessFailure(first_failure) from error
+    if first_failure is not None:
+        raise HarnessFailure(first_failure)
+    return observed
 
 
 # --- baseline (.errors.txt) parsing ------------------------------------------
@@ -784,10 +1056,11 @@ def cmd_run(args):
     if not tests:
         sys.exit("empty corpus — run `tsofficial.py fetch` first.")
 
-    # One record per test. bucket=None means in-scope (diffed); otherwise the
-    # out-of-scope reason. Out-of-scope records keep zeroed diff fields so the
-    # scoreboard can still track scope changes (IN <-> OOS) as regressions/progress.
-    results = []
+    # Discover first, then send every checker-eligible case through one persistent
+    # worker session. Pre-bucketed cases retain their exact position but never enter
+    # the protocol.
+    prepared = []
+    batch_cases = []
     for rel, ts_path, base_path in tests:
         with open(ts_path) as f:
             source = f.read()
@@ -799,13 +1072,13 @@ def cmd_run(args):
 
         if len(units) > 1:
             rec["bucket"] = "multifile"
-            results.append(rec); continue
+            prepared.append((rec, None, None)); continue
         content = units[0][1]
 
         sb = syntax_bucket(content)
         if sb:
             rec["bucket"] = f"syntax:{sb}"
-            results.append(rec); continue
+            prepared.append((rec, None, None)); continue
 
         baseline = None
         if base_path:
@@ -813,11 +1086,26 @@ def cmd_run(args):
                 baseline = f.read()
         expected = parse_baseline(baseline)
         rec["expected"] = len(expected)
+        prepared.append((rec, expected, content))
+        batch_cases.append((rel, content))
 
-        try:
-            parse_errors, diags, incompletes = run_typokat(binary, content, rel)
-        except HarnessFailure as e:
-            sys.exit(f"\nHARNESS FAILURE (aborting — never scored as success):\n  {e}")
+    try:
+        batch_results = run_typokat_batch(binary, batch_cases)
+    except HarnessFailure as e:
+        sys.exit(f"\nHARNESS FAILURE (aborting — never scored as success):\n  {e}")
+
+    results = []
+    for rec, expected, content in prepared:
+        if content is None:
+            results.append(rec)
+            continue
+        rel = rec["rel"]
+        if rel not in batch_results:
+            sys.exit(
+                "\nHARNESS FAILURE (aborting — never scored as success):\n"
+                f"  {rel}: official-batch result mapping is incomplete"
+            )
+        parse_errors, diags, incompletes = batch_results[rel]
 
         # Exit-3 discovery: typokat recorded an in-scope surface it does not yet check.
         # Demote to OOS:unsupported but KEEP the full diagnostic diff, so a diagnostic

@@ -79,6 +79,7 @@ typokat-frontend.workspace = true
 typokat-check.workspace = true
 typokat-library.workspace = true
 typokat-driver.workspace = true
+serde_json.workspace = true
 
 # Allocator for the CLI (`src/main.rs` only — the library must not pick its
 # consumers' allocator). Building the default library from source is allocation-churn
