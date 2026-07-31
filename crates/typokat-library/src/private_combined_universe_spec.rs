@@ -6,8 +6,9 @@
 
 use super::base::{
     CollisionRouteForTest, PrivateCombinedReceiptForTest, PrivateExecutionForTest,
-    PrivateFallbackControlFailureForTest, PrivateFallbackExecutionControlForTest,
-    PrivateReplayBaselineRecordFaultForTest, PrivateReplayCandidateFailureForTest,
+    PrivateLifecycleIdentityFaultForTest, PrivateProductionFallbackFailureForTest,
+    PrivateProductionReplayFailureForTest, PrivateProductionReplayFaultForTest,
+    PrivateProductionRouteFaultForTest, PrivateReplayCandidateFailureForTest,
     PrivateReplayOwnerOmissionForTest, PrivateReplayValidationFailureForTest,
     UserDeltaProjectInputForTest,
 };
@@ -266,6 +267,120 @@ fn nested_namespace_inherited_payload_reaches_overload_validation_in_both_file_o
     );
 }
 
+fn window_inherited_payload_project(reversed: bool) -> Vec<UserDeltaProjectInputForTest<'static>> {
+    const AUGMENT: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/00_augment.ts",
+        source: "interface Window { b103Window: string; }\n",
+    };
+    const CONSUME: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/99_consume.ts",
+        source: "const bad: number = window.b103Window;\n",
+    };
+    if reversed {
+        vec![CONSUME, AUGMENT]
+    } else {
+        vec![AUGMENT, CONSUME]
+    }
+}
+
+#[test]
+fn window_inherited_payload_reaches_assignment_in_both_project_file_orders() {
+    let forward = check(&window_inherited_payload_project(false));
+    let reverse = check(&window_inherited_payload_project(true));
+
+    for receipt in [&forward, &reverse] {
+        let oracle_rows = receipt
+            .oracle
+            .full_source_semantics_by_source
+            .values()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            oracle_rows
+                .iter()
+                .filter(|row| {
+                    row.contains("TK2322")
+                        && row.contains("Type 'string' is not assignable to type 'number'")
+                })
+                .count(),
+            1
+        );
+        assert!(oracle_rows
+            .iter()
+            .all(|row| !row.starts_with("incomplete ")));
+        assert_eq!(
+            receipt.oracle.candidate_semantics_by_source,
+            receipt.oracle.full_source_semantics_by_source
+        );
+        assert_eq!(receipt.normalized_diagnostics.len(), 1);
+    }
+    assert_eq!(
+        forward.normalized_semantics_by_source,
+        reverse.normalized_semantics_by_source
+    );
+}
+
+fn webassembly_inherited_payload_project(
+    reversed: bool,
+) -> Vec<UserDeltaProjectInputForTest<'static>> {
+    const AUGMENT: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/00_augment.ts",
+        source: r#"declare namespace WebAssembly {
+  interface MemoryDescriptor {
+    b103Required: string;
+  }
+}
+"#,
+    };
+    const CONSUME: UserDeltaProjectInputForTest<'static> = UserDeltaProjectInputForTest {
+        path: "/project/99_consume.ts",
+        source: "new WebAssembly.Memory({ initial: 1 });\n",
+    };
+    if reversed {
+        vec![CONSUME, AUGMENT]
+    } else {
+        vec![AUGMENT, CONSUME]
+    }
+}
+
+#[test]
+fn webassembly_inherited_payload_reaches_constructor_argument_in_both_file_orders() {
+    let forward = check(&webassembly_inherited_payload_project(false));
+    let reverse = check(&webassembly_inherited_payload_project(true));
+
+    for receipt in [&forward, &reverse] {
+        let oracle_rows = receipt
+            .oracle
+            .full_source_semantics_by_source
+            .values()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            oracle_rows
+                .iter()
+                .filter(|row| {
+                    row.contains("TK2345")
+                        && row.contains("not assignable to parameter")
+                        && row.contains("b103Required")
+                })
+                .count(),
+            1
+        );
+        assert!(oracle_rows
+            .iter()
+            .all(|row| !row.starts_with("incomplete ")));
+        assert_eq!(
+            receipt.oracle.candidate_semantics_by_source,
+            receipt.oracle.full_source_semantics_by_source
+        );
+        assert_eq!(receipt.normalized_diagnostics.len(), 1);
+    }
+    assert_eq!(
+        forward.normalized_semantics_by_source,
+        reverse.normalized_semantics_by_source
+    );
+}
+
 #[test]
 fn colliding_forms_resolve_same_file_lexical_siblings_before_global_publication() {
     let receipt = check(&[input(
@@ -378,6 +493,29 @@ void [collisionNumber, collisionMapped, collisionDom];
     ]
 }
 
+fn relative_import_collision_project() -> Vec<UserDeltaProjectInputForTest<'static>> {
+    vec![
+        input(
+            "/project/00_augment.ts",
+            r#"interface Array<T> {
+  fullLibBenchFirst(): T;
+}
+"#,
+        ),
+        input(
+            "/project/value.ts",
+            "export const values: number[] = [1, 2, 3];\n",
+        ),
+        input(
+            "/project/99_consume.ts",
+            r#"import { values } from "./value";
+const collisionNumber: number = values.fullLibBenchFirst();
+const wrongCollisionNumber: string = values.fullLibBenchFirst();
+"#,
+        ),
+    ]
+}
+
 #[test]
 fn private_combined_universe_is_order_invariant_by_normalized_source_identity() {
     let forward = check(&array_project(false));
@@ -419,6 +557,23 @@ fn complete_source_oracle_is_independent_of_a_corrupted_sparse_schedule() {
         .expect("the independent complete-source oracle still finishes");
     assert!(adversarial.omission.was_in_closed_schedule);
     assert!(adversarial.omission.removed_after_closure);
+    assert!(
+        adversarial
+            .candidate_execution
+            .corrupted_schedule_installed_after_omission
+    );
+    assert!(adversarial.candidate_execution.started);
+    assert!(
+        adversarial
+            .candidate_execution
+            .completion_or_semantic_query_steps
+            > 0,
+        "the omission must reach an executing sparse candidate, not a synthetic receipt"
+    );
+    assert_eq!(
+        adversarial.candidate_execution.omitted_owner,
+        adversarial.omission.owner
+    );
     assert_eq!(
         adversarial.full_source_oracle.semantics_by_source,
         healthy.oracle.full_source_semantics_by_source
@@ -465,104 +620,190 @@ fn complete_source_oracle_is_independent_of_a_corrupted_sparse_schedule() {
 }
 
 #[test]
-fn missing_expected_baseline_record_is_rejected_in_both_validation_directions() {
+fn post_bind_mutation_ledger_is_validated_before_plan_owner_intersection() {
     let receipt = acquire()
-        .validate_routed_user_project_with_baseline_record_fault_for_test(
+        .check_routed_user_project_with_production_replay_fault_for_test(
             &production_collision_project(),
-            PrivateReplayBaselineRecordFaultForTest::OmitObservedExpectedRecord,
+            PrivateProductionReplayFaultForTest::InjectPostBindMutationOwnerAbsentFromPlan,
         )
-        .expect("controlled baseline-record fault reaches sparse validation");
+        .expect("post-bind mutation fault reaches the production replay path");
 
-    assert!(receipt.fault.record_selected_from_expected_baseline);
-    assert!(receipt.fault.record_removed_from_observed);
-    assert!(matches!(
-        receipt.validation,
-        Err(
-            PrivateReplayValidationFailureForTest::MissingExpectedBaselineRecord {
-                ref fingerprint
-            }
-        ) if fingerprint == &receipt.fault.record_fingerprint
-    ));
-    assert_eq!(receipt.validation_observed_subset_expected_checks, 1);
-    assert_eq!(receipt.validation_expected_subset_observed_checks, 1);
+    assert!(receipt.production_trace.bind_completed);
+    assert!(receipt.fault.injected_after_bind);
+    assert!(receipt
+        .post_bind_mutation_ledger_owner_keys
+        .contains(&receipt.fault.injected_owner_key));
+    assert!(!receipt
+        .plan_owner_keys
+        .contains(&receipt.fault.injected_owner_key));
+    assert!(
+        receipt.production_trace.mutation_ledger_recorded
+            < receipt.production_trace.containment_validation_started
+            && receipt.production_trace.containment_validation_started
+                < receipt.production_trace.plan_owner_intersection_started,
+        "the complete mutation ledger must be validated before any plan-owner filtering"
+    );
+    let contained_or_expanded = match &receipt.candidate {
+        Err(PrivateProductionReplayFailureForTest::MutationOwnerOutsidePlan { owner }) => {
+            owner == &receipt.fault.injected_owner_key
+        }
+        Ok(candidate) => candidate
+            .scheduled_owner_keys
+            .contains(&receipt.fault.injected_owner_key),
+        Err(_) => false,
+    };
+    assert!(
+        contained_or_expanded,
+        "an absent plan owner must fail containment or expand closure"
+    );
 }
 
 #[test]
-fn sparse_validation_failure_falls_back_under_the_private_permit_with_measured_evidence() {
-    let inputs = production_collision_project();
+fn missing_expected_baseline_record_is_rejected_by_production_completion_selection() {
+    let receipt = acquire()
+        .check_routed_user_project_with_production_replay_fault_for_test(
+            &production_collision_project(),
+            PrivateProductionReplayFaultForTest::OmitExpectedBaselineRecordDuringCompletion,
+        )
+        .expect("baseline-record fault reaches production completion");
+
+    assert!(receipt.production_trace.bind_completed);
+    assert!(receipt.production_trace.sparse_candidate_execution_started);
+    assert!(receipt.production_trace.completion_selection_started);
+    assert!(receipt.fault.applied_in_completion_selection);
+    assert!(matches!(
+        receipt.candidate,
+        Err(PrivateProductionReplayFailureForTest::BaselineValidation(
+            PrivateReplayValidationFailureForTest::MissingExpected { ref fingerprint }
+        )) if fingerprint == &receipt.fault.expected_baseline_fingerprint
+    ));
+}
+
+#[test]
+fn production_route_failures_fall_back_under_one_permit_with_instrumented_evidence() {
+    let inputs = relative_import_collision_project();
     let healthy = check(&inputs);
     assert_private_replay(&healthy);
     let base = acquire();
-    let fallback = base
-        .check_routed_user_project_with_sparse_fault_and_complete_source_fallback_for_test(
-            &inputs,
-            PrivateReplayBaselineRecordFaultForTest::OmitObservedExpectedRecord,
-            PrivateFallbackExecutionControlForTest::RunNormally,
-        )
-        .expect("sparse validation failure invokes the complete-source fallback");
+    let mut epoch_tokens = Vec::new();
+    for fault in [
+        PrivateProductionRouteFaultForTest::RejectPlanAdmissionAfterPrivatePreflight,
+        PrivateProductionRouteFaultForTest::OmitExpectedBaselineDuringCheckerCompletion,
+    ] {
+        let fallback = base
+            .check_routed_user_project_with_production_fault_and_fallback_for_test(
+                &inputs,
+                fault,
+                PrivateLifecycleIdentityFaultForTest::None,
+            )
+            .expect("production route failure invokes complete-source fallback");
 
-    assert_eq!(
-        fallback.execution,
-        PrivateExecutionForTest::CompleteSourceFallback
-    );
-    assert!(matches!(
-        fallback.sparse_failure,
-        PrivateReplayValidationFailureForTest::MissingExpectedBaselineRecord { .. }
-    ));
-    assert_eq!(
-        fallback.normalized_semantics_by_source,
-        fallback.full_source_oracle.semantics_by_source
-    );
-    assert_eq!(
-        fallback.normalized_semantics_by_source,
-        healthy.oracle.full_source_semantics_by_source
-    );
-    assert_eq!(
-        fallback.published_root_projection,
-        healthy.oracle.full_source_published_root_projection
-    );
-    let fallback_rows = fallback
-        .normalized_semantics_by_source
-        .values()
-        .flatten()
-        .collect::<Vec<_>>();
-    assert_eq!(
-        fallback_rows
+        assert_eq!(
+            fallback.execution,
+            PrivateExecutionForTest::CompleteSourceFallback
+        );
+        assert!(fallback.route_trace.preflight_classified_private);
+        assert_eq!(fallback.route_trace.production_route_invocations, 1);
+        assert_eq!(fallback.route_trace.relative_import_edges, 1);
+        assert!(fallback.route_trace.fault_observed);
+        match fault {
+            PrivateProductionRouteFaultForTest::RejectPlanAdmissionAfterPrivatePreflight => {
+                assert!(fallback.route_trace.plan_admission_attempted);
+                assert!(!fallback.route_trace.private_runtime_fork_started);
+                assert!(!fallback.route_trace.checker_started);
+            }
+            PrivateProductionRouteFaultForTest::OmitExpectedBaselineDuringCheckerCompletion => {
+                assert!(fallback.route_trace.plan_admission_succeeded);
+                assert!(fallback.route_trace.private_runtime_fork_started);
+                assert!(fallback.route_trace.checker_started);
+                assert!(fallback.route_trace.completion_selection_started);
+                assert!(matches!(
+                    fallback.sparse_failure,
+                    PrivateProductionReplayFailureForTest::BaselineValidation(
+                        PrivateReplayValidationFailureForTest::MissingExpected { .. }
+                    )
+                ));
+            }
+        }
+        assert_eq!(
+            fallback.normalized_semantics_by_source,
+            fallback.full_source_oracle.semantics_by_source
+        );
+        assert_eq!(
+            fallback.normalized_semantics_by_source,
+            healthy.oracle.full_source_semantics_by_source
+        );
+        assert_eq!(
+            fallback.published_root_projection,
+            healthy.oracle.full_source_published_root_projection
+        );
+        let fallback_rows = fallback
+            .normalized_semantics_by_source
+            .values()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fallback_rows
+                .iter()
+                .filter(|row| row.contains("TK2322"))
+                .count(),
+            1
+        );
+        assert!(fallback_rows
             .iter()
-            .filter(|row| row.contains("TK2322"))
-            .count(),
-        1
-    );
-    assert!(fallback_rows
-        .iter()
-        .all(|row| !row.contains("TK2339") && !row.starts_with("incomplete ")));
-    assert_eq!(fallback.measurement.sparse_validation_failures, 1);
-    assert_eq!(fallback.measurement.full_source_fallback_invocations, 1);
-    assert_eq!(fallback.measurement.full_source_library_parse_units, 82);
-    assert_eq!(fallback.measurement.full_source_library_bind_units, 82);
-    assert_eq!(fallback.measurement.private_permit_acquisitions, 1);
-    assert_eq!(fallback.measurement.shared_base_mutations, 0);
-    assert!(
-        fallback.lifecycle.permit_acquired < fallback.lifecycle.sparse_candidate_dropped
-            && fallback.lifecycle.sparse_candidate_dropped
-                < fallback.lifecycle.complete_source_fallback_started
-            && fallback.lifecycle.complete_source_fallback_started
-                < fallback.lifecycle.fallback_state_dropped
-            && fallback.lifecycle.fallback_state_dropped < fallback.lifecycle.permit_released,
-        "fallback work and cleanup must stay inside one measured permit epoch"
+            .all(|row| !row.contains("TK2339") && !row.starts_with("incomplete ")));
+        assert_eq!(fallback.measurement.production_route_failures, 1);
+        assert_eq!(fallback.measurement.full_source_fallback_invocations, 1);
+        assert_eq!(fallback.measurement.full_source_library_parse_units, 82);
+        assert_eq!(fallback.measurement.full_source_library_bind_units, 82);
+        assert_eq!(fallback.measurement.private_permit_acquisitions, 1);
+        assert_eq!(fallback.measurement.shared_base_mutations, 0);
+        assert!(
+            fallback.lifecycle.permit_acquired < fallback.lifecycle.route_fault_observed
+                && fallback.lifecycle.route_fault_observed
+                    < fallback.lifecycle.complete_source_fallback_started
+                && fallback.lifecycle.complete_source_fallback_started
+                    < fallback.lifecycle.fallback_state_dropped
+                && fallback.lifecycle.fallback_state_dropped < fallback.lifecycle.permit_released,
+            "route failure, fallback work, and cleanup must stay inside one measured permit epoch"
+        );
+        assert!(fallback.identity.instrumented_production_hook_invocations > 0);
+        assert!(fallback.identity.wrapper_relocation_performed);
+        assert!(fallback.identity.wrapper_address_changed);
+        assert!(
+            fallback
+                .identity
+                .reported_storage_identity_stable_across_wrapper_relocation
+        );
+        epoch_tokens.push(fallback.identity.lifecycle_epoch_token);
+    }
+    assert_ne!(
+        epoch_tokens[0], epoch_tokens[1],
+        "independent production epochs cannot report a hard-coded lifecycle token"
     );
 
-    let suppressed = base
-        .check_routed_user_project_with_sparse_fault_and_complete_source_fallback_for_test(
-            &inputs,
-            PrivateReplayBaselineRecordFaultForTest::OmitObservedExpectedRecord,
-            PrivateFallbackExecutionControlForTest::SuppressCompleteSourceInvocation,
-        )
-        .expect_err("a receipt cannot claim fallback work when no fallback ran");
-    assert!(matches!(
-        suppressed,
-        PrivateFallbackControlFailureForTest::CompleteSourceFallbackNotInvoked
-    ));
+    for identity_fault in [
+        PrivateLifecycleIdentityFaultForTest::UseWrapperAddressAfterRelocation,
+        PrivateLifecycleIdentityFaultForTest::UseHardCodedConstant,
+    ] {
+        let rejected = base
+            .check_routed_user_project_with_production_fault_and_fallback_for_test(
+                &inputs,
+                PrivateProductionRouteFaultForTest::OmitExpectedBaselineDuringCheckerCompletion,
+                identity_fault,
+            )
+            .expect_err("untrusted lifecycle identity evidence must be rejected");
+        assert!(matches!(
+            rejected,
+            PrivateProductionFallbackFailureForTest::UntrustedLifecycleIdentity {
+                fault,
+                production_hook_invocations,
+                wrapper_relocations,
+            } if fault == identity_fault
+                && production_hook_invocations > 0
+                && wrapper_relocations > 0
+        ));
+    }
 }
 
 #[test]
