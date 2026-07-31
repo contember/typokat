@@ -1,6 +1,9 @@
 //! Disabled RED contract for ADR-0020 sparse-epoch physical-work scaling.
 
-use super::base::{PrivateExecutionForTest, UserDeltaProjectInputForTest};
+use super::base::{
+    ConcurrentPrivateProductionFailureForTest, ConcurrentPrivateProductionFaultForTest,
+    PrivateExecutionForTest, UserDeltaProjectInputForTest,
+};
 use super::{FrozenLibraryBase, LibraryBaseProvider};
 use std::collections::BTreeSet;
 use std::fs;
@@ -367,6 +370,17 @@ fn exact_locked_production_fanout_uses_one_sparse_epoch_without_fallback() {
         receipt.oracle.candidate_semantics_by_source,
         receipt.oracle.full_source_semantics_by_source
     );
+    for path in ["/locked/13.ts", "/locked/27.ts"] {
+        let rows = receipt
+            .oracle
+            .candidate_semantics_by_source
+            .get(path)
+            .expect("locked fanout path is present");
+        assert!(
+            rows.is_empty(),
+            "{path} must publish its rebuilt library producers without a silent incomplete: {rows:?}"
+        );
+    }
 }
 
 fn fanout_projects(count: usize) -> Vec<Vec<(String, String)>> {
@@ -384,7 +398,7 @@ fn fanout_projects(count: usize) -> Vec<Vec<(String, String)>> {
 }
 
 #[test]
-fn all_colliding_fanout_uses_32_distinct_private_projects_and_one_owned_permit() {
+fn all_colliding_fanout_uses_the_production_private_permit_and_work_instrumentation() {
     let owned = fanout_projects(32);
     let projects = owned
         .iter()
@@ -395,33 +409,47 @@ fn all_colliding_fanout_uses_32_distinct_private_projects_and_one_owned_permit()
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let first = FrozenLibraryBase::run_all_colliding_projects_concurrently_for_test(&projects)
-        .expect("first 32-project fanout");
-    let second = FrozenLibraryBase::run_all_colliding_projects_concurrently_for_test(&projects)
-        .expect("deterministic 32-project rerun");
+    let base = acquire();
+    let shared_identity_before = base.storage_identity_for_test();
+    let first = base
+        .run_all_colliding_projects_concurrently_for_test(
+            &projects,
+            ConcurrentPrivateProductionFaultForTest::None,
+        )
+        .expect("first 32-project production-route fanout");
+    let second = base
+        .run_all_colliding_projects_concurrently_for_test(
+            &projects,
+            ConcurrentPrivateProductionFaultForTest::None,
+        )
+        .expect("deterministic 32-project production-route rerun");
 
     assert_eq!(first.route_receipts.len(), 32);
-    assert_eq!(first.private_universe_drop_witnesses.len(), 32);
     assert!(first
         .route_receipts
         .iter()
         .all(|receipt| receipt.execution == PrivateExecutionForTest::SelectiveReplay));
-    assert!(first
-        .route_receipts
-        .iter()
-        .all(|receipt| {
-            receipt.file_count == 1
-                && receipt.full_source_fallbacks == 0
-                && receipt.second_library_compiles == 0
-                && receipt.library_bind_units == 0
-                && receipt.full_base_scans == 0
-        }));
+    assert!(first.route_receipts.iter().all(|receipt| {
+        receipt.file_count == 1
+            && receipt.production_private_route_invocations == 1
+            && receipt.production_work_hook_invocations > 0
+            && receipt.sparse_replay_invocations == 1
+            && receipt.full_source_fallback_invocations == 0
+            && receipt.library_source_compiles == 0
+            && receipt.library_source_parse_units == 0
+            && receipt.library_source_bind_units == 0
+            && receipt.full_base_scan_units == 0
+            && receipt.sparse_library_source_units > 0
+            && receipt.sparse_library_source_units < 82
+    }));
     assert_eq!(first.start_barrier_arrivals, 32);
-    assert_eq!(first.private_permit_acquisitions, 32);
+    assert_eq!(first.production_permit_acquisitions, 32);
+    assert!(first.production_permit_hook_invocations >= 64);
     assert!(first.max_private_contenders >= 2);
-    assert_eq!(first.max_private_concurrency, 1);
-    assert_eq!(first.shared_base_mutations, 0);
-    assert_eq!(first.cross_project_user_name_leaks, 0);
+    assert_eq!(first.production_peak_private_concurrency, 1);
+    assert_eq!(first.shared_base_identity_before, shared_identity_before);
+    assert_eq!(first.shared_base_identity_after, shared_identity_before);
+    assert_eq!(base.storage_identity_for_test(), shared_identity_before);
     assert_eq!(
         first.normalized_results_by_project,
         second.normalized_results_by_project
@@ -429,18 +457,61 @@ fn all_colliding_fanout_uses_32_distinct_private_projects_and_one_owned_permit()
     assert_eq!(first.normalized_results_by_project.len(), 32);
     for (index, result) in first.normalized_results_by_project.iter().enumerate() {
         assert_eq!(result.project_identity, format!("/fanout/{index:02}"));
+        assert!(result.production_visibility_query_invocations > 0);
         assert!(result
             .visible_user_methods
             .contains(&format!("wu5Fanout{index}")));
         assert_eq!(result.visible_user_methods.len(), 1);
     }
-    assert!(first
-        .private_universe_drop_witnesses
-        .iter()
-        .all(|dropped| *dropped));
-    assert_eq!(first.private_lifecycle_epochs.len(), 32);
-    assert!(first.private_lifecycle_epochs.iter().all(|epoch| {
-        epoch.permit_acquired < epoch.private_state_dropped
+    assert_eq!(first.production_lifecycle_epochs.len(), 32);
+    assert_eq!(
+        first
+            .production_lifecycle_epochs
+            .iter()
+            .map(|epoch| epoch.epoch_id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        32,
+        "each production permit acquisition must carry its own epoch identity"
+    );
+    assert!(first.production_lifecycle_epochs.iter().all(|epoch| {
+        epoch.production_hook_invocations > 0
+            && epoch.permit_acquired < epoch.private_work_started
+            && epoch.private_work_started < epoch.private_state_dropped
             && epoch.private_state_dropped < epoch.permit_released
     }));
+}
+
+#[test]
+fn concurrent_scale_gate_rejects_suppressed_production_permit_instrumentation() {
+    let owned = fanout_projects(32);
+    let projects = owned
+        .iter()
+        .map(|project| {
+            project
+                .iter()
+                .map(|(path, source)| input(path, source))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let base = acquire();
+    let shared_identity_before = base.storage_identity_for_test();
+    let rejected = base
+        .run_all_colliding_projects_concurrently_for_test(
+            &projects,
+            ConcurrentPrivateProductionFaultForTest::SuppressProductionPermitInstrumentation,
+        )
+        .expect_err("a gate without production permit evidence must reject its own receipt");
+    assert!(matches!(
+        rejected,
+        ConcurrentPrivateProductionFailureForTest::ProductionPermitInstrumentationMissing {
+            attempted_projects: 32,
+            production_route_invocations: 32,
+            observed_permit_acquisitions,
+            observed_permit_hook_invocations,
+        } if observed_permit_acquisitions < 32
+            && observed_permit_hook_invocations < 64
+    ));
+    assert_eq!(base.storage_identity_for_test(), shared_identity_before);
 }
