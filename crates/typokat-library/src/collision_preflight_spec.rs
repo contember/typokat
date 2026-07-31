@@ -370,6 +370,48 @@ if (source) {
 }
 
 #[test]
+fn nested_destructuring_property_keys_do_not_hide_the_regexp_collision() {
+    let receipt = preflight(&[input(
+        "/project/00_collision.ts",
+        r#"declare const condition: boolean;
+declare const source: {
+  nested: [{ ctor: RegExpConstructor }];
+};
+
+if (condition) {
+  var {
+    nested: [{ ctor: RegExp }],
+  } = source;
+}
+"#,
+    )]);
+
+    assert_private(&receipt);
+    assert_eq!(
+        names(&receipt),
+        BTreeSet::from([
+            "RegExp".to_owned(),
+            "condition".to_owned(),
+            "source".to_owned(),
+        ])
+    );
+    let colliding = receipt
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.global_object_contributor)
+        .collect::<Vec<_>>();
+    assert_eq!(colliding.len(), 1);
+    assert_eq!(colliding[0].name, "RegExp");
+    assert_eq!(
+        colliding[0].slots,
+        BTreeSet::from([PreflightSlotForTest::Value])
+    );
+    assert!(colliding[0].global_object_contributor);
+    assert!(!names(&receipt).contains("nested"));
+    assert!(!names(&receipt).contains("ctor"));
+}
+
+#[test]
 fn nested_hoisted_var_leaves_route_private_across_every_statement_container() {
     let receipt = preflight(&[input(
         "/project/hoists.ts",
