@@ -1284,6 +1284,18 @@ impl<'a> Relater<'a> {
 
     fn rest_param_shape(&self, ty: TypeId) -> Option<ParamShape> {
         let ty = self.store.readonly_operand(ty).unwrap_or(ty);
+        // Bare `any` and `never` rest operands are pure variadic tails.
+        if ty == self.well_known.any || ty == self.well_known.never {
+            return Some(ParamShape {
+                prefix: Vec::new(),
+                variadic: Some(ParamSlot {
+                    ty,
+                    accepts_undefined: false,
+                }),
+                suffix: Vec::new(),
+                non_array_rest: false,
+            });
+        }
         if let Some(array) = self.store.array_type(ty) {
             return Some(ParamShape {
                 prefix: Vec::new(),
