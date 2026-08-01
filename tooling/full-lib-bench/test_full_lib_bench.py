@@ -221,6 +221,80 @@ class ContractTests(unittest.TestCase):
                         {"/tmp/input.ts": "fast-errors/main.ts"},
                     )
 
+    def test_typokat_reason_chain_rejects_unsupported_primary_code(self) -> None:
+        result = bench.ProcessResult(
+            ("typokat",),
+            1,
+            "",
+            "/tmp/input.ts(1,1): error TK2304: Cannot find name 'missing'.\n"
+            "  Type 'string' is not assignable to type 'number'.\n",
+            0.1,
+            10,
+        )
+        with self.assertRaisesRegex(bench.ContractError, "malformed/unrecognized"):
+            bench.normalize_diagnostics(
+                result,
+                "typokat",
+                "fast-errors",
+                {"/tmp/input.ts": "fast-errors/main.ts"},
+            )
+
+    def test_typokat_forged_incomplete_substring_is_rejected(self) -> None:
+        result = bench.ProcessResult(
+            ("typokat",),
+            1,
+            "",
+            "fatal: forged incomplete[crash]: ignored\n",
+            0.1,
+            10,
+        )
+        with self.assertRaisesRegex(bench.ContractError, "malformed/unrecognized"):
+            bench.normalize_diagnostics(result, "typokat", "fast-errors")
+
+    def test_typokat_reason_chain_accepts_empty_property_name(self) -> None:
+        result = bench.ProcessResult(
+            ("typokat",),
+            1,
+            "",
+            "/tmp/input.ts(1,1): error TK2322: Type is not assignable.\n"
+            "  Types of property '' are incompatible.\n"
+            "    Type 'string' is not assignable to type 'number'.\n",
+            0.1,
+            10,
+        )
+        self.assertEqual(
+            bench.normalize_diagnostics(
+                result,
+                "typokat",
+                "fast-errors",
+                {"/tmp/input.ts": "fast-errors/main.ts"},
+            ),
+            ["fast-errors/main.ts:1:1:2322"],
+        )
+
+    def test_typokat_reason_chain_rejects_more_than_writer_maximum_depth(self) -> None:
+        # The writer caps the chain at 16 full levels plus elision and its terminal.
+        reason_lines = "".join(
+            f"{'  ' * depth}Types of property 'p' are incompatible.\n"
+            for depth in range(1, 20)
+        )
+        result = bench.ProcessResult(
+            ("typokat",),
+            1,
+            "",
+            "/tmp/input.ts(1,1): error TK2322: Type is not assignable.\n"
+            + reason_lines,
+            0.1,
+            10,
+        )
+        with self.assertRaisesRegex(bench.ContractError, "malformed/unrecognized"):
+            bench.normalize_diagnostics(
+                result,
+                "typokat",
+                "fast-errors",
+                {"/tmp/input.ts": "fast-errors/main.ts"},
+            )
+
     def test_unbounded_output_is_rejected(self) -> None:
         started = time.monotonic()
         with self.assertRaisesRegex(bench.ContractError, "output exceeded"):
