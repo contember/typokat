@@ -2924,6 +2924,26 @@ fn function_rest_and_fixed_slot_assignability() {
         vec![ParameterType::rest("target", never_arr)],
         wk.number,
     ));
+    let target_bare_any_rest = interner.intern_function(function(
+        vec![ParameterType::rest("target", wk.any)],
+        wk.number,
+    ));
+    let target_bare_never_rest = interner.intern_function(function(
+        vec![ParameterType::rest("target", wk.never)],
+        wk.number,
+    ));
+    let source_bare_any_rest = interner.intern_function(function(
+        vec![ParameterType::rest("source", wk.any)],
+        wk.number,
+    ));
+    let source_bare_never_rest = interner.intern_function(function(
+        vec![ParameterType::rest("source", wk.never)],
+        wk.number,
+    ));
+    let callable_object = interner.intern_object(ObjectType {
+        call_signatures: vec![source_one_fixed],
+        ..Default::default()
+    });
     let source_optional_prefix_and_suffix = interner.intern_function(function(
         vec![
             ParameterType::optional("first", wk.unknown),
@@ -3041,6 +3061,21 @@ fn function_rest_and_fixed_slot_assignability() {
         .is_yes());
     assert!(rel
         .is_assignable(source_bad_fixed, target_pure_never_rest)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_bad_fixed, target_bare_any_rest)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_bad_fixed, target_bare_never_rest)
+        .is_yes());
+    assert!(rel
+        .is_assignable(callable_object, target_bare_any_rest)
+        .is_yes());
+    assert!(rel
+        .is_assignable(source_bare_any_rest, target_single_string)
+        .is_yes());
+    assert!(!rel
+        .is_assignable(source_bare_never_rest, target_single_string)
         .is_yes());
     assert!(!rel
         .is_assignable(source_optional_prefix_and_suffix, target_single_string)
