@@ -4433,7 +4433,7 @@ mod raw_access_audit {
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/application.rs", snippet: "published.require_class(class)", count: 1, reason: "instrumented class-demand boundary" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: "self.decl_types.get(decl_id)", count: 2, reason: "own-target cache invalidation" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: "self.binder.resolve_value(scope, id.name.as_str())", count: 1, reason: "current declaration symbol" },
-            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: ".binder.resolve_value(scope, name)", count: 2, reason: "current function group symbol" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: ".binder.resolve_value(scope, name)", count: 3, reason: "current function group symbol, including registered lifecycle rejoin" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/statements.rs", snippet: "binder.resolve_value(declaration_scope, identifier.name.as_str())", count: 1, reason: "declaration owner lookup" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "use crate::check::checker::decls::type_decl_id;", count: 1, reason: "surface resolver helper import" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/classes/publication.rs", snippet: "type_decl_id(self.binder, self.scope, name)", count: 1, reason: "no-trace surface resolver" },

@@ -108,6 +108,7 @@ struct FunctionGroupDraft<Ticket: Copy> {
     symbol: SymbolId,
     name: String,
     participants: Vec<FunctionParticipantSlot>,
+    namespace_payload_required: bool,
     inherited_call_signatures: Vec<TypeId>,
     namespace_payload: NamespacePayloadState,
     state: FunctionGroupState<Ticket>,
@@ -177,6 +178,10 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
         if let Some(existing) = self.groups.get(&identity.symbol) {
             assert_eq!(existing.name, identity.name, "function group name changed");
             assert_eq!(
+                existing.namespace_payload_required, identity.namespace_payload_required,
+                "function group namespace payload requirement changed"
+            );
+            assert_eq!(
                 existing
                     .participants
                     .iter()
@@ -211,6 +216,7 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                         state: FunctionParticipantState::Unseen,
                     })
                     .collect(),
+                namespace_payload_required: identity.namespace_payload_required,
                 inherited_call_signatures: Vec::new(),
                 namespace_payload: if identity.namespace_payload_required {
                     NamespacePayloadState::Missing
@@ -220,6 +226,23 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                 state: FunctionGroupState::Building,
             },
         );
+    }
+
+    pub(in crate::check::checker) fn registered_identity(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<FunctionGroupIdentity> {
+        let draft = self.groups.get(&symbol)?;
+        Some(FunctionGroupIdentity {
+            symbol,
+            name: draft.name.clone(),
+            participants: draft
+                .participants
+                .iter()
+                .map(|participant| participant.declaration)
+                .collect(),
+            namespace_payload_required: draft.namespace_payload_required,
+        })
     }
 
     pub(in crate::check::checker) fn seed_inherited_publication(
@@ -830,6 +853,29 @@ mod tests {
                 .publication_plan(SymbolId(3))
                 .map(|publication| publication.call_signatures),
             Some(vec![TypeId(11), TypeId(10)])
+        );
+    }
+
+    #[test]
+    fn registered_identity_preserves_the_namespace_lifecycle() {
+        let mut registry = registry();
+        registry.register(FunctionGroupIdentity {
+            symbol: SymbolId(3),
+            name: "Merged".to_owned(),
+            participants: vec![ValueStorageId(4)],
+            namespace_payload_required: true,
+        });
+        registry
+            .install_namespace_payload(SymbolId(3), FunctionNamespacePayload::Ready(Vec::new()));
+
+        assert_eq!(
+            registry.registered_identity(SymbolId(3)),
+            Some(FunctionGroupIdentity {
+                symbol: SymbolId(3),
+                name: "Merged".to_owned(),
+                participants: vec![ValueStorageId(4)],
+                namespace_payload_required: true,
+            })
         );
     }
 

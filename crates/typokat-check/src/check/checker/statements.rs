@@ -1491,12 +1491,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         name: &str,
     ) -> Option<FunctionGroupIdentity> {
-        let mut identity =
+        let registered = self
+            .binder
+            .resolve_value(scope, name)
+            .and_then(|symbol| self.function_groups.registered_identity(symbol));
+        let mut identity = registered.or_else(|| {
             super::function_groups::FunctionGroupRegistry::<Ticket>::function_namespace_identity(
                 self.binder,
                 scope,
                 name,
-            )?;
+            )
+        })?;
         if let Some(tail) = self
             .function_group_precedence_tails_by_name
             .get(name)
