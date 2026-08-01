@@ -18,7 +18,7 @@ WU0B now supplies that evidence. Two isolated byte-reproducible release builds, 
 4-ignored preflights, two byte-identical calibrated regenerations, and 45 fresh timing processes
 produced an overall external p95 of 110.409 ms (window p95s 110.913 / 106.753 / 110.409 ms) with
 57,836 KiB maximum RSS. The active
-[sprint run log](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) records the complete
+[archived sprint run log](../archive/sprint-2026-07-21-full-lib-performance-cutover.md) records the complete
 optimization and failed-run ledger. This proves feasibility only: production still uses
 `src/prelude.ts`, and the final base/delta, collision, package, CLI, and cross-tool 2× gates remain.
 

@@ -1,3 +1,18 @@
+> **OUTCOME — terminated incomplete and superseded 2026-08-02.** This sprint did not ship
+> backlog `14`, the production default-library cutover, or an authoritative performance claim.
+> WU0A/WU0B and WU1–WU4 established the cross-tool contract, source-backed library compiler,
+> immutable base, and identity-preserving user delta. WU5 landed the collision classifier,
+> authenticated replay machinery, and source-native sparse-epoch substrate, but production route
+> correctness did not close. WU6 reached 10 of 14 flat B14 fixtures and 2 of 12 project fixtures.
+> WU7 accumulated substantial uncommitted cutover work; HEAD still uses the bounded prelude. WU8
+> and WU9 never ran. The retirement gate on the shared worktree was `cargo test --test conformance
+> -- --nocapture`: 9 differences across 574 files, clustered in `this` utility shadowing, obsolete
+> RegExp accounting, global value publication, and local `Array` heritage. No full release,
+> official-suite, differential, package, or benchmark closure is claimed. The plan is superseded by
+> [`sprint-2026-08-02-default-library-cutover-closure.md`](../sprints/sprint-2026-08-02-default-library-cutover-closure.md),
+> which starts from that exact state and puts the library-vs-project freeze boundary behind a
+> bounded decision gate before any more collision-route work.
+
 # Sprint — full default-library performance cutover (2026-07-21)
 
 **Goal.** Ship the exact pinned TypeScript 6.0.3 ES2025 full-host library as typokat's production

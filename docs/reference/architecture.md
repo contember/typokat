@@ -557,8 +557,9 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   `crates/typokat-check/src/prelude.ts`. The
   [2026-07-16 feasibility sprint](../archive/sprint-2026-07-16-full-lib-loading.md) ended at WU0
   NO-GO after its unchanged 5-second cold gate exited 143; no cutover shipped. The active
-  [performance-cutover sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) now
-  owns backlog [14](../backlog/14-libdts-loading.md). A shipped semantic snapshot was built and then
+  [cutover-closure sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) now owns
+  backlog [14](../backlog/14-libdts-loading.md) and starts with a bounded decision gate over the
+  library-vs-project freeze boundary. A shipped semantic snapshot was built and then
   retired by [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md): the library is
   compiled from its 82 vendored sources in every process, because the checking pipeline was already
   at parity with pinned native TypeScript 7 and precomputing one fixed profile does nothing for

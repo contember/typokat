@@ -194,8 +194,9 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
 2. **Execute the active full-library performance-cutover sprint (`14`).** The pinned ES5 proof is
    GO after immutable standalone namespace values shipped under ADR-0010. The
-   [active sprint](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the production
-   cutover and the fail-closed cross-tool gate against native TypeScript 7. The shipped semantic
+   [active sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) owns the bounded
+   freeze-boundary decision, production cutover, and fail-closed cross-tool gate against native
+   TypeScript 7. The shipped semantic
    snapshot it once carried was retired by
    [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md); `98` is its
    remaining fallout.

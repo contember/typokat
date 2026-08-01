@@ -27,9 +27,10 @@ decisions → reference → archive.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
-- [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) —
-  active backlog `14` delivery sprint: production full-library cutover with a hard, fail-closed
-  fresh-process target strictly faster than native TypeScript 7 on every approved semantic row.
+- [`sprint-2026-08-02-default-library-cutover-closure.md`](sprints/sprint-2026-08-02-default-library-cutover-closure.md) —
+  active backlog `14` closure sprint: bounded freeze-boundary decision, the remaining nine
+  conformance differences, atomic production cutover, cross-tool gates, and authoritative
+  full-library performance evidence.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
@@ -67,10 +68,12 @@ decisions → reference → archive.
   the complete set as a named `(code, site)` multiset
   (`tests/fixtures/library-owned-records.txt`), which narrows ADR-0011's "preserved exactly" to the
   pinned suite rather than the published base. The
-  [`active sprint`](sprints/sprint-2026-07-21-full-lib-performance-cutover.md) owns the production
-  Stage-1 cutover, collision/fanout correctness, and the cross-tool gate against native
-  TypeScript 7. Stage 1 is not yet shipped and `crates/typokat-check/src/prelude.ts` remains production until the atomic
-  cutover.
+  [`active sprint`](sprints/sprint-2026-08-02-default-library-cutover-closure.md) owns the bounded
+  freeze-boundary decision, production Stage-1 cutover, collision/fanout correctness, and the
+  cross-tool gate against native TypeScript 7. The
+  [`superseded 2026-07-21 sprint`](archive/sprint-2026-07-21-full-lib-performance-cutover.md)
+  remains the incomplete run and measurement record. Stage 1 is not yet shipped and
+  `crates/typokat-check/src/prelude.ts` remains production at HEAD until the atomic cutover.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable

@@ -24,7 +24,8 @@ base. But `local_iter()` at `:339` — the user-project delta, which is exactly 
 quadratics above scans — has **no probe at all**. The guard rail watches the layer that is sealed and
 ignores the layer that grows.
 
-**Gap 2 — no multi-file scaling row.** `docs/sprints/sprint-2026-07-21-full-lib-performance-cutover.md`
+**Gap 2 — no multi-file scaling row.** The archived
+[`2026-07-21 full-lib sprint`](../archive/sprint-2026-07-21-full-lib-performance-cutover.md)
 measured only the single-file library profile. `tooling/bench/typobench.py` does have a `modules`
 family, but it is not run as a gate, so nothing failed when the 6,249-file corpus went from 0.307 s
 (2026-07-09, *faster* than tsgo's 0.374 s) to 188.7 s.

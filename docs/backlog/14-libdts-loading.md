@@ -21,7 +21,7 @@ snapshot: the library is compiled from its 82 vendored sources in every process.
 that changed the decision is that typokat's cold parse+bind+check of the pinned library is 277 ms
 against native TypeScript 7's 289 ms on the reference host, and the 1.85 s the source path used to
 cost was 62 % artifact generation with no comparator analogue. The
-[`2026-07-21 performance-cutover sprint`](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md)
+[`2026-08-02 cutover-closure sprint`](../sprints/sprint-2026-08-02-default-library-cutover-closure.md)
 owns the production base/delta and collision paths, the atomic driver cutover, and a fail-closed
 fresh-process target against pinned native TypeScript 7 on every approved semantic row. The earlier
 [`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
@@ -100,7 +100,7 @@ accepted detailed design remains in
 [`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the archived
 [`2026-07-16 feasibility attempt`](../archive/sprint-2026-07-16-full-lib-loading.md) records the
 failed gate and optimization evidence but is not an active delivery contract. The
-[`active performance-cutover sprint`](../sprints/sprint-2026-07-21-full-lib-performance-cutover.md)
+[`active cutover-closure sprint`](../sprints/sprint-2026-08-02-default-library-cutover-closure.md)
 re-verifies the implementation touch points and owns delivery. The current explicit-input
 readiness fixture is not the loader.
 

@@ -24,10 +24,10 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have
   caught them. Runs alongside the full-lib sprint — different files.
-- [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprint-2026-07-21-full-lib-performance-cutover.md) —
-  active backlog `14` delivery sprint: exact TypeScript 6.0.3 full-host base, production cutover,
-  and a fail-closed fresh-process gate — statistically faster than native TypeScript 7 on every
-  approved row (restated from `≥2.00` to `>1.00` on 2026-07-26 with ADR-0017).
+- [`sprint-2026-08-02-default-library-cutover-closure.md`](sprint-2026-08-02-default-library-cutover-closure.md) —
+  active backlog `14` closure sprint: starts from 9 conformance differences across 574 files,
+  decides the library-vs-project freeze boundary through a bounded evidence gate, then completes
+  the atomic production cutover, cross-tool gates, and narrowly stated performance claim.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —

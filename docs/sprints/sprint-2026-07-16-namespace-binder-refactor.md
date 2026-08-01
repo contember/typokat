@@ -285,7 +285,7 @@ all stale; the values below supersede them.)
 1. **Gate satisfied:** the namespace sprint's WU7 adversarial review and closure landed before
    this refactor starts.
 2. ⚠ **New blocking gate:** do not start while
-   [`sprint-2026-07-21-full-lib-performance-cutover.md`](sprint-2026-07-21-full-lib-performance-cutover.md)
+   [`sprint-2026-08-02-default-library-cutover-closure.md`](sprint-2026-08-02-default-library-cutover-closure.md)
    is active. It is rewriting the exact three files this refactor touches
    (`crates/typokat-binder/src/binder/namespace.rs`,
    `crates/typokat-binder/src/binder/bind.rs`, and
