@@ -158,6 +158,69 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.ContractError, "malformed/unrecognized"):
             bench.normalize_diagnostics(result, "tsgo", "fast-errors")
 
+    def test_typokat_reason_chain_continuations_follow_a_primary_diagnostic(self) -> None:
+        result = bench.ProcessResult(
+            ("typokat",),
+            1,
+            "",
+            "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+            "  Types of property 'value' are incompatible.\n"
+            "    Type 'string' is not assignable to type 'number'.\n",
+            0.1,
+            10,
+        )
+        self.assertEqual(
+            bench.normalize_diagnostics(
+                result,
+                "typokat",
+                "fast-errors",
+                {"/tmp/input.ts": "fast-errors/main.ts"},
+            ),
+            ["fast-errors/main.ts:2:7:2322"],
+        )
+
+    def test_typokat_orphan_reason_chain_continuations_are_rejected(self) -> None:
+        for stderr in (
+            "  Types of property 'value' are incompatible.\n",
+            "  orphan\n/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n",
+            "incomplete[annotation]: unsupported\n  orphan\n",
+        ):
+            with self.subTest(stderr=stderr):
+                result = bench.ProcessResult(
+                    ("typokat",), 1, "", stderr, 0.1, 10
+                )
+                with self.assertRaisesRegex(
+                    bench.ContractError, "malformed/unrecognized"
+                ):
+                    bench.normalize_diagnostics(
+                        result,
+                        "typokat",
+                        "fast-errors",
+                        {"/tmp/input.ts": "fast-errors/main.ts"},
+                    )
+
+    def test_typokat_unknown_stderr_fails_closed_after_a_primary_diagnostic(self) -> None:
+        for unknown in ("internal compiler warning\n", "  internal compiler warning\n"):
+            with self.subTest(unknown=unknown):
+                result = bench.ProcessResult(
+                    ("typokat",),
+                    1,
+                    "",
+                    "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+                    + unknown,
+                    0.1,
+                    10,
+                )
+                with self.assertRaisesRegex(
+                    bench.ContractError, "malformed/unrecognized"
+                ):
+                    bench.normalize_diagnostics(
+                        result,
+                        "typokat",
+                        "fast-errors",
+                        {"/tmp/input.ts": "fast-errors/main.ts"},
+                    )
+
     def test_unbounded_output_is_rejected(self) -> None:
         started = time.monotonic()
         with self.assertRaisesRegex(bench.ContractError, "output exceeded"):
@@ -577,10 +640,6 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertGreater(first, 2.0)
 
-    @unittest.skipUnless(
-        os.environ.get("TYPOKAT_FULL_LIB_ACCEPTANCE") == "1",
-        "RED until the production full-library provider replaces crates/typokat-check/src/prelude.ts",
-    )
     def test_production_path_acceptance(self) -> None:
         binary = bench.ROOT / "target/release/typokat"
         bench.assert_production(binary, self.contract)
