@@ -49,6 +49,29 @@ TS_DIAGNOSTIC_RE = re.compile(
 TK_DIAGNOSTIC_RE = re.compile(
     r"^(?P<path>.+)\((?P<line>\d+),(?P<column>\d+)\): error TK(?P<code>\d+):"
 )
+TK_REASON_CHAIN_PRIMARY_CODES = frozenset({"2322", "2344", "2345", "2416"})
+TK_REASON_CHAIN_FULL_DEPTH = 16
+TK_REASON_CHAIN_ELISION_DEPTH = TK_REASON_CHAIN_FULL_DEPTH + 1
+TK_REASON_CHAIN_TERMINAL_DEPTH = TK_REASON_CHAIN_ELISION_DEPTH + 1
+TK_REASON_CHAIN_RE = re.compile(
+    r"^(?P<indent>(?:  )+)(?:"
+    r"(?P<wrapper>"
+    r"Types of property '.*' are incompatible\.|"
+    r"Types of parameters '[^']+'(?: and '[^']+')? are incompatible\.|"
+    r"Types of parameters at position \d+ are incompatible\.|"
+    r"Call signature return types are incompatible\."
+    r")|"
+    r"(?P<type>Type '.+' is not assignable to type '.+'\.)|"
+    r"(?P<missing>Property '.*' is missing in type '.+'\.)|"
+    r"(?P<arity>Type '.+' provides more parameters than type '.+' expects\.)|"
+    r"(?P<elision>\.\.\. (?:1 more nested level|"
+    r"(?:[2-9]|[1-9]\d+) more nested levels) omitted\.)"
+    r")$"
+)
+TK_INCOMPLETE_RE = re.compile(
+    r"^(?P<path>.+)\((?P<line>\d+),(?P<column>\d+)\): "
+    r"incomplete\[(?P<id>[^\]\r\n]+)\]: (?P<context>[^\r\n]*)$"
+)
 RSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -741,20 +764,88 @@ def normalize_diagnostics(
             str(path.resolve()): path.relative_to(WORKLOADS).as_posix() for path in row_sources(row)
         }
     diagnostics: list[str] = []
+    next_reason_depth: int | None = None
+    reason_line_required = False
+    terminal_reason_only = False
     for line in output.splitlines():
         match = regex.match(line)
         if match:
+            if reason_line_required:
+                raise ContractError(
+                    f"{tool} emitted malformed/unrecognized diagnostic line: {line!r}"
+                )
             diagnostics.append(
                 f"{logical_path(match.group('path'), path_map)}:{match.group('line')}:"
                 f"{match.group('column')}:{match.group('code')}"
             )
+            next_reason_depth = (
+                1
+                if tool == "typokat"
+                and match.group("code") in TK_REASON_CHAIN_PRIMARY_CODES
+                else None
+            )
+            reason_line_required = False
+            terminal_reason_only = False
             continue
         if line.startswith((" ", "\t")) and tool == "tsgo":
             continue
-        if "incomplete[" in line and tool == "typokat":
+        incomplete = TK_INCOMPLETE_RE.fullmatch(line) if tool == "typokat" else None
+        if incomplete:
+            if reason_line_required:
+                raise ContractError(
+                    f"{tool} emitted malformed/unrecognized diagnostic line: {line!r}"
+                )
+            logical_path(incomplete.group("path"), path_map)
             diagnostics.append("INCOMPLETE:" + line)
+            next_reason_depth = None
+            terminal_reason_only = False
             continue
+        if tool == "typokat" and next_reason_depth is not None:
+            reason = TK_REASON_CHAIN_RE.fullmatch(line)
+            if reason and len(reason.group("indent")) == next_reason_depth * 2:
+                wrapper = reason.group("wrapper") is not None
+                terminal = any(
+                    reason.group(group) is not None for group in ("missing", "arity")
+                )
+                type_line = reason.group("type") is not None
+                elision = reason.group("elision") is not None
+                if next_reason_depth <= TK_REASON_CHAIN_FULL_DEPTH and not elision:
+                    next_reason_depth = None if terminal else next_reason_depth + 1
+                    reason_line_required = wrapper
+                    terminal_reason_only = False
+                    continue
+                if (
+                    next_reason_depth == TK_REASON_CHAIN_ELISION_DEPTH
+                    and (terminal or type_line)
+                ):
+                    next_reason_depth = None
+                    reason_line_required = False
+                    terminal_reason_only = False
+                    continue
+                if (
+                    next_reason_depth == TK_REASON_CHAIN_ELISION_DEPTH
+                    and elision
+                    and not terminal_reason_only
+                ):
+                    next_reason_depth = TK_REASON_CHAIN_TERMINAL_DEPTH
+                    reason_line_required = True
+                    terminal_reason_only = True
+                    continue
+                if (
+                    next_reason_depth == TK_REASON_CHAIN_TERMINAL_DEPTH
+                    and terminal_reason_only
+                    and (terminal or type_line)
+                ):
+                    next_reason_depth = None
+                    reason_line_required = False
+                    terminal_reason_only = False
+                    continue
+        next_reason_depth = None
+        reason_line_required = False
+        terminal_reason_only = False
         raise ContractError(f"{tool} emitted malformed/unrecognized diagnostic line: {line!r}")
+    if reason_line_required:
+        raise ContractError(f"{tool} emitted malformed/unrecognized diagnostic continuation")
     return sorted(diagnostics)
 
 
