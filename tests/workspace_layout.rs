@@ -264,7 +264,10 @@ fn workspace_has_the_accepted_members_defaults_and_source_owners() {
                 .into_owned()
         })
         .collect::<BTreeSet<_>>();
-    assert_eq!(root_sources, names(&["lib.rs", "main.rs"]));
+    assert_eq!(
+        root_sources,
+        names(&["lib.rs", "main.rs", "wu7_cli_fault_spec.rs"])
+    );
 
     assert!(root.join("crates/typokat-core/src/source.rs").is_file());
     assert!(root.join("crates/typokat-core/src/span.rs").is_file());
