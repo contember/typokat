@@ -42,3 +42,30 @@ nativeFunction.localFunction; // error[TK2339]
 type Uppercase<Value extends string> = Value;
 type LocalUppercase = Uppercase<"lower">;
 const localUppercase: LocalUppercase = "lower";
+
+type Lowercase<Value extends string> = Value;
+type LocalLowercase = Lowercase<"LOUD">;
+const localLowercase: LocalLowercase = "LOUD";
+
+type Capitalize<Value extends string> = Value;
+type LocalCapitalize = Capitalize<"typokat">;
+const localCapitalize: LocalCapitalize = "typokat";
+
+type Uncapitalize<Value extends string> = Value;
+type LocalUncapitalize = Uncapitalize<"Typokat">;
+const localUncapitalize: LocalUncapitalize = "Typokat";
+
+type ThisType<Value> = { marker: Value };
+type LocalThisType = {
+  value: number;
+  read(): number;
+} & ThisType<{ value: string }>;
+
+const localThisType: LocalThisType = {
+  value: 1,
+  marker: { value: "local" },
+  read() {
+    const value: number = this.value;
+    return value;
+  },
+};

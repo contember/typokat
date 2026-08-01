@@ -304,7 +304,7 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 /// full. Keep this list path-sorted so execution and failure aggregation stay
 /// deterministic. Each runs against the base its directory declares in `MILESTONE_DIRS`.
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
-    // Backlog 14 (`Library` base). The other five flat fixtures await WU6 isolated verification,
+    // Backlog 14 (`Library` base). The other four flat fixtures await WU6 isolated verification,
     // expectation reconciliation, and residual model-gap work.
     (
         "b14_full_lib_loading",
@@ -312,6 +312,7 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
     ("b14_full_lib_loading", "arrays_tuples_readonly.ts"),
     ("b14_full_lib_loading", "global_values.ts"),
+    ("b14_full_lib_loading", "intrinsic_aliases.ts"),
     ("b14_full_lib_loading", "iterator_library_local_nonleak.ts"),
     ("b14_full_lib_loading", "library_identity_shadowing.ts"),
     (
