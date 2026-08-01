@@ -724,6 +724,12 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(bench.ContractError, "oracle digest differs"):
             bench.verify_oracle_digest("0" * 64, "fast-clean")
 
+    def test_adjusted_oracle_retains_canonical_diagnostic_order(self) -> None:
+        adjusted = bench.adjusted_oracle("fast-errors")
+
+        self.assertEqual(adjusted, sorted(adjusted))
+        self.assertEqual(adjusted[0], "fast-errors/main.ts:10:7:2322")
+
     def test_fast_crash_cannot_count_as_timing_sample(self) -> None:
         result = bench.ProcessResult(("typokat",), 0, "", "", 0.01, 1)
         with self.assertRaisesRegex(bench.ContractError, "raw exit/output differs"):
