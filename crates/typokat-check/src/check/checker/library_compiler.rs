@@ -3433,6 +3433,244 @@ struct CanonicalLibraryFrontend<'source, 'ast> {
     bind_elapsed: Duration,
 }
 
+#[derive(Clone, Copy)]
+enum TrustedLibraryMarkerShape {
+    IntrinsicAlias,
+    ConditionalAlias,
+    EmptyInterface,
+}
+
+fn exact_type_parameter(
+    declaration: Option<&oxc_ast::ast::TSTypeParameterDeclaration<'_>>,
+    name: &str,
+    constraint: Option<fn(&oxc_ast::ast::TSType<'_>) -> bool>,
+) -> bool {
+    let Some(parameter) = declaration
+        .and_then(|declaration| (declaration.params.len() == 1).then(|| &declaration.params[0]))
+    else {
+        return false;
+    };
+    parameter.name.name == name
+        && parameter.default.is_none()
+        && !parameter.r#in
+        && !parameter.out
+        && !parameter.r#const
+        && match (parameter.constraint.as_ref(), constraint) {
+            (None, None) => true,
+            (Some(actual), Some(expected)) => expected(actual),
+            _ => false,
+        }
+}
+
+fn is_string_keyword(ty: &oxc_ast::ast::TSType<'_>) -> bool {
+    matches!(ty, oxc_ast::ast::TSType::TSStringKeyword(_))
+}
+
+fn exact_plain_type_reference(ty: &oxc_ast::ast::TSType<'_>, name: &str) -> bool {
+    let oxc_ast::ast::TSType::TSTypeReference(reference) = ty else {
+        return false;
+    };
+    matches!(
+        &reference.type_name,
+        oxc_ast::ast::TSTypeName::IdentifierReference(identifier)
+            if identifier.name == name
+    ) && reference.type_arguments.is_none()
+}
+
+fn exact_unary_type_reference(
+    ty: &oxc_ast::ast::TSType<'_>,
+    name: &str,
+    argument_name: &str,
+) -> bool {
+    let oxc_ast::ast::TSType::TSTypeReference(reference) = ty else {
+        return false;
+    };
+    let Some(arguments) = reference.type_arguments.as_ref() else {
+        return false;
+    };
+    matches!(
+        &reference.type_name,
+        oxc_ast::ast::TSTypeName::IdentifierReference(identifier)
+            if identifier.name == name
+    ) && arguments.params.len() == 1
+        && exact_plain_type_reference(&arguments.params[0], argument_name)
+}
+
+fn exact_infer_type(ty: &oxc_ast::ast::TSType<'_>, name: &str) -> bool {
+    let oxc_ast::ast::TSType::TSInferType(infer) = ty else {
+        return false;
+    };
+    let parameter = &infer.type_parameter;
+    parameter.name.name == name
+        && parameter.constraint.is_none()
+        && parameter.default.is_none()
+        && !parameter.r#in
+        && !parameter.out
+        && !parameter.r#const
+}
+
+fn exact_rest_function(
+    ty: &oxc_ast::ast::TSType<'_>,
+    rest_name: &str,
+    rest_type: fn(&oxc_ast::ast::TSType<'_>) -> bool,
+    return_type: fn(&oxc_ast::ast::TSType<'_>) -> bool,
+) -> bool {
+    let oxc_ast::ast::TSType::TSFunctionType(function) = ty else {
+        return false;
+    };
+    let Some(rest) = function.params.rest.as_ref() else {
+        return false;
+    };
+    let Some(rest_annotation) = rest.type_annotation.as_ref() else {
+        return false;
+    };
+    matches!(
+        &rest.rest.argument,
+        oxc_ast::ast::BindingPattern::BindingIdentifier(identifier)
+            if identifier.name == rest_name
+    ) && function.type_parameters.is_none()
+        && function.this_param.is_none()
+        && function.params.kind == oxc_ast::ast::FormalParameterKind::Signature
+        && function.params.items.is_empty()
+        && rest.decorators.is_empty()
+        && rest_type(&rest_annotation.type_annotation)
+        && return_type(&function.return_type.type_annotation)
+}
+
+fn exact_omit_this_parameter_body(annotation: &oxc_ast::ast::TSType<'_>) -> bool {
+    fn infer_a(ty: &oxc_ast::ast::TSType<'_>) -> bool {
+        exact_infer_type(ty, "A")
+    }
+    fn infer_r(ty: &oxc_ast::ast::TSType<'_>) -> bool {
+        exact_infer_type(ty, "R")
+    }
+    fn reference_a(ty: &oxc_ast::ast::TSType<'_>) -> bool {
+        exact_plain_type_reference(ty, "A")
+    }
+    fn reference_r(ty: &oxc_ast::ast::TSType<'_>) -> bool {
+        exact_plain_type_reference(ty, "R")
+    }
+
+    let oxc_ast::ast::TSType::TSConditionalType(outer) = annotation else {
+        return false;
+    };
+    let oxc_ast::ast::TSType::TSConditionalType(inner) = &outer.false_type else {
+        return false;
+    };
+    matches!(outer.check_type, oxc_ast::ast::TSType::TSUnknownKeyword(_))
+        && exact_unary_type_reference(&outer.extends_type, "ThisParameterType", "T")
+        && exact_plain_type_reference(&outer.true_type, "T")
+        && exact_plain_type_reference(&inner.check_type, "T")
+        && exact_rest_function(&inner.extends_type, "args", infer_a, infer_r)
+        && exact_rest_function(&inner.true_type, "args", reference_a, reference_r)
+        && exact_plain_type_reference(&inner.false_type, "T")
+}
+
+fn seed_trusted_library_markers(
+    roots: &LibraryRootProjection,
+    declarations: &mut super::context::TypeDeclTable<'_>,
+    resolved: &mut super::context::TypeResolvedTable,
+    interner: &Interner,
+) {
+    let well_known = interner.well_known();
+    for (name, marker, shape) in [
+        (
+            "Uppercase",
+            well_known.uppercase,
+            TrustedLibraryMarkerShape::IntrinsicAlias,
+        ),
+        (
+            "Lowercase",
+            well_known.lowercase,
+            TrustedLibraryMarkerShape::IntrinsicAlias,
+        ),
+        (
+            "Capitalize",
+            well_known.capitalize,
+            TrustedLibraryMarkerShape::IntrinsicAlias,
+        ),
+        (
+            "Uncapitalize",
+            well_known.uncapitalize,
+            TrustedLibraryMarkerShape::IntrinsicAlias,
+        ),
+        (
+            "ThisType",
+            well_known.this_type,
+            TrustedLibraryMarkerShape::EmptyInterface,
+        ),
+        (
+            "OmitThisParameter",
+            well_known.omit_this_parameter,
+            TrustedLibraryMarkerShape::ConditionalAlias,
+        ),
+    ] {
+        let Some(group) = roots
+            .root_rows
+            .binary_search_by(|row| row.name.as_str().cmp(name))
+            .ok()
+            .and_then(|index| roots.root_rows.get(index))
+            .and_then(|row| row.ty)
+        else {
+            continue;
+        };
+        let trusted_shape = match (shape, declarations.get(group.index())) {
+            (
+                TrustedLibraryMarkerShape::IntrinsicAlias,
+                Some(super::context::TypeDecl::Alias {
+                    annotation,
+                    param_decl,
+                    name: declaration_name,
+                    ..
+                }),
+            ) if declaration_name == name
+                && exact_type_parameter(*param_decl, "S", Some(is_string_keyword))
+                && matches!(annotation, oxc_ast::ast::TSType::TSIntrinsicKeyword(_)) =>
+            {
+                true
+            }
+            (
+                TrustedLibraryMarkerShape::ConditionalAlias,
+                Some(super::context::TypeDecl::Alias {
+                    annotation,
+                    param_decl,
+                    name: declaration_name,
+                    ..
+                }),
+            ) if declaration_name == name
+                && exact_type_parameter(*param_decl, "T", None)
+                && exact_omit_this_parameter_body(annotation) =>
+            {
+                true
+            }
+            (
+                TrustedLibraryMarkerShape::EmptyInterface,
+                Some(super::context::TypeDecl::Interface {
+                    param_decl,
+                    extends,
+                    fragments,
+                    ..
+                }),
+            ) if exact_type_parameter(*param_decl, "T", None)
+                && extends.is_empty()
+                && fragments.len() == 1
+                && fragments
+                    .iter()
+                    .all(|fragment| fragment.members.is_empty() && fragment.extends.is_empty()) =>
+            {
+                true
+            }
+            _ => false,
+        };
+        if !trusted_shape {
+            continue;
+        }
+        if let Some(slot) = resolved.get_mut(group.index()) {
+            *slot = Some(marker);
+        }
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static CANONICAL_FRONTEND_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -6034,6 +6272,12 @@ fn compile_owned_injected_frontend(
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
         .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
+    seed_trusted_library_markers(
+        &collision_root_provenance,
+        &mut type_decls,
+        &mut type_resolved,
+        &interner,
+    );
 
     let replay_class_declarations = if replay_index_plan == ReplayIndexPlan::Assemble {
         lexical_events
@@ -7851,6 +8095,169 @@ mod tests {
         }])
         .expect("reservation lifecycle fixture compiles")
         .1
+    }
+
+    #[test]
+    fn exact_library_roots_install_only_the_six_trusted_marker_shapes() {
+        let state = compile_reservation_fixture(
+            "trusted-markers.d.ts",
+            r#"
+                type ThisParameterType<T> = T extends
+                    (this: infer Receiver, ...args: never) => any ? Receiver : unknown;
+                type OmitThisParameter<T> = unknown extends ThisParameterType<T>
+                    ? T
+                    : T extends (...args: infer A) => infer R
+                        ? (...args: A) => R
+                        : T;
+                type Uppercase<S extends string> = intrinsic;
+                type Lowercase<S extends string> = intrinsic;
+                type Capitalize<S extends string> = intrinsic;
+                type Uncapitalize<S extends string> = intrinsic;
+                interface ThisType<T> {}
+            "#,
+        );
+        let well_known = state.interner.well_known();
+        for (name, marker) in [
+            ("Uppercase", well_known.uppercase),
+            ("Lowercase", well_known.lowercase),
+            ("Capitalize", well_known.capitalize),
+            ("Uncapitalize", well_known.uncapitalize),
+            ("ThisType", well_known.this_type),
+            ("OmitThisParameter", well_known.omit_this_parameter),
+        ] {
+            assert_eq!(published_template_type(&state, name), marker, "{name}");
+        }
+    }
+
+    #[test]
+    fn early_omit_this_parameter_demand_does_not_freeze_its_library_root_twice() {
+        let state = compile_reservation_fixture(
+            "early-omit-demand.d.ts",
+            r#"
+                interface EarlyDemand<
+                    T extends OmitThisParameter<
+                        (this: { prefix: string }, value: string) => number
+                    >
+                > {}
+                type ThisParameterType<T> = T extends
+                    (this: infer Receiver, ...args: never) => any ? Receiver : unknown;
+                type OmitThisParameter<T> = unknown extends ThisParameterType<T>
+                    ? T
+                    : T extends (...args: infer A) => infer R
+                        ? (...args: A) => R
+                        : T;
+            "#,
+        );
+        assert_eq!(
+            published_template_type(&state, "OmitThisParameter"),
+            state.interner.well_known().omit_this_parameter
+        );
+    }
+
+    #[test]
+    fn same_named_wrong_shapes_and_unlisted_intrinsics_are_not_trusted_markers() {
+        let state = compile_reservation_fixture(
+            "untrusted-markers.d.ts",
+            r#"
+                type Uppercase<S extends string> = S;
+                type Lowercase<S extends string> = S;
+                type Capitalize<S extends string> = S;
+                type Uncapitalize<S extends string> = S;
+                type OmitThisParameter<T> = T;
+                interface ThisType<T> { marker: T; }
+                type NoInfer<T> = intrinsic;
+                type IntrinsicAlias<T> = intrinsic;
+            "#,
+        );
+        let well_known = state.interner.well_known();
+        for (name, marker) in [
+            ("Uppercase", well_known.uppercase),
+            ("Lowercase", well_known.lowercase),
+            ("Capitalize", well_known.capitalize),
+            ("Uncapitalize", well_known.uncapitalize),
+            ("ThisType", well_known.this_type),
+            ("OmitThisParameter", well_known.omit_this_parameter),
+        ] {
+            assert_ne!(published_template_type(&state, name), marker, "{name}");
+        }
+        assert_type_group_is_error_or_unavailable(&state, "NoInfer");
+        assert_type_group_is_error_or_unavailable(&state, "IntrinsicAlias");
+    }
+
+    #[test]
+    fn trusted_string_marker_rejects_each_near_shape_dimension() {
+        for source in [
+            "type Uppercase<S> = intrinsic;",
+            "type Uppercase<S extends number> = intrinsic;",
+            "type Uppercase<S extends string = string> = intrinsic;",
+            "type Uppercase<S extends string, T> = intrinsic;",
+            "type Uppercase<S extends string> = S;",
+        ] {
+            let state = compile_reservation_fixture("string-marker-near-shape.d.ts", source);
+            assert_ne!(
+                published_template_type(&state, "Uppercase"),
+                state.interner.well_known().uppercase,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_this_type_marker_rejects_each_near_shape_dimension() {
+        for source in [
+            "interface ThisType {}",
+            "interface ThisType<T, U> {}",
+            "interface ThisType<T extends string> {}",
+            "interface ThisType<T = unknown> {}",
+            "interface ThisType<T> { value: T; }",
+        ] {
+            let state = compile_reservation_fixture("this-type-near-shape.d.ts", source);
+            assert_ne!(
+                published_template_type(&state, "ThisType"),
+                state.interner.well_known().this_type,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_omit_this_parameter_rejects_parameter_near_shapes() {
+        let body = "unknown extends ThisParameterType<T> ? T : T extends (...args: infer A) => infer R ? (...args: A) => R : T";
+        for source in [
+            format!("type OmitThisParameter = {body};"),
+            format!("type OmitThisParameter<T, U> = {body};"),
+            format!("type OmitThisParameter<T extends unknown> = {body};"),
+            format!("type OmitThisParameter<T = unknown> = {body};"),
+        ] {
+            let state = compile_reservation_fixture("omit-parameter-near-shape.d.ts", &source);
+            assert_ne!(
+                published_template_type(&state, "OmitThisParameter"),
+                state.interner.well_known().omit_this_parameter,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_omit_this_parameter_rejects_conditional_near_shapes() {
+        for body in [
+            "any extends ThisParameterType<T> ? T : T extends (...args: infer A) => infer R ? (...args: A) => R : T",
+            "unknown extends T ? T : T extends (...args: infer A) => infer R ? (...args: A) => R : T",
+            "unknown extends ThisParameterType<T> ? unknown : T extends (...args: infer A) => infer R ? (...args: A) => R : T",
+            "unknown extends ThisParameterType<T> ? T : unknown extends (...args: infer A) => infer R ? (...args: A) => R : T",
+            "unknown extends ThisParameterType<T> ? T : T extends (value: infer A) => infer R ? (...args: A) => R : T",
+            "unknown extends ThisParameterType<T> ? T : T extends (...args: infer A) => infer R ? (value: A) => R : T",
+            "unknown extends ThisParameterType<T> ? T : T extends (...args: infer A) => infer R ? (...args: A) => unknown : T",
+            "unknown extends ThisParameterType<T> ? T : T extends (...args: infer A) => infer R ? (...args: A) => R : unknown",
+        ] {
+            let source = format!("type OmitThisParameter<T> = {body};");
+            let state = compile_reservation_fixture("omit-body-near-shape.d.ts", &source);
+            assert_ne!(
+                published_template_type(&state, "OmitThisParameter"),
+                state.interner.well_known().omit_this_parameter,
+                "{source}"
+            );
+        }
     }
 
     fn published_template_type(state: &OwnedLibraryRuntimeState, name: &str) -> TypeId {

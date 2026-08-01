@@ -107,6 +107,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 || *existing == self.interner.well_known().omit_this_parameter
         });
         if let Some(existing) = existing {
+            if trusted_seed.is_some()
+                && matches!(
+                    self.type_decls.get(decl_id.index()),
+                    Some(TypeDecl::Alias {
+                        conditional_template: Some(_),
+                        ..
+                    })
+                )
+            {
+                return existing;
+            }
             if trusted_seed.is_none() || !self.type_group_construction_is_pending(decl_id) {
                 return existing;
             }

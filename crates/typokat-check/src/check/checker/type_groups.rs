@@ -968,6 +968,60 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .expect("type group metadata must exist")
             .name
             .clone();
+        let trusted_marker = self
+            .type_resolved
+            .get(group.index())
+            .copied()
+            .flatten()
+            .filter(|marker| {
+                let well_known = self.interner.well_known();
+                well_known.is_string_intrinsic_marker(*marker)
+                    || *marker == well_known.this_type
+                    || *marker == well_known.omit_this_parameter
+            });
+        if let Some(marker) = trusted_marker {
+            let (parameters, parameter_names, parameter_defaults) = match &declaration {
+                TypeDecl::Interface {
+                    recovery_params,
+                    recovery_names,
+                    recovery_defaults,
+                    ..
+                } => (
+                    recovery_params.clone(),
+                    recovery_names.clone(),
+                    recovery_defaults.clone(),
+                ),
+                TypeDecl::Alias {
+                    params,
+                    defaults,
+                    param_decl,
+                    ..
+                } => (
+                    params.clone(),
+                    parameter_names(*param_decl),
+                    parameter_defaults(*param_decl, defaults),
+                ),
+                TypeDecl::Resolved { params, defaults } => {
+                    (params.clone(), Vec::new(), defaults.clone())
+                }
+                TypeDecl::Class { .. } | TypeDecl::Unavailable { .. } => {
+                    unreachable!("trusted markers belong to exact library type roots")
+                }
+            };
+            let terminal = PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                name,
+                surface: PublishedTypeGroupSurface::Template(marker),
+                parameters,
+                parameter_names,
+                parameter_defaults,
+                conflict_alternatives: Vec::new(),
+            });
+            self.type_group_construction
+                .as_mut()
+                .expect("type-group construction is consumed exactly once")
+                .freeze(group, terminal);
+            return;
+        }
         let terminal = match &declaration {
             TypeDecl::Interface {
                 reserved,
@@ -1147,6 +1201,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .freeze(group, terminal);
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn freeze_seeded_type_groups(&mut self) {
         let groups: Vec<TypeGroupId> = self
             .type_decls
