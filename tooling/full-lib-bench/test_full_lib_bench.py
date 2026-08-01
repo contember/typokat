@@ -272,6 +272,38 @@ class ContractTests(unittest.TestCase):
             ["fast-errors/main.ts:1:1:2322"],
         )
 
+    def test_typokat_reason_chain_rejects_empty_types_and_parameter_names(self) -> None:
+        for continuation in (
+            "  Type '' is not assignable to type ''.\n",
+            "  Type '' is not assignable to type 'number'.\n",
+            "  Type 'string' is not assignable to type ''.\n",
+            "  Types of parameters '' are incompatible.\n"
+            "    Type 'string' is not assignable to type 'number'.\n",
+            "  Types of parameters '' and 'value' are incompatible.\n"
+            "    Type 'string' is not assignable to type 'number'.\n",
+            "  Types of parameters 'value' and '' are incompatible.\n"
+            "    Type 'string' is not assignable to type 'number'.\n",
+        ):
+            with self.subTest(continuation=continuation):
+                result = bench.ProcessResult(
+                    ("typokat",),
+                    1,
+                    "",
+                    "/tmp/input.ts(1,1): error TK2322: Type is not assignable.\n"
+                    + continuation,
+                    0.1,
+                    10,
+                )
+                with self.assertRaisesRegex(
+                    bench.ContractError, "malformed/unrecognized"
+                ):
+                    bench.normalize_diagnostics(
+                        result,
+                        "typokat",
+                        "fast-errors",
+                        {"/tmp/input.ts": "fast-errors/main.ts"},
+                    )
+
     def test_typokat_reason_chain_rejects_more_than_writer_maximum_depth(self) -> None:
         # The writer caps the chain at 16 full levels plus elision and its terminal.
         reason_lines = "".join(
