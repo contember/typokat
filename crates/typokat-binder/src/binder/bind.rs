@@ -1095,6 +1095,10 @@ impl BindState {
             .map_or(fallback, |plan| plan.default_global_scope)
     }
 
+    pub(super) fn continuation_active(&self) -> bool {
+        self.continuation_publication.is_some()
+    }
+
     pub(super) fn continuation_publication_sites(&self) -> Vec<(u32, String)> {
         self.continuation_publication
             .as_ref()
@@ -1503,17 +1507,15 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         });
         roots.dedup_by(|left, right| left.1 == right.1);
         for (source, name, binding_start) in roots {
-            if self
-                .continuation_publication_plans
-                .get(&source)
-                .is_some_and(|plan| plan.binding_sites.contains_key(&binding_start))
-            {
-                continue;
-            }
+            let reservation_scope = match self.continuation_publication_plans.get(&source) {
+                Some(plan) if plan.binding_sites.contains_key(&binding_start) => continue,
+                Some(plan) => plan.default_global_scope,
+                None => self.script_namespace_root,
+            };
             if self
                 .state
                 .graph
-                .get(self.script_namespace_root)
+                .get(reservation_scope)
                 .and_then(|scope| scope.lookup_local(&name))
                 .is_some()
             {
@@ -1523,7 +1525,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             if self
                 .state
                 .graph
-                .declare(self.script_namespace_root, &name, symbol)
+                .declare(reservation_scope, &name, symbol)
                 .is_err()
             {
                 self.state
@@ -3052,7 +3054,7 @@ with (source) { var RegExp = 1; }
         );
         assert!(binder
             .graph
-            .get(binder.script_namespace_root)
+            .get(binder.compilation_global)
             .and_then(|scope| scope.lookup_local("WU5UniqueNamespace"))
             .is_some());
         for name in ["document", "RegExp"] {
@@ -3226,10 +3228,7 @@ with (source) { var RegExp = 1; }
             .namespaces()
             .find(|namespace| namespace.name == "Local")
             .expect("local script namespace");
-        assert_eq!(
-            local.owner,
-            NamespaceOwner::Lexical(binder.script_namespace_root)
-        );
+        assert_eq!(local.owner, NamespaceOwner::Lexical(delta_global));
         let storage = binder
             .namespaces
             .standalone_value_storage(local.id)

@@ -5586,6 +5586,7 @@ fn bind_module_declaration(
     if context.direct_top_level
         && !unit.binding.external_module
         && continuation_global.is_none()
+        && !state.continuation_active()
         && matches!(owner, NamespaceOwner::Lexical(scope) if scope == context.lexical_scope)
     {
         let occupied_local = state
