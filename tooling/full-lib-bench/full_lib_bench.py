@@ -927,10 +927,7 @@ def verify_perturbation_controls(binary: Path, contract: dict[str, Any]) -> None
             )
             diagnostics = normalize_diagnostics(result, "typokat", row, path_map)
             # One prepended line moves all expected diagnostic line numbers by one.
-            adjusted = []
-            for diagnostic in oracles[row]["diagnostics"]:
-                path, line, column, code = diagnostic.rsplit(":", 3)
-                adjusted.append(f"{path}:{int(line) + 1}:{column}:{code}")
+            adjusted = adjusted_oracle(row)
             if result.returncode != oracles[row]["exit"] or diagnostics != adjusted:
                 raise ContractError(f"{row}: rename/comment perturbation changed production semantics")
 
@@ -1166,7 +1163,7 @@ def adjusted_oracle(row: str) -> list[str]:
     for diagnostic in load_oracles()["rows"][row]["diagnostics"]:
         path, line, column, code = diagnostic.rsplit(":", 3)
         adjusted.append(f"{path}:{int(line) + 1}:{column}:{code}")
-    return adjusted
+    return sorted(adjusted)
 
 
 def binary_identities(typokat: Path, tsgo: Path, contract: dict[str, Any]) -> dict[str, Any]:
