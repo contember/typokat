@@ -22,12 +22,32 @@ use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
     ForStatement, ForStatementInit, ForStatementLeft, Function, ObjectPropertyKind, Statement,
-    TSModuleDeclaration, TSModuleDeclarationBody, TSType, TSTypeName, TryStatement,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName, TSType, TSTypeName,
+    TryStatement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+
+#[derive(Copy, Clone)]
+enum StatementListMode<'a> {
+    Ordinary,
+    Ambient,
+    SourceGlobalContributors(&'a FxHashSet<String>),
+}
+
+impl<'a> StatementListMode<'a> {
+    fn ambient(self) -> bool {
+        matches!(self, Self::Ambient)
+    }
+
+    fn source_global_contributors(self) -> Option<&'a FxHashSet<String>> {
+        match self {
+            Self::SourceGlobalContributors(contributors) => Some(contributors),
+            Self::Ordinary | Self::Ambient => None,
+        }
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -183,7 +203,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             None,
             &mut no_return,
             surfaces,
-            true,
+            StatementListMode::Ambient,
         );
         true
     }
@@ -215,6 +235,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .global_augmentation_requires_incomplete(self.current_module, binding_start)
         {
             return false;
+        }
+        if matches!(self.current_source, crate::source::SourceUnit::User { .. }) {
+            return self
+                .binder
+                .global_augmentation_value_storages(self.current_module, binding_start)
+                .into_iter()
+                .any(|storage| self.decl_type_replay(storage).is_none());
         }
         self.private_collision_affected.is_empty()
             || self
@@ -378,7 +405,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             declared_ret,
             inferred,
             surfaces,
-            false,
+            StatementListMode::Ordinary,
+        );
+    }
+
+    pub(in crate::check::checker) fn check_statement_list_with_global_contributors(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
+        contributor_names: &FxHashSet<String>,
+    ) {
+        self.check_statement_list_with_surfaces_mode(
+            scope,
+            statements,
+            declared_ret,
+            inferred,
+            surfaces,
+            StatementListMode::SourceGlobalContributors(contributor_names),
         );
     }
 
@@ -389,18 +435,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         declared_ret: Option<TypeId>,
         inferred: &mut Option<TypeId>,
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
-        ambient: bool,
+        mode: StatementListMode<'_>,
     ) {
+        let ambient = mode.ambient();
+        let global_contributors = mode.source_global_contributors();
         let mut index = 0;
         while index < statements.len() {
             if let Some((binding_start, body)) =
                 self.continuation_global_augmentation(&statements[index])
             {
                 self.check_continuation_global_augmentation_body(binding_start, body, surfaces);
+                self.check_stmt(scope, &statements[index], declared_ret, inferred);
                 index += 1;
                 continue;
             }
             if let Some((name, end)) = function_overload_group(statements, index) {
+                for statement in &statements[index..end] {
+                    self.emit_direct_script_global_this_conflicts_with_owner(statement);
+                }
                 self.finalize_function_declaration_group_with_publication(
                     scope,
                     &statements[index..end],
@@ -409,11 +461,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     true,
                     ambient,
                 );
+                if global_contributors.is_some_and(|contributors| contributors.contains(name)) {
+                    self.refresh_source_global_object_contributor(scope, name);
+                }
                 index = end;
                 continue;
             }
             if let Some(func) = function_decl_from_statement(&statements[index]) {
+                self.emit_direct_script_global_this_conflicts_with_owner(&statements[index]);
                 self.finalize_function_declaration_with_ambient(scope, func, surfaces, ambient);
+                if let Some(name) = func.id.as_ref().map(|identifier| identifier.name.as_str()) {
+                    if global_contributors.is_some_and(|contributors| contributors.contains(name)) {
+                        self.refresh_source_global_object_contributor(scope, name);
+                    }
+                }
                 index += 1;
                 continue;
             }
@@ -433,18 +494,139 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         match stmt {
             Statement::FunctionDeclaration(func) => {
+                self.emit_direct_script_global_this_conflicts_with_owner(stmt);
                 self.check_function_declaration(scope, func);
                 return;
             }
             Statement::ClassDeclaration(class) => {
+                self.emit_direct_script_global_this_conflicts_with_owner(stmt);
                 self.check_class(scope, class);
                 return;
             }
             _ => {}
         }
         self.with_lexical_effects(stmt.span().start, LexicalOwnerPhase::Immediate, |pass| {
+            pass.emit_direct_script_global_this_conflicts(stmt);
             pass.check_stmt_immediate(scope, stmt, declared_ret, inferred)
         });
+    }
+
+    fn emit_direct_script_global_this_conflicts_with_owner(&mut self, statement: &Statement<'_>) {
+        self.with_lexical_effects(
+            statement.span().start,
+            LexicalOwnerPhase::Immediate,
+            |pass| pass.emit_direct_script_global_this_conflicts(statement),
+        );
+    }
+
+    fn emit_direct_script_global_this_binding(
+        &mut self,
+        name: &str,
+        span: oxc_span::Span,
+        kind: DeclarationKind,
+    ) {
+        if name == "globalThis"
+            && self
+                .binder
+                .direct_script_global_this_conflict(self.current_module, span.start, kind)
+        {
+            self.emit_diagnostic(Diagnostic::global_this_declaration_conflict(
+                Span::from_oxc(span),
+            ));
+        }
+    }
+
+    fn emit_direct_script_global_this_declaration(&mut self, declaration: &Declaration<'_>) {
+        match declaration {
+            Declaration::VariableDeclaration(variable) => {
+                for declarator in &variable.declarations {
+                    for identifier in declarator.id.get_binding_identifiers() {
+                        self.emit_direct_script_global_this_binding(
+                            identifier.name.as_str(),
+                            identifier.span,
+                            DeclarationKind::Variable,
+                        );
+                    }
+                }
+            }
+            Declaration::FunctionDeclaration(function) => {
+                if let Some(identifier) = &function.id {
+                    self.emit_direct_script_global_this_binding(
+                        identifier.name.as_str(),
+                        identifier.span,
+                        DeclarationKind::Function,
+                    );
+                }
+            }
+            Declaration::ClassDeclaration(class) => {
+                if let Some(identifier) = &class.id {
+                    self.emit_direct_script_global_this_binding(
+                        identifier.name.as_str(),
+                        identifier.span,
+                        DeclarationKind::Class,
+                    );
+                }
+            }
+            Declaration::TSTypeAliasDeclaration(alias) => self
+                .emit_direct_script_global_this_binding(
+                    alias.id.name.as_str(),
+                    alias.id.span,
+                    DeclarationKind::TypeAlias,
+                ),
+            Declaration::TSInterfaceDeclaration(interface) => self
+                .emit_direct_script_global_this_binding(
+                    interface.id.name.as_str(),
+                    interface.id.span,
+                    DeclarationKind::Interface,
+                ),
+            Declaration::TSEnumDeclaration(enumeration) => self
+                .emit_direct_script_global_this_binding(
+                    enumeration.id.name.as_str(),
+                    enumeration.id.span,
+                    DeclarationKind::Enum,
+                ),
+            Declaration::TSModuleDeclaration(namespace) => {
+                if let TSModuleDeclarationName::Identifier(identifier) = &namespace.id {
+                    self.emit_direct_script_global_this_binding(
+                        identifier.name.as_str(),
+                        identifier.span,
+                        DeclarationKind::Namespace,
+                    );
+                }
+            }
+            Declaration::TSGlobalDeclaration(_) | Declaration::TSImportEqualsDeclaration(_) => {}
+        }
+    }
+
+    fn emit_direct_script_global_this_conflicts(&mut self, statement: &Statement<'_>) {
+        if let Some(declaration) = statement.as_declaration() {
+            self.emit_direct_script_global_this_declaration(declaration);
+        } else if let Statement::ExportNamedDeclaration(export) = statement {
+            if let Some(declaration) = &export.declaration {
+                self.emit_direct_script_global_this_declaration(declaration);
+            }
+        }
+    }
+
+    fn check_direct_global_this_namespace_body(
+        &mut self,
+        declaration: &TSModuleDeclaration<'_>,
+    ) -> bool {
+        let binding_start = module_declaration_binding_span(declaration).start;
+        if !self
+            .binder
+            .global_this_namespace_is_type_only(self.current_module, binding_start)
+        {
+            return false;
+        }
+        let Some((_, scope, ambient)) = self
+            .binder
+            .namespace_fragment_terminal_input(self.current_module, binding_start)
+        else {
+            return false;
+        };
+        self.check_prepared_namespace_body(declaration, ambient, scope, true);
+        true
     }
 
     fn check_stmt_immediate(
@@ -547,23 +729,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     "enum declaration not modeled",
                 );
             }
-            Statement::TSModuleDeclaration(declaration)
-                if !self.check_prepared_namespace_declaration(declaration)
-                    && !module_declaration_is_type_only(declaration) =>
-            {
-                if self
-                    .binder
-                    .library_module_reporting_owns(self.current_module, declaration.span.start)
+            Statement::TSModuleDeclaration(declaration) => {
+                let consumed = self.check_prepared_namespace_declaration(declaration);
+                if !consumed
+                    && !self.check_direct_global_this_namespace_body(declaration)
+                    && !self.check_storage_free_global_namespace_body(declaration)
+                    && !module_declaration_is_type_only(declaration)
                 {
-                    return;
+                    if self
+                        .binder
+                        .library_module_reporting_owns(self.current_module, declaration.span.start)
+                    {
+                        return;
+                    }
+                    self.record_incomplete(
+                        "decl/module-declaration/self",
+                        Span::from_oxc(stmt.span()),
+                        "namespace/module declaration has an unmodeled value surface",
+                    );
                 }
-                self.record_incomplete(
-                    "decl/module-declaration/self",
-                    Span::from_oxc(stmt.span()),
-                    "namespace/module declaration has an unmodeled value surface",
-                );
             }
-            Statement::TSModuleDeclaration(_) => {}
             Statement::TSGlobalDeclaration(global)
                 if self
                     .selected_global_augmentation_requires_incomplete(global.global_span.start) =>
@@ -680,23 +865,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     "enum declaration not modeled",
                 );
             }
-            Declaration::TSModuleDeclaration(declaration)
-                if !self.check_prepared_namespace_declaration(declaration)
-                    && !module_declaration_is_type_only(declaration) =>
-            {
-                if self
-                    .binder
-                    .library_module_reporting_owns(self.current_module, declaration.span.start)
+            Declaration::TSModuleDeclaration(declaration) => {
+                let consumed = self.check_prepared_namespace_declaration(declaration);
+                if !consumed
+                    && !self.check_direct_global_this_namespace_body(declaration)
+                    && !self.check_storage_free_global_namespace_body(declaration)
+                    && !module_declaration_is_type_only(declaration)
                 {
-                    return;
+                    if self
+                        .binder
+                        .library_module_reporting_owns(self.current_module, declaration.span.start)
+                    {
+                        return;
+                    }
+                    self.record_incomplete(
+                        "decl/module-declaration/self",
+                        Span::from_oxc(decl.span()),
+                        "namespace/module declaration has an unmodeled value surface",
+                    );
                 }
-                self.record_incomplete(
-                    "decl/module-declaration/self",
-                    Span::from_oxc(decl.span()),
-                    "namespace/module declaration has an unmodeled value surface",
-                );
             }
-            Declaration::TSModuleDeclaration(_) => {}
             Declaration::TSGlobalDeclaration(global)
                 if self
                     .selected_global_augmentation_requires_incomplete(global.global_span.start) =>
@@ -1092,7 +1280,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn check_owned_declarator(
+    pub(in crate::check::checker) fn check_owned_declarator(
         &mut self,
         scope: ScopeId,
         kind: VariableDeclarationKind,
@@ -2073,7 +2261,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Check a function declaration outside the shared statement-list prepass and
     /// bind its completed function type. This keeps uncommon direct walker paths
     /// behaviorally equivalent without introducing a second declaration model.
-    fn check_function_declaration(&mut self, scope: ScopeId, func: &Function<'_>) {
+    pub(in crate::check::checker) fn check_function_declaration(
+        &mut self,
+        scope: ScopeId,
+        func: &Function<'_>,
+    ) {
         let mut surfaces = FxHashMap::default();
         let group = func
             .id
@@ -2422,6 +2614,13 @@ fn module_declaration_is_type_only(declaration: &TSModuleDeclaration<'_>) -> boo
             module_declaration_is_type_only(nested)
         }
         None => true,
+    }
+}
+
+fn module_declaration_binding_span(declaration: &TSModuleDeclaration<'_>) -> Span {
+    match &declaration.id {
+        TSModuleDeclarationName::Identifier(identifier) => Span::from_oxc(identifier.span),
+        TSModuleDeclarationName::StringLiteral(literal) => Span::from_oxc(literal.span),
     }
 }
 

@@ -9,7 +9,8 @@ use crate::binder::bind::{
     Binder, FrozenPrefixWrite, FrozenPrefixWriteSite,
 };
 use crate::binder::declaration::{
-    DeclId, DeclarationKind, DeclarationSite, TypeFragmentKind, TypeGroupId, ValueStorageId,
+    DeclId, DeclarationKind, DeclarationSite, DeclarationTable, TypeFragmentKind, TypeGroupId,
+    ValueStorageId,
 };
 use crate::binder::roots::{LibraryRootProjection, RootNameRow};
 use crate::binder::scope::{FrozenScopeWrite, Scope, ScopeGraph, ScopeId, ScopeKind};
@@ -1329,7 +1330,7 @@ pub struct NamespaceTable {
     fragment_private_scopes_by_site: LayeredMap<(ScopeId, u32), ScopeId>,
     global_augmentations_by_site: LayeredMap<(ScopeId, u32), GlobalAugmentationId>,
     umd_exports_by_site: LayeredMap<(ScopeId, u32), usize>,
-    source_keys_by_module: LayeredMap<ScopeId, SourceUnitKey>,
+    source_unit_indices_by_module: LayeredMap<ScopeId, usize>,
     library_export_default_sites: LayeredMap<(SourceUnitKey, u32), bool>,
     library_module_reporting_sites: LayeredMap<(ScopeId, u32), bool>,
     globals: LayeredVec<GlobalAugmentation>,
@@ -1555,6 +1556,13 @@ impl NamespaceTable {
         issues.into_iter()
     }
 
+    fn source_unit_for_module(&self, module: ScopeId) -> Option<&SourceUnitRecord> {
+        let index = self.source_unit_indices_by_module.get(&module).copied()?;
+        self.source_units
+            .get(index)
+            .filter(|unit| unit.module == module)
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn source_units(&self) -> impl Iterator<Item = &SourceUnitRecord> {
         self.canonical_source_units
@@ -1662,17 +1670,7 @@ impl NamespaceTable {
             let safe = if self.uses_library_shared_globals() {
                 record.classification.disposition == MergeDisposition::Admitted
             } else {
-                record
-                    .declarations
-                    .iter()
-                    .all(|participant| match participant.kind {
-                        MergeDeclarationKind::Interface | MergeDeclarationKind::TypeAlias => true,
-                        MergeDeclarationKind::Namespace => {
-                            participant.namespace_instance
-                                == Some(NamespaceInstanceState::NonInstantiated)
-                        }
-                        _ => false,
-                    })
+                self.raw_global_record_is_publishable(record)
             };
             if !safe {
                 unsafe_names.insert(record.name.to_string());
@@ -1915,7 +1913,7 @@ impl NamespaceTable {
         self.fragment_private_scopes_by_site.freeze_as_base()?;
         self.global_augmentations_by_site.freeze_as_base()?;
         self.umd_exports_by_site.freeze_as_base()?;
-        self.source_keys_by_module.freeze_as_base()?;
+        self.source_unit_indices_by_module.freeze_as_base()?;
         self.library_export_default_sites.freeze_as_base()?;
         self.library_module_reporting_sites.freeze_as_base()?;
         self.globals.freeze_as_base()?;
@@ -1957,7 +1955,7 @@ impl NamespaceTable {
             fragment_private_scopes_by_site: self.fragment_private_scopes_by_site.fork_delta()?,
             global_augmentations_by_site: self.global_augmentations_by_site.fork_delta()?,
             umd_exports_by_site: self.umd_exports_by_site.fork_delta()?,
-            source_keys_by_module: self.source_keys_by_module.fork_delta()?,
+            source_unit_indices_by_module: self.source_unit_indices_by_module.fork_delta()?,
             library_export_default_sites: self.library_export_default_sites.fork_delta()?,
             library_module_reporting_sites: self.library_module_reporting_sites.fork_delta()?,
             globals: self.globals.fork_delta()?,
@@ -2003,7 +2001,7 @@ impl NamespaceTable {
             fragment_private_scopes_by_site: self.fragment_private_scopes_by_site.fork_delta()?,
             global_augmentations_by_site: self.global_augmentations_by_site.fork_delta()?,
             umd_exports_by_site: self.umd_exports_by_site.fork_delta()?,
-            source_keys_by_module: self.source_keys_by_module.fork_delta()?,
+            source_unit_indices_by_module: self.source_unit_indices_by_module.fork_delta()?,
             library_export_default_sites: self.library_export_default_sites.fork_delta()?,
             library_module_reporting_sites: self.library_module_reporting_sites.fork_delta()?,
             globals: self.globals.fork_sparse_delta()?,
@@ -2070,8 +2068,8 @@ impl NamespaceTable {
                 .umd_exports_by_site
                 .shares_base_with(&other.umd_exports_by_site)
             && self
-                .source_keys_by_module
-                .shares_base_with(&other.source_keys_by_module)
+                .source_unit_indices_by_module
+                .shares_base_with(&other.source_unit_indices_by_module)
             && self
                 .library_export_default_sites
                 .shares_base_with(&other.library_export_default_sites)
@@ -2186,8 +2184,8 @@ impl NamespaceTable {
                 .umd_exports_by_site
                 .shares_base_with(&other.umd_exports_by_site)
             && self
-                .source_keys_by_module
-                .shares_base_with(&other.source_keys_by_module)
+                .source_unit_indices_by_module
+                .shares_base_with(&other.source_unit_indices_by_module)
             && self
                 .library_export_default_sites
                 .shares_base_with(&other.library_export_default_sites)
@@ -2259,8 +2257,8 @@ impl NamespaceTable {
             + self.global_augmentations_by_site.replacement_len()
             + self.umd_exports_by_site.local_len()
             + self.umd_exports_by_site.replacement_len()
-            + self.source_keys_by_module.local_len()
-            + self.source_keys_by_module.replacement_len()
+            + self.source_unit_indices_by_module.local_len()
+            + self.source_unit_indices_by_module.replacement_len()
             + self.library_export_default_sites.local_len()
             + self.library_export_default_sites.replacement_len()
             + self.library_module_reporting_sites.local_len();
@@ -2766,7 +2764,7 @@ impl NamespaceTable {
     fn rebuild_local_statement_site_indexes(&mut self) -> Result<(), &'static str> {
         self.global_augmentations_by_site.clear_local();
         self.umd_exports_by_site.clear_local();
-        self.source_keys_by_module.clear_local();
+        self.source_unit_indices_by_module.clear_local();
         self.library_export_default_sites.clear_local();
         self.library_module_reporting_sites.clear_local();
         let globals = self
@@ -2801,15 +2799,17 @@ impl NamespaceTable {
                 return Err("UMD export site index contains a duplicate");
             }
         }
+        let source_base = self.source_units.base_len();
         let sources = self
             .source_units
             .local_iter()
-            .map(|unit| (unit.module, unit.source))
+            .enumerate()
+            .map(|(offset, unit)| (unit.module, source_base + offset))
             .collect::<Vec<_>>();
-        for (module, source) in sources {
+        for (module, index) in sources {
             if self
-                .source_keys_by_module
-                .insert_local(module, source)
+                .source_unit_indices_by_module
+                .insert_local(module, index)
                 .map_err(|_| "source-module index contains a duplicate")?
                 .is_some()
             {
@@ -3094,6 +3094,46 @@ impl NamespaceTable {
                 })
     }
 
+    fn raw_global_record_is_publishable(&self, record: &MergeRecord) -> bool {
+        record.classification.disposition == MergeDisposition::Admitted
+            && record.declarations.iter().all(|participant| {
+                matches!(
+                    participant.kind,
+                    MergeDeclarationKind::Interface
+                        | MergeDeclarationKind::TypeAlias
+                        | MergeDeclarationKind::Variable
+                        | MergeDeclarationKind::Function
+                        | MergeDeclarationKind::Class
+                        | MergeDeclarationKind::Namespace
+                )
+            })
+    }
+
+    fn is_admitted_storage_free_global_namespace(&self, record: &MergeRecord) -> bool {
+        record.owner == DeclarationOwner::CompilationGlobal
+            && !self.uses_library_shared_globals()
+            && self.raw_global_record_is_publishable(record)
+            && record.declarations.iter().any(|participant| {
+                participant.kind == MergeDeclarationKind::Namespace
+                    && participant.namespace_instance == Some(NamespaceInstanceState::Instantiated)
+            })
+    }
+
+    fn is_storage_free_type_side_namespace(&self, namespace: NamespaceId) -> bool {
+        self.standalone_value_storage(namespace).is_none()
+            && self
+                .standalone_merge_record(namespace)
+                .is_some_and(|record| {
+                    record.classification.disposition == MergeDisposition::Admitted
+                        && namespace_value_attachment_disposition(record)
+                            == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
+                })
+            && (self.aggregate_instance_state(namespace)
+                == Some(NamespaceInstanceState::NonInstantiated)
+                || (!self.uses_library_shared_globals()
+                    && self.has_compilation_global_ancestor(namespace)))
+    }
+
     fn standalone_merge_record(&self, id: NamespaceId) -> Option<&MergeRecord> {
         let namespace = self.get(id)?;
         let owner = match namespace.owner {
@@ -3145,11 +3185,119 @@ fn assert_idempotent_overlay_publication(
     );
 }
 
+fn direct_script_global_this_conflict(
+    declarations: &DeclarationTable,
+    namespaces: &NamespaceTable,
+    graph: &ScopeGraph,
+    module: ScopeId,
+    binding_start: u32,
+    kind: DeclarationKind,
+) -> bool {
+    let Some(declaration) = declarations.declaration_at_site(module, binding_start, kind) else {
+        return false;
+    };
+    let Some(unit) = namespaces.source_unit_for_module(module) else {
+        return false;
+    };
+    if unit.context.external_module {
+        return false;
+    }
+    declaration
+        .site
+        .scope
+        .and_then(|scope| graph.get(scope))
+        .is_some_and(|scope| matches!(scope.kind, ScopeKind::Module | ScopeKind::CompilationGlobal))
+}
+
+fn global_this_namespace_is_type_only(
+    namespaces: &NamespaceTable,
+    script_namespace_root: Option<ScopeId>,
+    namespace: NamespaceId,
+) -> bool {
+    namespaces.get(namespace).is_some_and(|namespace| {
+        namespace.name == "globalThis"
+            && match namespace.owner {
+                NamespaceOwner::CompilationGlobal => true,
+                NamespaceOwner::Lexical(owner) => Some(owner) == script_namespace_root,
+                NamespaceOwner::NamespacePublic(_) | NamespaceOwner::FragmentPrivate(_) => false,
+            }
+    })
+}
+
+fn suppress_direct_global_this_variable_values(state: &mut BindState) {
+    let mut affected = Vec::new();
+    for declaration in state
+        .declarations
+        .local_declarations()
+        .filter(|declaration| {
+            declaration.kind == DeclarationKind::Variable
+                && direct_script_global_this_conflict(
+                    &state.declarations,
+                    &state.namespaces,
+                    &state.graph,
+                    declaration.site.module,
+                    declaration.site.binding_span.start,
+                    declaration.kind,
+                )
+        })
+    {
+        for scope in [declaration.site.scope, state.namespaces.compilation_global]
+            .into_iter()
+            .flatten()
+        {
+            let Some(symbol) = state
+                .graph
+                .get(scope)
+                .and_then(|scope| scope.lookup_local("globalThis"))
+            else {
+                continue;
+            };
+            if state
+                .symbols
+                .get(symbol)
+                .is_some_and(|symbol| symbol.declarations.contains(&declaration.id))
+                && !affected.contains(&symbol)
+            {
+                affected.push(symbol);
+            }
+        }
+    }
+    for symbol in affected {
+        let replacement = state.symbols.get(symbol).and_then(|symbol| {
+            symbol.declarations.iter().rev().find_map(|declaration| {
+                let declaration = state.declarations.get(*declaration)?;
+                let rejected = declaration.kind == DeclarationKind::Variable
+                    && direct_script_global_this_conflict(
+                        &state.declarations,
+                        &state.namespaces,
+                        &state.graph,
+                        declaration.site.module,
+                        declaration.site.binding_span.start,
+                        declaration.kind,
+                    );
+                (!rejected).then_some(declaration.value_storage).flatten()
+            })
+        });
+        if let Some(symbol) = state.symbols.get_mut(symbol) {
+            symbol.value = replacement;
+        }
+    }
+}
+
 /// Append dormant namespace-owned slots after all lexical storage allocation.
 pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
     let candidates = state
         .namespaces
-        .dormant_standalone_value_storage_candidates();
+        .dormant_standalone_value_storage_candidates()
+        .into_iter()
+        .filter(|namespace| {
+            !global_this_namespace_is_type_only(
+                &state.namespaces,
+                state.namespaces.script_namespace_root,
+                *namespace,
+            )
+        })
+        .collect::<Vec<_>>();
     for namespace in candidates {
         let storage = state.fresh_value_storage();
         let slot = state
@@ -3181,7 +3329,7 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
         );
     }
 
-    let type_only = state
+    let storage_free_type_side = state
         .namespaces
         .canonical_namespaces
         .local_iter()
@@ -3191,20 +3339,13 @@ pub(super) fn allocate_dormant_namespace_value_storages(state: &mut BindState) {
         })
         .copied()
         .filter(|namespace| {
-            state.namespaces.aggregate_instance_state(*namespace)
-                == Some(NamespaceInstanceState::NonInstantiated)
-                && state
-                    .namespaces
-                    .standalone_merge_record(*namespace)
-                    .is_some_and(|record| {
-                        record.classification.disposition == MergeDisposition::Admitted
-                            && namespace_value_attachment_disposition(record)
-                                == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
-                    })
+            state
+                .namespaces
+                .is_storage_free_type_side_namespace(*namespace)
         })
         .filter_map(|namespace| state.namespaces.get(namespace).map(|root| root.symbol))
         .collect::<Vec<_>>();
-    for symbol in type_only {
+    for symbol in storage_free_type_side {
         if let Some(symbol) = state.symbols.get_mut(symbol) {
             symbol.blocks_value_lookup = true;
         }
@@ -3249,6 +3390,40 @@ impl Binder {
             .get(&declaration.id)
             .and_then(|fragment| self.namespaces.fragment(*fragment))?;
         Some((fragment.namespace, fragment.private_scope, fragment.ambient))
+    }
+
+    /// Return the lexical body input for an admitted global namespace with no runtime surface.
+    pub fn storage_free_global_namespace_body_input(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Option<(ScopeId, bool)> {
+        let declaration =
+            self.exact_declaration_at(module, binding_start, DeclarationKind::Namespace)?;
+        let fragment = self
+            .namespaces
+            .fragments_by_declaration
+            .get(&declaration.id)
+            .and_then(|fragment| self.namespaces.fragment(*fragment))?;
+        let namespace = self.namespaces.get(fragment.namespace)?;
+        let record = self
+            .namespaces
+            .standalone_merge_record(fragment.namespace)?;
+        if !self
+            .namespaces
+            .is_admitted_storage_free_global_namespace(record)
+            || self
+                .namespaces
+                .standalone_value_storage(fragment.namespace)
+                .is_some()
+        {
+            return None;
+        }
+        let symbol = self.symbols.get(namespace.symbol)?;
+        if symbol.value.is_some() || !symbol.blocks_value_lookup {
+            return None;
+        }
+        Some((fragment.private_scope, fragment.ambient))
     }
 
     pub fn namespace_fragment_private_scope(
@@ -3391,11 +3566,7 @@ impl Binder {
         let is_script_continuation = self.namespaces.uses_library_shared_globals()
             && self
                 .namespaces
-                .source_keys_by_module
-                .get(&module)
-                .and_then(|source| source.0.checked_sub(1))
-                .and_then(|index| usize::try_from(index).ok())
-                .and_then(|index| self.namespaces.source_units.get(index))
+                .source_unit_for_module(module)
                 .is_some_and(|unit| !unit.context.external_module)
             && self.graph.get(module).and_then(|scope| scope.parent)
                 == Some(self.script_namespace_root);
@@ -3407,6 +3578,65 @@ impl Binder {
         } else {
             module
         }
+    }
+
+    /// Whether one exact namespace declaration conflicts with the script-global `globalThis`.
+    pub fn direct_script_global_this_conflict(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+        kind: DeclarationKind,
+    ) -> bool {
+        direct_script_global_this_conflict(
+            &self.declarations,
+            &self.namespaces,
+            &self.graph,
+            module,
+            binding_start,
+            kind,
+        )
+    }
+
+    /// Whether one resolved value is a modeled direct-script `globalThis` conflict.
+    pub fn direct_global_this_value_conflict(&self, symbol: SymbolId) -> bool {
+        let Some(symbol) = self.symbols.get(symbol) else {
+            return false;
+        };
+        if symbol.name != "globalThis" {
+            return false;
+        }
+        symbol.declarations.iter().rev().any(|declaration| {
+            self.declarations
+                .get(*declaration)
+                .is_some_and(|declaration| {
+                    declaration.value_storage == symbol.value
+                        && matches!(
+                            declaration.kind,
+                            DeclarationKind::Class | DeclarationKind::Function
+                        )
+                        && direct_script_global_this_conflict(
+                            &self.declarations,
+                            &self.namespaces,
+                            &self.graph,
+                            declaration.site.module,
+                            declaration.site.binding_span.start,
+                            declaration.kind,
+                        )
+                })
+        })
+    }
+
+    /// Whether one namespace is a type-only contributor to the global `globalThis` surface.
+    pub fn global_this_namespace_is_type_only(&self, module: ScopeId, binding_start: u32) -> bool {
+        self.exact_declaration_at(module, binding_start, DeclarationKind::Namespace)
+            .and_then(|declaration| declaration.namespace)
+            .is_some_and(|namespace| {
+                global_this_namespace_is_type_only(
+                    &self.namespaces,
+                    Some(self.script_namespace_root),
+                    namespace,
+                )
+            })
     }
 
     pub fn global_augmentation_body_scope(
@@ -3539,7 +3769,10 @@ impl Binder {
     pub fn library_export_default_reporting_owns(&self, module: ScopeId, span_start: u32) -> bool {
         #[cfg(any(test, feature = "test-utils"))]
         record_continuation_library_source_lookup();
-        let source = self.namespaces.source_keys_by_module.get(&module).copied();
+        let source = self
+            .namespaces
+            .source_unit_for_module(module)
+            .map(|unit| unit.source);
         #[cfg(any(test, feature = "test-utils"))]
         record_continuation_library_reporting_lookup();
         source.is_some_and(|source| {
@@ -4581,6 +4814,7 @@ pub(super) fn finalize_namespace_metadata(state: &mut BindState) {
         .namespaces
         .classify()
         .unwrap_or_else(|error| panic!("namespace classification failed: {error}"));
+    suppress_direct_global_this_variable_values(state);
 }
 
 pub(super) fn fill_namespace_value_attachments(
@@ -4655,7 +4889,7 @@ fn publish_continuation_hoisted_variables(state: &mut BindState, unit: Compilati
 
 #[derive(Clone)]
 struct NamespaceValueBindingTarget {
-    member: NamespaceMemberId,
+    member: Option<NamespaceMemberId>,
     declaration: DeclId,
     name: String,
     /// The module that declares the member — the one fill that must bind it.
@@ -4708,10 +4942,13 @@ pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceVa
                     | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
             )
         );
-        let inaccessible_owner = matches!(record.owner, DeclarationOwner::DeferredAmbientModule(_))
-            || (record.owner == DeclarationOwner::CompilationGlobal
-                && !state.namespaces.uses_library_shared_globals());
-        if (!attached && !state.namespaces.is_admitted_instantiated_standalone(record))
+        let storage_free_global_namespace = state
+            .namespaces
+            .is_admitted_storage_free_global_namespace(record);
+        let inaccessible_owner = matches!(record.owner, DeclarationOwner::DeferredAmbientModule(_));
+        if (!attached
+            && !state.namespaces.is_admitted_instantiated_standalone(record)
+            && !storage_free_global_namespace)
             || inaccessible_owner
         {
             continue;
@@ -4734,6 +4971,8 @@ pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceVa
                                 | MergeDeclarationKind::Function
                                 | MergeDeclarationKind::Class
                         )
+                        && (!storage_free_global_namespace
+                            || member.kind == MergeDeclarationKind::Class)
                 })
             {
                 let (Some(declaration), Some(name)) = (member.declaration, member.name.as_ref())
@@ -4767,13 +5006,67 @@ pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceVa
                     continue;
                 };
                 targets.push(NamespaceValueBindingTarget {
-                    member: member.id,
+                    member: Some(member.id),
                     declaration,
                     name: name.clone(),
                     module,
                     scope,
                     kind: member.kind,
                     public_symbol,
+                });
+            }
+        }
+    }
+    if !state.namespaces.uses_library_shared_globals() {
+        for global in state
+            .namespaces
+            .local_globals()
+            .filter(|global| global.issues.is_empty())
+        {
+            for member in global
+                .members
+                .iter()
+                .filter_map(|member| state.namespaces.member(*member))
+                .filter(|member| {
+                    member.spaces.value
+                        && matches!(
+                            member.kind,
+                            MergeDeclarationKind::Variable
+                                | MergeDeclarationKind::Function
+                                | MergeDeclarationKind::Class
+                        )
+                })
+            {
+                let (Some(declaration), Some(name), Some(public_symbol)) =
+                    (member.declaration, member.name.as_ref(), member.symbol)
+                else {
+                    continue;
+                };
+                if state
+                    .namespaces
+                    .merge_disposition_for_declaration(declaration)
+                    != Some(MergeDisposition::Admitted)
+                {
+                    continue;
+                }
+                let Some((module, scope)) =
+                    state.declarations.get(declaration).and_then(|declaration| {
+                        declaration
+                            .site
+                            .scope
+                            .map(|scope| (declaration.site.module, scope))
+                    })
+                else {
+                    continue;
+                };
+                targets.push(NamespaceValueBindingTarget {
+                    member: None,
+                    declaration,
+                    name: name.clone(),
+                    module,
+                    scope,
+                    kind: member.kind,
+                    public_symbol: Some(public_symbol),
                 });
             }
         }
@@ -4850,12 +5143,10 @@ fn apply_namespace_value_attachment(state: &mut BindState, target: &NamespaceVal
         .graph
         .get(target.scope)
         .and_then(|scope| scope.lookup_local(&target.name));
-    if let Some(member) = state
-        .namespaces
-        .members
-        .get_mut_local(target.member.index())
-    {
-        member.local_symbol = local_symbol;
+    if let Some(member) = target.member {
+        if let Some(member) = state.namespaces.members.get_mut_local(member.index()) {
+            member.local_symbol = local_symbol;
+        }
     }
     let Some(symbol) = target.public_symbol else {
         return;
@@ -4921,6 +5212,9 @@ fn bind_selected_namespace_value_statements(
             Statement::TSModuleDeclaration(declaration) => {
                 bind_selected_namespace_module_body(state, declaration, scopes)
             }
+            Statement::TSGlobalDeclaration(global) => {
+                bind_selected_namespace_value_statements(state, &global.body.body, scopes)
+            }
             _ => {}
         }
     }
@@ -4957,6 +5251,9 @@ fn bind_selected_namespace_value_declaration(
         }
         Declaration::TSModuleDeclaration(declaration) => {
             bind_selected_namespace_module_body(state, declaration, scopes)
+        }
+        Declaration::TSGlobalDeclaration(global) => {
+            bind_selected_namespace_value_statements(state, &global.body.body, scopes)
         }
         _ => {}
     }
@@ -5590,7 +5887,9 @@ fn bind_named_declaration_with_syntax(
         && owner == DeclarationOwner::CompilationGlobal
         && matches!(
             merge_kind,
-            MergeDeclarationKind::TypeAlias | MergeDeclarationKind::Interface
+            MergeDeclarationKind::TypeAlias
+                | MergeDeclarationKind::Interface
+                | MergeDeclarationKind::Class
         );
     let already_bound_type = state.namespaces.uses_library_shared_globals()
         && state
@@ -6610,7 +6909,10 @@ fn bind_global(
     }
     let legal = issues.is_empty();
     let default_global_scope = state.continuation_default_global_scope(compilation_global);
-    let uses_lexical_overlay = legal && state.continuation_active();
+    let uses_lexical_overlay = legal
+        && (state.continuation_active()
+            || (placement == GlobalPlacement::DirectExternalModule
+                && matches!(unit.origin, CompilationOrigin::User(_))));
     let overlay_scope = if uses_lexical_overlay {
         state.global_augmentation_overlay_scope(
             context.lexical_scope,
@@ -7080,7 +7382,9 @@ fn metadata_name(name: &ModuleExportName<'_>) -> MetadataName {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::binder::bind::{Binder, ImportedSymbol, ProjectBinderBuilder};
+    use crate::binder::bind::{
+        Binder, ImportedSymbol, LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder,
+    };
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -7269,6 +7573,87 @@ mod tests {
             .ok_or("script namespace root retains its compilation parent")?;
 
         assert_eq!(binder.statement_lexical_root(module), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_script_global_this_conflict_survives_frozen_library_continuation(
+    ) -> Result<(), &'static str> {
+        let prelude_allocator = Allocator::default();
+        let library_allocator = Allocator::default();
+        let user_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let library = Parser::new(
+            &library_allocator,
+            "declare var ExistingLibraryGlobal: number;",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let source = "declare namespace globalThis { let rejected: number; }";
+        let user = Parser::new(&user_allocator, source, SourceType::d_ts()).parse();
+        assert!(!library.panicked && !user.panicked);
+
+        let mut base_builder = ProjectBinderBuilder::new(&prelude.program);
+        let library_unit = CompilationUnit::library(
+            SourceUnitKey(1),
+            LibraryFileOrdinal::new(0),
+            &library.program,
+        );
+        let library_modules = base_builder.add_library_modules(&[(&library.program, library_unit)]);
+        assert_eq!(library_modules.len(), 1);
+        let mut base = base_builder.finish(library_modules[0]);
+        assert!(base.freeze_as_base().is_ok());
+
+        let delta = base.fork_sparse_collision_delta()?;
+        let (mut builder, source_key) = ProjectBinderBuilder::resume_frozen_library(delta);
+        let user_unit = CompilationUnit::implementation(source_key, &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
+        let (module, _) = builder.add_module(&user.program, &[], user_unit);
+        let binder = builder.finish_frozen_library_continuation(module)?;
+        let binding_start = source
+            .find("globalThis")
+            .ok_or("fixture contains the globalThis binding")?;
+        let binding_start = u32::try_from(binding_start).map_err(|_| "binding offset fits u32")?;
+        assert!(binder.direct_script_global_this_conflict(
+            module,
+            binding_start,
+            DeclarationKind::Namespace,
+        ));
+        assert_eq!(
+            binder.resolve_value_binding(module, "globalThis"),
+            crate::binder::bind::ValueResolution::Missing
+        );
+
+        let mut checkpoint_builder = ProjectBinderBuilder::new(&prelude.program);
+        let checkpoint_modules =
+            checkpoint_builder.add_library_modules(&[(&library.program, library_unit)]);
+        let checkpoint_module = checkpoint_modules
+            .first()
+            .copied()
+            .ok_or("library checkpoint contains its module")?;
+        let checkpoint_binder = checkpoint_builder.finish(checkpoint_module);
+        let checkpoint = LibraryBinderCheckpoint::new(
+            checkpoint_binder,
+            vec![LibraryBinderUnit {
+                ordinal: LibraryFileOrdinal::new(0),
+                source: SourceUnitKey(1),
+                module: checkpoint_module,
+            }],
+        );
+        let (mut builder, _) = checkpoint.into_continuation();
+        let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
+        let (module, _) = builder.add_module(&user.program, &[], user_unit);
+        let binder = builder.finish(module);
+        assert!(binder.direct_script_global_this_conflict(
+            module,
+            binding_start,
+            DeclarationKind::Namespace,
+        ));
+        assert_eq!(
+            binder.resolve_value_binding(module, "globalThis"),
+            crate::binder::bind::ValueResolution::Missing
+        );
         Ok(())
     }
 
@@ -9259,22 +9644,29 @@ declare global {
         }
 
         assert_eq!(script_root.lookup_local("Blocked"), None);
-        assert_eq!(compilation_global.lookup_local("Blocked"), None);
+        let blocked_symbol = compilation_global.lookup_local("Blocked");
+        assert!(blocked_symbol.is_some());
         let blocked_global = binder
             .namespaces
             .globals()
             .find(|global| global.source == SourceUnitKey(60))
             .expect("blocked global augmentation");
-        let blocker = binder
-            .graph
-            .get(blocked_global.overlay_scope)
-            .and_then(|scope| scope.lookup_local("Blocked"))
+        assert_eq!(
+            binder
+                .graph
+                .get(blocked_global.overlay_scope)
+                .and_then(|scope| scope.lookup_local("Blocked")),
+            blocked_symbol
+        );
+        let blocker = blocked_symbol
             .and_then(|symbol| binder.symbols.get(symbol))
             .expect("global blocker");
         assert!(
             blocker.blocks_value_lookup
-                && blocker.blocks_type_lookup
-                && blocker.blocks_namespace_lookup
+                && !blocker.blocks_type_lookup
+                && !blocker.blocks_namespace_lookup
+                && blocker.value.is_none()
+                && blocker.ns.is_some()
         );
     }
 
@@ -11192,12 +11584,15 @@ namespace Visibility {
     }
 
     #[test]
-    fn legal_global_overlays_publish_only_complete_type_side_names_before_module_link() {
+    fn legal_global_overlays_publish_every_admitted_name_before_module_link() {
         let source = r#"
 export {};
 interface Captured { local: boolean }
 namespace DeferredRoot { export interface DeferredLeaf { moduleOnly: number } }
 declare global {
+    const GlobalConst: { value: number };
+    function GlobalFunction(value: number): string;
+    class GlobalClass { value: number }
     interface Captured { global: number }
     interface UsesCaptured { value: Captured }
     type GlobalAlias = UsesCaptured;
@@ -11235,9 +11630,15 @@ declare global {
 
         for name in [
             "Captured",
+            "GlobalClass",
+            "GlobalConst",
+            "GlobalFunction",
             "UsesCaptured",
             "GlobalAlias",
             "TypeSpace",
+            "DeferredPair",
+            "ValueSpace",
+            "DeferredRoot",
             "UsesDeferredRoot",
         ] {
             assert_eq!(script_root.lookup_local(name), None, "{name}");
@@ -11246,18 +11647,35 @@ declare global {
                 .unwrap_or_else(|| panic!("published global {name}"));
             assert_eq!(overlay.lookup_local(name), Some(canonical));
         }
-        for name in ["DeferredPair", "ValueSpace", "DeferredRoot"] {
-            assert_eq!(compilation_global.lookup_local(name), None, "{name}");
-            let blocker = overlay
+        for name in [
+            "GlobalClass",
+            "GlobalConst",
+            "GlobalFunction",
+            "DeferredPair",
+        ] {
+            let symbol = compilation_global
                 .lookup_local(name)
                 .and_then(|symbol| binder.symbols.get(symbol))
-                .unwrap_or_else(|| panic!("blocked global {name}"));
-            assert!(
-                blocker.blocks_type_lookup
-                    && blocker.blocks_value_lookup
-                    && blocker.blocks_namespace_lookup
-            );
-            assert!(blocker.ty.is_none() && blocker.value.is_none() && blocker.ns.is_none());
+                .unwrap_or_else(|| panic!("published global value {name}"));
+            assert!(!symbol.blocks_type_lookup, "{name}");
+            assert!(!symbol.blocks_value_lookup, "{name}");
+            assert!(!symbol.blocks_namespace_lookup, "{name}");
+            assert!(symbol.value.is_some(), "{name}: {symbol:?}");
+            if matches!(name, "GlobalClass" | "DeferredPair") {
+                assert!(symbol.ty.is_some(), "{name}: {symbol:?}");
+            }
+        }
+        for name in ["TypeSpace", "ValueSpace", "DeferredRoot"] {
+            assert!(compilation_global
+                .lookup_local(name)
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .is_some_and(|symbol| {
+                    !symbol.blocks_type_lookup
+                        && symbol.blocks_value_lookup
+                        && !symbol.blocks_namespace_lookup
+                        && symbol.value.is_none()
+                        && symbol.ns.is_some()
+                }));
         }
 
         let module_captured = module.lookup_local("Captured").expect("module local");
@@ -11273,13 +11691,13 @@ declare global {
             binder.resolve_type(binder.module, "Captured"),
             Some(module_captured)
         );
-        assert_eq!(
+        assert!(matches!(
             binder.resolve_qualified_type_path(
                 global.overlay_scope,
                 &["DeferredRoot", "DeferredLeaf"]
             ),
-            QualifiedTypePathResolution::Unavailable { segment: 0 }
-        );
+            QualifiedTypePathResolution::TypeGroup(_)
+        ));
 
         let uses_group = compilation_global
             .lookup_local("UsesCaptured")

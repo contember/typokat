@@ -2426,7 +2426,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .is_some()
             });
             if let Some((_, scope, ambient)) = frozen {
-                self.check_prepared_namespace_body(declaration, ambient, scope);
+                self.check_prepared_namespace_body(declaration, ambient, scope, false);
                 return true;
             }
             return false;
@@ -2435,25 +2435,47 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .namespace_values
             .fragment_scope(self.current_module, declaration.span.start)
             .expect("consumed namespace fragment retains its private scope");
-        self.check_prepared_namespace_body(declaration, ambient, scope);
+        self.check_prepared_namespace_body(declaration, ambient, scope, false);
         consumed
     }
 
-    fn check_prepared_namespace_body(
+    pub(in crate::check::checker) fn check_storage_free_global_namespace_body(
+        &mut self,
+        declaration: &TSModuleDeclaration<'_>,
+    ) -> bool {
+        let binding_start = match &declaration.id {
+            TSModuleDeclarationName::Identifier(identifier) => identifier.span.start,
+            TSModuleDeclarationName::StringLiteral(literal) => literal.span.start,
+        };
+        let Some((scope, ambient)) = self
+            .binder
+            .storage_free_global_namespace_body_input(self.current_module, binding_start)
+        else {
+            return false;
+        };
+        self.check_prepared_namespace_body(declaration, ambient, scope, true);
+        true
+    }
+
+    pub(in crate::check::checker) fn check_prepared_namespace_body(
         &mut self,
         declaration: &TSModuleDeclaration<'_>,
         ambient: bool,
         scope: ScopeId,
+        check_unprepared: bool,
     ) {
         match &declaration.body {
-            Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
-                self.check_prepared_namespace_statements(scope, &block.body, ambient)
-            }
+            Some(TSModuleDeclarationBody::TSModuleBlock(block)) => self
+                .check_prepared_namespace_statements(scope, &block.body, ambient, check_unprepared),
             Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
-                assert!(
-                    self.check_prepared_namespace_declaration(nested),
-                    "prepared dotted namespace child is consumed"
-                );
+                if check_unprepared {
+                    self.check_prepared_namespace_body(nested, ambient, scope, true);
+                } else {
+                    assert!(
+                        self.check_prepared_namespace_declaration(nested),
+                        "prepared dotted namespace child is consumed"
+                    );
+                }
             }
             None => {}
         }
@@ -2464,6 +2486,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         statements: &[Statement<'_>],
         ambient: bool,
+        check_unprepared: bool,
     ) {
         let mut index = 0;
         while index < statements.len() {
@@ -2477,13 +2500,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             let statement = &statements[index];
             match statement {
-                Statement::VariableDeclaration(declaration) => {
-                    self.check_prepared_namespace_variable(declaration)
+                Statement::VariableDeclaration(declaration) => self
+                    .check_prepared_namespace_variable(
+                        declaration,
+                        check_unprepared.then_some(scope),
+                    ),
+                Statement::FunctionDeclaration(function) => self
+                    .check_prepared_namespace_function(function, check_unprepared.then_some(scope)),
+                Statement::ClassDeclaration(class) => {
+                    self.check_class_for_namespace(class, check_unprepared.then_some(scope))
                 }
-                Statement::FunctionDeclaration(function) => {
-                    self.check_prepared_namespace_function(function)
-                }
-                Statement::ClassDeclaration(class) => self.check_class_for_namespace(class),
                 Statement::TSEnumDeclaration(_) | Statement::TSImportEqualsDeclaration(_)
                     if self.namespace_values.take_private_unsupported_member(
                         self.current_module,
@@ -2499,15 +2525,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Statement::ExportNamedDeclaration(export) => {
                     if let Some(declaration) = &export.declaration {
                         match declaration {
-                            Declaration::VariableDeclaration(declaration) => {
-                                self.check_prepared_namespace_variable(declaration)
-                            }
-                            Declaration::FunctionDeclaration(function) => {
-                                self.check_prepared_namespace_function(function)
-                            }
-                            Declaration::ClassDeclaration(class) => {
-                                self.check_class_for_namespace(class)
-                            }
+                            Declaration::VariableDeclaration(declaration) => self
+                                .check_prepared_namespace_variable(
+                                    declaration,
+                                    check_unprepared.then_some(scope),
+                                ),
+                            Declaration::FunctionDeclaration(function) => self
+                                .check_prepared_namespace_function(
+                                    function,
+                                    check_unprepared.then_some(scope),
+                                ),
+                            Declaration::ClassDeclaration(class) => self.check_class_for_namespace(
+                                class,
+                                check_unprepared.then_some(scope),
+                            ),
                             Declaration::TSModuleDeclaration(nested) => {
                                 self.check_prepared_namespace_declaration(nested);
                             }
@@ -2571,12 +2602,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.validate_reserved_namespace_function_group(scope, statements, &mut surfaces, ambient)
     }
 
-    fn check_prepared_namespace_variable(&mut self, declaration: &VariableDeclaration<'_>) {
+    fn check_prepared_namespace_variable(
+        &mut self,
+        declaration: &VariableDeclaration<'_>,
+        fallback_scope: Option<ScopeId>,
+    ) {
         for declarator in &declaration.declarations {
             let Some(PreparedNamespaceMember::Variable { scope, annotation }) = self
                 .namespace_values
                 .take_member(self.current_module, declarator.span.start)
             else {
+                if let Some(scope) = fallback_scope {
+                    self.check_owned_declarator(scope, declaration.kind, declarator);
+                }
                 continue;
             };
             self.with_lexical_effects(declarator.span.start, LexicalOwnerPhase::Deferred, |pass| {
@@ -2592,11 +2630,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn check_prepared_namespace_function(&mut self, function: &Function<'_>) {
+    fn check_prepared_namespace_function(
+        &mut self,
+        function: &Function<'_>,
+        fallback_scope: Option<ScopeId>,
+    ) {
         let Some(PreparedNamespaceMember::Function { scope, reservation }) = self
             .namespace_values
             .take_member(self.current_module, function.span.start)
         else {
+            if let Some(scope) = fallback_scope {
+                self.check_function_declaration(scope, function);
+            }
             return;
         };
         match reservation {
@@ -2609,11 +2654,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn check_class_for_namespace(&mut self, class: &Class<'_>) {
+    fn check_class_for_namespace(&mut self, class: &Class<'_>, fallback_scope: Option<ScopeId>) {
         let Some(PreparedNamespaceMember::Class { scope }) = self
             .namespace_values
             .take_member(self.current_module, class.span.start)
         else {
+            if let Some(scope) = fallback_scope {
+                self.check_class(scope, class);
+            }
             return;
         };
         self.check_class(scope, class);

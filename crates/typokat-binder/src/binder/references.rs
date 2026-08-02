@@ -1152,7 +1152,7 @@ mod tests {
     fn binder_reference_inventory_is_exhaustive_canonical_and_bounded() {
         let binder = fixture_rich_reference_binder();
         let records = reference_records_for_test(&binder);
-        assert_eq!(records.len(), 313, "rich-fixture manifest is append-only");
+        assert_eq!(records.len(), 317, "rich-fixture manifest is append-only");
         assert!(records.windows(2).all(|rows| rows[0] <= rows[1]));
         assert!(records.iter().all(|record| record.2 <= 31));
 

@@ -157,26 +157,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ValueResolution::Resolved {
                         symbol: symbol_id,
                         kind: ResolvedValueKind::Ordinary,
-                    } => match self.demand_function_group_replay(symbol_id) {
-                        FunctionGroupDemand::Ready(ty) | FunctionGroupDemand::PrivateSelf(ty) => {
-                            Some((ty, span))
-                        }
-                        FunctionGroupDemand::Pending { report_use } => {
-                            if report_use {
-                                self.record_incomplete(
-                                    "expr-infer/identifier/function-group-pending",
-                                    span,
-                                    "merged function value waits for body return inference",
-                                );
+                    } => {
+                        if name == "globalThis"
+                            && self.binder.direct_global_this_value_conflict(symbol_id)
+                        {
+                            if let Some(global_object) = self.global_object_type {
+                                return Some((global_object, span));
                             }
-                            None
                         }
-                        FunctionGroupDemand::Unavailable => None,
-                        FunctionGroupDemand::NotGroup => Some((
-                            self.resolve_identifier_type(symbol_id, ident.span.start),
-                            span,
-                        )),
-                    },
+                        match self.demand_function_group_replay(symbol_id) {
+                            FunctionGroupDemand::Ready(ty)
+                            | FunctionGroupDemand::PrivateSelf(ty) => Some((ty, span)),
+                            FunctionGroupDemand::Pending { report_use } => {
+                                if report_use {
+                                    self.record_incomplete(
+                                        "expr-infer/identifier/function-group-pending",
+                                        span,
+                                        "merged function value waits for body return inference",
+                                    );
+                                }
+                                None
+                            }
+                            FunctionGroupDemand::Unavailable => None,
+                            FunctionGroupDemand::NotGroup => Some((
+                                self.resolve_identifier_type(symbol_id, ident.span.start),
+                                span,
+                            )),
+                        }
+                    }
                     ValueResolution::Missing => {
                         // These built-ins are synthetic globals, after lexical lookup.
                         if name == "undefined" {

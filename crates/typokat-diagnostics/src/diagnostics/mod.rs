@@ -76,6 +76,8 @@ pub enum DiagnosticCode {
     TK2385,
     /// Overload signature is not compatible with its implementation signature.
     TK2394,
+    /// A declaration conflicts with the built-in `globalThis` identifier.
+    TK2397,
     TK2374,
     TK2411,
     TK2413,
@@ -187,6 +189,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2385 => "TK2385",
             DiagnosticCode::TK2391 => "TK2391",
             DiagnosticCode::TK2394 => "TK2394",
+            DiagnosticCode::TK2397 => "TK2397",
             DiagnosticCode::TK2374 => "TK2374",
             DiagnosticCode::TK2411 => "TK2411",
             DiagnosticCode::TK2413 => "TK2413",
@@ -973,6 +976,18 @@ impl Diagnostic {
             message:
                 "Function implementation is missing or not immediately following the declaration."
                     .to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2397` conflict with the built-in `globalThis` identifier.
+    pub fn global_this_declaration_conflict(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2397,
+            severity: Severity::Error,
+            message: "Declaration name conflicts with built-in global identifier 'globalThis'."
+                .to_string(),
             span,
             elaboration: Vec::new(),
         }

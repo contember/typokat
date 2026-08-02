@@ -9,8 +9,8 @@ use crate::binder::declaration::source_global_binding_census;
 use crate::binder::declaration::{DeclId, DeclarationKind, TypeGroupId, ValueStorageId};
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::namespace::{
-    CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, PlacementIssueKind,
-    UmdContext,
+    CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, ModuleBindingContext,
+    PlacementIssueKind, SourceFileKind, UmdContext,
 };
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
@@ -27,7 +27,7 @@ use crate::source::{
 };
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet};
-use crate::types::repr::{ClassId, PropertyType};
+use crate::types::repr::{ClassId, ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
@@ -106,6 +106,64 @@ struct PassReportingPlan<Ticket: Copy> {
 
 struct UserReportingAdapter {
     event_store: EventStore,
+}
+
+fn direct_global_this_modeled_value_storage(
+    binder: &Binder,
+    module: ScopeId,
+    program: &Program<'_>,
+) -> Option<ValueStorageId> {
+    program.body.iter().rev().find_map(|statement| {
+        let declaration = statement.as_declaration().or_else(|| {
+            let Statement::ExportNamedDeclaration(export) = statement else {
+                return None;
+            };
+            export.declaration.as_ref()
+        })?;
+        let (binding_start, kind) = match declaration {
+            Declaration::FunctionDeclaration(function) => {
+                let identifier = function.id.as_ref()?;
+                if identifier.name != "globalThis" {
+                    return None;
+                }
+                (identifier.span.start, DeclarationKind::Function)
+            }
+            Declaration::ClassDeclaration(class) => {
+                let identifier = class.id.as_ref()?;
+                if identifier.name != "globalThis" {
+                    return None;
+                }
+                (identifier.span.start, DeclarationKind::Class)
+            }
+            _ => return None,
+        };
+        binder
+            .direct_script_global_this_conflict(module, binding_start, kind)
+            .then(|| {
+                binder
+                    .exact_declaration_at(module, binding_start, kind)
+                    .and_then(|declaration| declaration.value_storage)
+            })
+            .flatten()
+    })
+}
+
+fn compose_global_this_value_surface(mut base: ObjectType, overlay: ObjectType) -> ObjectType {
+    for property in overlay.properties {
+        if !base
+            .properties
+            .iter()
+            .any(|existing| existing.name == property.name)
+        {
+            base.properties.push(property);
+        }
+    }
+    base.string_index = overlay.string_index.or(base.string_index);
+    base.number_index = overlay.number_index.or(base.number_index);
+    base.call_signatures.extend(overlay.call_signatures);
+    base.construct_signatures
+        .extend(overlay.construct_signatures);
+    base
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -187,12 +245,23 @@ fn reserve_internal_reporting(
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
     unit_slot: UnitSlot,
+    context: Option<ModuleBindingContext>,
 ) -> (PassReporting<UserRecordTicket>, UserReportingAdapter) {
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
-    lexical_events
-        .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
-        .expect("lexical event reservation must reference valid events");
+    let reservation = match context {
+        Some(context) => lexical_events.reserve_continuation_program(
+            module_ordinal,
+            unit_slot,
+            program,
+            context,
+            &mut event_store,
+        ),
+        None => {
+            lexical_events.reserve_program(module_ordinal, unit_slot, program, &mut event_store)
+        }
+    };
+    reservation.expect("lexical event reservation must reference valid events");
     (
         PassReporting {
             source: SourceUnit::User {
@@ -639,7 +708,7 @@ fn bootstrap_trusted_prelude(
     let prelude_slot = UnitSlot::new(0);
     // Capture into an isolated store so cleanliness is checked without leaking records.
     let (mut reporting, reporting_adapter) =
-        reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot);
+        reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot, None);
     let declaration_spans = ModuleDeclarationSpans::index(&binder);
     attach_type_decl_owners(
         &mut reporting.lexical_events,
@@ -830,7 +899,15 @@ where
         bind_module_with_prelude(prelude, program)
     });
 
-    let reporting = reserve_internal_reporting(program, ModuleOrdinal::new(0), UnitSlot::new(0));
+    let reporting = reserve_internal_reporting(
+        program,
+        ModuleOrdinal::new(0),
+        UnitSlot::new(0),
+        Some(ModuleBindingContext::for_program(
+            program,
+            SourceFileKind::ImplementationTs,
+        )),
+    );
     check_bound_user_program(
         interner,
         binder,
@@ -1089,6 +1166,24 @@ where
         pass.suppress_effects = true;
     }
     pass.validate_published_class_surfaces();
+    let mut function_surfaces = pass.reserve_function_surfaces(binder.module, &program.body);
+    pass.reserve_var_annotation_surfaces(binder.module, &program.body);
+    pass.reserve_continuation_global_augmentation_surfaces(&program.body, &mut function_surfaces);
+    let contributor_names = source_global_binding_census(
+        program,
+        ModuleBindingContext::for_program(program, SourceFileKind::ImplementationTs),
+    )
+    .candidates
+    .into_iter()
+    .filter_map(|(name, candidate)| {
+        (name != "globalThis" && candidate.global_object_contributor).then_some(name)
+    })
+    .collect::<FxHashSet<_>>();
+    pass.refresh_user_global_object([(
+        binder.module,
+        program,
+        ModuleBindingContext::for_program(program, SourceFileKind::ImplementationTs),
+    )]);
     inspect(
         &binder,
         pass.type_environment.published(),
@@ -1101,7 +1196,15 @@ where
     pass.build_flow_graph(binder.module, &program.body);
 
     // Phase 1: walk the module body and collect relation obligations.
-    pass.check_statements(binder.module, &program.body);
+    let mut no_return = None;
+    pass.check_statement_list_with_global_contributors(
+        binder.module,
+        &program.body,
+        None,
+        &mut no_return,
+        &mut function_surfaces,
+        &contributor_names,
+    );
 
     emit_test_incomplete(&mut pass);
 
@@ -2017,19 +2120,25 @@ where
         pass.reserve_continuation_global_augmentation_surfaces(&unit.program.body, &mut surfaces);
         module_surfaces.push(surfaces);
     }
-    let mut user_global_contributors = Vec::new();
-    for (scope, unit) in module_scopes.iter().copied().zip(units) {
-        let census = source_global_binding_census(unit.program, unit.compilation_unit.binding);
-        for (name, candidate) in census.candidates {
-            if !candidate.global_object_contributor {
-                continue;
-            }
-            if let Some(storage) = pass.value_decl_id_replay(scope, &name) {
-                user_global_contributors.push((name, storage));
-            }
-        }
-    }
-    pass.refresh_private_global_object(user_global_contributors);
+    let global_contributor_names = units
+        .iter()
+        .map(|unit| {
+            source_global_binding_census(unit.program, unit.compilation_unit.binding)
+                .candidates
+                .into_iter()
+                .filter_map(|(name, candidate)| {
+                    (name != "globalThis" && candidate.global_object_contributor).then_some(name)
+                })
+                .collect::<FxHashSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    pass.refresh_user_global_object(
+        module_scopes
+            .iter()
+            .copied()
+            .zip(units)
+            .map(|(scope, unit)| (scope, unit.program, unit.compilation_unit.binding)),
+    );
     #[cfg(any(test, feature = "test-utils"))]
     library_compiler::record_private_replay_trace_for_test(|trace, event| {
         trace.candidate_activation_started = event;
@@ -2052,11 +2161,12 @@ where
             );
         }
     }
-    for ((scope, unit), mut surfaces) in module_scopes
+    for (((scope, unit), mut surfaces), contributor_names) in module_scopes
         .iter()
         .copied()
         .zip(units)
         .zip(module_surfaces)
+        .zip(global_contributor_names)
     {
         pass.current_module = scope;
         pass.current_source = SourceUnit::User {
@@ -2065,12 +2175,13 @@ where
         };
         pass.build_flow_graph(scope, &unit.program.body);
         let mut no_return = None;
-        pass.check_statement_list_with_surfaces(
+        pass.check_statement_list_with_global_contributors(
             scope,
             &unit.program.body,
             None,
             &mut no_return,
             &mut surfaces,
+            &contributor_names,
         );
         emit_test_incomplete(&mut pass);
     }
@@ -2805,10 +2916,11 @@ pub(crate) fn bind_library_checkpoint_project_programs(
     for (slot, unit) in units.iter().enumerate() {
         debug_assert_eq!(unit.unit_slot.index(), slot);
         lexical_events
-            .reserve_program(
+            .reserve_continuation_program(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                unit.compilation_unit.binding,
                 &mut event_store,
             )
             .map_err(|error| format!("project lexical reservation failed: {error:?}"))?;
@@ -3098,10 +3210,11 @@ where
     for (slot, unit) in units.iter().enumerate() {
         debug_assert_eq!(unit.unit_slot.index(), slot);
         lexical_events
-            .reserve_program(
+            .reserve_continuation_program(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                unit.compilation_unit.binding,
                 &mut event_store,
             )
             .expect("lexical event reservation must reference valid events");
@@ -5078,10 +5191,75 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         }
     }
 
+    fn refresh_user_global_object<'program>(
+        &mut self,
+        units: impl IntoIterator<Item = (ScopeId, &'program Program<'program>, ModuleBindingContext)>,
+    ) {
+        let mut contributors = Vec::new();
+        for (scope, program, context) in units {
+            if let Some(storage) =
+                direct_global_this_modeled_value_storage(self.binder, scope, program)
+            {
+                contributors.push(("globalThis".to_string(), storage));
+            }
+            let census = source_global_binding_census(program, context);
+            for (name, candidate) in census.candidates {
+                if name == "globalThis" || !candidate.global_object_contributor {
+                    continue;
+                }
+                if let Some(storage) = self.value_decl_id_replay(scope, &name) {
+                    contributors.push((name, storage));
+                }
+            }
+        }
+        self.refresh_private_global_object(contributors);
+    }
+
+    pub(in crate::check::checker) fn refresh_source_global_object_contributor(
+        &mut self,
+        scope: ScopeId,
+        name: &str,
+    ) {
+        self.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
+            let Some(storage) = pass.value_decl_id_replay(scope, name) else {
+                return;
+            };
+            let Some(ty) = pass.decl_type_replay(storage) else {
+                return;
+            };
+            let Some(mut object) = pass
+                .global_object_type
+                .and_then(|global| pass.interner.store().object_type(global).cloned())
+            else {
+                return;
+            };
+            if let Some(property) = object
+                .properties
+                .iter_mut()
+                .find(|property| property.name == name)
+            {
+                if property.ty == ty {
+                    return;
+                }
+                property.ty = ty;
+            } else {
+                object.properties.push(PropertyType::public(name, ty));
+                object
+                    .properties
+                    .sort_by(|left, right| left.name.cmp(&right.name));
+            }
+            pass.global_object_type = Some(pass.interner.intern_object(object));
+        });
+    }
+
     fn refresh_private_global_object(&mut self, user_contributors: Vec<(String, ValueStorageId)>) {
-        if !self
-            .private_collision_affected
-            .contains(&ReplayOwner::GlobalObject)
+        let direct_global_this = user_contributors
+            .iter()
+            .any(|(name, _)| name == "globalThis");
+        if !direct_global_this
+            && !self
+                .private_collision_affected
+                .contains(&ReplayOwner::GlobalObject)
         {
             return;
         }
@@ -5092,16 +5270,33 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         let contributors = self
             .private_collision_value_winners_by_name
             .iter()
+            .filter(|(name, _)| !direct_global_this || name.as_str() != "globalThis")
             .map(|(name, storage)| (name.clone(), *storage))
             .chain(user_contributors.into_iter().filter(|(name, _)| {
-                !self
-                    .private_collision_value_winners_by_name
-                    .contains_key(name)
+                name == "globalThis"
+                    || !self
+                        .private_collision_value_winners_by_name
+                        .contains_key(name)
             }));
         for (name, storage) in contributors {
-            let Some(ty) = self.decl_type_replay(storage) else {
+            let ty = self.decl_type_replay(storage).or_else(|| {
+                let binding = self.class_value_bindings.get(&storage)?;
+                match self.published_class_replay(binding.class_id) {
+                    DemandOutcome::Ready(surface) => Some(surface.static_template()),
+                    DemandOutcome::Exhausted(_) => None,
+                }
+            });
+            let Some(ty) = ty else {
                 continue;
             };
+            if name == "globalThis" {
+                if let Some(overlay) = self.interner.store().object_type(ty).cloned() {
+                    object = compose_global_this_value_surface(object, overlay);
+                } else if self.interner.store().function_type(ty).is_some() {
+                    object.call_signatures.push(ty);
+                }
+                continue;
+            }
             if let Some(property) = object
                 .properties
                 .iter_mut()

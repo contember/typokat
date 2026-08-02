@@ -1683,7 +1683,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .contains(&ReplayOwner::Class(binding.class_id))
                     || self
                         .private_collision_affected
-                        .contains(&ReplayOwner::Value(value_decl));
+                        .contains(&ReplayOwner::Value(value_decl))
+                    || self
+                        .private_collision_affected
+                        .contains(&ReplayOwner::TypeGroup(binding.type_decl));
                 assert!(
                     self.class_value_bindings
                         .insert_local(
