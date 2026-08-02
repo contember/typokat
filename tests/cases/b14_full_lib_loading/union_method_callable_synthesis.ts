@@ -35,5 +35,6 @@ type SecondOverloads = {
   method(value: number): number;
 };
 declare const overloadUnion: FirstOverloads | SecondOverloads;
-const overloadBad: boolean = overloadUnion.method(); // error[TK2322]: Type 'string | number' is not assignable to type 'boolean'
-const overloadStringArm: number = overloadUnion.method(); // error[TK2322]: Type 'string | number' is not assignable to type 'number'
+const overloadBad: boolean = overloadUnion.method(); // error[TK2322]
+const overloadStringArm: number = overloadUnion.method(); // error[TK2322]
+const overloadNumberArm: string = overloadUnion.method(); // error[TK2322]
