@@ -219,3 +219,24 @@ semantic, production-acceptance, official-suite, differential, package, and CI g
   archived explicitly incomplete; no production or test worktree file was included in the docs
   transition. The agent-docs lint reported its existing 21 hard findings (20 historical deleted-
   backlog links and the stray `docs/AGENTS.md`); no finding targets the new or moved sprint.
+- **2026-08-02 — WU1 RED and commit-boundary finding.** Commit `914b66d` pins four recoverable-parse
+  failures across `check_source`, `check_files`, `check_project`, and the CLI while the three parser-
+  panic controls remain green. The focused worktree implementation makes all seven tests green and
+  keeps one shared-route and one private-route control green. Its typed ordinary-parse result,
+  however, depends on the uncommitted WU4 provider route. The WU1 body therefore cannot land alone
+  without either misrouting the rejection as infrastructure failure or sweeping the atomic cutover
+  forward. Keep the verified body parked and include it in WU4 after WU3; do not claim WU1 shipped
+  before that commit. Independent review passed after `556f084` replaced a stale syntactically
+  invalid type-only internal-import route oracle. The boundary deliberately follows Oxc parser
+  diagnostics: `tsc` classifies this exact recoverable TS1063 differently and is not the WU1
+  diagnostic-phase oracle.
+- **2026-08-02 — WU2 retained ADR-0020.** Two independent read-only audits found a project binder
+  barrier but no complete semantic-publication barrier before body checking. Unannotated variable,
+  function, namespace-group, and class-field meanings still depend on initializer or body inference;
+  the frozen runtime is extracted only after those effects complete. The existing complete-combined
+  source compiler is already the correctness probe for a library-plus-user universe, but it starts
+  from a new intrinsic-only interner and cannot preserve the process-wide library `TypeId`s or the
+  persistent official-suite batch's shared semantic base. Preserving only unaffected rows while
+  replacing the affected closure is ADR-0020 itself. A later freeze would therefore require a new
+  publication architecture or lose sharing, so the hard stop fired: no experimental path or
+  superseding ADR is warranted, and WU3 proceeds through the sparse collision epoch.
