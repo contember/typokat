@@ -310,7 +310,7 @@ import WU5Import = WU5Namespace;
 }
 
 #[test]
-fn import_equals_masks_match_value_and_type_only_binder_slots() {
+fn import_equals_masks_match_value_binder_slots() {
     let value = preflight(&[input(
         "/project/import-equals.ts",
         "import WU5Value = WU5.Space;\n",
@@ -324,15 +324,16 @@ fn import_equals_masks_match_value_and_type_only_binder_slots() {
             PreflightSlotForTest::Namespace,
         ])
     );
-    let typed = preflight(&[input(
+}
+
+#[test]
+fn invalid_type_only_internal_import_equals_is_rejected_before_census() {
+    let receipt = preflight(&[input(
         "/project/import-type-equals.ts",
         "import type WU5Type = WU5.Space;\n",
     )]);
-    assert_private(&typed);
-    assert_eq!(
-        slots(&typed, "WU5Type"),
-        BTreeSet::from([PreflightSlotForTest::Type])
-    );
+    assert_rejected(&receipt);
+    assert!(receipt.candidates.is_empty());
 }
 
 #[test]
