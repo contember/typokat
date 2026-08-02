@@ -4416,8 +4416,6 @@ mod raw_access_audit {
         let sources = discover_production_rust_sources(&root);
         let allowed = [
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "self.class_parents.iter()", count: 1, reason: "snapshot projection" },
-            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "use decls::{\n    reserve_type_decls, reserve_type_decls_for_combined_library, reserve_type_decls_selected,\n    type_decl_id, walk_type_decls, TopTypeDecl,\n};", count: 1, reason: "prelude identity and selected private replay helper imports" },
-            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "type_decl_id(binder, binder.prelude_module, name)", count: 1, reason: "prelude identity selection" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_value_binding(scope, name);", count: 1, reason: "no-trace value binding fast path" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_value(scope, name);", count: 1, reason: "no-trace value fast path" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.binder.resolve_type(scope, name);", count: 1, reason: "no-trace type fast path" },
@@ -4425,7 +4423,7 @@ mod raw_access_audit {
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: ".classes().published_class(class)", count: 1, reason: "instrumented class delegate" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "return self.decl_types.get(storage);", count: 1, reason: "no-trace decl fast path" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "self.decl_types.get(storage)", count: 1, reason: "instrumented decl delegate" },
-            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "decl_types.set(decl_id, error)", count: 2, reason: "module placeholder bootstrap, once per project-check path (prelude and default-library base)" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "decl_types.set(decl_id, error)", count: 1, reason: "default-library base module placeholder bootstrap" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/mod.rs", snippet: "|pass| pass.decl_types.set(storage, ty)", count: 1, reason: "owned copied publication" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/assignment.rs", snippet: "binder.resolve_value(scope, name)", count: 1, reason: "current binding identity" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/calls.rs", snippet: ".binder.resolve_value(scope, &name)", count: 5, reason: "current callable parameter identity" },
