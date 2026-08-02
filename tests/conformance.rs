@@ -232,7 +232,7 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     ("b73_surface_accounting", true, Prelude),
     // Backlog 73 expression-shape tail. WU1 makes every remaining `infer_expr`
     // shape explicit, retaining nested diagnostics before incomplete emissions.
-    ("b73_expression_shape_tail", true, Prelude),
+    ("b73_expression_shape_tail", true, Library),
     // Backlog 74 declaration-hoisting parity. Enabled after WU1 and WU2 land.
     ("b74_declaration_hoisting", true, Prelude),
     // Namespace/declaration-merging sprint. A mixed flat/project corpus: the directory stays

@@ -85,9 +85,9 @@ type GuardedUnionInput =
 type GuardedUnionOmit = OmitThisParameter<GuardedUnionInput>;
 declare const guardedUnionOmit: GuardedUnionOmit;
 const guardedUnionControl: GuardedUnionInput = guardedUnionOmit;
-// The generic receiver makes the intrinsic guard retain this union. tsc reports TS2349 here;
-// typokat's union-call diagnostic is deferred to backlog 19.
-guardedUnionOmit(1);
+// The generic receiver makes the intrinsic guard retain this union.
+// tsc 6.0.3 --strict reports TS2349 because the union is not wholly callable.
+guardedUnionOmit(1); // error[TK2349]: This expression is not callable
 
 type GenericWithoutReceiver = <T>(value: T) => T;
 type PreservedGeneric = OmitThisParameter<GenericWithoutReceiver>;
