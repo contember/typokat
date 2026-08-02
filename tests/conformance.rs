@@ -24,13 +24,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use typokat::check::test_support::{
-    check_project as check_project_without_library,
-    check_source as check_source_without_library,
-};
 use typokat::driver::{check_project, check_source, CheckOutput};
 use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
+use typokat_check::check::test_support::{
+    check_project as check_project_without_library, check_source as check_source_without_library,
+    on_raw_check_worker,
+};
 
 use FixtureBase::{Library, Prelude};
 
@@ -568,7 +568,11 @@ struct ExpectedIncomplete {
 /// The M0 conformance entry point. Runs every enabled milestone dir and reports
 /// all failures together so a regression is debuggable in one shot.
 #[test]
-fn conformance() {
+fn conformance() -> Result<(), String> {
+    on_raw_check_worker(conformance_on_worker)
+}
+
+fn conformance_on_worker() {
     let cases_root = cases_root();
     let mut failures: Vec<String> = Vec::new();
     let mut files_checked = 0usize;
@@ -983,13 +987,7 @@ fn compare_incomplete_output(
 /// segments that merely contain `error[` mid-text are still ignored.
 fn parse_markers(display: &str, source: &str) -> BTreeMap<u32, Vec<ExpectedMarker>> {
     let mut map: BTreeMap<u32, Vec<ExpectedMarker>> = BTreeMap::new();
-    for (idx, line) in source.lines().enumerate() {
-        let line_no = (idx + 1) as u32;
-        // Only the comment tail can carry markers. Find the first `//`.
-        let Some(comment_at) = line.find("//") else {
-            continue;
-        };
-        let comment = &line[comment_at + 2..];
+    for (line_no, comment) in source_line_comments(source) {
         // Quick reject: a comment without `error[` carries no markers.
         if !comment.contains("error[") {
             continue;
@@ -1069,12 +1067,7 @@ fn is_valid_code(code: &str) -> bool {
 /// ` | `-separated; a second `incomplete[` in a segment's residual is rejected.
 fn parse_incomplete_markers(display: &str, source: &str) -> BTreeMap<u32, Vec<ExpectedIncomplete>> {
     let mut map: BTreeMap<u32, Vec<ExpectedIncomplete>> = BTreeMap::new();
-    for (idx, line) in source.lines().enumerate() {
-        let line_no = (idx + 1) as u32;
-        let Some(comment_at) = line.find("//") else {
-            continue;
-        };
-        let comment = &line[comment_at + 2..];
+    for (line_no, comment) in source_line_comments(source) {
         if !comment.contains("incomplete[") {
             continue;
         }
@@ -1105,6 +1098,23 @@ fn parse_incomplete_markers(display: &str, source: &str) -> BTreeMap<u32, Vec<Ex
         }
     }
     map
+}
+
+/// Use the frontend lexer as the source of truth for real TypeScript line comments.
+fn source_line_comments(source: &str) -> Vec<(u32, &str)> {
+    let allocator = oxc_allocator::Allocator::default();
+    let parsed = oxc_parser::Parser::new(&allocator, source, oxc_span::SourceType::ts()).parse();
+    let line_index = LineIndex::new(source);
+    parsed
+        .program
+        .comments
+        .iter()
+        .filter(|comment| comment.is_line())
+        .map(|comment| {
+            let span = comment.content_span();
+            (line_index.line_of(span.start), span.source_text(source))
+        })
+        .collect()
 }
 
 /// Parse a single `incomplete[<id>]` / `incomplete[<id>]: substring` marker, or `None`
@@ -1247,6 +1257,37 @@ fn parse_markers_accepts_well_formed_and_ignores_prose() {
     assert!(!map.contains_key(&5));
 }
 
+#[test]
+fn parse_markers_only_reads_lexical_line_comments() {
+    let src = concat!(
+        "fetch(\"https://example.invalid/\"); // error[TK2322]\n",
+        "const single = '// error[TK2304]'; // error[TK2345]\n",
+        "const template = `https://example.invalid/${1}`; // error[TK2339]\n",
+        "const nested = `value ${\"// not a comment\"}`; // error[TK2551]\n",
+        "/* // error[TK1005]\n",
+        "   still block text */ const value = 1; // error[TK2322]\n",
+    );
+    let map = parse_markers_catch(src);
+    assert!(map.is_ok(), "lexical line-comment witnesses must parse");
+    let Ok(map) = map else {
+        return;
+    };
+    let codes = |line| {
+        map.get(&line).map(|markers| {
+            markers
+                .iter()
+                .map(|marker| marker.code.as_str())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(codes(1), Some(vec!["TK2322"]));
+    assert_eq!(codes(2), Some(vec!["TK2345"]));
+    assert_eq!(codes(3), Some(vec!["TK2339"]));
+    assert_eq!(codes(4), Some(vec!["TK2551"]));
+    assert!(!map.contains_key(&5));
+    assert_eq!(codes(6), Some(vec!["TK2322"]));
+}
+
 /// A marker missing its closing `]` must fail loudly, not be dropped.
 #[test]
 fn parse_markers_rejects_unterminated_code() {
@@ -1311,7 +1352,11 @@ fn parse_markers_rejects_malformed_second_segment() {
 /// The entire committed corpus (every `.ts` fixture, enabled or not) must parse
 /// under the strict rules — proving the hardening rewrites no real markers.
 #[test]
-fn parse_markers_accepts_entire_corpus() {
+fn parse_markers_accepts_entire_corpus() -> Result<(), String> {
+    on_raw_check_worker(parse_markers_accepts_entire_corpus_on_worker)
+}
+
+fn parse_markers_accepts_entire_corpus_on_worker() {
     let mut files = Vec::new();
     collect_all_ts(&cases_root(), &mut files);
     assert!(!files.is_empty(), "expected fixtures under tests/cases");
@@ -1390,7 +1435,11 @@ fn parse_incomplete_rejects_space_joined_double_marker() {
 
 /// The entire committed corpus parses under the strict incomplete-marker rules.
 #[test]
-fn parse_incomplete_accepts_entire_corpus() {
+fn parse_incomplete_accepts_entire_corpus() -> Result<(), String> {
+    on_raw_check_worker(parse_incomplete_accepts_entire_corpus_on_worker)
+}
+
+fn parse_incomplete_accepts_entire_corpus_on_worker() {
     let mut files = Vec::new();
     collect_all_ts(&cases_root(), &mut files);
     assert!(!files.is_empty(), "expected fixtures under tests/cases");

@@ -112,7 +112,8 @@ where
     })
 }
 
-fn on_raw_check_worker<T, W>(work: W) -> Result<T, String>
+/// Run test-only work on the same large stack as raw checker entry points.
+pub fn on_raw_check_worker<T, W>(work: W) -> Result<T, String>
 where
     T: Send,
     W: FnOnce() -> T + Send,
