@@ -240,11 +240,9 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // and `ENABLED_PROJECT_FIXTURES`. Registered here so every corpus declares its base.
     ("b43_namespaces_declaration_merging", false, Prelude),
     // Backlog 14 full TypeScript 6.0.3 default-library loading — the only corpora checked
-    // against `Library`. Both directories stay `false`: the fixtures that already pass are
-    // enabled one at a time through `ENABLED_FIXTURES` / `ENABLED_PROJECT_FIXTURES`, and the
-    // rest wait for the loader defect fixes.
-    ("b14_full_lib_loading", false, Library),
-    ("b14_full_lib_loading_project", false, Library),
+    // against `Library`.
+    ("b14_full_lib_loading", true, Library),
+    ("b14_full_lib_loading_project", true, Library),
     // Backlog 102 — a binder write that lands inside the frozen library prefix must either reach
     // a delta-side scope (fresh script globals) or be recorded (a library-owned row), never
     // vanish. Checked against `Library`, because the prefix only exists on that base.
@@ -278,10 +276,6 @@ const PROJECT_DIRS: &[&str] = &[
 /// Selected project fixtures enabled before their mixed flat/project corpus closes. Each runs
 /// against the base its directory declares in `MILESTONE_DIRS`.
 const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
-    // Backlog 14 (`Library` base). The other ten projects await WU6 isolated verification,
-    // expectation reconciliation, and residual model-gap work.
-    ("b14_full_lib_loading_project", "duplicate_global_deferred"),
-    ("b14_full_lib_loading_project", "fast_external_module"),
     (
         "b43_namespaces_declaration_merging",
         "wu5_global_augmentation_forward",
@@ -306,27 +300,6 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 /// full. Keep this list path-sorted so execution and failure aggregation stay
 /// deterministic. Each runs against the base its directory declares in `MILESTONE_DIRS`.
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
-    // Backlog 14 (`Library` base). The other four flat fixtures await WU6 isolated verification,
-    // expectation reconciliation, and residual model-gap work.
-    (
-        "b14_full_lib_loading",
-        "generic_application_cache_diagnostics.ts",
-    ),
-    ("b14_full_lib_loading", "arrays_tuples_readonly.ts"),
-    ("b14_full_lib_loading", "global_values.ts"),
-    ("b14_full_lib_loading", "intrinsic_aliases.ts"),
-    ("b14_full_lib_loading", "iterator_library_local_nonleak.ts"),
-    ("b14_full_lib_loading", "library_identity_shadowing.ts"),
-    (
-        "b14_full_lib_loading",
-        "native_array_annotation_identity.ts",
-    ),
-    (
-        "b14_full_lib_loading",
-        "primitive_object_function_members.ts",
-    ),
-    ("b14_full_lib_loading", "promise_iterators_generators.ts"),
-    ("b14_full_lib_loading", "regexp_literals.ts"),
     (
         "b43_namespaces_declaration_merging",
         "class_interface_conflicts.ts",
