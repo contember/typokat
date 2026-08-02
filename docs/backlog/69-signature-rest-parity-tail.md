@@ -6,8 +6,8 @@ title: Signature rest parity tail
 # 69 — Signature rest parity tail
 
 **Summary.** Small M32 safe-direction tail: represented rest shapes work for calls,
-relation, and fixed rest `infer`, but higher-order inference and aggregate variadic-call
-diagnostics still over-report compared with `tsc`.
+relation, and fixed rest `infer`, but higher-order inference, callable-union synthesis,
+and aggregate variadic-call diagnostics still over-report compared with `tsc`.
 
 ## Problem
 
@@ -19,29 +19,37 @@ The M32 adversarial review found no remaining dropped-error blocker after
   bare type parameter.
 - Conditional tuple infer ignores a variadic rest segment on the **source** tuple, so
   `Tail<[string, ...number[]]>` resolves too narrowly / to `never` instead of `number[]`.
+- Callable-union synthesis preserves a structured tuple rest when every constituent has
+  equal fixed-prefix, variadic-middle, and required-suffix cardinalities. Constituents
+  with unequal cardinalities, or with an optional prefix before the variadic segment, can
+  conservatively reject a call that `tsc` accepts. The synthesis does not erase represented
+  diagnostics; this is a parity-only false positive, not a silent channel.
 - In official `variadicTuples2.ts`, aggregate tuple-rest call failure selection is correct in
   verdict but wrong in identity/cardinality: harness line 66 reports `TK2555` where strict tsc
   reports one `TS2345`, and line 71 reports the expected `TK2345` plus a duplicate `TK2345`.
   The other newly matched identities are label-lowering progress; these two residuals are
   call-shape diagnostics, not a relation or tuple-label failure.
 
-Both are safe-direction over-reports, but they are close enough to the M32 surface that
+All are safe-direction over-reports, but they are close enough to the M32 surface that
 they should be fixed before broader `lib.d.ts` work depends on variadic tuple inference.
 
 ## Approach / acceptance
 
 Extend rest-shape inference to flatten embedded tuple rest patterns in both call-site
-and conditional modes. Add fixtures cross-checked with `tsc 6.0.3 --strict` for:
+and conditional modes, and preserve exact variadic layout while combining callable-union
+signatures. Add fixtures cross-checked with `tsc 6.0.3 --strict` for:
 
 - `function f<T extends unknown[]>(...args: [...T, boolean]): T` called with fixed
   prefix arguments.
 - `type Tail<T> = T extends [unknown, ...infer R] ? R : never` over
   `[string, ...number[]]`.
+- Callable unions whose structured tuple-rest constituents have unequal prefix or suffix
+  cardinalities, plus optional-prefix forms before a variadic middle.
 - The two exact `variadicTuples2.ts` identities above: line 66 becomes one aggregate `TK2345`,
   line 71 retains one `TK2345`, and neither line emits a scalar arity/per-argument duplicate.
 
 Acceptance: the new probes match tsc verdicts without weakening the M32 dropped-error
-guards around tuple-rest call arity.
+guards around tuple-rest call arity or suppressing diagnostics for a represented signature.
 
 ## Touch points
 

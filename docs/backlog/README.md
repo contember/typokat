@@ -135,7 +135,7 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **L** · [`36`](36-conditional-structural-operand-parity.md) — tsc's eager-false/demand behavior for structurally wrapped operands.
 - **M** · [`37`](37-constraint-approximation-deferred-args.md) — upper-bound approximation for provable deferred arguments.
 - **M** · [`68`](68-contravariant-infer-intersection.md) — intersect same-name contravariant `infer` candidates instead of collapsing to `never`.
-- **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest and variadic source-tuple inference.
+- **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest inference, callable-union rest-shape synthesis, and variadic source tuples.
 - **M** · [`83`](83-contextual-generic-signature-relation.md) — contextual generic-signature instantiation under a cache-safe query-local relation environment.
 - **L** · [`63`](63-review-parity-tail.md) — batched evaluator/relation/checker FPs, messages, and residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space

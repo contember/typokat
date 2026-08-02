@@ -498,11 +498,11 @@ deps = []
 [[criterion]]
 id = "C-parity-tail-signature-rest"
 track = "C"
-title = "Signature rest parity tail (inference + aggregate call diagnostics) — safe over-report"
+title = "Signature rest parity tail (inference + union-call synthesis + aggregate diagnostics) — safe over-report"
 state = "incomplete"
 blocks_release = "false"
 owner = "./69-signature-rest-parity-tail.md"
-witness = "documented safe-direction over-report; conditional inference fixtures plus official variadicTuples2 harness lines 66/71"
+witness = "documented safe-direction over-report; conditional inference fixtures, union-call review probes, and official variadicTuples2 harness lines 66/71"
 links = ["../reference/divergences.md"]
 deps = []
 
