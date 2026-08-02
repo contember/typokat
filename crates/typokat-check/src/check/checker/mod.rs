@@ -206,6 +206,37 @@ fn reserve_internal_reporting(
     )
 }
 
+fn reserve_continuation_reporting(
+    program: &Program<'_>,
+    module_ordinal: ModuleOrdinal,
+    unit_slot: UnitSlot,
+    context: crate::binder::namespace::ModuleBindingContext,
+) -> Result<
+    (PassReporting<UserRecordTicket>, UserReportingAdapter),
+    lexical_events_user::ReservationError,
+> {
+    let mut event_store = EventStore::default();
+    let mut lexical_events = LexicalReservations::default();
+    lexical_events.reserve_continuation_program(
+        module_ordinal,
+        unit_slot,
+        program,
+        context,
+        &mut event_store,
+    )?;
+    Ok((
+        PassReporting {
+            source: SourceUnit::User {
+                module_ordinal,
+                unit_slot,
+            },
+            lexical_events,
+            suppress_effects: false,
+        },
+        UserReportingAdapter { event_store },
+    ))
+}
+
 /// Trusted utility aliases and bounded ambient values, checked before user code.
 pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
 
@@ -799,10 +830,12 @@ where
         bind_module_with_prelude(prelude, program)
     });
 
+    let reporting = reserve_internal_reporting(program, ModuleOrdinal::new(0), UnitSlot::new(0));
     check_bound_user_program(
         interner,
         binder,
         program,
+        reporting,
         BoundUserBase {
             published_types,
             library_semantic_identities,
@@ -842,6 +875,7 @@ pub(in crate::check::checker) fn check_bound_user_program<'ast, F>(
     interner: &mut Interner,
     binder: Binder,
     program: &'ast Program<'ast>,
+    reporting: (PassReporting<UserRecordTicket>, UserReportingAdapter),
     base: BoundUserBase,
     inspect: F,
 ) -> CheckResult
@@ -854,7 +888,15 @@ where
         &namespace_values::NamespaceValueRegistry,
     ),
 {
-    check_bound_user_program_inner(interner, binder, program, base, inspect, |_, _| {})
+    check_bound_user_program_inner(
+        interner,
+        binder,
+        program,
+        reporting,
+        base,
+        inspect,
+        |_, _| {},
+    )
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -869,7 +911,7 @@ pub(in crate::check::checker) fn check_bound_user_program_with_final_identity_in
     base: BoundUserBase,
     inspect: F,
     inspect_final: G,
-) -> CheckResult
+) -> Result<CheckResult, &'static str>
 where
     F: FnOnce(
         &Binder,
@@ -881,13 +923,33 @@ where
     G: FnOnce(&Pass<'_, 'ast>, u32),
 {
     FINAL_IDENTITY_INSPECTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
-    check_bound_user_program_inner(interner, binder, program, base, inspect, inspect_final)
+    let continuation_binding = crate::binder::namespace::ModuleBindingContext::for_program(
+        program,
+        crate::binder::namespace::SourceFileKind::ImplementationTs,
+    );
+    let reporting = reserve_continuation_reporting(
+        program,
+        ModuleOrdinal::new(0),
+        UnitSlot::new(0),
+        continuation_binding,
+    )
+    .map_err(|_| "user lexical reservation failed")?;
+    Ok(check_bound_user_program_inner(
+        interner,
+        binder,
+        program,
+        reporting,
+        base,
+        inspect,
+        inspect_final,
+    ))
 }
 
 fn check_bound_user_program_inner<'ast, F, G>(
     interner: &mut Interner,
     binder: Binder,
     program: &'ast Program<'ast>,
+    reporting: (PassReporting<UserRecordTicket>, UserReportingAdapter),
     base: BoundUserBase,
     inspect: F,
     inspect_final: G,
@@ -906,11 +968,7 @@ where
     BOUND_USER_CHECK_CALLS.with(|calls| calls.set(calls.get() + 1));
     let module_ordinal = ModuleOrdinal::new(0);
     let unit_slot = UnitSlot::new(0);
-    let mut event_store = EventStore::default();
-    let mut lexical_events = LexicalReservations::default();
-    lexical_events
-        .reserve_program(module_ordinal, unit_slot, program, &mut event_store)
-        .expect("lexical event reservation must reference valid events");
+    let (mut reporting, reporting_adapter) = reporting;
     let BoundUserBase {
         published_types,
         library_semantic_identities,
@@ -938,7 +996,7 @@ where
         &mut type_resolved,
     );
     attach_type_decl_owners(
-        &mut lexical_events,
+        &mut reporting.lexical_events,
         SourceOrdinal::User(module_ordinal),
         &binder,
         binder.module,
@@ -946,7 +1004,7 @@ where
         &ModuleDeclarationSpans::index(&binder),
     );
     attach_class_bindings(
-        &mut lexical_events,
+        &mut reporting.lexical_events,
         SourceOrdinal::User(module_ordinal),
         &binder,
         binder.module,
@@ -954,23 +1012,24 @@ where
         &type_decls,
         None,
     );
-    lexical_events
+    reporting
+        .lexical_events
         .reserve_callable_type_params(&mut next_type_param)
         .expect("one callable binder reservation pass");
     let mut external_effects = BTreeMap::new();
     infallible(enqueue_local_ambient_export_alias_diagnostics(
         &binder,
-        &lexical_events,
+        &reporting.lexical_events,
         &mut external_effects,
     ));
     infallible(enqueue_namespace_placement_diagnostics(
         &binder,
-        &lexical_events,
+        &reporting.lexical_events,
         &mut external_effects,
     ));
     infallible(enqueue_ambient_context_diagnostics(
         &binder,
-        &lexical_events,
+        &reporting.lexical_events,
         &mut external_effects,
     ));
     let mut pass = build_pass_with_reporting(
@@ -980,14 +1039,7 @@ where
         type_resolved,
         decl_types,
         next_type_param,
-        PassReporting {
-            source: SourceUnit::User {
-                module_ordinal,
-                unit_slot,
-            },
-            lexical_events,
-            suppress_effects: false,
-        },
+        reporting,
     );
     pass.install_published_type_environment_base(published_types);
     pass.lexical_array_alias = lexical_array_alias;
@@ -1053,7 +1105,7 @@ where
 
     emit_test_incomplete(&mut pass);
 
-    let mut records = finish_event_effects(&mut pass, UserReportingAdapter { event_store });
+    let mut records = finish_event_effects(&mut pass, reporting_adapter);
     let (mut diagnostics, mut incomplete) = records.remove(&module_ordinal).unwrap_or_default();
     fail_closed_identity_selection(publication, &mut diagnostics, &mut incomplete);
     inspect_final(&pass, next_class_id);
@@ -1371,10 +1423,11 @@ where
     for (slot, unit) in units.iter().enumerate() {
         debug_assert_eq!(unit.unit_slot.index(), slot);
         lexical_events
-            .reserve_private_user_program(
+            .reserve_private_continuation_program(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                unit.compilation_unit.binding,
                 &mut event_store,
             )
             .expect("lexical event reservation must reference valid events");
@@ -1959,8 +2012,9 @@ where
             module_ordinal: unit.module_ordinal,
             unit_slot: unit.unit_slot,
         };
-        let surfaces = pass.reserve_function_surfaces(scope, &unit.program.body);
+        let mut surfaces = pass.reserve_function_surfaces(scope, &unit.program.body);
         pass.reserve_var_annotation_surfaces(scope, &unit.program.body);
+        pass.reserve_continuation_global_augmentation_surfaces(&unit.program.body, &mut surfaces);
         module_surfaces.push(surfaces);
     }
     let mut user_global_contributors = Vec::new();
@@ -2598,10 +2652,18 @@ pub fn check_program_with_owned_library<'ast>(
         .namespaces
         .validate_compilation_origin_index()
         .map_err(|_| "binder source-origin index conflict")?;
+    let reporting = reserve_continuation_reporting(
+        program,
+        ModuleOrdinal::new(0),
+        UnitSlot::new(0),
+        unit.binding,
+    )
+    .map_err(|_| "user lexical reservation failed")?;
     Ok(check_bound_user_program(
         &mut interner,
         binder,
         program,
+        reporting,
         base,
         |_, _, _, _, _| {},
     ))

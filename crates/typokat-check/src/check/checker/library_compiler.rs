@@ -7354,7 +7354,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
                 ),
             })));
         },
-    );
+    )?;
     record_user_source_checks_for_test(1);
     let check = check_started.elapsed();
     let final_identity = final_identity

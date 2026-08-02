@@ -3421,12 +3421,37 @@ impl Binder {
             .get(&(module, binding_start))
             .and_then(|global| self.namespaces.globals.get(global.index()))
             .map(|global| {
-                if global.issues.is_empty() && self.namespaces.uses_library_shared_globals() {
-                    global.target_scope
-                } else {
+                let uses_lexical_overlay = self
+                    .graph
+                    .get(global.overlay_scope)
+                    .is_some_and(|scope| scope.namespace_public == Some(global.target_scope));
+                if uses_lexical_overlay
+                    || !global.issues.is_empty()
+                    || !self.namespaces.uses_library_shared_globals()
+                {
                     global.overlay_scope
+                } else {
+                    global.target_scope
                 }
             })
+    }
+
+    pub fn continuation_global_augmentation_body_scope(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Option<ScopeId> {
+        let global = self
+            .namespaces
+            .global_augmentations_by_site
+            .get(&(module, binding_start))
+            .and_then(|global| self.namespaces.globals.get(global.index()))?;
+        (global.issues.is_empty()
+            && self
+                .graph
+                .get(global.overlay_scope)
+                .is_some_and(|scope| scope.namespace_public == Some(global.target_scope)))
+        .then_some(global.overlay_scope)
     }
 
     pub fn global_augmentation_requires_incomplete(
@@ -3787,6 +3812,72 @@ impl Binder {
                         .is_some_and(|symbol| symbol.ty.is_some());
             } else if let Some(reason) = root_deferred {
                 return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+            }
+
+            if scope_record.kind == ScopeKind::GlobalOverlay {
+                if let Some(public_scope) = scope_record.namespace_public {
+                    let public_record = match self.graph.get(public_scope) {
+                        Some(scope) => scope,
+                        None => {
+                            return QualifiedTypePathResolution::MissingRoot { segment: 0 };
+                        }
+                    };
+                    if public_scope == self.compilation_global {
+                        compilation_root_probe();
+                    }
+                    let public_owner = self.namespace_for_lookup_scope(public_scope);
+                    let public_root_merge = public_owner
+                        .is_none()
+                        .then(|| self.root_merge_record(public_scope, root_name))
+                        .flatten();
+                    let public_root_deferred =
+                        public_root_merge.and_then(Self::merge_deferred_reason);
+                    if let Some(symbol) = public_record.lookup_local(root_name) {
+                        if self
+                            .symbols
+                            .get(symbol)
+                            .is_some_and(|symbol| symbol.blocks_namespace_lookup)
+                        {
+                            return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                        }
+                        let view =
+                            self.qualified_symbol_view(public_owner, symbol, &mut Vec::new());
+                        if view.unavailable {
+                            return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                        }
+                        if let Some(reason) = view.deferred {
+                            return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+                        }
+                        if let Some(reason) = public_root_deferred {
+                            let known_target =
+                                view.namespace.is_some() || view.type_group.is_some();
+                            let admitted = public_root_merge.is_some_and(|record| {
+                                record.classification.disposition == MergeDisposition::Admitted
+                            });
+                            let concrete_import_namespace = reason
+                                == QualifiedTypePathDeferredReason::Import
+                                && view.namespace.is_some()
+                                && public_root_merge
+                                    .is_some_and(Self::has_qualified_import_namespace_target);
+                            if !known_target || (!admitted && !concrete_import_namespace) {
+                                return QualifiedTypePathResolution::Deferred {
+                                    segment: 0,
+                                    reason,
+                                };
+                            }
+                        }
+                        if let Some(namespace) = view.namespace {
+                            break namespace;
+                        }
+                        saw_type_root |= view.type_group.is_some()
+                            || self
+                                .symbols
+                                .get(symbol)
+                                .is_some_and(|symbol| symbol.ty.is_some());
+                    } else if let Some(reason) = public_root_deferred {
+                        return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+                    }
+                }
             }
 
             if scope_record.kind == ScopeKind::NamespacePrivate {
@@ -6517,12 +6608,21 @@ fn bind_global(
     if !declaration.declare && !context.ambient {
         issues.push(GlobalIssue::FutureTk2670);
     }
-    let overlay_scope = state.graph.push(Scope::new(
-        ScopeKind::GlobalOverlay,
-        Some(context.lexical_scope),
-    ));
     let legal = issues.is_empty();
     let default_global_scope = state.continuation_default_global_scope(compilation_global);
+    let uses_lexical_overlay = legal && state.continuation_active();
+    let overlay_scope = if uses_lexical_overlay {
+        state.global_augmentation_overlay_scope(
+            context.lexical_scope,
+            declaration.global_span.start,
+            default_global_scope,
+        )
+    } else {
+        state.graph.push(Scope::new(
+            ScopeKind::GlobalOverlay,
+            Some(context.lexical_scope),
+        ))
+    };
     let default_global_owner = if default_global_scope == compilation_global {
         DeclarationOwner::CompilationGlobal
     } else {
@@ -6551,18 +6651,19 @@ fn bind_global(
         declared: declaration.declare,
         members: Vec::new(),
     });
-    let global_lexical_scope = if legal && state.namespaces.uses_library_shared_globals() {
-        default_global_scope
-    } else {
-        overlay_scope
-    };
     let global_body = WalkContext {
         owner: if legal {
             default_global_owner
         } else {
             DeclarationOwner::Lexical(overlay_scope)
         },
-        lexical_scope: global_lexical_scope,
+        lexical_scope: if uses_lexical_overlay {
+            overlay_scope
+        } else if legal && state.namespaces.uses_library_shared_globals() {
+            default_global_scope
+        } else {
+            overlay_scope
+        },
         namespace: None,
         global: Some(id),
         deferred_module: None,

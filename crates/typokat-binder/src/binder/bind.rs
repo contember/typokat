@@ -463,6 +463,7 @@ impl LibraryBinderCheckpoint {
                     fn_scopes,
                     fn_decl_ids,
                     block_scopes,
+                    global_overlay_scopes: FxHashMap::default(),
                     placement_syntax: FxHashMap::default(),
                     symbol_declaration_orders: FxHashMap::default(),
                     current_module: module,
@@ -993,6 +994,8 @@ pub(crate) struct BindState {
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
     block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
+    /// Per-augmentation lexical overlays, shared by the declaration and metadata passes.
+    global_overlay_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// Syntax facts of the placement row each declaration bound by *this* build owns.
     /// Build-local on purpose: the readers only ever ask about the local placement
     /// delta, so a sealed base contributes no entry — exactly as the scan it replaces.
@@ -1058,10 +1061,34 @@ impl BindState {
         lexical_scope: ScopeId,
         binding_start: u32,
     ) -> ScopeId {
+        let lexical_publication_scope = self
+            .graph
+            .get(lexical_scope)
+            .filter(|scope| scope.kind == ScopeKind::GlobalOverlay)
+            .and_then(|scope| scope.namespace_public)
+            .unwrap_or(lexical_scope);
         self.continuation_publication
             .as_ref()
             .filter(|plan| plan.binding_sites.contains_key(&binding_start))
-            .map_or(lexical_scope, |plan| plan.compilation_global)
+            .map_or(lexical_publication_scope, |plan| plan.compilation_global)
+    }
+
+    pub(super) fn global_augmentation_overlay_scope(
+        &mut self,
+        lexical_parent: ScopeId,
+        binding_start: u32,
+        publication_scope: ScopeId,
+    ) -> ScopeId {
+        let key = (self.current_module, binding_start);
+        if let Some(scope) = self.global_overlay_scopes.get(&key) {
+            return *scope;
+        }
+        let overlay = self.graph.push(
+            Scope::new(ScopeKind::GlobalOverlay, Some(lexical_parent))
+                .with_namespace_public(publication_scope),
+        );
+        self.global_overlay_scopes.insert(key, overlay);
+        overlay
     }
 
     fn declaration_publication_scope(
@@ -1366,6 +1393,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
+            global_overlay_scopes: FxHashMap::default(),
             placement_syntax: FxHashMap::default(),
             symbol_declaration_orders: FxHashMap::default(),
             current_module: ScopeId(0),
@@ -1857,6 +1885,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     fn_scopes: FxHashMap::default(),
                     fn_decl_ids: FxHashMap::default(),
                     block_scopes: FxHashMap::default(),
+                    global_overlay_scopes: FxHashMap::default(),
                     placement_syntax: FxHashMap::default(),
                     symbol_declaration_orders: FxHashMap::default(),
                     current_module: module,
@@ -1972,7 +2001,16 @@ fn bind_library_statements(
             if unit.binding.external_module && (global.declare || unit.binding.declaration_file()) {
                 let default_global_scope =
                     state.continuation_default_global_scope(compilation_global);
-                bind_statements(state, default_global_scope, &global.body.body);
+                let lexical_scope = if state.continuation_active() {
+                    state.global_augmentation_overlay_scope(
+                        scope,
+                        global.global_span.start,
+                        default_global_scope,
+                    )
+                } else {
+                    default_global_scope
+                };
+                bind_statements(state, lexical_scope, &global.body.body);
             }
             continue;
         }

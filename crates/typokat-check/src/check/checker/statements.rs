@@ -144,6 +144,71 @@ impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    fn continuation_global_augmentation<'statement, 'program>(
+        &self,
+        statement: &'statement Statement<'program>,
+    ) -> Option<(u32, &'statement [Statement<'program>])> {
+        let global = match statement {
+            Statement::TSGlobalDeclaration(global) => global,
+            Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                Some(Declaration::TSGlobalDeclaration(global)) => global,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.binder
+            .continuation_global_augmentation_body_scope(
+                self.current_module,
+                global.global_span.start,
+            )
+            .map(|_| (global.global_span.start, global.body.body.as_slice()))
+    }
+
+    fn check_continuation_global_augmentation_body(
+        &mut self,
+        binding_start: u32,
+        body: &[Statement<'_>],
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
+    ) -> bool {
+        let Some(scope) = self
+            .binder
+            .continuation_global_augmentation_body_scope(self.current_module, binding_start)
+        else {
+            return false;
+        };
+        let mut no_return = None;
+        self.check_statement_list_with_surfaces_mode(
+            scope,
+            body,
+            None,
+            &mut no_return,
+            surfaces,
+            true,
+        );
+        true
+    }
+
+    pub(in crate::check::checker) fn reserve_continuation_global_augmentation_surfaces(
+        &mut self,
+        statements: &[Statement<'_>],
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
+    ) {
+        for statement in statements {
+            let Some((binding_start, body)) = self.continuation_global_augmentation(statement)
+            else {
+                continue;
+            };
+            let Some(scope) = self
+                .binder
+                .continuation_global_augmentation_body_scope(self.current_module, binding_start)
+            else {
+                continue;
+            };
+            self.reserve_function_surfaces_into(scope, body, surfaces);
+            self.reserve_var_annotation_surfaces(scope, body);
+        }
+    }
+
     fn selected_global_augmentation_requires_incomplete(&self, binding_start: u32) -> bool {
         if !self
             .binder
@@ -286,6 +351,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // Explicit `var` annotations are visible throughout their containing
         // function/module. The reservation does not inspect initializers or add flow.
         self.reserve_var_annotation_surfaces(scope, statements);
+        self.reserve_continuation_global_augmentation_surfaces(statements, &mut surfaces);
         self.check_statement_list_with_surfaces(
             scope,
             statements,
@@ -306,20 +372,48 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         inferred: &mut Option<TypeId>,
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
+        self.check_statement_list_with_surfaces_mode(
+            scope,
+            statements,
+            declared_ret,
+            inferred,
+            surfaces,
+            false,
+        );
+    }
+
+    fn check_statement_list_with_surfaces_mode(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
+        ambient: bool,
+    ) {
         let mut index = 0;
         while index < statements.len() {
+            if let Some((binding_start, body)) =
+                self.continuation_global_augmentation(&statements[index])
+            {
+                self.check_continuation_global_augmentation_body(binding_start, body, surfaces);
+                index += 1;
+                continue;
+            }
             if let Some((name, end)) = function_overload_group(statements, index) {
-                self.finalize_function_declaration_group(
+                self.finalize_function_declaration_group_with_publication(
                     scope,
                     &statements[index..end],
                     name,
                     surfaces,
+                    true,
+                    ambient,
                 );
                 index = end;
                 continue;
             }
             if let Some(func) = function_decl_from_statement(&statements[index]) {
-                self.finalize_function_declaration(scope, func, surfaces);
+                self.finalize_function_declaration_with_ambient(scope, func, surfaces, ambient);
                 index += 1;
                 continue;
             }
@@ -2013,16 +2107,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn finalize_function_declaration(
+    fn finalize_function_declaration_with_ambient(
         &mut self,
         scope: ScopeId,
         func: &Function<'_>,
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
+        ambient: bool,
     ) {
         if !self.fill_reserved_function_body(scope, func, surfaces, true) {
             return;
         }
-        if func.body.is_none() && !func.declare {
+        if func.body.is_none() && !func.declare && !ambient {
             let ticket = surfaces
                 .get(&func.span.start)
                 .and_then(|surface| match surface {
@@ -2041,18 +2136,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 )),
             }
         }
-    }
-
-    fn finalize_function_declaration_group(
-        &mut self,
-        scope: ScopeId,
-        statements: &[Statement<'_>],
-        name: &str,
-        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
-    ) {
-        self.finalize_function_declaration_group_with_publication(
-            scope, statements, name, surfaces, true, false,
-        );
     }
 
     /// Validate already-reserved namespace function rows without republishing them.
@@ -2158,7 +2241,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
 
         if function_group.is_some() {
-            if implementation.is_none()
+            if !ambient
+                && implementation.is_none()
                 && statements
                     .iter()
                     .filter_map(function_decl_from_statement)
@@ -2196,10 +2280,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let Some((implementation_ty, implementation_decl)) = implementation else {
             if let Some(overload_ty) = overload_ty {
                 if let Some((_, span, ticket)) = signatures.last() {
-                    if statements
-                        .iter()
-                        .filter_map(function_decl_from_statement)
-                        .any(|func| !func.declare)
+                    if !ambient
+                        && statements
+                            .iter()
+                            .filter_map(function_decl_from_statement)
+                            .any(|func| !func.declare)
                     {
                         match ticket {
                             Some(ticket) => self.with_ticket_effects(*ticket, |pass| {

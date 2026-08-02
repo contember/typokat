@@ -92,14 +92,32 @@ impl LexicalReservations<UserRecordTicket> {
         self.reserve_program_with(program, &mut allocator)
             .map_err(ReservationError::from)
     }
-}
 
-impl LexicalReservations<PrivateCombinedRecordTicket> {
-    pub(crate) fn reserve_private_user_program(
+    pub(crate) fn reserve_continuation_program(
         &mut self,
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
         program: &Program<'_>,
+        context: crate::binder::namespace::ModuleBindingContext,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        let mut allocator = UserReservationAllocator {
+            module_ordinal,
+            unit_slot,
+            store,
+        };
+        self.reserve_continuation_program_with(program, context, &mut allocator)
+            .map_err(ReservationError::from)
+    }
+}
+
+impl LexicalReservations<PrivateCombinedRecordTicket> {
+    pub(crate) fn reserve_private_continuation_program(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+        program: &Program<'_>,
+        context: crate::binder::namespace::ModuleBindingContext,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
         let mut allocator = PrivateCombinedUserReservationAllocator {
@@ -107,7 +125,7 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             unit_slot,
             store,
         };
-        self.reserve_program_with(program, &mut allocator)
+        self.reserve_continuation_program_with(program, context, &mut allocator)
             .map_err(ReservationError::from)
     }
 }

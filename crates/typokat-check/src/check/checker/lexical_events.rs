@@ -7,6 +7,7 @@ use super::replay_index::{
 use crate::binder::declaration::{
     source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
 };
+use crate::binder::namespace::ModuleBindingContext;
 #[cfg(test)]
 use crate::source::{ModuleOrdinal, UnitSlot};
 use crate::source::{SourceOrdinal, SourceUnit};
@@ -371,6 +372,30 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     where
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
+        self.reserve_program_with_context(program, None, allocator)
+    }
+
+    pub fn reserve_continuation_program_with<Allocator>(
+        &mut self,
+        program: &Program<'_>,
+        context: ModuleBindingContext,
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        self.reserve_program_with_context(program, Some(context), allocator)
+    }
+
+    fn reserve_program_with_context<Allocator>(
+        &mut self,
+        program: &Program<'_>,
+        global_context: Option<ModuleBindingContext>,
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
         let unit = allocator.source_unit();
         let ordinal = source_ordinal(unit);
         for occurrence in source_declaration_occurrences(program) {
@@ -419,7 +444,27 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             }
         }
         self.reserve_interface_occurrences_in_statements(unit, &program.body, allocator);
-        self.reserve_statement_list(unit, &program.body, true, allocator)
+        for statement in &program.body {
+            self.reserve_statement(unit, statement, true, allocator)?;
+            let Some(context) = global_context else {
+                continue;
+            };
+            let global = match statement {
+                Statement::TSGlobalDeclaration(global) => Some(global),
+                Statement::ExportNamedDeclaration(export) => match &export.declaration {
+                    Some(Declaration::TSGlobalDeclaration(global)) => Some(global),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(global) = global else {
+                continue;
+            };
+            if context.external_module && (global.declare || context.declaration_file()) {
+                self.reserve_statement_list(unit, &global.body.body, false, allocator)?;
+            }
+        }
+        Ok(())
     }
 
     fn reserve_interface_occurrences_in_statements<Allocator>(
