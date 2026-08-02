@@ -2,12 +2,10 @@
 
 use std::fmt;
 use std::io::{self, Write};
-use std::sync::Arc;
-use typokat::driver::FileReport;
+use typokat::driver::{DriverError, FileReport};
 use typokat::frontend::FileInput;
-use typokat::library::LibraryInitError;
 
-type ProductionProjectResult = Result<Vec<FileReport>, Arc<LibraryInitError>>;
+type ProductionProjectResult = Result<Vec<FileReport>, DriverError>;
 type ProductionProjectCheck = fn(Vec<FileInput>) -> ProductionProjectResult;
 
 // The generic IO core must remain instantiated by this exact production callback shape.
@@ -95,6 +93,14 @@ fn actual_check_dispatch_maps_provider_failure_to_exit_two_without_partial_outpu
     assert_eq!(
         String::from_utf8(stderr).expect("CLI stderr is UTF-8"),
         "error: failed to initialize embedded TypeScript 6.0.3 library: injected provider failure\n"
+    );
+}
+
+#[test]
+fn driver_infrastructure_failure_has_a_distinct_cli_prefix() {
+    assert_eq!(
+        super::format_driver_infrastructure_error(InjectedProviderError),
+        "driver infrastructure failure: injected provider failure"
     );
 }
 
