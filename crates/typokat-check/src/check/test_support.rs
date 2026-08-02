@@ -3,7 +3,11 @@
 use super::{check_program, check_project_programs, CheckResult};
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{run_project_frontend, run_source_frontend, FileInput, ProjectProgram};
+use crate::span::Span;
 use crate::types::Interner;
+
+// Match the production driver so deeply nested input reaches the checker's budget.
+const RAW_CHECK_STACK_SIZE: usize = 256 * 1024 * 1024;
 
 pub struct CheckOutput {
     pub diagnostics: Vec<Diagnostic>,
@@ -18,6 +22,13 @@ pub struct FileReport {
 }
 
 pub fn check_source(source: &str) -> CheckOutput {
+    match on_raw_check_worker(|| check_source_inner(source)) {
+        Ok(output) => output,
+        Err(context) => worker_failure_output(context),
+    }
+}
+
+fn check_source_inner(source: &str) -> CheckOutput {
     let run = run_source_frontend(source, |program| {
         let mut interner = Interner::with_intrinsics();
         check_program(&mut interner, program)
@@ -41,12 +52,37 @@ pub fn check_source(source: &str) -> CheckOutput {
 }
 
 pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
-    check_project_with_checker(inputs, |interner, units| {
+    if inputs.is_empty() {
+        return Vec::new();
+    }
+    let failed_inputs = inputs.clone();
+    match on_raw_check_worker(move || check_project_inner(inputs)) {
+        Ok(reports) => reports,
+        Err(context) => failed_inputs
+            .into_iter()
+            .map(|input| FileReport {
+                name: input.name,
+                source: input.source,
+                output: worker_failure_output(context.clone()),
+            })
+            .collect(),
+    }
+}
+
+fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
+    check_project_with_checker_inner(inputs, |interner, units| {
         check_project_programs(interner, units)
     })
 }
 
 pub fn check_project_with_checker<F>(inputs: Vec<FileInput>, check_project: F) -> Vec<FileReport>
+where
+    F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
+{
+    check_project_with_checker_inner(inputs, check_project)
+}
+
+fn check_project_with_checker_inner<F>(inputs: Vec<FileInput>, check_project: F) -> Vec<FileReport>
 where
     F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
 {
@@ -74,6 +110,34 @@ where
         super::checker::library_compiler::record_user_source_parses_for_test(units.len());
         check_project(units)
     })
+}
+
+fn on_raw_check_worker<T, W>(work: W) -> Result<T, String>
+where
+    T: Send,
+    W: FnOnce() -> T + Send,
+{
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(RAW_CHECK_STACK_SIZE)
+            .spawn_scoped(scope, work)
+            .map_err(|error| format!("cannot spawn the raw check worker: {error}"))?;
+        worker
+            .join()
+            .map_err(|_| "the raw check worker terminated unexpectedly".to_owned())
+    })
+}
+
+fn worker_failure_output(context: String) -> CheckOutput {
+    CheckOutput {
+        diagnostics: Vec::new(),
+        parse_errors: Vec::new(),
+        incomplete: vec![IncompleteSurface::new(
+            "test-support/check-worker/failure",
+            Span::new(0, 0),
+            context,
+        )],
+    }
 }
 
 fn reports_from_run(
