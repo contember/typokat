@@ -45,6 +45,31 @@ The build loop, per milestone `Mn`:
 5. **Leader commits** once green. Verify yourself (`cargo test` + `clippy` + spot-run the fixtures)
    before committing — committing unverified code is the one thing the leader owns.
 
+### Mandatory iteration protocol
+
+Use this protocol inside the milestone loop. It shortens feedback cycles; it does not replace any
+spec, review, differential, or final gate above.
+
+1. Keep exactly one active **RED/root-cause cluster**. Group failures only when evidence points to
+   one cause. Classify that cause before writing fixture-specific fixes: model gap, binder/checker
+   bug, relation/evaluator bug, diagnostic mismatch, or test/harness fault.
+2. Commit the spec first. Then run the narrowest crate or test gate that can observe the cluster.
+   A failed narrow gate is a hypothesis, not proof: falsify unrelated causes and use the required
+   negative control (for example, the same probe against the pre-change build) before attributing
+   it to the change. If the narrow gate cannot see the bug class, use the smallest gate that can.
+3. Give every agent explicit file ownership. Integrate each green cluster onto current `main`
+   immediately; do not accumulate fixes in long-lived worktrees that drift from `main`.
+4. Run full conformance when the cluster closes, not after every edit, unless no narrower gate can
+   observe the bug. Freeze the resulting small diff and hand that exact diff to the independent
+   adversarial reviewer. Start no new RED cluster until the reviewed cluster lands.
+5. Check progress every 20 minutes. Progress means an edit, a test result, or concrete root-cause
+   evidence. If there is none, transfer ownership and context to another implementation agent.
+6. Share a warm Cargo target directory when isolation is safe. Serialize every Cargo invocation
+   through one owner/queue and run it under an appropriate `cpu-lease`; never overlap Cargo jobs.
+7. At milestone closure, still run every required full gate: full conformance/`cargo test`, clippy,
+   fixture spot-runs, the independent `tsc --strict` adversarial review, and the randomized
+   differential gate when the change touches its scope. The leader runs and verifies these gates.
+
 ### Required extra gate: inference / contextual typing changes
 
 **If the change touches inference, contextual typing, argument walking, or overload resolution, the
