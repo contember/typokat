@@ -24,8 +24,8 @@ use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
-    ClassId, FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleType, TypeParamId,
-    TypeTag,
+    ClassId, FunctionType, GenericTypeParam, IntrinsicKind, ParameterType, TupleRestType,
+    TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::{instantiate_function, substitute, Interner, WellKnown};
@@ -1081,13 +1081,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
         let outcome = self.evaluate_type(callee_ty);
         let callee_ty = self.own_type_demand(outcome, call_span)?;
-        let signatures = self.callable_signatures(callee_ty);
-        if signatures.is_empty() {
-            if direct_standalone || self.provably_non_callable(callee_ty) {
+        let signatures = match self.callable_signatures(callee_ty) {
+            DemandOutcome::Ready(CallableSignatures::Ready(signatures)) => signatures,
+            DemandOutcome::Ready(CallableSignatures::ProvablyNone) => {
                 self.emit_diagnostic(Diagnostic::expression_is_not_callable(call_span));
+                return Some((wk.error, call_span));
             }
-            return Some((wk.error, call_span));
-        }
+            DemandOutcome::Ready(CallableSignatures::Unavailable) => {
+                if direct_standalone || self.provably_non_callable(callee_ty) {
+                    self.emit_diagnostic(Diagnostic::expression_is_not_callable(call_span));
+                }
+                return Some((wk.error, call_span));
+            }
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), call_span);
+                return None;
+            }
+        };
 
         let candidate = match self.select_call_candidate(
             scope,
@@ -1131,18 +1141,730 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     /// Callable signatures after apparent-type resolution: a function type or an
     /// object's ordered call-signature list.
-    fn callable_signatures(&mut self, callee_ty: TypeId) -> Vec<TypeId> {
+    fn callable_signatures(&mut self, callee_ty: TypeId) -> DemandOutcome<CallableSignatures> {
         let callee_ty = self.apparent_type(callee_ty);
         match self.interner.store().tag(callee_ty) {
-            TypeTag::Function => vec![callee_ty],
+            TypeTag::Function => DemandOutcome::Ready(CallableSignatures::Ready(vec![callee_ty])),
             TypeTag::Object => {
                 let Some(object) = self.interner.store().object_type(callee_ty) else {
-                    return Vec::new();
+                    return DemandOutcome::Ready(CallableSignatures::Unavailable);
                 };
-                object.call_signatures.clone()
+                if object.call_signatures.is_empty() {
+                    DemandOutcome::Ready(CallableSignatures::ProvablyNone)
+                } else {
+                    DemandOutcome::Ready(CallableSignatures::Ready(object.call_signatures.clone()))
+                }
             }
-            _ => Vec::new(),
+            TypeTag::Union => self.union_callable_signatures(callee_ty),
+            _ if self.provably_non_callable(callee_ty) => {
+                DemandOutcome::Ready(CallableSignatures::ProvablyNone)
+            }
+            _ => DemandOutcome::Ready(CallableSignatures::Unavailable),
         }
+    }
+
+    /// Build the signatures callable on every member of a union. This follows
+    /// TypeScript's ordered `getUnionSignatures` protocol: matching overload rows
+    /// are combined once, and the first duplicate row remains the representative.
+    fn union_callable_signatures(&mut self, union_ty: TypeId) -> DemandOutcome<CallableSignatures> {
+        let Some(members) = self.interner.store().union_members(union_ty) else {
+            return DemandOutcome::Ready(CallableSignatures::Unavailable);
+        };
+        let members = members.to_vec();
+        let mut lists = Vec::with_capacity(members.len());
+        for member in members {
+            match self.callable_signatures(member) {
+                DemandOutcome::Ready(CallableSignatures::Ready(signatures)) => {
+                    lists.push(signatures)
+                }
+                DemandOutcome::Ready(CallableSignatures::ProvablyNone) => {
+                    return DemandOutcome::Ready(CallableSignatures::ProvablyNone)
+                }
+                DemandOutcome::Ready(CallableSignatures::Unavailable) => {
+                    return DemandOutcome::Ready(CallableSignatures::Unavailable)
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+
+        match self.common_union_signatures(&lists) {
+            DemandOutcome::Ready(CommonUnionSignatures::Ready(signatures))
+                if signatures.is_empty() =>
+            {
+                DemandOutcome::Ready(CallableSignatures::ProvablyNone)
+            }
+            DemandOutcome::Ready(CommonUnionSignatures::Ready(signatures)) => {
+                DemandOutcome::Ready(CallableSignatures::Ready(signatures))
+            }
+            DemandOutcome::Ready(CommonUnionSignatures::Unavailable) => {
+                DemandOutcome::Ready(CallableSignatures::Unavailable)
+            }
+            DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        }
+    }
+
+    fn common_union_signatures(
+        &mut self,
+        lists: &[Vec<TypeId>],
+    ) -> DemandOutcome<CommonUnionSignatures> {
+        let mut result = Vec::new();
+        let mut overloaded_list = None;
+        let mut multiple_overloaded_lists = false;
+
+        for (list_index, list) in lists.iter().enumerate() {
+            if list.is_empty() {
+                return DemandOutcome::Ready(CommonUnionSignatures::Ready(Vec::new()));
+            }
+            if list.len() > 1 {
+                if overloaded_list.is_some() {
+                    multiple_overloaded_lists = true;
+                } else {
+                    overloaded_list = Some(list_index);
+                }
+            }
+            for &signature in list {
+                match self.find_matching_signature(&result, signature, false, true) {
+                    DemandOutcome::Ready(SignatureSearch::Found(_)) => continue,
+                    DemandOutcome::Ready(SignatureSearch::NotFound) => {}
+                    DemandOutcome::Ready(SignatureSearch::Unavailable) => {
+                        return DemandOutcome::Ready(CommonUnionSignatures::Unavailable)
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                }
+                let matches = match self.matching_union_signatures(lists, signature, list_index) {
+                    DemandOutcome::Ready(SignatureMatches::Found(matches)) => matches,
+                    DemandOutcome::Ready(SignatureMatches::NotFound) => continue,
+                    DemandOutcome::Ready(SignatureMatches::Unavailable) => {
+                        return DemandOutcome::Ready(CommonUnionSignatures::Unavailable)
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                };
+                let mut combined = Some(signature);
+                for matched in matches {
+                    if matched != signature {
+                        let Some(current) = combined else {
+                            break;
+                        };
+                        combined = match self.combine_union_signature_pair(current, matched) {
+                            DemandOutcome::Ready(SignatureCombination::Combined(combined)) => {
+                                Some(combined)
+                            }
+                            DemandOutcome::Ready(SignatureCombination::NoCommon) => None,
+                            DemandOutcome::Ready(SignatureCombination::Unavailable) => {
+                                return DemandOutcome::Ready(CommonUnionSignatures::Unavailable)
+                            }
+                            DemandOutcome::Exhausted(exhaustion) => {
+                                return DemandOutcome::Exhausted(exhaustion)
+                            }
+                        };
+                    }
+                }
+                if let Some(combined) = combined {
+                    result.push(combined);
+                }
+            }
+        }
+
+        if !result.is_empty() || multiple_overloaded_lists {
+            return DemandOutcome::Ready(CommonUnionSignatures::Ready(result));
+        }
+
+        let master_index = overloaded_list.unwrap_or(0);
+        let mut fallback = lists[master_index].clone();
+        for (list_index, list) in lists.iter().enumerate() {
+            if list_index == master_index {
+                continue;
+            }
+            let Some(&signature) = list.first() else {
+                return DemandOutcome::Ready(CommonUnionSignatures::Ready(Vec::new()));
+            };
+            let mut combined = Vec::with_capacity(fallback.len());
+            for existing in fallback {
+                let next = match self.combine_union_signature_pair(existing, signature) {
+                    DemandOutcome::Ready(SignatureCombination::Combined(next)) => next,
+                    DemandOutcome::Ready(SignatureCombination::NoCommon) => {
+                        return DemandOutcome::Ready(CommonUnionSignatures::Ready(Vec::new()))
+                    }
+                    DemandOutcome::Ready(SignatureCombination::Unavailable) => {
+                        return DemandOutcome::Ready(CommonUnionSignatures::Unavailable)
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                };
+                combined.push(next);
+            }
+            fallback = combined;
+        }
+        DemandOutcome::Ready(CommonUnionSignatures::Ready(fallback))
+    }
+
+    fn matching_union_signatures(
+        &mut self,
+        lists: &[Vec<TypeId>],
+        signature: TypeId,
+        list_index: usize,
+    ) -> DemandOutcome<SignatureMatches> {
+        let generic = self
+            .interner
+            .store()
+            .function_type(signature)
+            .is_some_and(|function| !function.type_params.is_empty());
+        if generic {
+            if list_index != 0 {
+                return DemandOutcome::Ready(SignatureMatches::NotFound);
+            }
+            for list in lists.iter().skip(1) {
+                match self.find_matching_signature(list, signature, false, false) {
+                    DemandOutcome::Ready(SignatureSearch::Found(_)) => {}
+                    DemandOutcome::Ready(SignatureSearch::NotFound) => {
+                        return DemandOutcome::Ready(SignatureMatches::NotFound)
+                    }
+                    DemandOutcome::Ready(SignatureSearch::Unavailable) => {
+                        return DemandOutcome::Ready(SignatureMatches::Unavailable)
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                }
+            }
+            return DemandOutcome::Ready(SignatureMatches::Found(vec![signature]));
+        }
+
+        let mut matches = Vec::new();
+        for (index, list) in lists.iter().enumerate() {
+            let matched = if index == list_index {
+                SignatureSearch::Found(signature)
+            } else {
+                match self.find_matching_signature(list, signature, false, true) {
+                    DemandOutcome::Ready(SignatureSearch::Found(found)) => {
+                        SignatureSearch::Found(found)
+                    }
+                    DemandOutcome::Ready(SignatureSearch::NotFound) => {
+                        match self.find_matching_signature(list, signature, true, true) {
+                            DemandOutcome::Ready(search) => search,
+                            DemandOutcome::Exhausted(exhaustion) => {
+                                return DemandOutcome::Exhausted(exhaustion)
+                            }
+                        }
+                    }
+                    DemandOutcome::Ready(SignatureSearch::Unavailable) => {
+                        return DemandOutcome::Ready(SignatureMatches::Unavailable)
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return DemandOutcome::Exhausted(exhaustion)
+                    }
+                }
+            };
+            let matched = match matched {
+                SignatureSearch::Found(matched) => matched,
+                SignatureSearch::NotFound => {
+                    return DemandOutcome::Ready(SignatureMatches::NotFound)
+                }
+                SignatureSearch::Unavailable => {
+                    return DemandOutcome::Ready(SignatureMatches::Unavailable)
+                }
+            };
+            if !matches.contains(&matched) {
+                matches.push(matched);
+            }
+        }
+        DemandOutcome::Ready(SignatureMatches::Found(matches))
+    }
+
+    fn find_matching_signature(
+        &mut self,
+        signatures: &[TypeId],
+        target: TypeId,
+        partial: bool,
+        ignore_return: bool,
+    ) -> DemandOutcome<SignatureSearch> {
+        let mut saw_unavailable = false;
+        for &source in signatures {
+            match self.signatures_identical(source, target, partial, ignore_return) {
+                DemandOutcome::Ready(SignatureComparison::Match) => {
+                    return DemandOutcome::Ready(SignatureSearch::Found(source))
+                }
+                DemandOutcome::Ready(SignatureComparison::Mismatch) => {}
+                DemandOutcome::Ready(SignatureComparison::Unavailable) => {
+                    saw_unavailable = true;
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+        DemandOutcome::Ready(if saw_unavailable {
+            SignatureSearch::Unavailable
+        } else {
+            SignatureSearch::NotFound
+        })
+    }
+
+    fn signatures_identical(
+        &mut self,
+        source_ty: TypeId,
+        target_ty: TypeId,
+        partial: bool,
+        ignore_return: bool,
+    ) -> DemandOutcome<SignatureComparison> {
+        let Some(source) = self.interner.store().function_type(source_ty).cloned() else {
+            return DemandOutcome::Ready(SignatureComparison::Unavailable);
+        };
+        let Some(target) = self.interner.store().function_type(target_ty).cloned() else {
+            return DemandOutcome::Ready(SignatureComparison::Unavailable);
+        };
+        let Some(source_count) = self.effective_parameter_count(&source) else {
+            return DemandOutcome::Ready(SignatureComparison::Unavailable);
+        };
+        let Some(target_count) = self.effective_parameter_count(&target) else {
+            return DemandOutcome::Ready(SignatureComparison::Unavailable);
+        };
+        let source_arity = self.call_arity(&source.params);
+        let target_arity = self.call_arity(&target.params);
+        let source_rest = source_arity.max.is_none();
+        let target_rest = target_arity.max.is_none();
+        let exact_shape = source_count == target_count
+            && source_arity.min == target_arity.min
+            && source_rest == target_rest;
+        let partial_shape = partial && source_arity.min <= target_arity.min;
+        if !exact_shape && !partial_shape {
+            return DemandOutcome::Ready(SignatureComparison::Mismatch);
+        }
+
+        let Some(map) = self.signature_alpha_map(&source, &target, true) else {
+            return DemandOutcome::Ready(SignatureComparison::Mismatch);
+        };
+        if let Some(source_receiver) = source.receiver {
+            let Some(target_receiver) = target.receiver else {
+                return DemandOutcome::Ready(SignatureComparison::Mismatch);
+            };
+            let source_receiver = substitute(self.interner, source_receiver, &map);
+            match self.compare_signature_types(source_receiver, target_receiver, partial, false) {
+                DemandOutcome::Ready(true) => {}
+                DemandOutcome::Ready(false) => {
+                    return DemandOutcome::Ready(SignatureComparison::Mismatch)
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+        for position in 0..target_count {
+            let source_param =
+                match self.signature_type_at_position(&source, position, target_count) {
+                    SignaturePosition::Type(ty) => ty,
+                    SignaturePosition::Missing => self.interner.well_known().any,
+                    SignaturePosition::Unavailable => {
+                        return DemandOutcome::Ready(SignatureComparison::Unavailable)
+                    }
+                };
+            let target_param =
+                match self.signature_type_at_position(&target, position, target_count) {
+                    SignaturePosition::Type(ty) => ty,
+                    SignaturePosition::Missing => self.interner.well_known().any,
+                    SignaturePosition::Unavailable => {
+                        return DemandOutcome::Ready(SignatureComparison::Unavailable)
+                    }
+                };
+            let source_param = substitute(self.interner, source_param, &map);
+            match self.compare_signature_types(source_param, target_param, partial, true) {
+                DemandOutcome::Ready(true) => {}
+                DemandOutcome::Ready(false) => {
+                    return DemandOutcome::Ready(SignatureComparison::Mismatch)
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+        if !ignore_return {
+            let source_ret = substitute(self.interner, source.ret, &map);
+            match self.compare_signature_types(source_ret, target.ret, partial, false) {
+                DemandOutcome::Ready(true) => {}
+                DemandOutcome::Ready(false) => {
+                    return DemandOutcome::Ready(SignatureComparison::Mismatch)
+                }
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion)
+                }
+            }
+        }
+        DemandOutcome::Ready(SignatureComparison::Match)
+    }
+
+    fn compare_signature_types(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        partial: bool,
+        reverse_partial: bool,
+    ) -> DemandOutcome<bool> {
+        if !partial {
+            return self.with_semantic_query(|query| query.is_identical(source, target));
+        }
+        let (source, target) = if reverse_partial {
+            (target, source)
+        } else {
+            (source, target)
+        };
+        match self.with_semantic_query(|query| query.is_assignable(source, target)) {
+            RelationOutcome::Yes => DemandOutcome::Ready(true),
+            RelationOutcome::No(_) => DemandOutcome::Ready(false),
+            RelationOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+        }
+    }
+
+    fn signature_alpha_map(
+        &mut self,
+        source: &FunctionType,
+        target: &FunctionType,
+        compare_defaults: bool,
+    ) -> Option<FxHashMap<TypeParamId, TypeId>> {
+        if source.type_params.len() != target.type_params.len() {
+            return None;
+        }
+        let mut map = FxHashMap::default();
+        for (source_param, target_param) in source.type_params.iter().zip(&target.type_params) {
+            let target_ty = self.interner.intern_type_param(target_param.id, "T");
+            map.insert(source_param.id, target_ty);
+        }
+        let unknown = self.interner.well_known().unknown;
+        for (source_param, target_param) in source.type_params.iter().zip(&target.type_params) {
+            let source_constraint = source_param.constraint.unwrap_or(unknown);
+            let target_constraint = target_param.constraint.unwrap_or(unknown);
+            if substitute(self.interner, source_constraint, &map) != target_constraint {
+                return None;
+            }
+            if compare_defaults {
+                let source_default = source_param.default.unwrap_or(unknown);
+                let target_default = target_param.default.unwrap_or(unknown);
+                if substitute(self.interner, source_default, &map) != target_default {
+                    return None;
+                }
+            }
+        }
+        Some(map)
+    }
+
+    fn combine_union_signature_pair(
+        &mut self,
+        left_ty: TypeId,
+        right_ty: TypeId,
+    ) -> DemandOutcome<SignatureCombination> {
+        let Some(left) = self.interner.store().function_type(left_ty).cloned() else {
+            return DemandOutcome::Ready(SignatureCombination::Unavailable);
+        };
+        let Some(right) = self.interner.store().function_type(right_ty).cloned() else {
+            return DemandOutcome::Ready(SignatureCombination::Unavailable);
+        };
+        let right_map = if right.type_params.is_empty() || left.type_params.is_empty() {
+            FxHashMap::default()
+        } else {
+            let Some(map) = self.signature_alpha_map(&right, &left, false) else {
+                return DemandOutcome::Ready(SignatureCombination::NoCommon);
+            };
+            map
+        };
+        match self.signatures_identical(right_ty, left_ty, false, true) {
+            DemandOutcome::Ready(SignatureComparison::Match) => {
+                let right_ret = substitute(self.interner, right.ret, &right_map);
+                let ret = self.interner.union(vec![left.ret, right_ret]);
+                return DemandOutcome::Ready(SignatureCombination::Combined(
+                    self.interner.intern_function(FunctionType {
+                        type_params: left.type_params,
+                        receiver: left.receiver,
+                        params: left.params,
+                        ret,
+                    }),
+                ));
+            }
+            DemandOutcome::Ready(SignatureComparison::Mismatch) => {}
+            DemandOutcome::Ready(SignatureComparison::Unavailable) => {
+                return DemandOutcome::Ready(SignatureCombination::Unavailable)
+            }
+            DemandOutcome::Exhausted(exhaustion) => return DemandOutcome::Exhausted(exhaustion),
+        }
+        if let Some(params) = self.combine_structured_rest_parameters(&left, &right, &right_map) {
+            let receiver = match (left.receiver, right.receiver) {
+                (Some(left), Some(right)) => {
+                    let right = substitute(self.interner, right, &right_map);
+                    Some(self.interner.intersection(vec![left, right]))
+                }
+                (Some(left), None) => Some(left),
+                (None, Some(right)) => Some(substitute(self.interner, right, &right_map)),
+                (None, None) => None,
+            };
+            let right_ret = substitute(self.interner, right.ret, &right_map);
+            let ret = self.interner.union(vec![left.ret, right_ret]);
+            let type_params = if left.type_params.is_empty() {
+                right.type_params
+            } else {
+                left.type_params
+            };
+            return DemandOutcome::Ready(SignatureCombination::Combined(
+                self.interner.intern_function(FunctionType {
+                    type_params,
+                    receiver,
+                    params,
+                    ret,
+                }),
+            ));
+        }
+        let Some(left_count) = self.effective_parameter_count(&left) else {
+            return DemandOutcome::Ready(SignatureCombination::Unavailable);
+        };
+        let Some(right_count) = self.effective_parameter_count(&right) else {
+            return DemandOutcome::Ready(SignatureCombination::Unavailable);
+        };
+        let (longest_is_right, longest_count) = if left_count >= right_count {
+            (false, left_count)
+        } else {
+            (true, right_count)
+        };
+        let left_arity = self.call_arity(&left.params);
+        let right_arity = self.call_arity(&right.params);
+        let either_rest = left_arity.max.is_none() || right_arity.max.is_none();
+        let longest_rest = if longest_is_right {
+            right_arity.max.is_none()
+        } else {
+            left_arity.max.is_none()
+        };
+        let needs_extra_rest = either_rest && !longest_rest;
+        let mut params = Vec::with_capacity(longest_count + usize::from(needs_extra_rest));
+        let unknown = self.interner.well_known().unknown;
+
+        for position in 0..longest_count {
+            let left_param = match self.signature_type_at_position(&left, position, longest_count) {
+                SignaturePosition::Type(ty) => ty,
+                SignaturePosition::Missing => unknown,
+                SignaturePosition::Unavailable => {
+                    return DemandOutcome::Ready(SignatureCombination::Unavailable)
+                }
+            };
+            let right_param = match self.signature_type_at_position(&right, position, longest_count)
+            {
+                SignaturePosition::Type(ty) => substitute(self.interner, ty, &right_map),
+                SignaturePosition::Missing => unknown,
+                SignaturePosition::Unavailable => {
+                    return DemandOutcome::Ready(SignatureCombination::Unavailable)
+                }
+            };
+            let ty = self.interner.intersection(vec![left_param, right_param]);
+            let name = self.combined_parameter_name(&left, &right, position);
+            let is_rest = either_rest && !needs_extra_rest && position + 1 == longest_count;
+            let optional = position >= left_arity.min && position >= right_arity.min;
+            params.push(if is_rest {
+                ParameterType::rest(name, self.interner.intern_array(ty))
+            } else if optional {
+                ParameterType::optional(name, ty)
+            } else {
+                ParameterType::required(name, ty)
+            });
+        }
+        if needs_extra_rest {
+            let shorter = if longest_is_right { &left } else { &right };
+            let mut ty =
+                match self.signature_type_at_position(shorter, longest_count, longest_count + 1) {
+                    SignaturePosition::Type(ty) => ty,
+                    SignaturePosition::Missing => {
+                        return DemandOutcome::Ready(SignatureCombination::NoCommon)
+                    }
+                    SignaturePosition::Unavailable => {
+                        return DemandOutcome::Ready(SignatureCombination::Unavailable)
+                    }
+                };
+            if !longest_is_right {
+                ty = substitute(self.interner, ty, &right_map);
+            }
+            params.push(ParameterType::rest("args", self.interner.intern_array(ty)));
+        }
+
+        let receiver = match (left.receiver, right.receiver) {
+            (Some(left), Some(right)) => {
+                let right = substitute(self.interner, right, &right_map);
+                Some(self.interner.intersection(vec![left, right]))
+            }
+            (Some(left), None) => Some(left),
+            (None, Some(right)) => Some(substitute(self.interner, right, &right_map)),
+            (None, None) => None,
+        };
+        let right_ret = substitute(self.interner, right.ret, &right_map);
+        let ret = self.interner.union(vec![left.ret, right_ret]);
+        let type_params = if left.type_params.is_empty() {
+            right.type_params
+        } else {
+            left.type_params
+        };
+        DemandOutcome::Ready(SignatureCombination::Combined(
+            self.interner.intern_function(FunctionType {
+                type_params,
+                receiver,
+                params,
+                ret,
+            }),
+        ))
+    }
+
+    /// Keep a tuple rest's required prefix and suffix around its variadic middle.
+    fn combine_structured_rest_parameters(
+        &mut self,
+        left: &FunctionType,
+        right: &FunctionType,
+        right_map: &FxHashMap<TypeParamId, TypeId>,
+    ) -> Option<Vec<ParameterType>> {
+        let left_fixed: Vec<&ParameterType> = left.fixed_params().collect();
+        let right_fixed: Vec<&ParameterType> = right.fixed_params().collect();
+        if left_fixed.len() != right_fixed.len() {
+            return None;
+        }
+        let left_rest = left.rest_param()?;
+        let right_rest = right.rest_param()?;
+        let left_shapes = self.rest_call_shapes(left_rest.ty)?;
+        let right_shapes = self.rest_call_shapes(right_rest.ty)?;
+        let [left_shape] = left_shapes.as_slice() else {
+            return None;
+        };
+        let [right_shape] = right_shapes.as_slice() else {
+            return None;
+        };
+        let (Some(left_middle), Some(right_middle)) = (left_shape.variadic, right_shape.variadic)
+        else {
+            return None;
+        };
+        if left_shape.prefix.len() != right_shape.prefix.len()
+            || left_shape.suffix.len() != right_shape.suffix.len()
+        {
+            return None;
+        }
+
+        let mut params = Vec::with_capacity(left_fixed.len() + 1);
+        for (position, (left_param, right_param)) in left_fixed.iter().zip(right_fixed).enumerate()
+        {
+            let right_ty = substitute(self.interner, right_param.ty, right_map);
+            let ty = self.interner.intersection(vec![left_param.ty, right_ty]);
+            let name = if left_param.name == right_param.name {
+                left_param.name.clone()
+            } else {
+                format!("arg{position}")
+            };
+            params.push(if left_param.optional && right_param.optional {
+                ParameterType::optional(name, ty)
+            } else {
+                ParameterType::required(name, ty)
+            });
+        }
+
+        let mut elements = Vec::with_capacity(left_shape.prefix.len() + left_shape.suffix.len());
+        for (&left_ty, &right_ty) in left_shape.prefix.iter().zip(&right_shape.prefix) {
+            let right_ty = substitute(self.interner, right_ty, right_map);
+            elements.push(self.interner.intersection(vec![left_ty, right_ty]));
+        }
+        let rest_position = elements.len();
+        for (&left_ty, &right_ty) in left_shape.suffix.iter().zip(&right_shape.suffix) {
+            let right_ty = substitute(self.interner, right_ty, right_map);
+            elements.push(self.interner.intersection(vec![left_ty, right_ty]));
+        }
+        let right_middle = substitute(self.interner, right_middle, right_map);
+        let middle = self.interner.intersection(vec![left_middle, right_middle]);
+        let middle = self.interner.intern_array(middle);
+        let tuple = self.interner.intern_tuple_type(TupleType::with_rest(
+            elements,
+            TupleRestType::new(rest_position, middle),
+        ));
+        let name = if left_rest.name == right_rest.name {
+            left_rest.name.clone()
+        } else {
+            "args".to_string()
+        };
+        params.push(ParameterType::rest(name, tuple));
+        Some(params)
+    }
+
+    fn effective_parameter_count(&self, function: &FunctionType) -> Option<usize> {
+        let fixed = function.total_fixed_param_count();
+        let Some(rest) = function.rest_param() else {
+            return Some(fixed);
+        };
+        let shapes = self.rest_call_shapes(rest.ty)?;
+        if shapes.len() > 1 {
+            return Some(fixed + 1);
+        }
+        let shape = shapes.first()?;
+        Some(
+            fixed + shape.prefix.len() + shape.suffix.len() + usize::from(shape.variadic.is_some()),
+        )
+    }
+
+    fn signature_type_at_position(
+        &mut self,
+        function: &FunctionType,
+        position: usize,
+        total_count: usize,
+    ) -> SignaturePosition {
+        let fixed: Vec<&ParameterType> = function.fixed_params().collect();
+        if let Some(parameter) = fixed.get(position) {
+            return SignaturePosition::Type(parameter.ty);
+        }
+        let Some(rest) = function.rest_param() else {
+            return SignaturePosition::Missing;
+        };
+        let Some(shapes) = self.rest_call_shapes(rest.ty) else {
+            return SignaturePosition::Unavailable;
+        };
+        let Some(offset) = position.checked_sub(fixed.len()) else {
+            return SignaturePosition::Missing;
+        };
+        let rest_count = total_count.saturating_sub(fixed.len());
+        let mut types = Vec::new();
+        for shape in shapes {
+            if let Some(ty) = shape.element_at(offset, rest_count) {
+                types.push(ty);
+            }
+        }
+        if types.is_empty() {
+            SignaturePosition::Missing
+        } else {
+            SignaturePosition::Type(self.interner.union(types))
+        }
+    }
+
+    fn combined_parameter_name(
+        &self,
+        left: &FunctionType,
+        right: &FunctionType,
+        position: usize,
+    ) -> String {
+        let left = self.signature_parameter_name(left, position);
+        let right = self.signature_parameter_name(right, position);
+        match (left, right) {
+            (Some(left), Some(right)) if left == right => left.to_string(),
+            (Some(left), None) => left.to_string(),
+            (None, Some(right)) => right.to_string(),
+            _ => format!("arg{position}"),
+        }
+    }
+
+    fn signature_parameter_name<'signature>(
+        &self,
+        function: &'signature FunctionType,
+        position: usize,
+    ) -> Option<&'signature str> {
+        let fixed: Vec<&ParameterType> = function.fixed_params().collect();
+        fixed
+            .get(position)
+            .map(|parameter| parameter.name.as_str())
+            .or_else(|| {
+                function
+                    .rest_param()
+                    .map(|parameter| parameter.name.as_str())
+            })
     }
 
     /// Keep TK2349 on types whose represented shape is conclusive. Deferred and
@@ -3773,6 +4495,47 @@ struct CallCandidate {
     params: Vec<ParameterType>,
     ret: TypeId,
     inference_exhaustion: Option<Exhaustion>,
+}
+
+enum CallableSignatures {
+    Ready(Vec<TypeId>),
+    ProvablyNone,
+    Unavailable,
+}
+
+enum CommonUnionSignatures {
+    Ready(Vec<TypeId>),
+    Unavailable,
+}
+
+enum SignatureSearch {
+    Found(TypeId),
+    NotFound,
+    Unavailable,
+}
+
+enum SignatureMatches {
+    Found(Vec<TypeId>),
+    NotFound,
+    Unavailable,
+}
+
+enum SignatureComparison {
+    Match,
+    Mismatch,
+    Unavailable,
+}
+
+enum SignatureCombination {
+    Combined(TypeId),
+    NoCommon,
+    Unavailable,
+}
+
+enum SignaturePosition {
+    Type(TypeId),
+    Missing,
+    Unavailable,
 }
 
 #[derive(Copy, Clone)]
