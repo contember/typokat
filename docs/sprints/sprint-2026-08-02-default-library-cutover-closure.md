@@ -125,21 +125,28 @@ assumption.
 - **Touch points.** Determined by WU2; expected binder declaration/namespace, checker publication,
   and conformance corpus paths.
 
-### WU4 — atomic production cutover (effort L)
+### WU4 — complete and unify the production cutover (effort L)
 
-- **Problem.** The public API, CLI, batch protocol, docs, and tests must switch together; a mixed
-  prelude/library state can make internal tests green while production still checks a different
-  universe.
+- **Problem.** Commit `f2e5bc2` started this work unit early: the public driver, CLI,
+  `library-info`, and official batch now use and attest the full-library provider, while the root
+  facade still exposes the raw checker, `prelude.ts` remains compiled into that route, and the
+  conformance harness deliberately uses it for `FixtureBase::Prelude`. The attestation is truthful
+  for the driver consumers that emit it, but it is not evidence that the repository has one type
+  universe. The planned atomic boundary has already been crossed and must not remain implicit.
 - **Verify first.** Re-audit `check_source`, `check_files`, `check_project`, CLI exit behavior,
-  `library-info`, batch supervision, parse failures, and provider lifecycle. Resolve driver-owned
-  infrastructure errors deliberately rather than adding them casually to `LibraryInitError`.
-- **Scope.** Land provider-backed public routes, `library-info`, official batch, production
-  `prelude.ts` deletion, cfg-gated test-support prelude, `FixtureBase` removal, warning cleanup, and
-  user-facing docs as one coherent cutover.
+  `library-info`, batch supervision, raw checker exports, parse failures, and provider lifecycle.
+  Treat `production-default-library` as a route attestation, not a repository-wide single-universe
+  claim, until the source-inventory guard passes.
+- **Scope.** Finish the cutover in one post-WU3 commit: delete production `prelude.ts`; move its
+  required fixture support behind the existing test-only feature; remove raw checker exports from
+  the root production facade; remove `FixtureBase` and route the conformance corpus through the
+  public driver; finish warning cleanup and user-facing docs. Re-verify the already-landed provider,
+  `library-info`, batch, and typed infrastructure behavior without reimplementing them.
 - **Acceptance / witness.** Production acceptance is executable and green; the provider probe says
-  `production-default-library`; no production source references the retired prelude; malformed
-  input remains exit 1, semantic incomplete remains exit 3, infrastructure failure remains typed
-  and fail-closed.
+  `production-default-library`; the source-inventory guard proves that no production source or
+  public facade references the retired prelude/raw route; conformance has no alternate base;
+  malformed input remains exit 1, semantic incomplete remains exit 3, and infrastructure failure
+  remains typed and fail-closed.
 - **Touch points.** Existing WU7 worktree files in driver/frontend/library/check/root CLI/tests.
 
 ### WU5 — semantic, cross-tool, package, and CI gates (effort L)
@@ -201,8 +208,9 @@ assumption.
 
 - The old sprint is historical evidence, not an active contract.
 - No more collision-route implementation lands before WU2 chooses the freeze boundary.
-- Parse routing and cutover plumbing are architecture-independent, but production cutover waits for
-  project-global semantics and full conformance.
+- `f2e5bc2` landed the provider-backed driver and route attestation before WU3 closed. This is a
+  partial WU4 cutover, not an atomic or complete one. No further WU4 implementation lands until
+  project-global semantics and full conformance close WU3.
 - WU8's default claim is the four-row full-library cutover claim, not universal checker speed.
 - A WU2 pivot requires a superseding ADR; an experiment alone cannot overrule ADR-0020.
 
@@ -222,15 +230,26 @@ semantic, production-acceptance, official-suite, differential, package, and CI g
 - **2026-08-02 — WU1 shipped.** Commits `914b66d` and `556f084` pin recoverable Oxc diagnostics,
   parser panics, all three public check shapes, the CLI, file ordering, and valid shared/private
   controls. Commit `f2e5bc2` rejects every parser diagnostic or panic before collision census and
-  semantic continuation, then reparses only to return canonical ordinary parser output. The minimal
-  dependency also makes provider initialization and driver infrastructure distinct typed failures;
-  it does not claim WU4's prelude deletion or unified conformance cleanup. The isolated candidate
+  semantic continuation, then reparses only to return canonical ordinary parser output. The
+  implementation also makes provider initialization and driver infrastructure distinct typed failures
+  and, more broadly than WU1 required, switches the public driver, CLI, `library-info`, and official
+  batch to the full-library provider. It does not complete WU4's prelude deletion or unified
+  conformance cleanup. The isolated candidate
   passed all seven parse-routing tests, all 25 collision-preflight tests, provider lifecycle 5/5,
   CLI fault routing 5/5, the unchanged ES5 readiness and library-owned-record oracles, and
   `cargo check --all-targets`. Independent adversarial review passed with no high or medium finding
   and confirmed no dependency on parked WU3 or local-`Array` work. The boundary deliberately follows
   Oxc parser diagnostics: `tsc` classifies the recoverable TS1063 witness differently and is not the
   WU1 diagnostic-phase oracle.
+- **2026-08-02 — WU4 boundary correction.** A supervisor audit found that `f2e5bc2` had begun WU4
+  while its commit title and the run log described only a minimal WU1 dependency. HEAD's
+  `production-default-library` value is truthful for each emitter: the CLI, `library-info`, and
+  official batch all acquire `LibraryBaseProvider` through the public driver. HEAD is nevertheless
+  mixed: `src/lib.rs` still re-exports raw checker functions that bootstrap `prelude.ts`, and
+  conformance intentionally calls their test-support equivalents for `FixtureBase::Prelude` rows.
+  The existing WU4 source-inventory acceptance remains RED and is the binding single-universe gate.
+  WU4 is therefore restated as completion of an already-started cutover, and further WU4 work is
+  paused behind WU3.
 - **2026-08-02 — WU2 retained ADR-0020.** Two independent read-only audits found a project binder
   barrier but no complete semantic-publication barrier before body checking. Unannotated variable,
   function, namespace-group, and class-field meanings still depend on initializer or body inference;
