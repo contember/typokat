@@ -1201,7 +1201,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .freeze(group, terminal);
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn freeze_seeded_type_groups(&mut self) {
         let groups: Vec<TypeGroupId> = self
             .type_decls
