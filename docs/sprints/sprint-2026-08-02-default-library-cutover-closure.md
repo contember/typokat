@@ -260,3 +260,17 @@ semantic, production-acceptance, official-suite, differential, package, and CI g
   replacing the affected closure is ADR-0020 itself. A later freeze would therefore require a new
   publication architecture or lose sharing, so the hard stop fired: no experimental path or
   superseding ADR is warranted, and WU3 proceeds through the sparse collision epoch.
+- **2026-08-03 — WU3 shipped.** Commit `49e9c0d` pinned the global-publication review failures;
+  `781f1b8` and `5910ed3` corrected their scope without rebaselining, and `e91f294` retired a stale
+  driver oracle. Independent review rejected eager prefill, raw checker access, and a dotted-name
+  panic. Commit `2974719` instead publishes legal global contributors incrementally in source order.
+  The resulting gates passed 824 checker tests, 105+1 binder tests, and all 625 conformance files.
+  Randomized differential testing found zero differences across 1,200 cases; its `412f321` negative
+  control fired on 92 of 400 cases.
+- **2026-08-03 — WU4 shipped.** Commit `b5988e0` removed the production prelude, raw root facade,
+  and `FixtureBase`; retained fixture support is test-only, while conformance now uses the public
+  driver. It also aligned the living docs and workspace inventory and removed the release-build
+  warning. Source inventory passed 6/6, parse routing 7/7, provider lifecycle 5/5, full conformance,
+  warning-free release build, production acceptance, and strict ReasonChain/profile parser tests.
+  The `.d.ts` exit correction from 0 to 3 records backlog 15's stale oracle: unsupported semantics
+  fail closed rather than succeeding silently.
