@@ -159,7 +159,7 @@ def validate_contract(contract: Any) -> dict[str, Any]:
         "license_bytes": 9_197,
         "third_party_notice_bytes": 37_824,
         "gitattributes_bytes": 165,
-        "profile_readme_bytes": 1_163,
+        "profile_readme_bytes": 1_127,
         "profile_notice_bytes": 1_036,
         "cargo_checks": 2,
         "build_scripts": 0,
@@ -193,7 +193,7 @@ def validate_contract(contract: Any) -> dict[str, Any]:
             "1af3c68039c57e539422da82a4faada506ce6d0ea6f90e0b699d02dbcdb7a90c"
         ),
         "gitattributes_sha256": "3f9153093b34fc664e5b6e0670710f9aed8f64c5f17b8a2b79fba1ae8e17b9f9",
-        "profile_readme_sha256": "93caed2f2cb291f00b7ab64e17a7f8f0d58b2d1619a0c9e2ea0e18b79c2057e4",
+        "profile_readme_sha256": "7706999fba59de5c5ce251208315f7b59c42fc3fb92a777d1073f59d0ca1a09c",
         "profile_notice_sha256": "401062e3feb78e115fabc467683d92574b1a99d776ce8b4962bdf422cfe7a5cc",
     }
     for key, expected in expected_digests.items():
@@ -610,7 +610,7 @@ def _profile_asset_inventory(profile_dir: Path, contract: dict[str, Any]) -> set
     )
     for name, size_key, digest_key, line_facts in (
         (".gitattributes", "gitattributes_bytes", "gitattributes_sha256", (6, 0, True)),
-        ("README.md", "profile_readme_bytes", "profile_readme_sha256", (20, 0, True)),
+        ("README.md", "profile_readme_bytes", "profile_readme_sha256", (19, 0, True)),
         ("THIRD_PARTY_NOTICE.md", "profile_notice_bytes", "profile_notice_sha256", (19, 0, True)),
     ):
         _exact_text_asset(

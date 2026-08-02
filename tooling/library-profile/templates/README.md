@@ -11,9 +11,9 @@ tracked `lib/` build artifacts at TypeScript commit
 published package artifacts and are not treated as equivalent provenance.
 
 Regenerate or verify this directory only through
-[`tooling/library-profile/profile.py`](../../../tooling/library-profile/profile.py), using explicit
-local npm-package and bare-Git inputs. The production default-library provider compiles this exact
-profile from source on first use.
+[`tooling/library-profile/profile.py`](../../../../tooling/library-profile/profile.py), using
+explicit local npm-package and bare-Git inputs. The production driver publishes this exact profile
+through its process-wide default-library provider.
 
 The copied Apache license and third-party notices apply to the vendored TypeScript artifacts. This
 directory does not select typokat's own crate license.
