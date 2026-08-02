@@ -2614,14 +2614,7 @@ const publishedWrong: boolean = published.value;
                 .collect::<Vec<_>>(),
             [DiagnosticCode::TK2339, DiagnosticCode::TK2322]
         );
-        assert_eq!(
-            output
-                .incomplete
-                .iter()
-                .map(|surface| surface.id.as_str())
-                .collect::<Vec<_>>(),
-            ["decl/global-declaration/self"]
-        );
+        assert!(output.incomplete.is_empty());
     }
 
     #[test]
