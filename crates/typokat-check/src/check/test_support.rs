@@ -1,6 +1,6 @@
 //! Checker-owned parse/check helpers for checker unit specifications.
 
-use super::{check_program, check_project_programs, CheckResult};
+use super::checker::{check_program, check_project_programs, CheckResult};
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{run_project_frontend, run_source_frontend, FileInput, ProjectProgram};
 use crate::span::Span;

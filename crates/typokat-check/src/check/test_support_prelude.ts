@@ -1,16 +1,4 @@
-// typokat prelude — built-in utility aliases plus a bounded ambient value slice.
-// It is checked as a REAL compilation unit before every user program.
-// Each alias is its ordinary lib.es5-style mapped/conditional definition, so the
-// shared M25-M27 evaluator machinery does all the work (no second evaluator).
-// Divergences from lib.es5.d.ts (documented in tests/cases/README.md):
-//  - ReturnType uses `never[]` instead of lib.es5.d.ts's `any[]`, preserving
-//    strict contravariant matching without introducing a permissive `any`.
-//  - Record's value parameter is named V (cosmetic).
-// The four string intrinsics are declared `= intrinsic` and seeded to their
-// well-known marker ids by name (the prelude is a trusted asset; a user
-// `= intrinsic` alias elsewhere is out of scope and degrades silently).
-// Transitional until the production full-library cutover: explicit Array<T>
-// resolves lexically while T[] remains the native syntax representation.
+// Test-only utility aliases and bounded ambient values for checker unit tests.
 type Array<T> = T[];
 type Partial<T> = { [P in keyof T]?: T[P] };
 type Required<T> = { [P in keyof T]-?: T[P] };

@@ -599,13 +599,14 @@ primitives) also stays DEFERRED — never a permissive `{}`.
 
 ## Utility types (M28)
 
-Implemented (M28): the standard aliases (Partial, Required, Readonly, Record, Pick, Omit, Exclude,
-Extract, NonNullable, ReturnType, ThisParameterType, and OmitThisParameter) are BUILT-INS via a prelude compilation unit (`crates/typokat-check/src/prelude.ts`). `OmitThisParameter`
-uses a trusted intrinsic specialization to preserve represented function parameter shape; the other
-aliases use the ordinary mapped/conditional machinery. The same
-canonical unit also supplies the deliberately bounded `console` (`log`/`warn`/`error`) and numeric
-`Math` ambient values; it does not claim general `lib.d.ts` fidelity. A user redeclaration shadows
-the matching prelude slot. `keyof <pending computation>` is a **deferred keyof** node
+Implemented (M28): production resolves the standard aliases (Partial, Required, Readonly, Record,
+Pick, Omit, Exclude, Extract, NonNullable, ReturnType, ThisParameterType, and
+OmitThisParameter), `console`, and `Math` from the pinned TypeScript 6.0.3 default library.
+`OmitThisParameter` uses a trusted intrinsic specialization to preserve represented function
+parameter shape; the other aliases use the ordinary mapped/conditional machinery. A user
+redeclaration follows the library merge/shadow rules. Raw checker unit tests use the separate
+test-only `crates/typokat-check/src/check/test_support_prelude.ts`; it is not a production library
+route. `keyof <pending computation>` is a **deferred keyof** node
 evaluated on demand (identical-node-only while deferred: rejects e.g. `x: T` against `keyof T`,
 matching tsc). Uppercase/Lowercase/Capitalize/Uncapitalize are evaluator intrinsics on string
 literals (distributing over unions; Rust char-wise case mapping — agrees with JS for the corpus,
@@ -618,7 +619,7 @@ including multi-char expansions like `ß` → `"SS"`).
   <!-- div: id=utility/unsupported-aliases dir=over scope=design-oos owner=design-oos witness=../../tests/cases/m28_utility_types -->
   <!-- div: id=utility/intrinsic-degradation dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m28_utility_types -->
 - **Documented divergences:**
-  - The prelude `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
+  - The test-support `ReturnType` uses a strict/sound `(...args: never[]) => infer R` match, so it handles
     non-nullary and rest functions without introducing the lib's permissive `any[]` constraint.
     Its modeled `(...args: never[]) => unknown` constraint is enforced through the shared alias
     constraint path, so non-callables report `TK2344` without introducing `any`.

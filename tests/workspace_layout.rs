@@ -333,12 +333,12 @@ fn workspace_internal_dependencies_are_exact_downward_and_acyclic() {
     assert_eq!(
         root_edges[&DependencyKind::Normal],
         names(MEMBERS),
-        "the root facade must re-export every member"
+        "the root package must depend on every member"
     );
     assert_eq!(
         root_edges[&DependencyKind::Dev],
-        names(&["typokat-core"]),
-        "the root owns only its reproducibility test utility"
+        names(&["typokat-check", "typokat-core"]),
+        "the root owns only its test-support dependencies"
     );
     assert!(root_edges[&DependencyKind::Build].is_empty());
 

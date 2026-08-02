@@ -222,7 +222,7 @@ keep at most one mismatched argument per call.
 | `m25_conditional_types/` | M25 — conditional types (resolution, distribution, `infer`, deferred conditionals, `TK2456`/`TK2589`) |
 | `m26_mapped_types/` | M26 — mapped types (`{ [K in keyof T]: … }`, modifiers, homomorphic preservation, deferred generics) |
 | `m27_template_literals/` | M27 — template literal types (construction/distribution, patterns, `infer` extraction, deferred generics) |
-| `m28_utility_types/` | M28 — built-in utility types (prelude aliases: Partial…Omit/ReturnType; Uppercase-family intrinsics) |
+| `m28_utility_types/` | M28 — utility types (production default-library aliases: Partial…Omit/ReturnType; Uppercase-family intrinsics) |
 | `m29_modules/` | M29 — local relative modules / named imports + exports across files (project fixture subdirectories) |
 | `m30_contextual_literals/` | M30 — contextual typing of fresh object / array / tuple literals |
 | `m31_intersections/` | M31 — intersection types (`A & B`): canonicalization, dual relation directions, merged member access + excess |
@@ -247,36 +247,18 @@ ledger.)
 Flat `.d.ts`/`.d.mts`/`.d.cts` fixtures run through the same one-file project
 path so their filename-derived declaration context is preserved.
 
-## Which base a corpus runs against
+## Fixture routing
 
-Every directory in `MILESTONE_DIRS` (`tests/conformance.rs`) carries a third field, a
-`FixtureBase`, naming the type universe its fixtures are checked in:
+Every enabled fixture runs through the same public production driver and the TypeScript 6.0.3
+default library. `MILESTONE_DIRS` rows carry only the directory and its enablement flag.
+`ENABLED_FIXTURES` and `ENABLED_PROJECT_FIXTURES` admit selected rows from mixed corpora without
+introducing a second checker route. Keep every referenced directory registered in
+`MILESTONE_DIRS`; the harness rejects an unregistered selected fixture. Mixed corpora stay
+registered `false` until the whole directory is ready.
 
-| `FixtureBase` | Universe | Driver entry points |
-|---|---|---|
-| `Prelude` | `crates/typokat-check/src/prelude.ts` — the production path | `check_source` / `check_project` |
-| `Library` | the full TypeScript 6.0.3 default library | `check_source_with_library` / `check_project_with_library` |
-
-The base is declared **once per directory** and applies to that directory's rows in
-`ENABLED_FIXTURES` and `ENABLED_PROJECT_FIXTURES` too, so a fixture's base is always readable
-from its corpus line. Every referenced directory must appear in `MILESTONE_DIRS` — a mixed
-corpus enabled only fixture by fixture (`b43_namespaces_declaration_merging`,
-`b14_full_lib_loading*`) is registered `false` there rather than omitted, and an unregistered
-directory fails the harness loudly instead of defaulting to `Prelude`.
-
-Only the backlog-14 corpora use `Library` today. The library entry points are deliberate,
-temporary siblings of the production ones — one library base, one compiler, a second *entry
-point* rather than a second ambient-loading path — and they go away when backlog 14 cuts
-production over. Everything else stays on the prelude path, byte for byte.
-
-The enabled backlog-14 slice follows the usual per-fixture convention: nine of the fourteen
-flat fixtures (`arrays_tuples_readonly.ts`, `generic_application_cache_diagnostics.ts`, `global_values.ts`,
-`iterator_library_local_nonleak.ts`, `library_identity_shadowing.ts`,
-`native_array_annotation_identity.ts`, `primitive_object_function_members.ts`,
-`promise_iterators_generators.ts`, `regexp_literals.ts`)
-and two of the twelve projects (`duplicate_global_deferred`, `fast_external_module`). The remaining
-fixtures await WU6 isolated verification and expectation reconciliation, with residual model gaps
-kept disabled.
+The enabled backlog-14 slice follows the usual per-fixture convention. The remaining fixtures
+await WU6 isolated verification and expectation reconciliation, with residual model gaps kept
+disabled.
 
 `native_array_annotation_identity.ts` pins the annotation side of the native-array bridge:
 `Array<T>` and `ReadonlyArray<T>` name the intrinsic array types themselves, so an annotation
@@ -337,19 +319,19 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b70_this_parameter_typing/` | shipped backlog `70` | explicit non-positional receiver slots, receiver calls/relation, ThisParameterType/OmitThisParameter, and contextual ThisType |
 | `b77_returntype_call_signatures/` | shipped backlog `77` | ReturnType extracts single and last-overload returns from represented object call signatures |
 | `b66_protected_override_compat/` | backlog `66` (disabled) | acceptance target for protected↔protected TK2416 plus the nested protected-lineage architecture stop gate owned by `63(d)` |
-| `b38_minimal_ambient_prelude/` | shipped backlog `38` | bounded `console` and numeric `Math` ambient declarations through the existing prelude compilation unit |
-| `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped prelude boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit prelude names, and local type-only exports do not acquire ambient value slots |
+| `b38_minimal_ambient_prelude/` | shipped backlog `38` | historical bounded `console` and numeric `Math` acceptance, now exercised through the production default library |
+| `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped ambient-library boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit library names, and local type-only exports do not acquire ambient value slots |
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
-| `b14_full_lib_loading/` | backlog `14` WU0A (9 of 14 enabled, `Library` base) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
-| `b14_full_lib_loading_project/` | backlog `14` WU0A (2 of 12 enabled, project-shaped, `Library` base) | fast external-module routing, collision/private-rebuild order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
-| `b102_frozen_prefix_writes/` | backlog `102`/`103` regression net (enabled, `Library` base) | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
-| `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped, `Library` base) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
-| `b103_library_merge_correctness/` | backlog `103` correctness tier (enabled, `Library` base) | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
-| `b103_library_merge_correctness_project/` | backlog `103` correctness tier (enabled, project-shaped, `Library` base) | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
+| `b14_full_lib_loading/` | backlog `14` (whole corpus enabled) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | backlog `14` (whole corpus enabled) | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b102_frozen_prefix_writes/` | backlog `102`/`103` regression net (enabled) | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
+| `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
+| `b103_library_merge_correctness/` | backlog `103` correctness tier (enabled) | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
+| `b103_library_merge_correctness_project/` | backlog `103` correctness tier (enabled, project-shaped) | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -369,8 +351,7 @@ to inference. Deliberately unpinned: a mixed-element literal against `[T, T]` (`
 inference-priority choices.
 
 `b102_frozen_prefix_writes/` and `b102_frozen_prefix_writes_project/` are the backlog-`102`
-corpora, checked against the `Library` base because the frozen prefix only exists there. Two
-halves. The **publication** half is project-shaped: an ordinary `globals.d.ts`-shaped script file
+corpora. The **publication** half is project-shaped: an ordinary `globals.d.ts`-shaped script file
 declaring an interface, `declare var`, `declare function`, `declare namespace`, `class`, and a
 `type` alias, consumed from a second file — once in declaration order and once with the consumer
 fed first, because the hoist reservations are per-form and a value slot filled only at its own
@@ -487,8 +468,8 @@ at most one mismatched argument per call, per the general call-marker rule above
 every arithmetic (`- * / % **`), bitwise (`& | ^`) and shift (`<< >> >>>`) operator
 produces `number`, so an ordinary annotation/argument/return mismatch downstream of
 an operator is reported instead of being absorbed by the error type — including
-through generic callback inference (`callback_inference.ts`, the prelude-base stand-in
-for `numbers.map((value) => value * 2)`). The **operand** half: `TK2362`/`TK2363` per
+through generic callback inference (`callback_inference.ts`, a compact witness in the unified
+production default-library context). The **operand** half: `TK2362`/`TK2363` per
 side, one diagnostic per bad side rather than a combined one, and `TK2365` for a `+`
 whose operands satisfy none of its string/number/`any` rules. The result stays `number`
 even when an operand is rejected, which is why most rows carry both an operand marker

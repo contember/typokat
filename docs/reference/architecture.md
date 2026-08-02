@@ -232,11 +232,12 @@ so it doesn't get silently folded into either neighbor.
 The implementation keeps type construction and semantic queries separated because the interner
 requires `&mut Interner` while the relation engine borrows the store immutably:
 
-1. **Prelude unit.** `crates/typokat-check/src/prelude.ts` is parsed, bound, reserved, and checked first in the same type
-   universe as the user program. The user pass keeps lifetime-free resolved type placeholders and
-   the prelude's `DeclId → TypeId` value entries; string intrinsic aliases are then seeded to
-   well-known marker types. Ordinary slot-aware parent lookup keeps user value/type declarations
-   able to shadow their corresponding prelude slots independently.
+1. **Default-library base.** The production driver acquires one process-wide
+   `LibraryBaseProvider`. Its first caller compiles the pinned 82-file TypeScript 6.0.3 profile
+   from source and freezes an AST-free type store plus immutable binder prefix. Each user project
+   continues from that base through either the shared delta or the sparse private collision epoch;
+   user value/type declarations retain ordinary slot-aware shadowing and merge rules. The small
+   `test_support_prelude.ts` universe exists only behind the checker crate's test-support feature.
 2. **Reservation and class publication.** The checker reserves class, alias, and interface
    identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
    before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction
@@ -545,21 +546,18 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   boundary while delegating physical Bundler resolution to `oxc_resolver`; project enumeration,
   graph construction, import/export semantics, `.d.ts` checking, diagnostics, and determinism stay
   in typokat ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
-- **Stage 1 — shared *read-only* default-library base (accepted, not yet shipped).**
+- **Stage 1 — shared *read-only* default-library base (shipped).**
   `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
   per-file interners is absurd. [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)
   accepts one AST-free frozen library `Store` **and immutable library binder prefix**, shared across
-  workers, with an identity-preserving private type/binder delta for each non-colliding run. A
-  conservative preflight routes any possible library-global collision or global-object
-  contribution to a correctness-first private rebuild of library + project in one universe; the
-  shared base is never mutated or partially overlaid. The implementation and pinned profile live
-  in `crates/typokat-library/src/`; production still uses
-  `crates/typokat-check/src/prelude.ts`. The
-  [2026-07-16 feasibility sprint](../archive/sprint-2026-07-16-full-lib-loading.md) ended at WU0
-  NO-GO after its unchanged 5-second cold gate exited 143; no cutover shipped. The active
-  [cutover-closure sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) now owns
-  backlog [14](../backlog/14-libdts-loading.md) and starts with a bounded decision gate over the
-  library-vs-project freeze boundary. A shipped semantic snapshot was built and then
+  workers, with an identity-preserving private type/binder delta for each non-colliding run.
+  Conservative preflight selects either that shared delta or ADR-0020's source-native sparse
+  private epoch for library-global merges; the immutable base is never mutated. The implementation
+  and pinned profile live in `crates/typokat-library/src/`, and every public driver/CLI route now
+  acquires that provider. The active
+  [cutover-closure sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) owns the
+  remaining cross-tool, package, CI, and authoritative timing gates for backlog
+  [14](../backlog/14-libdts-loading.md). A shipped semantic snapshot was built and then
   retired by [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md): the library is
   compiled from its 82 vendored sources in every process, because the checking pipeline was already
   at parity with pinned native TypeScript 7 and precomputing one fixed profile does nothing for

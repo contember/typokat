@@ -2,9 +2,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use toml::Value;
-use typokat::check::test_support::{check_project, CheckOutput};
 use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
+use typokat_check::check::test_support::{check_project, CheckOutput};
 
 const FIXTURE_DIR: &str = "tests/fixtures/lib-es5-6.0.3";
 const MANIFEST_PATH: &str = "tests/fixtures/lib-es5-6.0.3/readiness.toml";

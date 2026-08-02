@@ -26,9 +26,11 @@ owns the production base/delta and collision paths, the atomic driver cutover, a
 fresh-process target against pinned native TypeScript 7 on every approved semantic row. The earlier
 [`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
 first substitution and diagnostic-rendering barriers but ended at WU0 NO-GO: its authoritative
-5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8. No loader or
-cutover has shipped yet; `crates/typokat-check/src/prelude.ts` remains the production path until the active sprint's
-atomic acceptance gates pass.
+5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8. The current
+production driver and CLI now acquire the source-compiled frozen base, the conformance corpus has
+no alternate prelude route, and the retired production `prelude.ts` asset is gone. This item stays
+open until the active sprint completes its cross-tool, package, CI, authoritative timing, and
+independent closure gates.
 
 ## Problem
 
@@ -57,7 +59,7 @@ supplying them, not suppressing their diagnostics piecemeal.
 ## Approach / acceptance
 
 Parse and load the standard `lib.d.ts` declarations into the type universe as a shared read-only
-prelude. This is also where parallelism **Stage 1** lands — the shared read-only prelude across
+base. This is also where parallelism **Stage 1** lands — the shared read-only base across
 per-file workers (architecture §8.2). Acceptance: fixtures using `console`, array methods, and
 `Promise` check correctly against tsc. The Bundler-compatible full-stack ambient witness selected
 with backlogs `72`/`15` must no longer produce missing-global or standard-library-member noise;
@@ -70,8 +72,9 @@ library, `StrNum extends Array<string | number>` composes its real heritage surf
 pre-existing diagnostics in those files remain measurable. Run the full official-suite ratchet
 after the loader corpus passes; do not rebaseline away any newly exposed dependency.
 
-If the minimal prelude slice (`38`) exists by the time this item starts, replace it rather than
-forking a second ambient-loading path. The full library loader is the canonical mechanism.
+The full library loader replaced the minimal production prelude slice from backlog `38`; its small
+source copy remains only as raw checker test support. The production driver has one canonical
+default-library mechanism.
 
 ## Pinned start gate
 

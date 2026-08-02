@@ -4,6 +4,7 @@
 //! (§5.2) and soundness rules in `docs/reference/invariants.md`.
 
 use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
+#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::source_global_binding_census;
 use crate::binder::declaration::{DeclId, DeclarationKind, TypeGroupId, ValueStorageId};
@@ -30,12 +31,18 @@ use crate::types::layered::{LayeredMap, LayeredSet};
 use crate::types::repr::{ClassId, ObjectType, PropertyType};
 use crate::types::store::TypeId;
 use crate::types::Interner;
+#[cfg(any(test, feature = "test-utils"))]
 use oxc_allocator::Allocator;
+#[cfg(any(test, feature = "test-utils"))]
+use oxc_ast::ast::TSType;
 use oxc_ast::ast::{
-    Declaration, ExportSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement, TSType,
+    Declaration, ExportSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
 };
+#[cfg(any(test, feature = "test-utils"))]
 use oxc_parser::Parser;
-use oxc_span::{GetSpan, SourceType};
+use oxc_span::GetSpan;
+#[cfg(any(test, feature = "test-utils"))]
+use oxc_span::SourceType;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,9 +88,11 @@ use context::{
     InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
     Pass, ProvisionalArgumentWalk, TemplateFillTable, TypeDecl, TypeDeclTable, TypeResolvedTable,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use decls::type_decl_id;
 use decls::{
     reserve_type_decls, reserve_type_decls_for_combined_library, reserve_type_decls_selected,
-    type_decl_id, walk_type_decls, TopTypeDecl,
+    walk_type_decls, TopTypeDecl,
 };
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
 use events_library::{library_record_ticket_key, LibraryEventLedger, LibraryRecordTicket};
@@ -241,6 +250,7 @@ fn source_ordinal_from_origin(origin: CompilationOrigin) -> SourceOrdinal {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn reserve_internal_reporting(
     program: &Program<'_>,
     module_ordinal: ModuleOrdinal,
@@ -306,9 +316,11 @@ fn reserve_continuation_reporting(
     ))
 }
 
-/// Trusted utility aliases and bounded ambient values, checked before user code.
-pub(crate) const PRELUDE_SOURCE: &str = include_str!("../../prelude.ts");
+/// Test-only utility aliases and bounded ambient values for raw checker unit support.
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) const TEST_AMBIENT_SOURCE: &str = include_str!("../test_support_prelude.ts");
 
+#[cfg(any(test, feature = "test-utils"))]
 const TRUSTED_PRELUDE_INTRINSICS: [&str; 6] = [
     "OmitThisParameter",
     "Uppercase",
@@ -318,6 +330,7 @@ const TRUSTED_PRELUDE_INTRINSICS: [&str; 6] = [
     "ThisType",
 ];
 
+#[cfg(any(test, feature = "test-utils"))]
 fn expected_trusted_prelude_incomplete(
     binder: &Binder,
     program: &Program<'_>,
@@ -363,6 +376,7 @@ fn expected_trusted_prelude_incomplete(
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn trusted_prelude_records_are_clean(
     binder: &Binder,
     program: &Program<'_>,
@@ -378,6 +392,7 @@ fn trusted_prelude_records_are_clean(
 }
 
 /// Lifetime-free state handed from the trusted prelude pass to user checking.
+#[cfg(any(test, feature = "test-utils"))]
 struct TrustedPreludeHandoff {
     published_types: type_groups::PublishedTypeEnvironment,
     library_semantic_identities: Option<library_identities::LibrarySemanticIdentities>,
@@ -676,12 +691,13 @@ pub(in crate::check::checker) struct BoundUserBase {
 }
 
 /// Parse, bind, and check the trusted prelude in the caller's run-local type universe.
-fn bootstrap_trusted_prelude(
+#[cfg(any(test, feature = "test-utils"))]
+fn bootstrap_test_support_prelude(
     interner: &mut Interner,
     bind: impl FnOnce(&Program<'_>) -> Binder,
 ) -> (Binder, TrustedPreludeHandoff) {
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
+    let parsed = Parser::new(&allocator, TEST_AMBIENT_SOURCE, SourceType::ts()).parse();
     debug_assert!(
         !parsed.panicked && parsed.diagnostics.is_empty(),
         "the prelude must parse clean: {:?}",
@@ -835,7 +851,11 @@ fn emit_test_incomplete<Ticket: Copy + PartialEq>(pass: &mut Pass<'_, '_, Ticket
 }
 
 /// Check a parsed program and return the diagnostics plus incomplete surfaces it produces.
-pub fn check_program<'ast>(interner: &mut Interner, program: &'ast Program<'ast>) -> CheckResult {
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) fn check_program<'ast>(
+    interner: &mut Interner,
+    program: &'ast Program<'ast>,
+) -> CheckResult {
     check_program_inner(interner, program, |_, _, _, _, _| {})
 }
 
@@ -871,6 +891,7 @@ where
     )
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn check_program_inner<'ast, F>(
     interner: &mut Interner,
     program: &'ast Program<'ast>,
@@ -895,7 +916,7 @@ where
             next_type_param,
             next_class_id,
         },
-    ) = bootstrap_trusted_prelude(interner, |prelude| {
+    ) = bootstrap_test_support_prelude(interner, |prelude| {
         bind_module_with_prelude(prelude, program)
     });
 
@@ -1466,7 +1487,8 @@ fn selected_library_statement_lists<'ast>(
 
 /// Check a dependency-ordered project in one serial type universe. Returns one
 /// [`CheckResult`] per unit, indexed like `units`.
-pub fn check_project_programs<'ast>(
+#[cfg(any(test, feature = "test-utils"))]
+pub(crate) fn check_project_programs<'ast>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
 ) -> Vec<CheckResult> {
@@ -2941,6 +2963,7 @@ pub(crate) fn bind_library_checkpoint_project_programs(
     Ok(bound)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn bind_fresh_project_programs(
     prelude: &Program<'_>,
     units: &[ProjectProgram<'_>],
@@ -3181,6 +3204,7 @@ pub(crate) fn record_continuation_project_binding_consumed_for_test() {
     );
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn check_project_programs_inner<'ast, F, G, H>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
@@ -3233,7 +3257,7 @@ where
             mut next_type_param,
             mut next_class_id,
         },
-    ) = bootstrap_trusted_prelude(interner, |prelude| {
+    ) = bootstrap_test_support_prelude(interner, |prelude| {
         let bound =
             bind_fresh_project_programs(prelude, units, &lexical_events, &mut external_effects)
                 .expect("authoritative fresh project binding succeeds");
@@ -3820,6 +3844,7 @@ fn binding_name<'a>(pattern: &'a oxc_ast::ast::BindingPattern<'a>) -> Option<&'a
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn prelude_intrinsic_markers(interner: &Interner) -> [TypeId; 6] {
     let wk = interner.well_known();
     [
@@ -3832,6 +3857,7 @@ fn prelude_intrinsic_markers(interner: &Interner) -> [TypeId; 6] {
     ]
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 fn seed_prelude_intrinsics(
     binder: &Binder,
     type_resolved: &mut TypeResolvedTable,

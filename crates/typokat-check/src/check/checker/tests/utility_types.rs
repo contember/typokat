@@ -3,7 +3,7 @@
 //! preservation. Fixture acceptance lives in `m28_utility_types/`.
 
 use super::super::{
-    expected_trusted_prelude_incomplete, trusted_prelude_records_are_clean, PRELUDE_SOURCE,
+    expected_trusted_prelude_incomplete, trusted_prelude_records_are_clean, TEST_AMBIENT_SOURCE,
 };
 use crate::binder::bind_module_with_prelude;
 use crate::check::test_support::{check_project, check_source};
@@ -77,7 +77,7 @@ fn prelude_checks_clean() {
         "an empty program must be clean (the prelude never leaks diagnostics)"
     );
     assert!(
-        diags(PRELUDE_SOURCE).is_empty(),
+        diags(TEST_AMBIENT_SOURCE).is_empty(),
         "the prelude source must also check clean as ordinary user code"
     );
 }
@@ -85,7 +85,7 @@ fn prelude_checks_clean() {
 #[test]
 fn trusted_prelude_cleanliness_allowlist_is_exact() {
     let prelude_allocator = Allocator::default();
-    let prelude = Parser::new(&prelude_allocator, PRELUDE_SOURCE, SourceType::ts()).parse();
+    let prelude = Parser::new(&prelude_allocator, TEST_AMBIENT_SOURCE, SourceType::ts()).parse();
     let user_allocator = Allocator::default();
     let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
     let binder = bind_module_with_prelude(&prelude.program, &user.program);

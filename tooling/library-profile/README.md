@@ -33,8 +33,9 @@ The closure is reconstructed from raw `/// <reference lib>` edges rooted at
 `lib.es2025.full.d.ts`. Ordering independently follows the explicit package's `libEntries` table and
 is cross-checked against that package's own `tsc --strict --target es2025 --listFilesOnly`. The
 output contains raw upstream declarations and notices plus a deterministic `profile.toml`; no host
-tool or checkout is needed to inspect the committed result. This provenance tool does not wire a
-production reader; `crates/typokat-check/src/prelude.ts` remains active until the planned cutover.
+tool or checkout is needed to inspect the committed result. The production default-library
+provider compiles this exact checked-in profile from source on first use; this provenance tool does
+not participate in runtime loading.
 
 Run the standard-library-only tool tests with:
 

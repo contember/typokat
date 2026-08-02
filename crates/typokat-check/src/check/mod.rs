@@ -9,5 +9,4 @@ pub mod query;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_support;
 
-pub use checker::check_project_programs;
-pub use checker::{check_program, CheckResult};
+pub use checker::CheckResult;

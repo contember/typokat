@@ -69,11 +69,12 @@ decisions → reference → archive.
   (`tests/fixtures/library-owned-records.txt`), which narrows ADR-0011's "preserved exactly" to the
   pinned suite rather than the published base. The
   [`active sprint`](sprints/sprint-2026-08-02-default-library-cutover-closure.md) owns the bounded
-  freeze-boundary decision, production Stage-1 cutover, collision/fanout correctness, and the
-  cross-tool gate against native TypeScript 7. The
+  freeze-boundary decision, collision/fanout correctness, cross-tool gates, and authoritative
+  fresh-process timing against native TypeScript 7. The production Stage-1 cutover is now shipped:
+  the public driver and CLI use the source-compiled full library, conformance has no alternate base,
+  and the old production prelude asset is gone. The
   [`superseded 2026-07-21 sprint`](archive/sprint-2026-07-21-full-lib-performance-cutover.md)
-  remains the incomplete run and measurement record. Stage 1 is not yet shipped and
-  `crates/typokat-check/src/prelude.ts` remains production at HEAD until the atomic cutover.
+  remains the incomplete run and measurement record.
 - **Namespaces/declaration merging shipped 2026-07-16** (archived:
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable

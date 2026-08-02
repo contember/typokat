@@ -136,8 +136,8 @@ crates/
   typokat-surface/                              exhaustive Oxc AST surface classification
   typokat-frontend/                             parser and project dependency ordering
   typokat-check/
-    src/prelude.ts                              built-in utility types and bounded ambient unit
-    src/check/                                  checker, inference engine, and flow analysis
+    src/check/                                  checker, inference, flow, and test support
+    src/check/test_support_prelude.ts           test-only bounded ambient unit
   typokat-library/
     src/typescript-6.0.3/                       pinned default-library sources and notices
     src/{base,compiler,profile,provider}.rs      frozen library base and source compiler

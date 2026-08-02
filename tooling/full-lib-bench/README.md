@@ -6,9 +6,9 @@ TypeScript 6.0.3 ES2025-full cutover. It is deliberately separate from
 this gate measures normal default-library loading and rejects either flag.
 
 WU0A supplies the sole collector and structural evidence inspector. It stages and attests
-the native comparator, verifies the semantic oracles, proves today's production
-path RED, executes the frozen semantic/control/timing/memory commands, and
-rejects incomplete or ineligible evidence. WU8 runs this collector on the final
+the native comparator, verifies the semantic oracles, asserts the production route,
+executes the frozen semantic/control/timing/memory commands, and rejects incomplete or
+ineligible evidence. WU8 runs this collector on the final
 production binary without replacing its schema, commands, rows, or statistics.
 
 ## Frozen inputs
@@ -73,32 +73,21 @@ No npm/Node wrapper, daemon, `--noLib`, `--skipLibCheck`,
 custom `RUSTFLAGS`, test binary, or WU0 environment switch is eligible. Option
 matching is case-insensitive and handles `--name=value` spellings.
 
-## RED production acceptance
+## Production acceptance
 
-Build the ordinary release binary, then run the explicit RED witness:
+Build the ordinary release binary, then run the production witness:
 
 ```sh
 cargo build --release
-python3 tooling/full-lib-bench/full_lib_bench.py assert-red \
+python3 tooling/full-lib-bench/full_lib_bench.py assert-production \
   --typokat target/release/typokat
 ```
 
-At WU0A HEAD this succeeds only by observing the expected failure. The normal
-CLI still bootstraps `crates/typokat-check/src/prelude.ts`: `Promise`, DOM, Intl, Date and other
-library names are missing, native members are absent, regexp literals are
-incomplete, and the clean rows do not exit 0. This is the precise remaining RED
-reason—not a comparator or fixture failure.
-
-The future production assertion is intentionally disabled in the normal test
-run. Enabling it today must fail; after the real provider lands it must pass and
-`assert-red` must be retired:
+The normal self-test suite runs this acceptance against `target/release/typokat`; it is not hidden
+behind an environment switch:
 
 ```sh
-TYPOKAT_FULL_LIB_ACCEPTANCE=1 python3 -m unittest \
-  tooling/full-lib-bench/test_full_lib_bench.py
-
-python3 tooling/full-lib-bench/full_lib_bench.py assert-production \
-  --typokat target/release/typokat
+python3 -m unittest tooling/full-lib-bench/test_full_lib_bench.py
 ```
 
 `assert-production` runs the ordinary release CLI on all rows, demands exact
@@ -237,4 +226,4 @@ drift, window spacing/chronology, extra list files, normalized forbidden flags,
 duplicate/nonstandard JSON, malformed/live-flood output, timeout/orphan
 containment, offline non-authority, invalid RED preconditions, global PID reuse,
 missing windows/pre-reads, reordered memory, fast crashes, oracle digest drift,
-block-bootstrap determinism, and the disabled production acceptance.
+block-bootstrap determinism, and the live production acceptance.

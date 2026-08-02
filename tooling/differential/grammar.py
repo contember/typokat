@@ -25,8 +25,9 @@ All top-level names are prefixed (`g<seed>_<index>_…`) so a whole batch of gen
 programs can be handed to one `tsc` invocation without colliding in the global scope.
 The shrinker removes the prefix as its last step, when the repro is a single file.
 
-No `lib.d.ts` surface is used beyond what `crates/typokat-check/src/prelude.ts` provides: numbers, strings,
-booleans, object literals, arrays with element access. Nothing here depends on
+The generated programs stay within the bounded primitive/array subset also covered by the
+test-support ambient unit: numbers, strings, booleans, object literals, and arrays with element
+access. Nothing here depends on
 `Array.prototype`, `String.prototype`, or any ambient global.
 """
 

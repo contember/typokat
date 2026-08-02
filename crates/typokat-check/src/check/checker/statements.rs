@@ -349,6 +349,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// Check a list of statements in `scope` at the **module top level** (no enclosing
     /// function, so no return context). Each statement flows through the unified
     /// statement walker with an empty return context.
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn check_statements(
         &mut self,
         scope: ScopeId,

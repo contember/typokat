@@ -18,7 +18,7 @@ fn exhausted_class_default_constraint_does_not_fabricate_tk2344() {
     }
     source.push_str("class C { method<T extends A0 = B0>(): void {} }\n");
 
-    let result = check_source(&source).expect("production library initializes");
+    let result = check_source(&source).expect("production default library initializes");
     assert!(result.parse_errors.is_empty(), "{:?}", result.parse_errors);
     assert!(result
         .incomplete

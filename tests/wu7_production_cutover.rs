@@ -1,9 +1,7 @@
-//! RED acceptance for WU7's atomic production default-library cutover.
+//! Acceptance for WU7's atomic production default-library cutover.
 //!
-//! This deliberately tests public/process boundaries instead of calling the temporary
-//! `*_with_library` scaffolding. The full-library semantic probes fail on the current minimal
-//! prelude, while the source inventory fails until the old route and infallible worker edges are
-//! removed together.
+//! These tests exercise the public and process boundaries after cutover. They pin the unified
+//! full-library route, result-bearing worker edges, and the absence of a production prelude bypass.
 
 use std::fs;
 use std::path::PathBuf;
@@ -143,8 +141,7 @@ fn production_sources_have_one_result_bearing_provider_route_and_no_prelude_asse
         "packaged sources still advertise the retired prelude asset: {package_path_offenders:?}"
     );
     assert!(
-        !conformance.contains("FixtureBase::Prelude")
-            && !conformance.contains("FixtureBase::Library")
+        !conformance.contains("FixtureBase")
             && !conformance.contains("check_source_with_library")
             && !conformance.contains("check_project_with_library"),
         "conformance must use the same single production route as the CLI"
@@ -203,7 +200,7 @@ fn cli_full_library_error_probe_reports_the_user_error() {
     assert_eq!(output.status.code(), Some(1), "{output:#?}");
     assert!(output.stdout.is_empty(), "{output:#?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("error[TK2322]"),
+        String::from_utf8_lossy(&output.stderr).contains("error TK2322"),
         "{output:#?}"
     );
 }
@@ -213,9 +210,16 @@ fn cli_preserves_declaration_filename_semantics() {
     let source = "export as namespace Valid; export = Valid; declare function Valid(): void;";
     let output = run_cli_probe("valid-declaration", "d.ts", source);
 
-    assert_eq!(output.status.code(), Some(0), "{output:#?}");
+    assert_eq!(output.status.code(), Some(3), "{output:#?}");
+    assert!(output.stdout.is_empty(), "{output:#?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stdout.is_empty() && output.stderr.is_empty(),
+        stderr.contains("incomplete[decl/namespace-export/self]")
+            && stderr.contains("incomplete[decl/export-assignment/self]"),
+        "{output:#?}"
+    );
+    assert!(
+        !stderr.contains("error[TK") && !stderr.contains("error TK"),
         "{output:#?}"
     );
 }

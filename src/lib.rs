@@ -4,7 +4,6 @@
 //! architecture layers.
 
 pub use typokat_binder::binder;
-pub use typokat_check::check;
 pub use typokat_core::span;
 pub use typokat_diagnostics::diagnostics;
 pub use typokat_driver::driver;

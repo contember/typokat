@@ -16,175 +16,155 @@
 //! enabled. `MILESTONE_DIRS` enables whole corpora; `ENABLED_FIXTURES` gates a
 //! selected flat subset while the rest of its corpus remains disabled.
 //!
-//! Every corpus also names the **base** its fixtures are checked against
-//! ([`FixtureBase`]): `crates/typokat-check/src/prelude.ts` (production) or the full TypeScript 6.0.3 default
-//! library. The base is declared once per directory in `MILESTONE_DIRS` and applies to that
-//! directory's `ENABLED_FIXTURES` / `ENABLED_PROJECT_FIXTURES` rows too.
+//! Every corpus runs through the same production TypeScript 6.0.3 default-library route.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use typokat::driver::{check_project, check_source, CheckOutput};
+use typokat::driver::{check_project, check_source};
 use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
-use typokat_check::check::test_support::{
-    check_project as check_project_without_library, check_source as check_source_without_library,
-    on_raw_check_worker,
-};
+use typokat_check::check::test_support::on_raw_check_worker;
 
-use FixtureBase::{Library, Prelude};
-
-/// Which type universe a corpus's fixtures are checked in.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum FixtureBase {
-    /// `crates/typokat-check/src/prelude.ts` — the production path (`check_source` / `check_project`).
-    Prelude,
-    /// The full TypeScript 6.0.3 default library (`check_source_with_library` /
-    /// `check_project_with_library`). Backlog-14 scaffolding: the library entry points are a
-    /// temporary sibling of the production ones and go away with the WU7 cutover.
-    Library,
-}
-
-/// Milestone fixture directories under `tests/cases/`, each with its enablement flag and the
-/// base it is checked against. Only enabled dirs run. Enable later milestones here as they are
-/// implemented.
-const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
-    ("m0_assign_primitives", true, Prelude),
-    ("m1_binder_inference", true, Prelude),
-    ("m2_objects", true, Prelude),
-    ("m3_functions", true, Prelude),
-    ("m4_unions", true, Prelude),
-    ("m5_named_recursive", true, Prelude),
-    ("m6_reporting", true, Prelude),
-    ("m7_narrowing", true, Prelude),
-    ("m8_discriminated", true, Prelude),
-    ("m9_generics", true, Prelude),
-    ("m10_inference", true, Prelude),
-    ("m11_classes", true, Prelude),
-    ("m12_inheritance", true, Prelude),
-    ("m13_modifiers", true, Prelude),
-    ("m14_readonly", true, Prelude),
-    ("m15_accessors", true, Prelude),
-    ("m16_generic_classes", true, Prelude),
-    ("m17_arrays", true, Prelude),
-    ("m18_tuples", true, Prelude),
-    ("m19_index_sig", true, Prelude),
-    ("m20_keyof", true, Prelude),
-    ("m21_optional", true, Prelude),
-    ("m22_unresolved_type", true, Prelude),
-    ("m23_unstructured_narrowing", true, Prelude),
-    ("m24_generic_constraints", true, Prelude),
-    ("m25_conditional_types", true, Prelude),
-    ("m26_mapped_types", true, Prelude),
-    ("m27_template_literals", true, Prelude),
-    ("m28_utility_types", true, Prelude),
+/// Milestone fixture directories under `tests/cases/`, each with its enablement flag. Only
+/// enabled dirs run. Enable later milestones here as they are implemented.
+const MILESTONE_DIRS: &[(&str, bool)] = &[
+    ("m0_assign_primitives", true),
+    ("m1_binder_inference", true),
+    ("m2_objects", true),
+    ("m3_functions", true),
+    ("m4_unions", true),
+    ("m5_named_recursive", true),
+    ("m6_reporting", true),
+    ("m7_narrowing", true),
+    ("m8_discriminated", true),
+    ("m9_generics", true),
+    ("m10_inference", true),
+    ("m11_classes", true),
+    ("m12_inheritance", true),
+    ("m13_modifiers", true),
+    ("m14_readonly", true),
+    ("m15_accessors", true),
+    ("m16_generic_classes", true),
+    ("m17_arrays", true),
+    ("m18_tuples", true),
+    ("m19_index_sig", true),
+    ("m20_keyof", true),
+    ("m21_optional", true),
+    ("m22_unresolved_type", true),
+    ("m23_unstructured_narrowing", true),
+    ("m24_generic_constraints", true),
+    ("m25_conditional_types", true),
+    ("m26_mapped_types", true),
+    ("m27_template_literals", true),
+    ("m28_utility_types", true),
     // M29 modules are project fixtures (subdirectories with multiple files), not
     // flat single-file fixtures. Registered false by the spec commit; the
     // implementation commit extends the harness before flipping this on.
-    ("m29_modules", true, Prelude),
-    ("m30_contextual_literals", true, Prelude),
+    ("m29_modules", true),
+    ("m30_contextual_literals", true),
     // M31 intersection types. Registered false by the spec commit; the
     // implementation commit flips this on.
-    ("m31_intersections", true, Prelude),
-    ("m32_signature_shape", true, Prelude),
+    ("m31_intersections", true),
+    ("m32_signature_shape", true),
     // M33 function overloads. Registered false by the spec commit; the
     // implementation commit flips this on.
-    ("m33_function_overloads", true, Prelude),
+    ("m33_function_overloads", true),
     // Bug-fix corpora (official-suite findings / backlog items). Each is
     // committed `false` as a behavior-neutral spec, then flipped `true` by the
     // commit that lands its fix. See tests/cases/README.md ("Bug-fix corpora").
-    ("f1_object_interface_methods", true, Prelude),
-    ("f1_object_interface_call", true, Prelude),
-    ("f1_object_interface_construct", true, Prelude),
-    ("f3_class_member_collection", true, Prelude),
-    ("f4_destructuring_access", true, Prelude),
-    ("f5_union_readonly", true, Prelude),
+    ("f1_object_interface_methods", true),
+    ("f1_object_interface_call", true),
+    ("f1_object_interface_construct", true),
+    ("f3_class_member_collection", true),
+    ("f4_destructuring_access", true),
+    ("f5_union_readonly", true),
     // Backlog corpora (same mechanism, named by backlog item ID).
     // Backlog 41 generic methods/signatures.
-    ("b41_generic_methods", true, Prelude),
-    ("b06_class_completeness", true, Prelude),
-    ("b20_ctor_accessibility", true, Prelude),
+    ("b41_generic_methods", true),
+    ("b06_class_completeness", true),
+    ("b20_ctor_accessibility", true),
     // Backlog 22 — parenthesized/const-aliased class values must retain abstract
     // and constructor-accessibility facts. WU0 commits disabled; WU1 enables.
-    ("b22_new_callee_forms", true, Prelude),
-    ("b28_interface_extends", true, Prelude),
-    ("b29_alias_cycles", true, Prelude),
-    ("b30_negative_literals", true, Prelude),
+    ("b22_new_callee_forms", true),
+    ("b28_interface_extends", true),
+    ("b29_alias_cycles", true),
+    ("b30_negative_literals", true),
     // Backlog 32 — `keyof` must observe declarations filled later in source
     // order. WU0 commits the corpus disabled; the fix enables it.
-    ("b32_eager_keyof_forward", true, Prelude),
+    ("b32_eager_keyof_forward", true),
     // Backlog 30 JS-exact number stringification.
-    ("b30_numeric_stringify", true, Prelude),
-    ("b55_template_memo", true, Prelude),
+    ("b30_numeric_stringify", true),
+    ("b55_template_memo", true),
     // Backlog 56 — cycles must diagnose and taint ancestor evaluator frames so
     // no error-derived value reaches the durable memo. WU0 disabled; WU2 enables.
-    ("b56_instantiation_cycles", true, Prelude),
+    ("b56_instantiation_cycles", true),
     // Project fixtures (subdirectories, m29 convention) — see `PROJECT_DIRS`.
-    ("b58_project_scopes", true, Prelude),
-    ("b61_field_initializers", true, Prelude),
-    ("b53_cfg_assignments", true, Prelude),
-    ("b57_tuple_array_infer", true, Prelude),
-    ("b64_readonly_infer_binder", true, Prelude),
-    ("b34_fix_params_keyof", true, Prelude),
-    ("b33_as_cast_assignability", true, Prelude),
-    ("b54_labeled_statements", true, Prelude),
-    ("b59_modules_hygiene", true, Prelude),
-    ("b65_inference_candidate_policy", true, Prelude),
+    ("b58_project_scopes", true),
+    ("b61_field_initializers", true),
+    ("b53_cfg_assignments", true),
+    ("b57_tuple_array_infer", true),
+    ("b64_readonly_infer_binder", true),
+    ("b34_fix_params_keyof", true),
+    ("b33_as_cast_assignability", true),
+    ("b54_labeled_statements", true),
+    ("b59_modules_hygiene", true),
+    ("b65_inference_candidate_policy", true),
     // Backlog 45 — binary operator result typing plus the arithmetic operand rule
     // (TK2362/TK2363) and the `+` general mismatch (TK2365). Enabled by its spec
     // commit, which is RED until the implementation lands.
-    ("b45_operator_result_typing", true, Prelude),
+    ("b45_operator_result_typing", true),
     // Backlog 101 — a ternary and a logical expression carry a real VALUE type (the
     // arm union / the falsy-truthy-nullish split joined with the right operand)
     // instead of the error type, so everything downstream of them is checked again.
     // Enabled by its spec commit, which is RED until the implementation lands.
-    ("b101_conditional_logical_values", true, Prelude),
+    ("b101_conditional_logical_values", true),
     // Backlog 104 — the excess-property check must descend through a ternary / logical
     // into the operands the target contextually shapes, instead of recognising an object
     // literal only DIRECTLY in the checked position. Enabled by its spec commit, which is
     // RED until the implementation lands.
-    ("b104_excess_property_descent", true, Prelude),
+    ("b104_excess_property_descent", true),
     // Backlog 87 — the reason chain must be bounded like the type renderer next to it:
     // past REASON_DEPTH_LIMIT nesting levels it collapses to one elision line plus the
     // retained innermost cause, and the indent stops growing. Enabled by its spec commit,
     // which is RED until the implementation lands.
-    ("b87_reason_chain_depth", true, Prelude),
+    ("b87_reason_chain_depth", true),
     // Backlog 100 — a composed condition (`&&`, `||`, and `!` over them) must narrow
     // the branch it guards. `analyze_guard` has no `LogicalExpression` arm and
     // `build_flow_logical` joins both senses back together, so today the guarded branch
     // reads the DECLARED union. Enabled by its spec commit, which is RED until the
     // implementation lands. See tests/cases/README.md ("Bug-fix corpora").
-    ("b100_logical_condition_narrowing", true, Prelude),
+    ("b100_logical_condition_narrowing", true),
     // ADR-0016 review finding — a cached failure must not change WHICH failure a
     // later, independent statement reports. Committed `false`: the trio only goes
     // green with the `getUnmatchedProperty`-style presence pass in `relate_objects`,
     // which is filed separately. See `docs/reference/divergences.md`.
-    ("b91_missing_property_presence", false, Prelude),
+    ("b91_missing_property_presence", false),
     // Backlog 92 — one error nested `d` levels deep inside contextually typed
     // arguments is reported once, not 2^d times: exactly one of the raw and the
     // committed argument walk commits per level. The per-line multiset rule in
     // `compare_fixture_output` is what turns a single marker into an
     // exactly-once assertion — no marker-format change is involved.
-    ("b92_contextual_duplicate_diagnostics", true, Prelude),
+    ("b92_contextual_duplicate_diagnostics", true),
     // Backlog 67 shipped; backlog 66 remains disabled behind its protected-lineage
     // architecture stop gate (backlog 63d).
-    ("b67_utility_alias_constraint", true, Prelude),
+    ("b67_utility_alias_constraint", true),
     // Backlog 70 — explicit receiver slots, receiver call diagnostics, lib.es5
     // receiver utilities, and contextual ThisType.
-    ("b70_this_parameter_typing", true, Prelude),
+    ("b70_this_parameter_typing", true),
     // Backlog 77 — conditional infer must extract the last represented object
     // call-signature return. WU0 commits disabled; WU3 enables.
-    ("b77_returntype_call_signatures", true, Prelude),
+    ("b77_returntype_call_signatures", true),
     // Backlog 78 — generic class const aliases retain substitution and class facts.
     // Review byproduct from backlog 22; independently disabled.
-    ("b78_generic_class_value_aliases", false, Prelude),
-    ("b66_protected_override_compat", false, Prelude),
+    ("b78_generic_class_value_aliases", false),
+    ("b66_protected_override_compat", false),
     // Backlog 38 minimal ambient prelude. WU1 commits this corpus disabled;
     // WU2 flips it on with the canonical prelude declarations.
-    ("b38_minimal_ambient_prelude", true, Prelude),
+    ("b38_minimal_ambient_prelude", true),
     // Backlog 38 follow-up: prelude lookup must not cross a type-only import
     // barrier or a module export boundary. Project-shaped; see PROJECT_DIRS.
-    ("b38_prelude_lookup_boundaries", true, Prelude),
+    ("b38_prelude_lookup_boundaries", true),
     // Soundness-review-fixes sprint (2026-07-10) WU0 corpora. Each is committed
     // `false` (behavior-neutral spec); WU1-WU3 flip only their own dir when the
     // fix lands, the deferred-ledger dir stays `false` beyond this sprint. See
@@ -192,65 +172,64 @@ const MILESTONE_DIRS: &[(&str, bool, FixtureBase)] = &[
     // tests/cases/README.md ("Soundness-review corpora").
     // WU1 — nested assignment expressions, complete return inference, loop/throw
     // body checking (findings 1-3).
-    ("sr_wu1_expressions", true, Prelude),
+    ("sr_wu1_expressions", true),
     // WU2 — switch-local scope boundary + local function overloads (findings 5-6).
-    ("sr_wu2_scope_overloads", true, Prelude),
+    ("sr_wu2_scope_overloads", true),
     // WU2 — type-only export/value separation (finding 4). Project-shaped; also
     // registered in PROJECT_DIRS below.
-    ("sr_wu2_export_space", true, Prelude),
+    ("sr_wu2_export_space", true),
     // WU3 — any&never, source-intersection nominal origin, string-index keyof,
     // recursive mapped types, deep-annotation depth guard (findings 7-10 + backlog
     // 63k). NOTE: recursive_mapped.ts and deep_annotation.ts stack-overflow at HEAD
     // and only become safe to run once WU3's recursion/depth guards land.
-    ("sr_wu3_types_recursion", true, Prelude),
+    ("sr_wu3_types_recursion", true),
     // Deferred ledger — known under-reports from backlogs 18, 60, 62, 66, and
     // 76. Backlogs 56 and 77 moved to isolated corpora above.
-    ("sr_deferred_ledger", false, Prelude),
+    ("sr_deferred_ledger", false),
     // Rewrite/hotpath-hardening sprint (2026-07-13) WU0 acceptance corpus.
     // Enabled after WU1-WU3 landed their owning fixes; overload_trial_depth.ts
     // continues to pin tsc parity with the architecture probes.
-    ("sr_rewrite_hotpath_wu0", true, Prelude),
+    ("sr_rewrite_hotpath_wu0", true),
     // WU7 — deep acyclic generic metadata reaches both auxiliary structural
     // walkers. Enabled after their separate heap task/value stacks landed; their
     // distinct rewrite and constraint-evaluation policies remain covered directly.
-    ("sr_rewrite_hotpath_wu7", true, Prelude),
+    ("sr_rewrite_hotpath_wu7", true),
     // WU8 — mapped-value replacement uses its own local iterative work stack;
     // the enabled corpus pins both the shallow source route and generic metadata.
-    ("sr_rewrite_hotpath_wu8", true, Prelude),
+    ("sr_rewrite_hotpath_wu8", true),
     // Semantic-duplication/layering sprint WU1 — immutable class applications,
     // one-time class surface lowering, lexical effects, and typed exhaustion.
-    ("sr_semantic_duplication", true, Prelude),
+    ("sr_semantic_duplication", true),
     // Cross-module/opposite-order class publication. Project-shaped; also
     // registered in PROJECT_DIRS below.
-    ("sr_semantic_duplication_project", true, Prelude),
+    ("sr_semantic_duplication_project", true),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the
     // fixtures emit their prescribed `incomplete[<role/surface/slot>]` records and/or
     // ordinary `error[TK…]`, diffed by `compare_incomplete_output` /
     // `compare_fixture_output`. See tests/cases/README.md ("Surface-accounting corpus").
-    ("b73_surface_accounting", true, Prelude),
+    ("b73_surface_accounting", true),
     // Backlog 73 expression-shape tail. WU1 makes every remaining `infer_expr`
     // shape explicit, retaining nested diagnostics before incomplete emissions.
-    ("b73_expression_shape_tail", true, Library),
+    ("b73_expression_shape_tail", true),
     // Backlog 74 declaration-hoisting parity. Enabled after WU1 and WU2 land.
-    ("b74_declaration_hoisting", true, Prelude),
+    ("b74_declaration_hoisting", true),
     // Namespace/declaration-merging sprint. A mixed flat/project corpus: the directory stays
     // `false` and its admitted slice is enabled fixture by fixture through `ENABLED_FIXTURES`
-    // and `ENABLED_PROJECT_FIXTURES`. Registered here so every corpus declares its base.
-    ("b43_namespaces_declaration_merging", false, Prelude),
-    // Backlog 14 full TypeScript 6.0.3 default-library loading — the only corpora checked
-    // against `Library`.
-    ("b14_full_lib_loading", true, Library),
-    ("b14_full_lib_loading_project", true, Library),
+    // and `ENABLED_PROJECT_FIXTURES`.
+    ("b43_namespaces_declaration_merging", false),
+    // Backlog 14 full TypeScript 6.0.3 default-library loading. Both corpora run in full.
+    ("b14_full_lib_loading", true),
+    ("b14_full_lib_loading_project", true),
     // Backlog 102 — a binder write that lands inside the frozen library prefix must either reach
     // a delta-side scope (fresh script globals) or be recorded (a library-owned row), never
-    // vanish. Checked against `Library`, because the prefix only exists on that base.
-    ("b102_frozen_prefix_writes", true, Library),
-    ("b102_frozen_prefix_writes_project", true, Library),
+    // vanish.
+    ("b102_frozen_prefix_writes", true),
+    ("b102_frozen_prefix_writes_project", true),
     // Backlog 103 correctness tier — collisions route through one sparse private epoch.
-    ("b103_library_merge_correctness", true, Library),
-    ("b103_library_merge_correctness_project", true, Library),
+    ("b103_library_merge_correctness", true),
+    ("b103_library_merge_correctness_project", true),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -265,16 +244,15 @@ const PROJECT_DIRS: &[&str] = &[
     // Soundness-review WU2 type-only export/value separation (finding 4).
     "sr_wu2_export_space",
     "sr_semantic_duplication_project",
-    // Backlog 14 collision/preflight routing matrix, checked against the `Library` base.
+    // Backlog 14 collision/preflight routing matrix.
     "b14_full_lib_loading_project",
-    // Backlog 102 cross-file script globals, checked against the `Library` base.
+    // Backlog 102 cross-file script globals.
     "b102_frozen_prefix_writes_project",
-    // Backlog 103 successful private-merge acceptance, checked against the `Library` base.
+    // Backlog 103 successful private-merge acceptance.
     "b103_library_merge_correctness_project",
 ];
 
-/// Selected project fixtures enabled before their mixed flat/project corpus closes. Each runs
-/// against the base its directory declares in `MILESTONE_DIRS`.
+/// Selected project fixtures enabled before their mixed flat/project corpus closes.
 const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
     (
         "b43_namespaces_declaration_merging",
@@ -298,7 +276,7 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 
 /// Flat fixtures that are enabled before their containing corpus can run in
 /// full. Keep this list path-sorted so execution and failure aggregation stay
-/// deterministic. Each runs against the base its directory declares in `MILESTONE_DIRS`.
+/// deterministic.
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
     (
         "b43_namespaces_declaration_merging",
@@ -577,7 +555,7 @@ fn conformance_on_worker() {
     let mut failures: Vec<String> = Vec::new();
     let mut files_checked = 0usize;
 
-    for (dir, enabled, base) in MILESTONE_DIRS {
+    for (dir, enabled) in MILESTONE_DIRS {
         if !*enabled {
             continue;
         }
@@ -593,7 +571,7 @@ fn conformance_on_worker() {
             for project in projects {
                 let fixtures = discover_ts_files_recursive(&project);
                 files_checked += fixtures.len();
-                if let Err(project_failures) = run_project_fixture(&project, fixtures, *base) {
+                if let Err(project_failures) = run_project_fixture(&project, fixtures) {
                     failures.extend(project_failures);
                 }
             }
@@ -608,13 +586,14 @@ fn conformance_on_worker() {
         );
         for fixture in fixtures {
             files_checked += 1;
-            if let Err(file_failures) = run_fixture(&fixture, *base) {
+            if let Err(file_failures) = run_fixture(&fixture) {
                 failures.extend(file_failures);
             }
         }
     }
 
     for (dir, file) in ENABLED_FIXTURES {
+        assert_fixture_directory_registered(dir);
         let fixture = cases_root.join(dir).join(file);
         assert!(
             fixture.is_file(),
@@ -622,13 +601,13 @@ fn conformance_on_worker() {
             fixture.display()
         );
         files_checked += 1;
-        if let Err(file_failures) = run_fixture(&fixture, fixture_base(dir)) {
+        if let Err(file_failures) = run_fixture(&fixture) {
             failures.extend(file_failures);
         }
     }
 
     for (dir, project) in ENABLED_PROJECT_FIXTURES {
-        let base = fixture_base(dir);
+        assert_fixture_directory_registered(dir);
         let project = cases_root.join(dir).join(project);
         assert!(
             project.is_dir(),
@@ -637,7 +616,7 @@ fn conformance_on_worker() {
         );
         let fixtures = discover_ts_files_recursive(&project);
         files_checked += fixtures.len();
-        if let Err(project_failures) = run_project_fixture(&project, fixtures, base) {
+        if let Err(project_failures) = run_project_fixture(&project, fixtures) {
             failures.extend(project_failures);
         }
     }
@@ -654,19 +633,15 @@ fn conformance_on_worker() {
     }
 }
 
-/// The base a fixture directory is checked against, from its `MILESTONE_DIRS` row. Every
-/// directory must have one — an `ENABLED_FIXTURES` entry for an unregistered directory is a
-/// harness bug, not a silent `Prelude` default.
-fn fixture_base(dir: &str) -> FixtureBase {
-    MILESTONE_DIRS
-        .iter()
-        .find(|(name, _, _)| *name == dir)
-        .map(|(_, _, base)| *base)
-        .unwrap_or_else(|| panic!("fixture dir {dir} is not registered in MILESTONE_DIRS"))
+fn assert_fixture_directory_registered(dir: &str) {
+    assert!(
+        MILESTONE_DIRS.iter().any(|(name, _)| *name == dir),
+        "fixture dir {dir} is not registered in MILESTONE_DIRS"
+    );
 }
 
-/// Run one fixture against `base`; return `Err(messages)` on any mismatch.
-fn run_fixture(path: &Path, base: FixtureBase) -> Result<(), Vec<String>> {
+/// Run one fixture; return `Err(messages)` on any mismatch.
+fn run_fixture(path: &Path) -> Result<(), Vec<String>> {
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", path.display()));
 
@@ -682,43 +657,33 @@ fn run_fixture(path: &Path, base: FixtureBase) -> Result<(), Vec<String>> {
             source: source.clone(),
         }]
     };
-    let output = match (base, declaration_file) {
-        (FixtureBase::Prelude, true) => {
-            raw_project_reports(one_file_project())
-                .pop()
-                .expect("one-file declaration project report")
-                .output
-        }
-        (FixtureBase::Prelude, false) => raw_output(check_source_without_library(&source)),
-        (FixtureBase::Library, true) => match check_project(one_file_project()) {
+    let output = if declaration_file {
+        match check_project(one_file_project()) {
             Ok(mut reports) => {
                 reports
                     .pop()
                     .expect("one-file declaration project report")
                     .output
             }
-            Err(error) => return Err(vec![library_base_failure(path, &error.to_string())]),
-        },
-        (FixtureBase::Library, false) => match check_source(&source) {
+            Err(error) => return Err(vec![library_base_failure(path, &error)]),
+        }
+    } else {
+        match check_source(&source) {
             Ok(output) => output,
-            Err(error) => return Err(vec![library_base_failure(path, &error.to_string())]),
-        },
+            Err(error) => return Err(vec![library_base_failure(path, &error)]),
+        }
     };
     compare_fixture_output(path, &source, &output)
 }
 
-fn library_base_failure(path: &Path, error: &str) -> String {
+fn library_base_failure(path: &Path, error: &impl std::fmt::Display) -> String {
     format!(
         "{}: the default-library base is unavailable: {error}",
         display_path(path)
     )
 }
 
-fn run_project_fixture(
-    project: &Path,
-    mut fixtures: Vec<PathBuf>,
-    base: FixtureBase,
-) -> Result<(), Vec<String>> {
+fn run_project_fixture(project: &Path, mut fixtures: Vec<PathBuf>) -> Result<(), Vec<String>> {
     fixtures.sort();
     let mut inputs = Vec::with_capacity(fixtures.len());
     for fixture in &fixtures {
@@ -729,14 +694,9 @@ fn run_project_fixture(
             source,
         });
     }
-    let reports = match base {
-        FixtureBase::Prelude => raw_project_reports(inputs),
-        FixtureBase::Library => match check_project(inputs) {
-            Ok(reports) => reports,
-            Err(error) => {
-                return Err(vec![library_base_failure(project, &error.to_string())]);
-            }
-        },
+    let reports = match check_project(inputs) {
+        Ok(reports) => reports,
+        Err(error) => return Err(vec![library_base_failure(project, &error)]),
     };
     let mut failures = Vec::new();
     for (fixture, report) in fixtures.iter().zip(&reports) {
@@ -757,25 +717,6 @@ fn run_project_fixture(
         Ok(())
     } else {
         Err(failures)
-    }
-}
-
-fn raw_project_reports(inputs: Vec<FileInput>) -> Vec<typokat::driver::FileReport> {
-    check_project_without_library(inputs)
-        .into_iter()
-        .map(|report| typokat::driver::FileReport {
-            name: report.name,
-            source: report.source,
-            output: raw_output(report.output),
-        })
-        .collect()
-}
-
-fn raw_output(output: typokat::check::test_support::CheckOutput) -> CheckOutput {
-    CheckOutput {
-        diagnostics: output.diagnostics,
-        parse_errors: output.parse_errors,
-        incomplete: output.incomplete,
     }
 }
 
