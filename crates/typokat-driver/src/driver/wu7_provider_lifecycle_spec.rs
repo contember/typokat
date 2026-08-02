@@ -8,6 +8,7 @@ use super::test_support::{
     classify_driver_failure_for_test, DriverFailureKindForTest, ProductionDriverFaultForTest,
     ProductionDriverFaultTraceScopeForTest, ProviderTraceFaultForTest,
 };
+use super::DriverError;
 use crate::frontend::FileInput;
 use crate::library::LibraryInitError;
 use std::sync::Arc;
@@ -21,10 +22,18 @@ fn inputs(count: usize) -> Vec<FileInput> {
         .collect()
 }
 
-fn failure<T>(
-    result: Result<T, Arc<LibraryInitError>>,
+fn library_failure<T>(
+    result: Result<T, DriverError>,
     message: &'static str,
 ) -> Arc<LibraryInitError> {
+    match result {
+        Ok(_) => panic!("{message}"),
+        Err(DriverError::LibraryInitialization(error)) => error,
+        Err(error) => panic!("{message}: {error}"),
+    }
+}
+
+fn driver_failure<T>(result: Result<T, DriverError>, message: &'static str) -> DriverError {
     match result {
         Ok(_) => panic!("{message}"),
         Err(error) => error,
@@ -39,18 +48,18 @@ fn deterministic_initialization_failure_is_one_cached_arc_through_real_public_fu
         ),
     );
 
-    let first = failure(
+    let first = library_failure(
         super::check_source("export const first = 1;\n"),
         "single mode must expose initialization failure",
     );
-    let second = failure(
+    let second = library_failure(
         super::check_project(inputs(2)),
         "project mode must expose initialization failure",
     );
-    let route = failure(
-        super::production_library_route(),
-        "library-info attestation must expose initialization failure",
-    );
+    let route = match super::production_library_route() {
+        Ok(_) => panic!("library-info attestation must expose initialization failure"),
+        Err(error) => error,
+    };
     assert!(Arc::ptr_eq(&first, &second));
     assert!(Arc::ptr_eq(&first, &route));
 
@@ -73,7 +82,12 @@ fn deterministic_initialization_failure_is_one_cached_arc_through_real_public_fu
             })
             .collect::<Vec<_>>()
     });
-    assert!(errors.iter().all(|error| Arc::ptr_eq(&first, error)));
+    assert!(errors.iter().all(|error| {
+        matches!(
+            error,
+            DriverError::LibraryInitialization(library) if Arc::ptr_eq(&first, library)
+        )
+    }));
 
     let trace = scope.finish();
     assert_eq!(trace.provider_initialization_attempts, 1);
@@ -186,15 +200,15 @@ fn real_worker_spawn_and_join_failures_are_typed_and_expose_no_partial_reports()
         for mode in ["single", "project", "parallel"] {
             let scope = ProductionDriverFaultTraceScopeForTest::install(fault.clone());
             let error = match mode {
-                "single" => failure(
+                "single" => driver_failure(
                     super::check_source("export const value = 1;\n"),
                     "single worker fault must be returned",
                 ),
-                "project" => failure(
+                "project" => driver_failure(
                     super::check_project(inputs(3)),
                     "project worker fault must be returned",
                 ),
-                "parallel" => failure(
+                "parallel" => driver_failure(
                     super::check_files(inputs(3)),
                     "parallel worker fault must discard every report",
                 ),

@@ -2,14 +2,18 @@
 
 use std::sync::Arc;
 use typokat::driver::{
-    check_files, check_project, check_source, production_library_route, CheckOutput, FileReport,
+    check_files, check_project, check_source, production_library_route, CheckOutput, DriverError,
+    FileReport,
 };
 use typokat::frontend::FileInput;
 use typokat::library::LibraryInitError;
 
-const _: fn(&str) -> Result<CheckOutput, Arc<LibraryInitError>> = check_source;
-const _: fn(Vec<FileInput>) -> Result<Vec<FileReport>, Arc<LibraryInitError>> = check_files;
-const _: fn(Vec<FileInput>) -> Result<Vec<FileReport>, Arc<LibraryInitError>> = check_project;
+type ProjectCheckResult = Result<Vec<FileReport>, DriverError>;
+type ProjectCheck = fn(Vec<FileInput>) -> ProjectCheckResult;
+
+const _: fn(&str) -> Result<CheckOutput, DriverError> = check_source;
+const _: ProjectCheck = check_files;
+const _: ProjectCheck = check_project;
 const _: fn() -> Result<&'static str, Arc<LibraryInitError>> = production_library_route;
 
 #[test]
