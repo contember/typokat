@@ -7226,6 +7226,52 @@ mod tests {
         assert!(unit.binding.declaration_file());
     }
 
+    #[test]
+    fn statement_lexical_root_uses_sparse_source_keys_in_frozen_continuation(
+    ) -> Result<(), &'static str> {
+        let prelude_allocator = Allocator::default();
+        let library_allocator = Allocator::default();
+        let user_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let library = Parser::new(
+            &library_allocator,
+            "interface FrozenSparseMarker {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let user = Parser::new(&user_allocator, "const local = 1;", SourceType::ts()).parse();
+        assert!(!prelude.panicked && !library.panicked && !user.panicked);
+
+        let mut base_builder = ProjectBinderBuilder::new(&prelude.program);
+        let library_unit = CompilationUnit::library(
+            SourceUnitKey(899),
+            LibraryFileOrdinal::new(0),
+            &library.program,
+        );
+        let library_modules = base_builder.add_library_modules(&[(&library.program, library_unit)]);
+        let library_module = library_modules
+            .first()
+            .copied()
+            .ok_or("library binder retains its module")?;
+        let mut base = base_builder.finish(library_module);
+        base.freeze_as_base()?;
+
+        let delta = base.fork_sparse_collision_delta()?;
+        let (mut builder, _) = ProjectBinderBuilder::resume_frozen_library(delta);
+        let user_unit = CompilationUnit::implementation(SourceUnitKey(900), &user.program);
+        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
+        let (module, _) = builder.add_module(&user.program, &[], user_unit);
+        let binder = builder.finish_frozen_library_continuation(module)?;
+        let expected = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .and_then(|scope| scope.parent)
+            .ok_or("script namespace root retains its compilation parent")?;
+
+        assert_eq!(binder.statement_lexical_root(module), expected);
+        Ok(())
+    }
+
     fn bind(source: &str, declaration_file: bool) -> Binder {
         bind_unit(
             source,
