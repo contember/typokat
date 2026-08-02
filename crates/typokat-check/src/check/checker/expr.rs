@@ -119,16 +119,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             ),
             Expression::Identifier(ident) => {
                 let span = Span::from_oxc(ident.span);
-                // The `undefined` keyword parses as an identifier reference.
-                if ident.name.as_str() == "undefined" {
-                    return Some((well_known.undefined, span));
-                }
-                if ident.name.as_str() == "globalThis" {
-                    if let Some(global_object) = self.global_object_type {
-                        return Some((global_object, span));
-                    }
-                }
-                match self.resolve_value_binding_replay(scope, ident.name.as_str()) {
+                let name = ident.name.as_str();
+                match self.resolve_value_binding_replay(scope, name) {
                     ValueResolution::TypeOnlyNamespace { .. } => {
                         self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_value(
                             span,
@@ -186,10 +178,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         )),
                     },
                     ValueResolution::Missing => {
-                        self.emit_diagnostic(Diagnostic::cannot_find_name(
-                            span,
-                            ident.name.as_str(),
-                        ));
+                        // These built-ins are synthetic globals, after lexical lookup.
+                        if name == "undefined" {
+                            return Some((well_known.undefined, span));
+                        }
+                        if name == "globalThis" {
+                            if let Some(global_object) = self.global_object_type {
+                                return Some((global_object, span));
+                            }
+                        }
+                        self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
                         Some((well_known.error, span))
                     }
                 }

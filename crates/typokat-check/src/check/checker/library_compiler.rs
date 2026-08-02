@@ -6141,13 +6141,18 @@ fn intern_compiled_global_object(
         .filter_map(|row| row.value.map(|storage| (row.name.clone(), storage)))
         .collect::<BTreeMap<_, _>>();
     contributors.extend(additional_contributors.iter().cloned());
-    let properties = contributors
+    let mut properties = contributors
         .into_iter()
+        .filter(|(name, _)| name != "undefined")
         .filter_map(|(name, storage)| {
             pass.decl_type_replay(storage)
                 .map(|ty| PropertyType::public(name, ty))
         })
-        .collect();
+        .collect::<Vec<_>>();
+    properties.push(PropertyType::public(
+        "undefined",
+        pass.interner.well_known().undefined,
+    ));
     pass.interner.intern_object(ObjectType {
         properties,
         ..Default::default()
