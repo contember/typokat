@@ -92,6 +92,7 @@ impl CollisionPreflightOutcome {
 pub(super) enum RoutedProjectPreflight {
     Shared(CollisionFreeUserDeltaCapability),
     Private(PrivateCollisionRouteReceipt),
+    UserParseRejected,
     Rejected { reasons: BTreeSet<String> },
 }
 
@@ -115,9 +116,7 @@ pub(super) fn preflight_file_inputs(
             },
         },
         CollisionRoute::PrivateCombined => RoutedProjectPreflight::Private(receipt),
-        CollisionRoute::RejectedBeforeSemantics => RoutedProjectPreflight::Rejected {
-            reasons: receipt.reasons,
-        },
+        CollisionRoute::RejectedBeforeSemantics => RoutedProjectPreflight::UserParseRejected,
     }
 }
 
@@ -177,11 +176,23 @@ fn preflight_project(
     let mut module_classifications = Vec::with_capacity(inputs.len());
     let mut relative_import_edges = 0_usize;
     let mut work = CollisionPreflightWork::default();
-    let mut rejected = false;
+    let parsed = inputs
+        .iter()
+        .zip(&allocators)
+        .map(|(input, allocator)| {
+            work.parse_units = work.parse_units.saturating_add(1);
+            Parser::new(allocator, input.source, SourceType::ts()).parse()
+        })
+        .collect::<Vec<_>>();
+    let rejected = parsed
+        .iter()
+        .any(|parsed| parsed.panicked || !parsed.diagnostics.is_empty());
+    if rejected {
+        reasons.insert("parse-rejected".to_owned());
+    }
 
-    for (input, allocator) in inputs.iter().zip(&allocators) {
-        let parsed = Parser::new(allocator, input.source, SourceType::ts()).parse();
-        work.parse_units = work.parse_units.saturating_add(1);
+    let parsed_for_census: &[_] = if rejected { &[] } else { &parsed };
+    for (input, parsed) in inputs.iter().zip(parsed_for_census) {
         let context =
             ModuleBindingContext::for_program(&parsed.program, source_file_kind(input.path));
         let classification = if context.external_module {
@@ -190,15 +201,6 @@ fn preflight_project(
             PrivateCollisionModuleClassification::Script
         };
         module_classifications.push((input.path.to_owned(), classification));
-
-        if parsed.panicked {
-            rejected = true;
-            reasons.insert("parse-rejected".to_owned());
-            continue;
-        }
-        if !parsed.diagnostics.is_empty() {
-            reasons.insert("classifier-uncertainty".to_owned());
-        }
         relative_import_edges = relative_import_edges
             .saturating_add(crate::frontend::relative_import_edge_count(&parsed.program));
         let census = source_global_binding_census(&parsed.program, context);

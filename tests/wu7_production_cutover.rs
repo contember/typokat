@@ -76,7 +76,7 @@ fn parallel_mode_preserves_filename_derived_declaration_semantics() {
             output
                 .incomplete
                 .iter()
-                .map(|surface| surface.id.as_str())
+                .map(|surface| surface.id.clone())
                 .collect::<Vec<_>>(),
         )
     };

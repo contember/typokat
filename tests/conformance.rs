@@ -24,9 +24,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use typokat::driver::{
-    check_project, check_project_with_library, check_source, check_source_with_library,
+use typokat::check::test_support::{
+    check_project as check_project_without_library,
+    check_source as check_source_without_library,
 };
+use typokat::driver::{check_project, check_source, CheckOutput};
 use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
 
@@ -705,24 +707,24 @@ fn run_fixture(path: &Path, base: FixtureBase) -> Result<(), Vec<String>> {
     };
     let output = match (base, declaration_file) {
         (FixtureBase::Prelude, true) => {
-            check_project(one_file_project())
+            raw_project_reports(one_file_project())
                 .pop()
                 .expect("one-file declaration project report")
                 .output
         }
-        (FixtureBase::Prelude, false) => check_source(&source),
-        (FixtureBase::Library, true) => match check_project_with_library(one_file_project()) {
+        (FixtureBase::Prelude, false) => raw_output(check_source_without_library(&source)),
+        (FixtureBase::Library, true) => match check_project(one_file_project()) {
             Ok(mut reports) => {
                 reports
                     .pop()
                     .expect("one-file declaration project report")
                     .output
             }
-            Err(error) => return Err(vec![library_base_failure(path, &error)]),
+            Err(error) => return Err(vec![library_base_failure(path, &error.to_string())]),
         },
-        (FixtureBase::Library, false) => match check_source_with_library(&source) {
+        (FixtureBase::Library, false) => match check_source(&source) {
             Ok(output) => output,
-            Err(error) => return Err(vec![library_base_failure(path, &error)]),
+            Err(error) => return Err(vec![library_base_failure(path, &error.to_string())]),
         },
     };
     compare_fixture_output(path, &source, &output)
@@ -751,10 +753,12 @@ fn run_project_fixture(
         });
     }
     let reports = match base {
-        FixtureBase::Prelude => check_project(inputs),
-        FixtureBase::Library => match check_project_with_library(inputs) {
+        FixtureBase::Prelude => raw_project_reports(inputs),
+        FixtureBase::Library => match check_project(inputs) {
             Ok(reports) => reports,
-            Err(error) => return Err(vec![library_base_failure(project, &error)]),
+            Err(error) => {
+                return Err(vec![library_base_failure(project, &error.to_string())]);
+            }
         },
     };
     let mut failures = Vec::new();
@@ -776,6 +780,25 @@ fn run_project_fixture(
         Ok(())
     } else {
         Err(failures)
+    }
+}
+
+fn raw_project_reports(inputs: Vec<FileInput>) -> Vec<typokat::driver::FileReport> {
+    check_project_without_library(inputs)
+        .into_iter()
+        .map(|report| typokat::driver::FileReport {
+            name: report.name,
+            source: report.source,
+            output: raw_output(report.output),
+        })
+        .collect()
+}
+
+fn raw_output(output: typokat::check::test_support::CheckOutput) -> CheckOutput {
+    CheckOutput {
+        diagnostics: output.diagnostics,
+        parse_errors: output.parse_errors,
+        incomplete: output.incomplete,
     }
 }
 

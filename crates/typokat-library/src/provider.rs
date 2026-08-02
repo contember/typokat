@@ -38,6 +38,14 @@ impl LibraryInitError {
     pub const fn cause(&self) -> &LibraryInitCause {
         &self.cause
     }
+
+    #[doc(hidden)]
+    pub fn injected_initialization_failure(message: String) -> Self {
+        Self::new(
+            LibraryInitStage::ProfileLoad,
+            LibraryInitCause::ProfileRejected { message },
+        )
+    }
 }
 
 impl fmt::Display for LibraryInitError {

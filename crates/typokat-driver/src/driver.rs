@@ -3,26 +3,105 @@
 //! The frontend owns each per-run parser allocation; the driver keeps borrowed
 //! parser data inside the parse/check continuation.
 
+use crate::check::checker::CheckResult;
 #[cfg(test)]
 use crate::check::checker::{
     check_project_programs_with_binding_inspector,
     check_project_programs_with_namespace_value_inspector,
 };
-use crate::check::{check_program, check_project_programs, CheckResult};
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
-    run_project_frontend, run_project_frontend_with_auxiliary, run_source_frontend,
-    AuxiliarySourceInput, FileInput, ProjectFrontendRun, ProjectProgram,
+    parse_source_errors, run_project_frontend, run_project_frontend_with_auxiliary,
+    run_project_parse_only, run_source_frontend, AuxiliarySourceInput, FileInput,
+    ProjectFrontendRun, ProjectProgram,
 };
 use crate::library::{
-    FrozenLibraryBase, LibraryBaseProvider, RoutedLibraryProject, RoutedPrivateExecution,
-    RoutedPrivateLibraryProject,
+    FrozenLibraryBase, LibraryBaseProvider, LibraryInitError, RoutedLibraryProject,
+    RoutedPrivateExecution, RoutedPrivateLibraryProject,
 };
 #[cfg(test)]
 use crate::span::Span;
 use crate::types::Interner;
 use rayon::prelude::*;
 use std::sync::{Arc, LazyLock};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriverInfrastructureKind {
+    WorkerSpawn,
+    WorkerJoin,
+    Check,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriverInfrastructureError {
+    kind: DriverInfrastructureKind,
+    message: String,
+}
+
+impl DriverInfrastructureError {
+    fn new(kind: DriverInfrastructureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub const fn kind(&self) -> DriverInfrastructureKind {
+        self.kind
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for DriverInfrastructureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "driver infrastructure failed at {:?}: {}",
+            self.kind, self.message
+        )
+    }
+}
+
+impl std::error::Error for DriverInfrastructureError {}
+
+#[derive(Clone, Debug)]
+pub enum DriverError {
+    LibraryInitialization(Arc<LibraryInitError>),
+    Infrastructure(DriverInfrastructureError),
+}
+
+impl std::fmt::Display for DriverError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LibraryInitialization(error) => error.fmt(formatter),
+            Self::Infrastructure(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for DriverError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LibraryInitialization(error) => Some(error.as_ref()),
+            Self::Infrastructure(error) => Some(error),
+        }
+    }
+}
+
+impl From<Arc<LibraryInitError>> for DriverError {
+    fn from(error: Arc<LibraryInitError>) -> Self {
+        Self::LibraryInitialization(error)
+    }
+}
+
+impl From<DriverInfrastructureError> for DriverError {
+    fn from(error: DriverInfrastructureError) -> Self {
+        Self::Infrastructure(error)
+    }
+}
 
 /// The outcome of checking one source file. Three independent channels: type
 /// diagnostics, parser errors, and the incomplete-surface channel (WU2) — an empty
@@ -64,42 +143,17 @@ const CHECK_STACK_SIZE: usize = 256 * 1024 * 1024;
 
 /// Parse and check one TypeScript source. The local `Allocator` owns the AST only
 /// for this call; owned diagnostics are extracted before it drops.
-pub fn check_source(source: &str) -> CheckOutput {
-    // Run on a large-stack worker so deep input meets the checker's nesting budget rather
-    // than a native parser stack overflow (see `CHECK_STACK_SIZE`). The oxc AST is
-    // `!Send`, so the whole parse→check stays inside; only the owned `CheckOutput` (Send)
-    // crosses back out of the scope.
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(CHECK_STACK_SIZE)
-            .spawn_scoped(scope, || check_source_inner(source))
-            .expect("spawn check worker")
-            .join()
-            .expect("check worker panicked")
-    })
+pub fn check_source(source: &str) -> Result<CheckOutput, DriverError> {
+    let base = library_base()?;
+    let output =
+        on_check_worker(&base, || check_source_inner(&base, source))?.map_err(check_failure)?;
+    #[cfg(test)]
+    test_support::record_reports_exposed_for_test(1);
+    Ok(output)
 }
 
-fn check_source_inner(source: &str) -> CheckOutput {
-    let run = run_source_frontend(source, |program| {
-        let mut interner = Interner::with_intrinsics();
-        check_program(&mut interner, program)
-    });
-    match run.product {
-        Some(CheckResult {
-            diagnostics,
-            incomplete,
-            ..
-        }) => CheckOutput {
-            diagnostics,
-            parse_errors: run.parse_errors,
-            incomplete,
-        },
-        None => CheckOutput {
-            diagnostics: Vec::new(),
-            parse_errors: run.parse_errors,
-            incomplete: Vec::new(),
-        },
-    }
+fn check_source_inner(base: &FrozenLibraryBase, source: &str) -> Result<CheckOutput, String> {
+    check_source_against_library(base, source)
 }
 
 /// Result for one [`FileInput`]. `name` and `source` move through the pipeline so
@@ -114,18 +168,26 @@ pub struct FileReport {
 /// There is no cross-file resolution on this API, so per-file pipelines are
 /// lossless and keep the `!Send + !Sync` AST on its parser thread. Order is
 /// preserved: `reports[i]` corresponds to `inputs[i]`.
-pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
-    inputs
+pub fn check_files(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverError> {
+    let base = library_base()?;
+    #[cfg(test)]
+    test_support::record_provider_acquired_before_rayon_for_test();
+    let reports = inputs
         .into_par_iter()
-        .map(|input| {
-            let output = check_source(&input.source);
-            FileReport {
-                name: input.name,
-                source: input.source,
-                output,
-            }
+        .map(|input| -> Result<FileReport, DriverError> {
+            #[cfg(test)]
+            test_support::record_rayon_worker_start_for_test();
+            let worker_base = base.clone();
+            let checked_base = worker_base.clone();
+            on_check_worker(&worker_base, move || {
+                check_one_file_against_library(&checked_base, input)
+            })?
+            .map_err(check_failure)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    #[cfg(test)]
+    test_support::record_reports_exposed_for_test(reports.len());
+    Ok(reports)
 }
 
 /// Check a local relative-module project in one serial type universe, resolving
@@ -133,87 +195,97 @@ pub fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
 /// worker for the same reason as [`check_source`] (deep input meets the checker's nesting
 /// budget rather than a native parser stack overflow); `inputs` and the returned reports
 /// are owned/`Send`, so they cross the scope cleanly.
-pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
+pub fn check_project(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverError> {
+    let base = library_base()?;
     #[cfg(test)]
     {
-        let (reports, receipt) = std::thread::scope(|scope| {
-            std::thread::Builder::new()
-                .stack_size(CHECK_STACK_SIZE)
-                .spawn_scoped(scope, || {
-                    let reports = check_project_inner(inputs);
-                    let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
-                    (reports, receipt)
-                })
-                .expect("spawn check worker")
-                .join()
-                .expect("check worker panicked")
-        });
+        let (reports, receipt) = on_check_worker(&base, || {
+            let reports = check_project_inner(&base, inputs);
+            let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
+            (reports, receipt)
+        })?;
         crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
-        reports
+        let reports = reports.map_err(check_failure)?;
+        test_support::record_reports_exposed_for_test(reports.len());
+        Ok(reports)
     }
     #[cfg(not(test))]
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(CHECK_STACK_SIZE)
-            .spawn_scoped(scope, || check_project_inner(inputs))
-            .expect("spawn check worker")
-            .join()
-            .expect("check worker panicked")
-    })
+    {
+        on_check_worker(&base, || check_project_inner(&base, inputs))?.map_err(check_failure)
+    }
 }
 
-fn check_project_inner(inputs: Vec<FileInput>) -> Vec<FileReport> {
-    check_project_inner_with_checker(inputs, check_project_programs)
+fn check_project_inner(
+    base: &FrozenLibraryBase,
+    inputs: Vec<FileInput>,
+) -> Result<Vec<FileReport>, String> {
+    check_project_against_library(base, inputs)
 }
-
-// --- Default-library siblings (backlog 14 scaffolding) -----------------------
-//
-// [`check_source_with_library`] and [`check_project_with_library`] are a deliberate, temporary
-// SECOND ENTRY POINT — not a second loader. There is exactly one [`FrozenLibraryBase`] and one
-// `LibraryCompiler` in the process; the siblings only choose which base a check forks from, so
-// backlog 14's prohibition on forking a second *ambient-loading path* is not engaged. They exist
-// so the backlog-14 acceptance corpus can run before production moves off `crates/typokat-check/src/prelude.ts`, and
-// the WU7 cutover deletes them once `check_source`/`check_project` fork from the library base
-// themselves.
 
 /// The process-wide default-library base. Publication happens once, on the first caller's thread,
-/// and never inside a rayon fan-out: [`check_files`] is the crate's only rayon site and does not
-/// reach here.
-fn library_base() -> Result<Arc<FrozenLibraryBase>, String> {
+/// and never inside a rayon fan-out.
+fn library_base() -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
     static PROVIDER: LazyLock<LibraryBaseProvider> = LazyLock::new(LibraryBaseProvider::new);
-    PROVIDER.get().map_err(|error| error.to_string())
+    #[cfg(test)]
+    if let Some(result) = test_support::acquire_provider_for_test(&PROVIDER) {
+        return result;
+    }
+    PROVIDER.get()
 }
 
-/// Run `work` on a large-stack worker, for the reason given at [`CHECK_STACK_SIZE`]. A panic in
-/// the worker is re-raised on the caller's thread rather than converted to an error.
-fn on_check_worker<T, W>(work: W) -> Result<T, String>
+/// Stable attestation for every production consumer of the default-library singleton.
+pub fn production_library_route() -> Result<&'static str, Arc<LibraryInitError>> {
+    let _base = library_base()?;
+    Ok("production-default-library")
+}
+
+/// Run `work` on a large-stack worker, for the reason given at [`CHECK_STACK_SIZE`]. Spawn and
+/// join failures return through the typed driver-infrastructure boundary.
+fn on_check_worker<T, W>(
+    _base: &Arc<FrozenLibraryBase>,
+    work: W,
+) -> Result<T, DriverInfrastructureError>
 where
     T: Send,
     W: FnOnce() -> T + Send,
 {
+    #[cfg(test)]
+    if test_support::worker_fault_for_test() == Some(DriverInfrastructureKind::WorkerSpawn) {
+        return Err(driver_failure(
+            DriverInfrastructureKind::WorkerSpawn,
+            "injected check-worker spawn failure",
+        ));
+    }
+    #[cfg(test)]
+    test_support::record_worker_start_for_test(Arc::as_ptr(_base).addr());
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .stack_size(CHECK_STACK_SIZE)
             .spawn_scoped(scope, work)
-            .map_err(|error| format!("cannot spawn the check worker: {error}"))?;
-        match worker.join() {
-            Ok(product) => Ok(product),
-            Err(payload) => std::panic::resume_unwind(payload),
+            .map_err(|error| {
+                driver_failure(
+                    DriverInfrastructureKind::WorkerSpawn,
+                    format!("cannot spawn the check worker: {error}"),
+                )
+            })?;
+        let product = worker.join().map_err(|_| {
+            driver_failure(
+                DriverInfrastructureKind::WorkerJoin,
+                "the check worker terminated unexpectedly",
+            )
+        })?;
+        #[cfg(test)]
+        if test_support::worker_fault_for_test() == Some(DriverInfrastructureKind::WorkerJoin) {
+            return Err(driver_failure(
+                DriverInfrastructureKind::WorkerJoin,
+                "injected check-worker join failure",
+            ));
         }
+        Ok(product)
     })
 }
 
-/// [`check_source`] against the full default library instead of `crates/typokat-check/src/prelude.ts`.
-///
-/// Temporary backlog-14 scaffolding — see the section comment above. `Err` means the library base
-/// itself could not be published or forked; ordinary type/parse problems ride in the
-/// [`CheckOutput`] exactly as on the prelude path.
-pub fn check_source_with_library(source: &str) -> Result<CheckOutput, String> {
-    let base = library_base()?;
-    on_check_worker(|| check_source_with_library_inner(&base, source))?
-}
-
-fn check_source_with_library_inner(
+fn check_source_against_library(
     base: &FrozenLibraryBase,
     source: &str,
 ) -> Result<CheckOutput, String> {
@@ -221,15 +293,18 @@ fn check_source_with_library_inner(
         name: "input.ts".to_owned(),
         source: source.to_owned(),
     };
-    match base
-        .route_user_project(std::slice::from_ref(&route_input))
-        .map_err(|error| error.to_string())?
-    {
-        RoutedLibraryProject::Shared(state) => continue_source_with_library_runtime(state, source),
-        RoutedLibraryProject::Private(private) => {
+    match base.route_user_project(std::slice::from_ref(&route_input)) {
+        Err(crate::library::LibraryProjectRouteError::UserParseRejected) => {
+            Ok(parse_only_source_output(source))
+        }
+        Err(error) => Err(error.to_string()),
+        Ok(RoutedLibraryProject::Shared(state)) => {
+            continue_source_with_library_runtime(state, source)
+        }
+        Ok(RoutedLibraryProject::Private(private)) => {
             continue_private_source_with_library(private, source)
         }
-        RoutedLibraryProject::CompleteSourceFallback(fallback) => {
+        Ok(RoutedLibraryProject::CompleteSourceFallback(fallback)) => {
             continue_complete_source_with_library(
                 *fallback,
                 vec![FileInput {
@@ -239,6 +314,14 @@ fn check_source_with_library_inner(
             )
             .and_then(single_private_source_output)
         }
+    }
+}
+
+fn parse_only_source_output(source: &str) -> CheckOutput {
+    CheckOutput {
+        diagnostics: Vec::new(),
+        parse_errors: parse_source_errors(source),
+        incomplete: Vec::new(),
     }
 }
 
@@ -296,34 +379,70 @@ fn continue_source_with_library_runtime(
     }
 }
 
-/// [`check_project`] against the full default library instead of `crates/typokat-check/src/prelude.ts`.
-///
-/// Temporary backlog-14 scaffolding — see the section comment above. The module graph, dependency
-/// order, and per-input report order are the production ones; only the base differs.
-pub fn check_project_with_library(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, String> {
-    if inputs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let base = library_base()?;
-    on_check_worker(|| check_project_with_library_inner(&base, inputs))?
-}
-
-fn check_project_with_library_inner(
+fn check_project_against_library(
     base: &FrozenLibraryBase,
     inputs: Vec<FileInput>,
 ) -> Result<Vec<FileReport>, String> {
-    match base
-        .route_user_project(&inputs)
-        .map_err(|error| error.to_string())?
-    {
-        RoutedLibraryProject::Shared(state) => continue_project_with_library_runtime(state, inputs),
-        RoutedLibraryProject::Private(private) => {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    match base.route_user_project(&inputs) {
+        Err(crate::library::LibraryProjectRouteError::UserParseRejected) => {
+            Ok(parse_only_project_reports(inputs))
+        }
+        Err(error) => Err(error.to_string()),
+        Ok(RoutedLibraryProject::Shared(state)) => {
+            continue_project_with_library_runtime(state, inputs)
+        }
+        Ok(RoutedLibraryProject::Private(private)) => {
             continue_private_project_with_library(private, inputs)
         }
-        RoutedLibraryProject::CompleteSourceFallback(fallback) => {
+        Ok(RoutedLibraryProject::CompleteSourceFallback(fallback)) => {
             continue_complete_source_with_library(*fallback, inputs)
         }
     }
+}
+
+fn parse_only_project_reports(inputs: Vec<FileInput>) -> Vec<FileReport> {
+    let run = run_project_parse_only(inputs);
+    debug_assert_eq!(run.inputs.len(), run.parse_errors.len());
+    run.inputs
+        .into_iter()
+        .zip(run.parse_errors)
+        .map(|(input, parse_errors)| FileReport {
+            name: input.name,
+            source: input.source,
+            output: CheckOutput {
+                diagnostics: Vec::new(),
+                parse_errors,
+                incomplete: Vec::new(),
+            },
+        })
+        .collect()
+}
+
+fn check_one_file_against_library(
+    base: &FrozenLibraryBase,
+    input: FileInput,
+) -> Result<FileReport, String> {
+    let mut reports = check_project_against_library(base, vec![input])?;
+    if reports.len() != 1 {
+        return Err("single-file check produced an invalid report count".to_owned());
+    }
+    reports
+        .pop()
+        .ok_or_else(|| "single-file check produced no report".to_owned())
+}
+
+fn check_failure(message: String) -> DriverError {
+    driver_failure(DriverInfrastructureKind::Check, message).into()
+}
+
+fn driver_failure(
+    kind: DriverInfrastructureKind,
+    message: impl Into<String>,
+) -> DriverInfrastructureError {
+    DriverInfrastructureError::new(kind, message)
 }
 
 fn continue_private_project_with_library(
@@ -484,6 +603,7 @@ where
     })
 }
 
+#[cfg(test)]
 fn check_project_inner_with_checker<F>(inputs: Vec<FileInput>, check_project: F) -> Vec<FileReport>
 where
     F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
@@ -570,11 +690,221 @@ fn project_reports_from_frontend_run<E>(
 }
 
 #[cfg(test)]
+mod test_support {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(super) enum ProductionDriverFaultForTest {
+        None,
+        ProviderInitialization(String),
+        WorkerSpawn,
+        WorkerJoin,
+        ProviderTrace(ProviderTraceFaultForTest),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum ProviderTraceFaultForTest {
+        AcquireInsideRayon,
+        ReplaceOneWorkerBase,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum DriverFailureKindForTest {
+        WorkerSpawn,
+        WorkerJoin,
+        Other,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub(super) struct ProductionDriverTraceForTest {
+        pub provider_initialization_attempts: usize,
+        pub provider_publications: usize,
+        pub provider_acquisitions: usize,
+        pub worker_starts: usize,
+        pub rayon_worker_starts: usize,
+        pub reports_exposed: usize,
+        pub provider_acquired_before_rayon: bool,
+        pub provider_instance_identity: usize,
+        pub published_base_identity: usize,
+        pub worker_base_identities: Vec<usize>,
+    }
+
+    struct ActiveScope {
+        fault: ProductionDriverFaultForTest,
+        provider_result: OnceLock<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>>,
+        trace: Mutex<ProductionDriverTraceForTest>,
+    }
+
+    static SCOPE_GATE: Mutex<()> = Mutex::new(());
+    static ACTIVE_SCOPE: Mutex<Option<Arc<ActiveScope>>> = Mutex::new(None);
+
+    pub(super) struct ProductionDriverFaultTraceScopeForTest {
+        active: Arc<ActiveScope>,
+        _gate: MutexGuard<'static, ()>,
+    }
+
+    impl ProductionDriverFaultTraceScopeForTest {
+        pub(super) fn install(fault: ProductionDriverFaultForTest) -> Self {
+            let gate = lock(&SCOPE_GATE);
+            let active = Arc::new(ActiveScope {
+                fault,
+                provider_result: OnceLock::new(),
+                trace: Mutex::new(ProductionDriverTraceForTest::default()),
+            });
+            *lock(&ACTIVE_SCOPE) = Some(active.clone());
+            Self {
+                active,
+                _gate: gate,
+            }
+        }
+
+        pub(super) fn finish(self) -> ProductionDriverTraceForTest {
+            *lock(&ACTIVE_SCOPE) = None;
+            lock(&self.active.trace).clone()
+        }
+    }
+
+    pub(super) fn acquire_provider_for_test(
+        provider: &'static LazyLock<LibraryBaseProvider>,
+    ) -> Option<Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>>> {
+        let active = active_scope()?;
+        {
+            let mut trace = lock(&active.trace);
+            trace.provider_acquisitions += 1;
+            trace.provider_instance_identity = std::ptr::from_ref(&**provider).addr();
+        }
+        Some(
+            active
+                .provider_result
+                .get_or_init(|| {
+                    lock(&active.trace).provider_initialization_attempts += 1;
+                    if let ProductionDriverFaultForTest::ProviderInitialization(message) =
+                        &active.fault
+                    {
+                        return Err(Arc::new(LibraryInitError::injected_initialization_failure(
+                            message.clone(),
+                        )));
+                    }
+                    let base = provider.get()?;
+                    let mut trace = lock(&active.trace);
+                    trace.provider_publications += 1;
+                    trace.published_base_identity = Arc::as_ptr(&base).addr();
+                    Ok(base)
+                })
+                .clone(),
+        )
+    }
+
+    pub(super) fn worker_fault_for_test() -> Option<DriverInfrastructureKind> {
+        match active_scope().as_deref().map(|scope| &scope.fault) {
+            Some(ProductionDriverFaultForTest::WorkerSpawn) => {
+                Some(DriverInfrastructureKind::WorkerSpawn)
+            }
+            Some(ProductionDriverFaultForTest::WorkerJoin) => {
+                Some(DriverInfrastructureKind::WorkerJoin)
+            }
+            Some(
+                ProductionDriverFaultForTest::None
+                | ProductionDriverFaultForTest::ProviderInitialization(_)
+                | ProductionDriverFaultForTest::ProviderTrace(_),
+            )
+            | None => None,
+        }
+    }
+
+    pub(super) fn record_provider_acquired_before_rayon_for_test() {
+        let Some(active) = active_scope() else {
+            return;
+        };
+        let acquired_before = !matches!(
+            active.fault,
+            ProductionDriverFaultForTest::ProviderTrace(
+                ProviderTraceFaultForTest::AcquireInsideRayon
+            )
+        );
+        lock(&active.trace).provider_acquired_before_rayon = acquired_before;
+    }
+
+    pub(super) fn record_rayon_worker_start_for_test() {
+        if let Some(active) = active_scope() {
+            lock(&active.trace).rayon_worker_starts += 1;
+        }
+    }
+
+    pub(super) fn record_worker_start_for_test(base_identity: usize) {
+        let Some(active) = active_scope() else {
+            return;
+        };
+        let mut trace = lock(&active.trace);
+        trace.worker_starts += 1;
+        let replace = matches!(
+            active.fault,
+            ProductionDriverFaultForTest::ProviderTrace(
+                ProviderTraceFaultForTest::ReplaceOneWorkerBase
+            )
+        ) && trace.worker_base_identities.is_empty();
+        trace.worker_base_identities.push(if replace {
+            base_identity.wrapping_add(1)
+        } else {
+            base_identity
+        });
+    }
+
+    pub(super) fn record_reports_exposed_for_test(count: usize) {
+        if let Some(active) = active_scope() {
+            lock(&active.trace).reports_exposed += count;
+        }
+    }
+
+    pub(super) fn classify_driver_failure_for_test(
+        error: &DriverError,
+    ) -> DriverFailureKindForTest {
+        match error {
+            DriverError::Infrastructure(error)
+                if error.kind() == DriverInfrastructureKind::WorkerSpawn =>
+            {
+                DriverFailureKindForTest::WorkerSpawn
+            }
+            DriverError::Infrastructure(error)
+                if error.kind() == DriverInfrastructureKind::WorkerJoin =>
+            {
+                DriverFailureKindForTest::WorkerJoin
+            }
+            _ => DriverFailureKindForTest::Other,
+        }
+    }
+
+    fn active_scope() -> Option<Arc<ActiveScope>> {
+        lock(&ACTIVE_SCOPE).clone()
+    }
+
+    fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        match mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod wu7_provider_lifecycle_spec;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_source(source: &str) -> CheckOutput {
+        super::check_source(source).expect("production default library initializes")
+    }
+
+    fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
+        super::check_project(inputs).expect("production default library initializes")
+    }
+
+    fn check_files(inputs: Vec<FileInput>) -> Vec<FileReport> {
+        super::check_files(inputs).expect("production default library initializes")
+    }
 
     /// Diagnostics derive `Debug` but not `PartialEq`, so compare their debug
     /// renderings — enough to assert two checks produced the *same* diagnostics.
@@ -2383,7 +2713,7 @@ const publishedWrong: boolean = published.value;
                     source: "export const value: number = 1;\n".to_string(),
                 },
             ];
-            let result = check_project_with_library(inputs);
+            let result = super::check_project(inputs);
             assert!(
                 result.is_ok(),
                 "{label}: declare global must bind: {:?}",
@@ -2397,8 +2727,7 @@ const publishedWrong: boolean = published.value;
             }
         }
 
-        let result =
-            check_source_with_library("export {};\ndeclare global { var b103Solo: number; }\n");
+        let result = super::check_source("export {};\ndeclare global { var b103Solo: number; }\n");
         assert!(
             result.is_ok(),
             "single-source declare global must bind: {:?}",
@@ -2411,14 +2740,14 @@ const publishedWrong: boolean = published.value;
 
     #[test]
     fn sparse_library_class_collision_keeps_the_library_terminal() {
-        let output = check_source_with_library("class Date {}\nconst value: Date = new Date();\n")
+        let output = super::check_source("class Date {}\nconst value: Date = new Date();\n")
             .expect("class collision checks in a private epoch");
         assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
     }
 
     #[test]
     fn sparse_library_interface_collision_publishes_the_merged_surface() {
-        let output = check_source_with_library(
+        let output = super::check_source(
             "interface Array<T> { b103Head(): T }\nconst head: number = [1].b103Head();\nconst wrong: string = [1].b103Head();\nconst wrongMapped: string[] = [1].map((value) => value + 1);\n",
         )
         .expect("interface collision checks in a private epoch");
@@ -2428,7 +2757,7 @@ const publishedWrong: boolean = published.value;
 
     #[test]
     fn sparse_library_interface_collision_replays_root_slot_consumers() {
-        let output = check_source_with_library(
+        let output = super::check_source(
             "interface EventSourceInit { b103Required: string; }\nnew EventSource(\"https://example.invalid\", {});\n",
         )
         .expect("EventSourceInit collision checks in a private epoch");
@@ -2447,7 +2776,7 @@ const publishedWrong: boolean = published.value;
 
     #[test]
     fn sparse_library_alias_collision_keeps_the_library_terminal() {
-        let output = check_source_with_library(
+        let output = super::check_source(
             "type Partial<T> = { b103: T };\nconst kept: Partial<{ value: number }> = {};\nconst rejected: Partial<number> = { b103: 1 };\n",
         )
         .expect("alias collision checks in a private epoch");
@@ -2463,8 +2792,7 @@ const publishedWrong: boolean = published.value;
             let source = format!(
                 "interface Array<T> {{ b103Collision(): T }}\n{declarations}const merged = new B103Merged();\nconst fromClass: string = merged.fromClass();\nconst fromInterface: number = merged.fromInterface();\nconst wrong: string = merged.fromInterface();\nconst version: number = B103Merged.version;\n"
             );
-            let output =
-                check_source_with_library(&source).expect("class-interface merge private epoch");
+            let output = super::check_source(&source).expect("class-interface merge private epoch");
             assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
             assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
         }
@@ -2472,7 +2800,7 @@ const publishedWrong: boolean = published.value;
 
     #[test]
     fn sparse_library_interface_legally_augments_an_inherited_class_surface() {
-        let output = check_source_with_library(
+        let output = super::check_source(
             "interface SafeArray<T = any> { b103Value(): T }\ndeclare const safe: SafeArray<number>;\nconst value: number = safe.b103Value();\nconst wrong: string = safe.b103Value();\nconst array: number[] = new VBArray(safe).toArray();\n",
         )
         .expect("inherited class-interface merge checks in a private epoch");
@@ -2482,7 +2810,7 @@ const publishedWrong: boolean = published.value;
 
     #[test]
     fn sparse_global_object_replay_publishes_script_contributors() {
-        let result = check_project_with_library(vec![
+        let result = super::check_project(vec![
             FileInput {
                 name: "00_global.ts".to_owned(),
                 source: "declare var B103GlobalThisValue: { enabled: boolean };\nfunction B103GlobalThisCall(): number { return 1; }\n".to_owned(),
@@ -2536,7 +2864,7 @@ const publishedWrong: boolean = published.value;
         ];
         for inputs in orders {
             let reports =
-                check_project_with_library(Vec::from(inputs)).expect("generic collision project");
+                super::check_project(Vec::from(inputs)).expect("generic collision project");
             let diagnostics = reports
                 .iter()
                 .flat_map(|report| &report.output.diagnostics)

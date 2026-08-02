@@ -284,6 +284,7 @@ pub enum LibraryProjectRouteError {
     PrivateCollisionPlanAdmissionFailed,
     PrivateEpochForkFailed(&'static str),
     CompleteSourceFallbackFailed(String),
+    UserParseRejected,
     PreflightRejected { reasons: BTreeSet<String> },
 }
 
@@ -309,6 +310,9 @@ impl fmt::Display for LibraryProjectRouteError {
                     formatter,
                     "cannot compile the complete-source collision fallback: {message}"
                 )
+            }
+            Self::UserParseRejected => {
+                formatter.write_str("library collision preflight rejected malformed user input")
             }
             Self::PreflightRejected { reasons } => {
                 write!(
@@ -4125,6 +4129,9 @@ impl FrozenLibraryBase {
             super::collision_preflight::RoutedProjectPreflight::Rejected { reasons } => {
                 Err(LibraryProjectRouteError::PreflightRejected { reasons })
             }
+            super::collision_preflight::RoutedProjectPreflight::UserParseRejected => {
+                Err(LibraryProjectRouteError::UserParseRejected)
+            }
         }
     }
 
@@ -4168,6 +4175,9 @@ impl FrozenLibraryBase {
             }
             super::collision_preflight::RoutedProjectPreflight::Rejected { reasons } => {
                 Err(LibraryProjectRouteError::PreflightRejected { reasons })
+            }
+            super::collision_preflight::RoutedProjectPreflight::UserParseRejected => {
+                Err(LibraryProjectRouteError::UserParseRejected)
             }
         }
     }

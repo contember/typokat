@@ -71,6 +71,17 @@ pub struct SourceFrontendRun<Product> {
     pub product: Option<Product>,
 }
 
+/// Parse one source without exposing a recovered AST to semantic consumers.
+pub fn parse_source_errors(source: &str) -> Vec<String> {
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    parse_errors(&parsed)
+}
+
+fn parse_errors(parsed: &oxc_parser::ParserReturn<'_>) -> Vec<String> {
+    parsed.diagnostics.iter().map(ToString::to_string).collect()
+}
+
 /// Parse one TypeScript source and keep its borrowed AST inside `consume`.
 pub fn run_source_frontend<Product>(
     source: &str,
@@ -90,6 +101,30 @@ pub struct ProjectFrontendRun<Product> {
     pub inputs: Vec<FileInput>,
     pub parse_errors: Vec<Vec<String>>,
     pub product: Product,
+}
+
+pub struct ParseOnlyProjectRun {
+    pub inputs: Vec<FileInput>,
+    pub parse_errors: Vec<Vec<String>>,
+}
+
+/// Parse a project without resolving imports or exposing recovered ASTs.
+pub fn run_project_parse_only(inputs: Vec<FileInput>) -> ParseOnlyProjectRun {
+    let allocators = (0..inputs.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    let parse_errors = inputs
+        .iter()
+        .zip(&allocators)
+        .map(|(input, allocator)| {
+            let parsed = Parser::new(allocator, &input.source, SourceType::ts()).parse();
+            parse_errors(&parsed)
+        })
+        .collect();
+    ParseOnlyProjectRun {
+        inputs,
+        parse_errors,
+    }
 }
 
 impl<Product> ProjectFrontendRun<Product> {
