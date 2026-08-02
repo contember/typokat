@@ -250,7 +250,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let base_ty = self.resolve_heritage_type(scope, heritage)?;
         if self.interner.store().array_type(base_ty).is_some() {
             return self
-                .project_library_heritage_surface(base_ty)
+                .project_library_heritage_surface(scope, base_ty)
                 .and_then(|projected| self.project_interface_heritage_type(projected))
                 .or_else(|| self.project_interface_heritage_type(base_ty));
         }

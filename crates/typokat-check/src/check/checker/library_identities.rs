@@ -1,6 +1,6 @@
 //! Stable full-library identities used by native-syntax member projection.
 
-use super::context::Pass;
+use super::context::{Pass, TypeDecl};
 use super::type_groups::{
     PublishedTypeEnvironment, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
 };
@@ -555,6 +555,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
     pub(in crate::check::checker) fn project_library_heritage_surface(
         &mut self,
+        scope: ScopeId,
         ty: TypeId,
     ) -> Option<TypeId> {
         let identities = self.library_semantic_identities.clone()?;
@@ -567,13 +568,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let LibraryIdentityTerminal::Ready(identity) = terminal else {
             return None;
         };
-        let parameter = identity.parameters.first().copied()?;
+        // A private collision rebuild publishes after interface construction. Read its
+        // exact frozen replacement here instead of the still-installed base template.
+        let replacement = (!self.type_environment.is_published()
+            && self.type_decls.has_replacement(identity.group.index())
+            && self.type_group_construction_is_frozen(identity.group))
+        .then(|| match self.type_decls.get(identity.group.index()) {
+            Some(TypeDecl::Interface {
+                recovery_params, ..
+            }) => Some(recovery_params.clone()),
+            _ => None,
+        })
+        .flatten();
+        let (template, parameters) = if let Some(parameters) = replacement {
+            (self.resolve_type_decl(scope, identity.group), parameters)
+        } else {
+            (identity.template, identity.parameters.clone())
+        };
+        let parameter = parameters.first().copied()?;
         let substitutions = FxHashMap::from_iter([(parameter, argument)]);
-        Some(self.substitute_ready_type_group_application(
-            identity.template,
-            &identity.parameters,
-            &substitutions,
-        ))
+        Some(self.substitute_ready_type_group_application(template, &parameters, &substitutions))
     }
 
     pub(in crate::check::checker) fn lookup_library_composed_member(
