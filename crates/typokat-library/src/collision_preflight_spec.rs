@@ -699,7 +699,7 @@ fn project_inputs(directory: &Path) -> Vec<(String, String)> {
 }
 
 #[test]
-fn b14_routing_matrix_is_exactly_two_shared_and_ten_private() {
+fn b14_routing_matrix_is_exactly_two_shared_and_thirteen_private() {
     let root =
         crate::test_support::repository_root().join("tests/cases/b14_full_lib_loading_project");
     let mut observed = Vec::new();
@@ -736,7 +736,24 @@ fn b14_routing_matrix_is_exactly_two_shared_and_ten_private() {
         .map(|(name, _)| name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(shared, ["fast_external_module", "zz_shared_base_isolation"]);
-    assert_eq!(private.len(), 10, "{private:#?}");
+    assert_eq!(
+        private,
+        [
+            "declare_global",
+            "declare_global_value_deferred",
+            "duplicate_global_deferred",
+            "explicit_global_this_extension",
+            "global_this_deferred_contributor_forward",
+            "global_this_deferred_contributor_reverse",
+            "global_value_dependency_reverse",
+            "root_namespace",
+            "script_collision_forward",
+            "script_collision_reverse",
+            "umd_global",
+            "unique_script_global_value",
+            "unsupported_merge_no_prefix",
+        ]
+    );
 }
 
 #[test]
