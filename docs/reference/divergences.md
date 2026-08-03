@@ -818,10 +818,13 @@ its **merged apparent object**. Member access, excess-property checking (against
 set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T extends T & X` →
 `TK2313`) all see the merge.
 
-- **Documented divergences (all safe / over-report):**
-  - Disjoint primitives (`string & number`) are **not** reduced to `never` — the per-member relation
-    yields the same *verdict* with a different message, so those fixtures assert **code-only**.
-    <!-- div: id=intersection/disjoint-primitives-message dir=cosmetic scope=s-assignability owner=design-oos witness=../../tests/cases/m31_intersections -->
+- **Documented divergences:**
+  - Disjoint primitive intersections (`string & number`) are **not** reduced to `never`. Concrete
+    primitive sources are still rejected member by member, but `any` is accepted by every
+    unreduced member and therefore enters an uninhabited target without a diagnostic. The reverse
+    direction also fails to expose the target's `never` identity. This is a silent under-report,
+    not the cosmetic-only difference previously recorded here (backlog `107`).
+    <!-- div: id=intersection/disjoint-primitives-message dir=under scope=s-assignability owner=../backlog/107-disjoint-primitive-intersection-never.md witness=../../tests/cases/m31_intersections/any_to_disjoint_primitives.ts -->
   - `&` is **not distributed** over unions (`(A | B) & C`).
     <!-- div: id=intersection/no-union-distribution dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m31_intersections -->
   - `keyof` / indexed-access **over an intersection** stay out of subset (the M20/M28
