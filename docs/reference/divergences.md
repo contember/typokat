@@ -825,7 +825,11 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
     direction also fails to expose the target's `never` identity. This is a silent under-report,
     not the cosmetic-only difference previously recorded here (backlog `107`).
     <!-- div: id=intersection/disjoint-primitives-message dir=under scope=s-assignability owner=../backlog/107-disjoint-primitive-intersection-never.md witness=../../tests/cases/m31_intersections/any_to_disjoint_primitives.ts -->
-  - `&` is **not distributed** over unions (`(A | B) & C`).
+  - `&` is **not generally distributed** over unions (`(A | B) & C`). Backlog `107` separately
+    requires the narrow, structurally decidable case where recursively comparing finite
+    primitive/literal/`object`-keyword union members proves every pairing disjoint, such as
+    `(string | number) & boolean`; leaving that case unreduced creates the same `any` silent
+    channel as `string & number`.
     <!-- div: id=intersection/no-union-distribution dir=over scope=b-type-level-tail owner=design-oos witness=../../tests/cases/m31_intersections -->
   - `keyof` / indexed-access **over an intersection** stay out of subset (the M20/M28
     keyof-of-non-object deferral).

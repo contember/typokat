@@ -23,21 +23,30 @@ silent under-report as a message-only difference. The exact witness is
 
 ## Approach / acceptance
 
-Collapse only intersections that are structurally provable to have no common primitive value:
-disjoint primitive domains and unequal singleton literals of one primitive domain. Preserve the
-existing error/`never`/`any` absorption order and do not generalize this into an assignability query
-inside the interner.
+Collapse only intersections that are structurally provable to have no common primitive value.
+The proof may compare primitive or `object`-keyword domains, unequal singleton literals of one
+primitive domain, and finite unions composed entirely of those forms. Recursing through a union
+only has to prove every relevant member pairing disjoint; it does not have to materialize a
+distributed result or simplify an overlapping union. Keep `void` and `undefined` in one
+potentially overlapping void-like domain. Preserve the existing error/`never`/`any` absorption
+order and do not generalize this into an assignability query inside the interner.
 
 Keep potentially inhabited forms intact: a primitive with its own literal subtype (`string &
-"x"`), primitive branding (`string & { readonly brand: ... }`), type parameters, templates,
-unions, and object intersections. Conflicting object members and other broader intersection
-reduction remain outside this item.
+"x"`), overlapping finite primitive/literal/`object`-keyword unions, primitive branding (`string
+& { readonly brand: ... }`), type parameters, templates, and general object intersections.
+Conflicting object members and broader union distribution remain outside this item. `object &
+string` is the narrow exception: its domains are structurally disjoint without inspecting object
+members.
 
 Acceptance is the new M31 fixture matching `tsc 6.0.3 --strict` in both member orders: `any` is
 rejected from disjoint targets as `TK2322`, a reduced disjoint source flows to `never`, existing
 concrete/`unknown` rejections remain, `never` still flows in, and the overlap/brand controls remain
-inhabited. Add interner unit coverage for order independence, singleton-literal domains, and every
-preserved boundary above.
+inhabited. The boundary matrix also pins primitive/nullish distinctions: `number & bigint`,
+`string & symbol`, `string & null`, `string & undefined`, `string & void`, `object & string`, and
+`null & undefined` reduce to `never`; `void & undefined` remains inhabited (tsc normalizes it to
+`undefined`); and `0 & -0` remains inhabited as `0`. Add interner unit coverage for order
+independence, recursive finite-union domain proofs, singleton-literal domains, and every preserved
+boundary above.
 
 ## Touch points
 
