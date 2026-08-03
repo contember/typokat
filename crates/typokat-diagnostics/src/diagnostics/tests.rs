@@ -3,7 +3,7 @@ use crate::relate::Reason;
 use crate::span::Span;
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, ObjectType,
-    ParameterType, PropertyType, TupleRestType, TupleType, TypeParamId,
+    ParameterType, PropertyType, TupleRestType, TupleType, TypeParamId, TypeTag,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
@@ -39,7 +39,16 @@ fn deferred_indexed_access_parenthesizes_low_precedence_objects() {
     let wk = interner.well_known();
     let key = interner.intern_literal(LiteralValue::String("value".into()));
     let union = interner.union(vec![wk.number, wk.string]);
-    let intersection = interner.intersection(vec![wk.number, wk.string]);
+    let left = interner.intern_object(ObjectType {
+        properties: vec![prop("left", wk.number)],
+        ..Default::default()
+    });
+    let right = interner.intern_object(ObjectType {
+        properties: vec![prop("right", wk.string)],
+        ..Default::default()
+    });
+    let intersection = interner.intersection(vec![left, right]);
+    assert_eq!(interner.store().tag(intersection), TypeTag::Intersection);
     let function = interner.intern_function(FunctionType {
         type_params: Vec::new(),
         receiver: None,
@@ -58,7 +67,6 @@ fn deferred_indexed_access_parenthesizes_low_precedence_objects() {
 
     for (object, expected) in [
         (union, "(number | string)[\"value\"]"),
-        (intersection, "(number & string)[\"value\"]"),
         (function, "(() => number)[\"value\"]"),
         (
             conditional,
@@ -68,6 +76,13 @@ fn deferred_indexed_access_parenthesizes_low_precedence_objects() {
         let access = interner.intern_deferred_indexed_access(object, key);
         assert_eq!(render_type(interner.store(), access, false), expected);
     }
+    let access = interner.intern_deferred_indexed_access(intersection, key);
+    let rendered = render_type(interner.store(), access, false);
+    assert!(
+        rendered == "({ left: number } & { right: string })[\"value\"]"
+            || rendered == "({ right: string } & { left: number })[\"value\"]",
+        "an intersection object must be parenthesized before indexed access, got {rendered:?}"
+    );
 }
 
 /// A shared acyclic subtree is not a cycle, but its exponential display must
@@ -494,30 +509,42 @@ fn arity_diagnostics_render_range_and_at_least_messages() {
     );
 }
 
-/// M31 intersection rendering: `A & B` joins members with ` & ` (canonical,
-/// TypeId-sorted order — asserted order-independently, like unions), a **union**
-/// member is parenthesized (`(A | B) & C`), and an intersection element inside an
-/// array is parenthesized (`(A & B)[]`).
+/// M31 intersection rendering: `A & B` joins overlapping structural members with
+/// ` & `, a union member is parenthesized, and an intersection array element is
+/// parenthesized. Disjoint primitive intersections reduce to `never` before display.
 #[test]
 fn intersection_type_renders_with_ampersand_and_parens() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
 
-    // `string & number` — a bare two-member node (disjoint primitives are not
-    // reduced). Rendered with ` & `, in TypeId order (unstable, so accept either).
-    let sn = interner.intersection(vec![wk.string, wk.number]);
-    let rendered = render_type(interner.store(), sn, false);
+    let left = interner.intern_object(ObjectType {
+        properties: vec![prop("left", wk.number)],
+        ..Default::default()
+    });
+    let right = interner.intern_object(ObjectType {
+        properties: vec![prop("right", wk.string)],
+        ..Default::default()
+    });
+    let structural = interner.intersection(vec![left, right]);
+    assert_eq!(interner.store().tag(structural), TypeTag::Intersection);
+    let rendered = render_type(interner.store(), structural, false);
     assert!(
-        rendered == "string & number" || rendered == "number & string",
+        rendered == "{ left: number } & { right: string }"
+            || rendered == "{ right: string } & { left: number }",
         "an intersection joins members with ` & `, got {rendered:?}"
     );
 
-    // A **union** member is parenthesized inside an intersection: `(number | string) & boolean`.
-    let union = interner.union(vec![wk.number, wk.string]);
-    let with_union = interner.intersection(vec![union, wk.boolean]);
+    let third = interner.intern_object(ObjectType {
+        properties: vec![prop("third", wk.boolean)],
+        ..Default::default()
+    });
+    let union = interner.union(vec![left, right]);
+    let with_union = interner.intersection(vec![union, third]);
+    assert_eq!(interner.store().tag(with_union), TypeTag::Intersection);
     let rendered = render_type(interner.store(), with_union, false);
     assert!(
-        rendered.contains("(number | string)") || rendered.contains("(string | number)"),
+        rendered.contains("({ left: number } | { right: string })")
+            || rendered.contains("({ right: string } | { left: number })"),
         "a union member must be parenthesized inside an intersection, got {rendered:?}"
     );
     assert!(
@@ -525,11 +552,11 @@ fn intersection_type_renders_with_ampersand_and_parens() {
         "still ` & `-joined, got {rendered:?}"
     );
 
-    // An intersection element inside an array is parenthesized: `(string & number)[]`.
-    let sn_arr = interner.intern_array(sn);
-    let rendered = render_type(interner.store(), sn_arr, false);
+    let structural_array = interner.intern_array(structural);
+    let rendered = render_type(interner.store(), structural_array, false);
     assert!(
-        rendered == "(string & number)[]" || rendered == "(number & string)[]",
+        rendered == "({ left: number } & { right: string })[]"
+            || rendered == "({ right: string } & { left: number })[]",
         "an intersection array element must be parenthesized, got {rendered:?}"
     );
 }
