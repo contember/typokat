@@ -3851,6 +3851,72 @@ fn intrinsic_lattice_and_widening() {
     assert!(!rel.is_assignable(wk.null, wk.undefined).is_yes());
 }
 
+/// Backlog 107 — `any` cannot enter `never`, while the internal error type
+/// remains cascade-suppressing and all other `any`/`never` directions stay put.
+#[test]
+fn any_error_and_never_preserve_their_directional_boundaries() {
+    let interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let all_intrinsics = [
+        wk.error,
+        wk.any,
+        wk.unknown,
+        wk.never,
+        wk.void,
+        wk.null,
+        wk.undefined,
+        wk.boolean,
+        wk.number,
+        wk.string,
+        wk.uppercase,
+        wk.lowercase,
+        wk.capitalize,
+        wk.uncapitalize,
+        wk.this_type,
+        wk.omit_this_parameter,
+        wk.object,
+        wk.bigint,
+        wk.symbol,
+    ];
+    let mut rel = Relater::new(interner.store(), wk);
+
+    for ty in all_intrinsics {
+        assert!(
+            rel.is_assignable(wk.error, ty).is_yes(),
+            "the internal error source must suppress cascades for {ty:?}"
+        );
+        assert!(
+            rel.is_assignable(ty, wk.error).is_yes(),
+            "the internal error target must suppress cascades for {ty:?}"
+        );
+        assert!(
+            rel.is_assignable(wk.never, ty).is_yes(),
+            "never must remain bottom for {ty:?}"
+        );
+        assert!(
+            rel.is_assignable(ty, wk.any).is_yes(),
+            "any must remain a permissive target for {ty:?}"
+        );
+        if ty != wk.never {
+            assert!(
+                rel.is_assignable(wk.any, ty).is_yes(),
+                "any must remain a permissive source for {ty:?}"
+            );
+        }
+    }
+
+    for attempt in 0..2 {
+        match rel.is_assignable(wk.any, wk.never) {
+            Relation::No(chain) => assert_eq!(
+                chain.root(),
+                (wk.any, wk.never),
+                "attempt {attempt} must preserve the public reason root"
+            ),
+            Relation::Yes => panic!("attempt {attempt}: any must not be assignable to never"),
+        }
+    }
+}
+
 /// A failure returns a reason chain whose root is the (src, tgt) pair — the
 /// hook M6 grows into nested messages, and the data M0's renderer consumes.
 #[test]

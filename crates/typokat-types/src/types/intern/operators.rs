@@ -4,8 +4,87 @@
 use super::*;
 use crate::types::repr::{
     ClassId, ClassInstanceType, ConditionalType, DeferredIndexedAccessType, InstantiationType,
-    MappedType, TemplateType,
+    IntrinsicKind, LiteralValue, MappedType, TemplateType,
 };
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum DisjointDomain {
+    Null,
+    VoidLike,
+    Boolean,
+    Number,
+    String,
+    BigInt,
+    Symbol,
+    NonPrimitive,
+}
+
+fn disjoint_domain(store: &Store, ty: TypeId) -> Option<DisjointDomain> {
+    let intrinsic = match store.intrinsic_kind(ty) {
+        Some(IntrinsicKind::Null) => DisjointDomain::Null,
+        Some(IntrinsicKind::Void | IntrinsicKind::Undefined) => DisjointDomain::VoidLike,
+        Some(IntrinsicKind::Boolean) => DisjointDomain::Boolean,
+        Some(IntrinsicKind::Number) => DisjointDomain::Number,
+        Some(IntrinsicKind::String) => DisjointDomain::String,
+        Some(IntrinsicKind::BigInt) => DisjointDomain::BigInt,
+        Some(IntrinsicKind::Symbol) => DisjointDomain::Symbol,
+        Some(IntrinsicKind::Object) => DisjointDomain::NonPrimitive,
+        Some(_) | None => {
+            return store.literal_value(ty).map(|literal| match literal {
+                LiteralValue::Boolean(_) => DisjointDomain::Boolean,
+                LiteralValue::Number(_) => DisjointDomain::Number,
+                LiteralValue::String(_) => DisjointDomain::String,
+            });
+        }
+    };
+    Some(intrinsic)
+}
+
+fn definitely_disjoint(store: &Store, left: TypeId, right: TypeId) -> bool {
+    if let Some(members) = store.union_members(left) {
+        return !members.is_empty()
+            && members
+                .iter()
+                .all(|&member| definitely_disjoint(store, member, right));
+    }
+    if let Some(members) = store.union_members(right) {
+        return !members.is_empty()
+            && members
+                .iter()
+                .all(|&member| definitely_disjoint(store, left, member));
+    }
+
+    let (Some(left_domain), Some(right_domain)) =
+        (disjoint_domain(store, left), disjoint_domain(store, right))
+    else {
+        return false;
+    };
+    if left_domain != right_domain {
+        return true;
+    }
+
+    match (store.literal_value(left), store.literal_value(right)) {
+        (Some(left), Some(right)) => left != right,
+        _ => false,
+    }
+}
+
+fn has_definitely_disjoint_members(store: &Store, members: &[TypeId]) -> bool {
+    for (index, &left) in members.iter().enumerate() {
+        if disjoint_domain(store, left).is_none() && store.union_members(left).is_none() {
+            continue;
+        }
+        for &right in &members[index + 1..] {
+            if disjoint_domain(store, right).is_none() && store.union_members(right).is_none() {
+                continue;
+            }
+            if definitely_disjoint(store, left, right) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 impl Interner {
     /// Intern a union type from its (un-canonicalized) member ids, returning the
@@ -97,12 +176,13 @@ impl Interner {
     ///  3. **drop** `unknown` members (`X & unknown` → `X`; `unknown` is the identity of
     ///     `&` — the DUAL of union dropping `never`),
     ///  4. **sort** by `TypeId` and **dedup** (`A & B` ≡ `B & A`; `A & A` → `A`),
-    ///  5. **collapse**: a 0-member intersection → `unknown` (the DUAL of union → `never`);
+    ///  5. **reduce** structurally disjoint primitive domains, the `object` keyword,
+    ///     unequal singleton literals, and finite unions proven disjoint to `never`,
+    ///  6. **collapse**: a 0-member intersection → `unknown` (the DUAL of union → `never`);
     ///     a 1-member intersection → that member (no intersection node is created).
     ///
-    /// Disjoint primitives (`string & number`) are **not** reduced to `never` (a
-    /// documented deferral — the per-member target relation gives the correct verdict).
-    /// Only a genuine ≥ 2-member intersection is hash-consed. The input `Vec` is consumed.
+    /// Only a genuine ≥ 2-member inhabited intersection is hash-consed. The input
+    /// `Vec` is consumed.
     pub fn intersection(&mut self, mut members: Vec<TypeId>) -> TypeId {
         let wk = self.well_known;
 
@@ -135,6 +215,10 @@ impl Interner {
         // Canonical member sets ignore order and multiplicity.
         flat.sort_unstable();
         flat.dedup();
+
+        if has_definitely_disjoint_members(&self.store, &flat) {
+            return wk.never;
+        }
 
         // Collapse 0-/1-member cases before store insertion.
         match flat.len() {

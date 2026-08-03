@@ -1440,6 +1440,246 @@ fn intersection_canonicalization_and_hash_consing() {
     );
 }
 
+#[test]
+fn intersection_reduces_disjoint_primitive_domains() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let domains = [
+        vec![wk.null],
+        vec![wk.void, wk.undefined],
+        vec![wk.boolean],
+        vec![wk.number],
+        vec![wk.string],
+        vec![wk.bigint],
+        vec![wk.symbol],
+        vec![wk.object],
+    ];
+
+    for (index, domain) in domains.iter().enumerate() {
+        for &left in domain {
+            for &right in domain {
+                assert_ne!(
+                    interner.intersection(vec![left, right]),
+                    wk.never,
+                    "members of one domain may overlap"
+                );
+            }
+            for other_domain in &domains[index + 1..] {
+                for &right in other_domain {
+                    assert_eq!(
+                        interner.intersection(vec![left, right]),
+                        wk.never,
+                        "different primitive domains are disjoint"
+                    );
+                    assert_eq!(
+                        interner.intersection(vec![right, left]),
+                        wk.never,
+                        "primitive-domain reduction is order independent"
+                    );
+                    assert_eq!(
+                        interner.intersection(vec![left, right, left]),
+                        wk.never,
+                        "duplicates do not hide disjoint domains"
+                    );
+                }
+            }
+        }
+    }
+
+    let brand = interner.intern_object(ObjectType {
+        properties: vec![prop("brand", wk.string)],
+        ..Default::default()
+    });
+    let branded_string = interner.intersection(vec![wk.string, brand]);
+    assert_eq!(interner.store().tag(branded_string), TypeTag::Intersection);
+    assert_eq!(
+        interner.intersection(vec![wk.number, branded_string]),
+        wk.never,
+        "flattening exposes disjoint domains in nested intersections"
+    );
+
+    assert_eq!(
+        interner.intersection(vec![wk.any, wk.string, wk.number]),
+        wk.any,
+        "any absorption precedes primitive reduction"
+    );
+    assert_eq!(
+        interner.intersection(vec![wk.error, wk.string, wk.number]),
+        wk.any,
+        "error absorption precedes primitive reduction"
+    );
+    assert_eq!(
+        interner.intersection(vec![wk.never, wk.string, wk.number]),
+        wk.never,
+        "never absorption precedes primitive reduction"
+    );
+    assert_eq!(
+        interner.intersection(vec![wk.unknown, wk.string, wk.number]),
+        wk.never,
+        "unknown remains the identity before primitive reduction"
+    );
+}
+
+#[test]
+fn intersection_reduces_only_proven_disjoint_singletons() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let string_x = interner.intern_literal(LiteralValue::String("x".to_owned()));
+    let string_x_again = interner.intern_literal(LiteralValue::String("x".to_owned()));
+    let string_y = interner.intern_literal(LiteralValue::String("y".to_owned()));
+    let number_one = interner.intern_literal(LiteralValue::Number(1.0));
+    let number_two = interner.intern_literal(LiteralValue::Number(2.0));
+    let positive_zero = interner.intern_literal(LiteralValue::Number(0.0));
+    let negative_zero = interner.intern_literal(LiteralValue::Number(-0.0));
+    let boolean_true = interner.intern_literal(LiteralValue::Boolean(true));
+    let boolean_false = interner.intern_literal(LiteralValue::Boolean(false));
+
+    assert_eq!(string_x, string_x_again);
+    assert_eq!(
+        interner.intersection(vec![string_x, string_x_again]),
+        string_x,
+        "equal singleton literals remain inhabited"
+    );
+    assert_ne!(
+        interner.intersection(vec![positive_zero, negative_zero]),
+        wk.never,
+        "positive and negative zero denote the same singleton value"
+    );
+
+    for (left, right) in [
+        (string_x, string_y),
+        (number_one, number_two),
+        (boolean_true, boolean_false),
+    ] {
+        assert_eq!(
+            interner.intersection(vec![left, right]),
+            wk.never,
+            "unequal singleton literals in one domain are disjoint"
+        );
+        assert_eq!(
+            interner.intersection(vec![right, left]),
+            wk.never,
+            "singleton reduction is order independent"
+        );
+    }
+
+    for (primitive, literal) in [
+        (wk.string, string_x),
+        (wk.number, number_one),
+        (wk.boolean, boolean_true),
+    ] {
+        let overlap = interner.intersection(vec![primitive, literal]);
+        assert_eq!(
+            interner.store().tag(overlap),
+            TypeTag::Intersection,
+            "a primitive and its own literal subtype overlap"
+        );
+    }
+
+    assert_eq!(
+        interner.intersection(vec![string_x, number_one]),
+        wk.never,
+        "singleton literals from different domains are disjoint"
+    );
+}
+
+#[test]
+fn intersection_preserves_nonstructural_disjointness_boundaries() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let brand = interner.intern_object(ObjectType {
+        properties: vec![prop("brand", wk.string)],
+        ..Default::default()
+    });
+    let parameter = interner.intern_type_param(TypeParamId(107), "T");
+    let template = interner.intern_template(TemplateType {
+        texts: vec!["prefix-".to_owned(), String::new()],
+        holes: vec![parameter],
+    });
+
+    for opaque in [brand, parameter, template] {
+        let intersection = interner.intersection(vec![wk.string, opaque]);
+        assert_eq!(
+            interner.store().tag(intersection),
+            TypeTag::Intersection,
+            "non-primitive boundaries remain potentially inhabited"
+        );
+        assert_ne!(intersection, wk.never);
+    }
+}
+
+#[test]
+fn intersection_proves_disjoint_finite_union_domains() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    let string_or_number = interner.union(vec![wk.string, wk.number]);
+    let boolean_or_symbol = interner.union(vec![wk.boolean, wk.symbol]);
+    assert_eq!(
+        interner.intersection(vec![string_or_number, wk.boolean]),
+        wk.never,
+        "every union branch is disjoint from boolean"
+    );
+    assert_eq!(
+        interner.intersection(vec![wk.boolean, string_or_number]),
+        wk.never,
+        "union disjointness is order independent"
+    );
+    assert_eq!(
+        interner.intersection(vec![string_or_number, boolean_or_symbol]),
+        wk.never,
+        "recursive union comparison proves every branch pairing"
+    );
+    assert_eq!(
+        interner.intersection(vec![string_or_number, wk.object]),
+        wk.never,
+        "primitive union branches are disjoint from object"
+    );
+
+    let string_x = interner.intern_literal(LiteralValue::String("x".to_owned()));
+    let string_y = interner.intern_literal(LiteralValue::String("y".to_owned()));
+    let string_z = interner.intern_literal(LiteralValue::String("z".to_owned()));
+    let x_or_y = interner.union(vec![string_x, string_y]);
+    assert_eq!(
+        interner.intersection(vec![x_or_y, string_z]),
+        wk.never,
+        "every finite literal branch is disjoint from z"
+    );
+
+    for overlap in [
+        interner.intersection(vec![string_or_number, wk.string]),
+        interner.intersection(vec![x_or_y, string_x]),
+    ] {
+        assert_eq!(
+            interner.store().tag(overlap),
+            TypeTag::Intersection,
+            "one overlapping union branch prevents a disjointness proof"
+        );
+    }
+
+    let object_or_string = interner.union(vec![wk.object, wk.string]);
+    let object_overlap = interner.intersection(vec![object_or_string, wk.object]);
+    assert_eq!(
+        interner.store().tag(object_overlap),
+        TypeTag::Intersection,
+        "the object branch keeps the union intersection potentially inhabited"
+    );
+
+    let brand = interner.intern_object(ObjectType {
+        properties: vec![prop("brand", wk.string)],
+        ..Default::default()
+    });
+    let branded_union = interner.union(vec![brand, wk.number]);
+    let branded_overlap = interner.intersection(vec![branded_union, wk.string]);
+    assert_eq!(
+        interner.store().tag(branded_overlap),
+        TypeTag::Intersection,
+        "an opaque structural-object branch blocks the narrow proof"
+    );
+}
+
 /// Array hash-consing (M17): an array's identity is its element id alone, so
 /// `number[]` interns consistently, `number[]` ≠ `string[]`, and `number[][]`
 /// nests (its element is `number[]`). The element is canonical, so the dedup

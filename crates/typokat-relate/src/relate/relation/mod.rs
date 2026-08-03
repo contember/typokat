@@ -1189,16 +1189,28 @@ impl<'a> Relater<'a> {
     ) -> Relation {
         let wk = self.well_known;
 
-        // `any` relates to everything in both directions (architecture §6,
-        // mvp-plan §4.4). The error type behaves the same so cascades are
-        // suppressed.
-        if self.is_any_like(src) || self.is_any_like(tgt) {
+        // The internal error type relates in both directions so earlier failures
+        // do not cascade into secondary diagnostics.
+        if self.is_error_type(src) || self.is_error_type(tgt) {
             return Relation::Yes;
         }
 
         // `never` is the bottom type. Keep this ahead of target-specific
         // structural obligations so an apparent member check cannot reject it.
         if src == wk.never {
+            return Relation::Yes;
+        }
+
+        // Source-level `any` relates to every target except `never`. TypeScript
+        // preserves this one boundary because no value can inhabit `never`.
+        if self.is_any_type(src) {
+            return if tgt == wk.never {
+                Relation::No(ReasonChain::leaf(src, tgt))
+            } else {
+                Relation::Yes
+            };
+        }
+        if self.is_any_type(tgt) {
             return Relation::Yes;
         }
 
@@ -1504,17 +1516,20 @@ impl<'a> Relater<'a> {
         Relation::No(ReasonChain::leaf(src, tgt))
     }
 
-    /// `any` or the error type — both relate to everything.
-    fn is_any_like(&self, id: TypeId) -> bool {
-        if id == self.well_known.any || id == self.well_known.error {
+    fn is_any_type(&self, id: TypeId) -> bool {
+        if id == self.well_known.any {
             return true;
         }
-        // Defensive: any type explicitly flagged as containing the error type.
         self.store.tag(id) == TypeTag::Intrinsic
-            && matches!(
-                self.store.intrinsic_kind(id),
-                Some(IntrinsicKind::Any) | Some(IntrinsicKind::Error)
-            )
+            && self.store.intrinsic_kind(id) == Some(IntrinsicKind::Any)
+    }
+
+    fn is_error_type(&self, id: TypeId) -> bool {
+        if id == self.well_known.error {
+            return true;
+        }
+        self.store.tag(id) == TypeTag::Intrinsic
+            && self.store.intrinsic_kind(id) == Some(IntrinsicKind::Error)
     }
 
     fn is_non_nullish_object_top_source(&self, id: TypeId) -> bool {
