@@ -125,6 +125,29 @@ INCOMPLETE_LINES = (
 )
 
 
+# --- Official test-case unit parsing ----------------------------------------
+
+class UnitParserTests(unittest.TestCase):
+    def test_leading_bom_does_not_hide_directives_or_shift_units(self):
+        source = textwrap.dedent("""\
+            // @target: es5
+            // @filename: first.ts
+            const first: number = "bad";
+            // @filename: second.ts
+            const second: string = 1;
+        """)
+        expected = (
+            {"target": "es5"},
+            [
+                ("first.ts", 'const first: number = "bad";'),
+                ("second.ts", 'const second: string = 1;\n'),
+            ],
+        )
+
+        self.assertEqual(ts.parse_units(source), expected)
+        self.assertEqual(ts.parse_units("\ufeff" + source), expected)
+
+
 # --- Finding 1: identity-based ratchet ---------------------------------------
 
 class IdentityRatchetTests(unittest.TestCase):
