@@ -10638,6 +10638,74 @@ mod tests {
         increment.notAFunctionMember;
     "#;
 
+    fn object_overlap_scale_source(width: usize) -> String {
+        let source_properties = (0..width)
+            .map(|index| format!("  p{index:03}: [{index}];"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let target_properties = (0..width)
+            .map(|index| format!("  p{index:03}: Object;"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "interface ScaleSource {{\n{source_properties}\n}}\n\
+             interface ScaleTarget {{\n{target_properties}\n}}\n\
+             declare const source: ScaleSource;\n\
+             const target: ScaleTarget = source;\n"
+        )
+    }
+
+    fn object_overlap_relation_frames(width: usize) -> Result<u64, String> {
+        let library = format!(
+            "{OWNED_MINI_LIBRARY}\n\
+             interface Array<T> {{ readonly length: number; }}\n\
+             interface ReadonlyArray<T> {{ readonly length: number; }}\n"
+        );
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "object-overlap-scale.d.ts",
+            source: &library,
+        }])
+        .map_err(|error| format!("{error:?}"))?;
+        assert_eq!(
+            crate::relate::relation::relation_source_cold_measure(),
+            None
+        );
+        let guard = crate::relate::relation::start_relation_source_cold_measure();
+        let run = check_caller_certified_collision_free_source_with_owned_library(
+            state,
+            &object_overlap_scale_source(width),
+        )?;
+        let work = crate::relate::relation::relation_source_cold_measure().unwrap_or_default();
+        drop(guard);
+        assert!(
+            run.result.diagnostics.is_empty(),
+            "{:?}",
+            run.result.diagnostics
+        );
+        assert!(
+            run.result.incomplete.is_empty(),
+            "{:?}",
+            run.result.incomplete
+        );
+        Ok(work.uncached_relation_frames)
+    }
+
+    #[test]
+    fn object_overlap_demand_retries_do_not_rescan_named_property_prefixes() -> Result<(), String> {
+        const SMALL: usize = 16;
+        const LARGE: usize = 32;
+
+        let small = object_overlap_relation_frames(SMALL)?;
+        let large = object_overlap_relation_frames(LARGE)?;
+        assert!(small > 0, "the scale guard must observe relation work");
+        assert!(
+            large <= small.saturating_mul(3),
+            "doubling Object-overlap width must stay sub-quadratic: small={small}, large={large}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn owned_generic_promise_identity_preserves_resolve_argument() {
         let library = r#"
