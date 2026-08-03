@@ -1616,6 +1616,7 @@ where
             source_offset,
             &binding_lexical_events,
             &mut external_effects,
+            AuthoritativeProjectBinderFinish::Continuation,
         )
         .map_err(|_| "complete-source project binding failed")?;
         bound.binder.prelude_type_group_count = u32::try_from(published_types.groups().len())
@@ -1666,7 +1667,7 @@ where
             module_placeholders.push(placeholders);
             exports.push(surface);
         }
-        let binder_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
+        let binder_module = module_scopes.last().copied();
         // The single-source path already propagates this; the project path must not turn it
         // into a panic (backlog 103).
         let binder = builder.finish_frozen_library_continuation(binder_module)?;
@@ -2780,7 +2781,7 @@ pub fn check_program_with_owned_library<'ast>(
     let unit = CompilationUnit::implementation(source, program);
     builder.reserve_script_namespace_roots([(program, unit)]);
     let (module, _) = builder.add_module(program, &[], unit);
-    let binder = builder.finish_frozen_library_continuation(module)?;
+    let binder = builder.finish_frozen_library_continuation(Some(module))?;
     binder
         .namespaces
         .validate_compilation_origin_index()
@@ -2954,6 +2955,7 @@ pub(crate) fn bind_library_checkpoint_project_programs(
         source_offset,
         &lexical_events,
         &mut external_effects,
+        AuthoritativeProjectBinderFinish::Continuation,
     )?;
     #[cfg(any(test, feature = "test-utils"))]
     {
@@ -2978,11 +2980,19 @@ fn bind_fresh_project_programs(
         0,
         lexical_events,
         external_effects,
+        AuthoritativeProjectBinderFinish::Fresh,
     )?;
     #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_PRODUCTS
         .with(|products| products.borrow_mut().push(bound.normalized.clone()));
     Ok(bound)
+}
+
+#[derive(Copy, Clone)]
+enum AuthoritativeProjectBinderFinish {
+    #[cfg(any(test, feature = "test-utils"))]
+    Fresh,
+    Continuation,
 }
 
 fn bind_authoritative_project_core<'ast>(
@@ -2991,6 +3001,7 @@ fn bind_authoritative_project_core<'ast>(
     source_offset: u32,
     lexical_events: &LexicalReservations,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+    finish: AuthoritativeProjectBinderFinish,
 ) -> Result<BoundProjectBinder, String> {
     #[cfg(any(test, feature = "test-utils"))]
     {
@@ -3043,8 +3054,16 @@ fn bind_authoritative_project_core<'ast>(
         module_placeholders.push(placeholders);
         exports.push(surface);
     }
-    let final_module = module_scopes.last().copied().unwrap_or(ScopeId(0));
-    let binder = builder.finish(final_module);
+    let final_module = module_scopes.last().copied();
+    let binder = match finish {
+        #[cfg(any(test, feature = "test-utils"))]
+        AuthoritativeProjectBinderFinish::Fresh => {
+            builder.finish(final_module.unwrap_or(ScopeId(0)))
+        }
+        AuthoritativeProjectBinderFinish::Continuation => builder
+            .finish_frozen_library_continuation(final_module)
+            .map_err(str::to_owned)?,
+    };
     let mut project_sources = units
         .iter()
         .zip(module_scopes.iter().copied())

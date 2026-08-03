@@ -430,7 +430,7 @@ impl LibraryBinderCheckpoint {
             .map(|unit| (unit.module, unit.ordinal))
             .collect();
         let Binder {
-            graph,
+            mut graph,
             symbols,
             declarations,
             type_groups,
@@ -449,6 +449,14 @@ impl LibraryBinderCheckpoint {
             next_source_key,
             frozen_prefix_writes,
         } = binder;
+        let delta_compilation_global = graph.push(Scope::new(
+            ScopeKind::CompilationGlobal,
+            Some(script_namespace_root),
+        ));
+        let delta_script_namespace_root = graph.push(Scope::new(
+            ScopeKind::ScriptNamespaceRoot,
+            Some(delta_compilation_global),
+        ));
         (
             ProjectBinderBuilder {
                 state: BindState {
@@ -474,9 +482,8 @@ impl LibraryBinderCheckpoint {
                 },
                 prelude_module,
                 compilation_global,
-                // Nothing is sealed on the checkpoint path, so it keeps its own routing.
-                delta_compilation_global: None,
-                script_namespace_root,
+                delta_compilation_global: Some(delta_compilation_global),
+                script_namespace_root: delta_script_namespace_root,
                 library_root_projection,
                 prelude_type_group_count,
                 use_mode: BuilderUseMode::Continuation,
@@ -1067,10 +1074,16 @@ impl BindState {
             .filter(|scope| scope.kind == ScopeKind::GlobalOverlay)
             .and_then(|scope| scope.namespace_public)
             .unwrap_or(lexical_scope);
-        self.continuation_publication
-            .as_ref()
-            .filter(|plan| plan.binding_sites.contains_key(&binding_start))
-            .map_or(lexical_publication_scope, |plan| plan.compilation_global)
+        let Some(plan) = self.continuation_publication.as_ref() else {
+            return lexical_publication_scope;
+        };
+        if plan.binding_sites.contains_key(&binding_start) {
+            plan.compilation_global
+        } else if lexical_publication_scope == self.current_module {
+            plan.default_global_scope
+        } else {
+            lexical_publication_scope
+        }
     }
 
     pub(super) fn global_augmentation_overlay_scope(
@@ -1119,7 +1132,7 @@ impl BindState {
     pub(super) fn continuation_default_global_scope(&self, fallback: ScopeId) -> ScopeId {
         self.continuation_publication
             .as_ref()
-            .map_or(fallback, |plan| plan.default_global_scope)
+            .map_or(fallback, |plan| plan.project_global_scope)
     }
 
     pub(super) fn continuation_active(&self) -> bool {
@@ -1365,6 +1378,7 @@ struct PendingNamespaceModule<'ast> {
 
 struct ContinuationPublicationPlan {
     compilation_global: ScopeId,
+    project_global_scope: ScopeId,
     default_global_scope: ScopeId,
     binding_sites: FxHashMap<u32, String>,
 }
@@ -1479,6 +1493,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     unit.source,
                     ContinuationPublicationPlan {
                         compilation_global: self.compilation_global,
+                        project_global_scope: default_global_scope,
                         default_global_scope,
                         binding_sites,
                     },
@@ -1599,20 +1614,19 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             placeholders.push(declare_import(&mut self.state, module, import));
         }
         if self.use_mode == BuilderUseMode::Continuation {
-            self.state.continuation_publication = Some(
-                self.continuation_publication_plans
-                    .remove(&unit.source)
-                    .expect("continuation source has one publication plan"),
-            );
+            let mut publication = self
+                .continuation_publication_plans
+                .remove(&unit.source)
+                .expect("continuation source has one publication plan");
+            if unit.binding.external_module {
+                publication.default_global_scope = module;
+            }
+            self.state.continuation_publication = Some(publication);
             // A script file contributes to the project-wide global scope — the same rule the
             // library batch applies to its own script files, one layer up.
-            let ordinary_scope = match self.delta_compilation_global {
-                Some(delta) if !unit.binding.external_module => delta,
-                _ => module,
-            };
             bind_library_statements(
                 &mut self.state,
-                ordinary_scope,
+                module,
                 &program.body,
                 unit,
                 self.compilation_global,
@@ -1912,9 +1926,10 @@ impl<'ast> ProjectBinderBuilder<'ast> {
     /// Freeze only the appended user suffix; the library global prefix is already final.
     pub fn finish_frozen_library_continuation(
         mut self,
-        module: ScopeId,
+        appended_module: Option<ScopeId>,
     ) -> Result<Binder, &'static str> {
         assert_eq!(self.use_mode, BuilderUseMode::Continuation);
+        let current_module = self.state.current_module;
         self.finalize_pending_namespaces();
         allocate_dormant_namespace_value_storages(&mut self.state);
         self.state
@@ -1924,18 +1939,21 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                 self.script_namespace_root,
                 &mut self.state.frozen_prefix_writes,
             );
-        self.state
-            .graph
-            .get_mut(module)
-            .expect("continuation module exists")
-            .parent = Some(self.script_namespace_root);
+        if let Some(module) = appended_module {
+            let scope = self
+                .state
+                .graph
+                .get_mut(module)
+                .ok_or("continuation module does not exist")?;
+            scope.parent = Some(self.script_namespace_root);
+        }
         Ok(Binder {
             graph: self.state.graph,
             symbols: self.state.symbols,
             declarations: self.state.declarations,
             type_groups: self.state.type_groups,
             namespaces: self.state.namespaces,
-            module,
+            module: appended_module.unwrap_or(current_module),
             prelude_module: self.prelude_module,
             compilation_global: self.compilation_global,
             script_namespace_root: self.script_namespace_root,
@@ -2951,7 +2969,9 @@ mod tests {
     fn continuation_routes_each_global_collision_leaf_without_capturing_unique_siblings() {
         let prelude_allocator = Allocator::default();
         let library_allocator = Allocator::default();
-        let user_allocator = Allocator::default();
+        let script_declaration_allocator = Allocator::default();
+        let script_consumer_allocator = Allocator::default();
+        let external_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
         let library = Parser::new(
             &library_allocator,
@@ -2969,10 +2989,36 @@ var { collision: Array, unique: uniqueLeaf } = source;
 var document = 1, uniqueValue = 2;
 with (source) { var RegExp = 1; }
 "#;
-        let user = Parser::new(&user_allocator, user_source, SourceType::ts()).parse();
+        let script_declaration =
+            Parser::new(&script_declaration_allocator, user_source, SourceType::ts()).parse();
+        let script_consumer_source = r#"let uniqueType: WU5Unique;
+wu5UniqueFunction();
+uniqueValue;
+WU5UniqueNamespace;
+Array;
+document;
+RegExp;
+parseInt;
+"#;
+        let script_consumer = Parser::new(
+            &script_consumer_allocator,
+            script_consumer_source,
+            SourceType::ts(),
+        )
+        .parse();
+        let external_source = r#"export {};
+interface Array<T> { external: T }
+interface WU5External {}
+declare function wu5ExternalFunction(): void;
+const externalValue = 1;
+let seesScriptGlobal: WU5Unique;
+"#;
+        let external = Parser::new(&external_allocator, external_source, SourceType::ts()).parse();
         assert!(prelude.diagnostics.is_empty());
         assert!(library.diagnostics.is_empty());
-        assert!(user.diagnostics.is_empty());
+        assert!(script_declaration.diagnostics.is_empty());
+        assert!(script_consumer.diagnostics.is_empty());
+        assert!(external.diagnostics.is_empty());
 
         let mut builder = ProjectBinderBuilder::new(&prelude.program);
         let library_unit = CompilationUnit::library(
@@ -2980,7 +3026,8 @@ with (source) { var RegExp = 1; }
             LibraryFileOrdinal::new(0),
             &library.program,
         );
-        builder.add_library_modules(&[(&library.program, library_unit)]);
+        let library_modules = builder.add_library_modules(&[(&library.program, library_unit)]);
+        let library_module = library_modules.first().copied().expect("library module");
         let array_symbol = builder
             .state
             .graph
@@ -2993,12 +3040,16 @@ with (source) { var RegExp = 1; }
             .get(array_symbol)
             .and_then(|symbol| symbol.ty)
             .expect("library Array type group");
-        let intl_namespace = builder
+        let intl_symbol = builder
             .state
             .graph
             .get(builder.compilation_global)
             .and_then(|scope| scope.lookup_local("Intl"))
-            .and_then(|symbol| builder.state.symbols.get(symbol))
+            .expect("library Intl symbol");
+        let intl_namespace = builder
+            .state
+            .symbols
+            .get(intl_symbol)
             .and_then(|symbol| symbol.ns)
             .expect("library Intl namespace");
         let document_symbol = builder
@@ -3007,6 +3058,12 @@ with (source) { var RegExp = 1; }
             .get(builder.compilation_global)
             .and_then(|scope| scope.lookup_local("document"))
             .expect("library document symbol");
+        let regexp_symbol = builder
+            .state
+            .graph
+            .get(builder.compilation_global)
+            .and_then(|scope| scope.lookup_local("RegExp"))
+            .expect("library RegExp symbol");
         let parse_int_symbol = builder
             .state
             .graph
@@ -3014,14 +3071,59 @@ with (source) { var RegExp = 1; }
             .and_then(|scope| scope.lookup_local("parseInt"))
             .expect("library parseInt symbol");
 
-        builder.use_mode = BuilderUseMode::Continuation;
-        builder.state.library_module_ordinals.clear();
-        let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
-        builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
-        let (module, _) = builder.add_module(&user.program, &[], user_unit);
-        let binder = builder.finish(module);
+        let checkpoint = LibraryBinderCheckpoint::new(
+            builder.finish(library_module),
+            vec![LibraryBinderUnit {
+                ordinal: LibraryFileOrdinal::new(0),
+                source: SourceUnitKey(1),
+                module: library_module,
+            }],
+        );
+        let (mut builder, _) = checkpoint.into_continuation();
+        let declaration_unit =
+            CompilationUnit::implementation(SourceUnitKey(2), &script_declaration.program);
+        let consumer_unit =
+            CompilationUnit::implementation(SourceUnitKey(3), &script_consumer.program);
+        let external_unit = CompilationUnit::implementation(SourceUnitKey(4), &external.program);
+        builder.reserve_script_namespace_roots([
+            (&script_declaration.program, declaration_unit),
+            (&script_consumer.program, consumer_unit),
+            (&external.program, external_unit),
+        ]);
+        let (declaration_module, _) =
+            builder.add_module(&script_declaration.program, &[], declaration_unit);
+        let (consumer_module, _) = builder.add_module(&script_consumer.program, &[], consumer_unit);
+        let (external_module, _) = builder.add_module(&external.program, &[], external_unit);
+        let binder = builder
+            .finish_frozen_library_continuation(Some(external_module))
+            .expect("checkpoint continuation");
+        let delta_global = binder
+            .graph
+            .get(binder.script_namespace_root)
+            .and_then(|scope| scope.parent)
+            .expect("delta script root has a delta-global parent");
+        assert_ne!(delta_global, binder.compilation_global);
 
-        assert_eq!(binder.resolve_type(module, "Array"), Some(array_symbol));
+        for module in [declaration_module, consumer_module] {
+            assert_eq!(binder.resolve_type(module, "Array"), Some(array_symbol));
+            assert_eq!(
+                binder.resolve_value(module, "document"),
+                Some(document_symbol)
+            );
+            assert_eq!(binder.resolve_value(module, "RegExp"), Some(regexp_symbol));
+            assert_eq!(
+                binder.resolve_value(module, "parseInt"),
+                Some(parse_int_symbol)
+            );
+            assert_eq!(
+                binder
+                    .graph
+                    .resolve(module, "Intl")
+                    .and_then(|symbol| binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.ns),
+                Some(intl_namespace)
+            );
+        }
         assert_eq!(
             binder
                 .symbols
@@ -3036,65 +3138,125 @@ with (source) { var RegExp = 1; }
                 .map(|symbol| symbol.declarations.len()),
             Some(2)
         );
-        assert_eq!(
-            binder.resolve_value(module, "parseInt"),
-            Some(parse_int_symbol)
-        );
-        assert_eq!(
-            binder
-                .graph
-                .resolve(module, "Intl")
-                .and_then(|symbol| binder.symbols.get(symbol))
-                .and_then(|symbol| symbol.ns),
-            Some(intl_namespace)
-        );
-        for unique in ["WU5Unique", "wu5UniqueFunction", "uniqueValue"] {
-            assert!(
+        for (name, frozen) in [
+            ("Array", array_symbol),
+            ("Intl", intl_symbol),
+            ("document", document_symbol),
+            ("RegExp", regexp_symbol),
+            ("parseInt", parse_int_symbol),
+        ] {
+            assert_eq!(
                 binder
                     .graph
-                    .get(module)
-                    .and_then(|scope| scope.lookup_local(unique))
-                    .is_some(),
-                "{unique} remains module-local"
+                    .get(binder.compilation_global)
+                    .and_then(|scope| scope.lookup_local(name)),
+                Some(frozen),
+                "{name} publishes through the frozen collision symbol"
             );
+        }
+        for unique in [
+            "WU5Unique",
+            "WU5UniqueNamespace",
+            "wu5UniqueFunction",
+            "uniqueValue",
+        ] {
+            let delta = binder
+                .graph
+                .get(delta_global)
+                .and_then(|scope| scope.lookup_local(unique))
+                .unwrap_or_else(|| panic!("delta-global {unique}"));
+            assert_eq!(
+                binder.graph.resolve(declaration_module, unique),
+                Some(delta)
+            );
+            assert_eq!(binder.graph.resolve(consumer_module, unique), Some(delta));
             assert!(
                 binder
                     .graph
                     .get(binder.compilation_global)
                     .and_then(|scope| scope.lookup_local(unique))
                     .is_none(),
-                "{unique} does not leak into the library global"
+                "{unique} does not leak into the frozen library global"
             );
         }
-        let binding_scope = |name: &str, kind: DeclarationKind| {
+        let external_array = binder
+            .graph
+            .get(external_module)
+            .and_then(|scope| scope.lookup_local("Array"))
+            .expect("external Array stays local");
+        assert_ne!(external_array, array_symbol);
+        assert_eq!(
+            binder.resolve_type(external_module, "Array"),
+            Some(external_array)
+        );
+        for external_only in [
+            "WU5External",
+            "wu5ExternalFunction",
+            "externalValue",
+            "seesScriptGlobal",
+        ] {
+            assert!(binder
+                .graph
+                .get(external_module)
+                .and_then(|scope| scope.lookup_local(external_only))
+                .is_some());
+            assert!(binder
+                .graph
+                .get(delta_global)
+                .and_then(|scope| scope.lookup_local(external_only))
+                .is_none());
+            assert!(binder
+                .graph
+                .resolve(consumer_module, external_only)
+                .is_none());
+        }
+        assert_eq!(
+            binder.resolve_type(external_module, "WU5Unique"),
+            binder.resolve_type(consumer_module, "WU5Unique")
+        );
+
+        let binding_scope = |source: &str, module: ScopeId, name: &str, kind: DeclarationKind| {
             binder
                 .declarations
                 .iter()
                 .find(|declaration| {
                     declaration.site.module == module
                         && declaration.kind == kind
-                        && &user_source[declaration.site.binding_span.range()] == name
+                        && &source[declaration.site.binding_span.range()] == name
                 })
                 .and_then(|declaration| declaration.site.scope)
                 .unwrap_or_else(|| panic!("binding scope for {name}"))
         };
-        assert_eq!(binding_scope("Array", DeclarationKind::Interface), module);
-        assert_eq!(binding_scope("Array", DeclarationKind::Variable), module);
-        assert_eq!(binding_scope("document", DeclarationKind::Variable), module);
-        assert_eq!(binding_scope("RegExp", DeclarationKind::Variable), module);
-        assert_eq!(
-            binding_scope("uniqueLeaf", DeclarationKind::Variable),
-            module
-        );
-        assert_eq!(
-            binding_scope("uniqueValue", DeclarationKind::Variable),
-            module
-        );
-        assert!(binder
-            .graph
-            .get(binder.compilation_global)
-            .and_then(|scope| scope.lookup_local("WU5UniqueNamespace"))
-            .is_some());
+        for (name, kind) in [
+            ("Array", DeclarationKind::Interface),
+            ("Array", DeclarationKind::Variable),
+            ("Intl", DeclarationKind::Namespace),
+            ("parseInt", DeclarationKind::Function),
+            ("document", DeclarationKind::Variable),
+            ("RegExp", DeclarationKind::Variable),
+            ("WU5Unique", DeclarationKind::Interface),
+            ("WU5UniqueNamespace", DeclarationKind::Namespace),
+            ("wu5UniqueFunction", DeclarationKind::Function),
+            ("uniqueLeaf", DeclarationKind::Variable),
+            ("uniqueValue", DeclarationKind::Variable),
+        ] {
+            assert_eq!(
+                binding_scope(user_source, declaration_module, name, kind),
+                declaration_module
+            );
+        }
+        for (name, kind) in [
+            ("Array", DeclarationKind::Interface),
+            ("WU5External", DeclarationKind::Interface),
+            ("wu5ExternalFunction", DeclarationKind::Function),
+            ("externalValue", DeclarationKind::Variable),
+            ("seesScriptGlobal", DeclarationKind::Variable),
+        ] {
+            assert_eq!(
+                binding_scope(external_source, external_module, name, kind),
+                external_module
+            );
+        }
         for name in ["document", "RegExp"] {
             let user_participants = binder
                 .namespaces
@@ -3108,7 +3270,7 @@ with (source) { var RegExp = 1; }
                 .iter()
                 .filter(|participant| {
                     participant.kind == MergeDeclarationKind::Variable
-                        && participant.source == user_unit.source
+                        && participant.source == declaration_unit.source
                 })
                 .collect::<Vec<_>>();
             assert_eq!(
@@ -3165,7 +3327,7 @@ with (source) { var RegExp = 1; }
         first_builder.reserve_script_namespace_roots([(&user.program, first_unit)]);
         let (first_module, _) = first_builder.add_module(&user.program, &[], first_unit);
         let first = first_builder
-            .finish_frozen_library_continuation(first_module)
+            .finish_frozen_library_continuation(Some(first_module))
             .expect("first namespace suffix freezes");
 
         assert!(first.graph.len() > base_scopes);
@@ -3238,7 +3400,7 @@ with (source) { var RegExp = 1; }
         builder.reserve_script_namespace_roots([(&user.program, unit)]);
         let (module, _) = builder.add_module(&user.program, &[], unit);
         let binder = builder
-            .finish_frozen_library_continuation(module)
+            .finish_frozen_library_continuation(Some(module))
             .expect("plain-script namespace suffix freezes");
 
         assert!(binder.script_namespace_root.index() >= frozen_scope_count);
@@ -3429,7 +3591,7 @@ with (source) { var RegExp = 1; }
         builder.reserve_script_namespace_roots([(&user.program, unit)]);
         let (module, _) = builder.add_module(&user.program, &[], unit);
         let binder = builder
-            .finish_frozen_library_continuation(module)
+            .finish_frozen_library_continuation(Some(module))
             .expect("scaled namespace suffix freezes");
 
         assert_eq!(
@@ -5108,7 +5270,7 @@ namespace Standalone { export const value = 1; }
         builder.reserve_script_namespace_roots([(&user.program, unit)]);
         let (module, _) = builder.add_module(&user.program, &[], unit);
         let binder = builder
-            .finish_frozen_library_continuation(module)
+            .finish_frozen_library_continuation(Some(module))
             .expect("colliding suffix still binds");
 
         let sites = binder
@@ -5186,7 +5348,7 @@ namespace Standalone { export const value = 1; }
         let (_declare_module, _) = builder.add_module(&declare.program, &[], declare_unit);
         let (consume_module, _) = builder.add_module(&consume.program, &[], consume_unit);
         let binder = builder
-            .finish_frozen_library_continuation(consume_module)
+            .finish_frozen_library_continuation(Some(consume_module))
             .expect("fresh-global suffix binds");
 
         assert_eq!(binder.frozen_prefix_writes(), &[]);
@@ -5278,7 +5440,7 @@ namespace Standalone { export const value = 1; }
             builder.reserve_script_namespace_roots([(&user.program, unit)]);
             let (module, _) = builder.add_module(&user.program, &[], unit);
             let binder = builder
-                .finish_frozen_library_continuation(module)
+                .finish_frozen_library_continuation(Some(module))
                 .expect("a colliding suffix still binds");
 
             let refusals = binder
@@ -5308,7 +5470,7 @@ namespace Standalone { export const value = 1; }
             let unit = CompilationUnit::implementation(key, &user.program);
             builder.reserve_script_namespace_roots([(&user.program, unit)]);
             let (module, _) = builder.add_module(&user.program, &[], unit);
-            let result = builder.finish_frozen_library_continuation(module);
+            let result = builder.finish_frozen_library_continuation(Some(module));
             assert!(
                 result.is_ok(),
                 "declare global must bind: {source}: {:?}",

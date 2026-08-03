@@ -3797,13 +3797,27 @@ impl Binder {
         scope: ScopeId,
         name: &str,
     ) -> Option<NamespaceValueAttachment<'_>> {
-        let owner = self
-            .namespaces
-            .declaration_owners_by_scope
-            .get(&scope)
-            .copied()
-            .unwrap_or(DeclarationOwner::Lexical(scope));
-        self.namespace_value_attachment_for_owner(owner, name)
+        let mut current = Some(scope);
+        while let Some(candidate) = current {
+            let scope = self.graph.get(candidate)?;
+            if scope.lookup_local(name).is_some() {
+                let owner = self.namespaces.declaration_owner_for_scope(candidate);
+                return self.namespace_value_attachment_for_owner(owner, name);
+            }
+            if let Some(public) = scope.namespace_public {
+                if self
+                    .graph
+                    .get(public)
+                    .and_then(|scope| scope.lookup_local(name))
+                    .is_some()
+                {
+                    let owner = self.namespaces.declaration_owner_for_scope(public);
+                    return self.namespace_value_attachment_for_owner(owner, name);
+                }
+            }
+            current = scope.parent;
+        }
+        None
     }
 
     pub fn namespace_value_attachment_for_owner(
@@ -4777,7 +4791,7 @@ pub(super) fn collect_namespace_metadata(
         // A delta-side *lexical* owner: one project-wide domain that merges user script globals
         // with each other, while the sealed library domain stays untouched.
         NamespaceMetadataRoot::ContinuationSharedGlobal(delta_global) => {
-            (DeclarationOwner::Lexical(delta_global), delta_global)
+            (DeclarationOwner::Lexical(delta_global), module)
         }
     };
     let context = WalkContext {
@@ -7565,7 +7579,7 @@ mod tests {
         let user_unit = CompilationUnit::implementation(SourceUnitKey(900), &user.program);
         builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
         let (module, _) = builder.add_module(&user.program, &[], user_unit);
-        let binder = builder.finish_frozen_library_continuation(module)?;
+        let binder = builder.finish_frozen_library_continuation(Some(module))?;
         let expected = binder
             .graph
             .get(binder.script_namespace_root)
@@ -7609,7 +7623,7 @@ mod tests {
         let user_unit = CompilationUnit::implementation(source_key, &user.program);
         builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
         let (module, _) = builder.add_module(&user.program, &[], user_unit);
-        let binder = builder.finish_frozen_library_continuation(module)?;
+        let binder = builder.finish_frozen_library_continuation(Some(module))?;
         let binding_start = source
             .find("globalThis")
             .ok_or("fixture contains the globalThis binding")?;
@@ -7644,7 +7658,7 @@ mod tests {
         let user_unit = CompilationUnit::implementation(SourceUnitKey(2), &user.program);
         builder.reserve_script_namespace_roots([(&user.program, user_unit)]);
         let (module, _) = builder.add_module(&user.program, &[], user_unit);
-        let binder = builder.finish(module);
+        let binder = builder.finish_frozen_library_continuation(Some(module))?;
         assert!(binder.direct_script_global_this_conflict(
             module,
             binding_start,

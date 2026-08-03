@@ -5832,16 +5832,18 @@ fn with_canonical_frontend<'source, Output>(
         .collect();
     let checkpoint = build_library_binder_checkpoint(library_binder, library_units);
     let (mut builder, _) = checkpoint.into_continuation();
-    let binder = if library_count < units.len() {
+    let mut appended_module = None;
+    if library_count < units.len() {
         builder.reserve_script_namespace_roots(units[library_count..].iter().copied());
         for (program, unit) in &units[library_count..] {
             let (module, _) = builder.add_module(program, &[], *unit);
             module_scopes.push(module);
+            appended_module = Some(module);
         }
-        builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)))
-    } else {
-        builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)))
-    };
+    }
+    let binder = builder
+        .finish_frozen_library_continuation(appended_module)
+        .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
     validate_parser_export_claims(&binder, parser_export_claims, canonical[0].file_ordinal)?;
     let semantic_scopes = units
         .iter()
@@ -7298,7 +7300,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
     builder.reserve_script_namespace_roots([(&parsed.program, unit)]);
     let (module, _) = builder.add_module(&parsed.program, &[], unit);
     let binder = builder
-        .finish_frozen_library_continuation(module)
+        .finish_frozen_library_continuation(Some(module))
         .map_err(str::to_owned)?;
     decl_types.resize(binder.decl_count);
     let witness_source_key = source_key.0;

@@ -1368,7 +1368,7 @@ mod tests {
         builder.reserve_script_namespace_roots([(&source.program, unit)]);
         let (module, _) = builder.add_module(&source.program, &[], unit);
         let delta = builder
-            .finish_frozen_library_continuation(module)
+            .finish_frozen_library_continuation(Some(module))
             .expect("reference delta finishes");
         let local = local_reference_records_for_test(&delta);
 
