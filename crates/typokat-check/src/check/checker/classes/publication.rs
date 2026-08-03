@@ -38,7 +38,7 @@ use crate::check::checker::lexical_events::{
     source_ordinal, ClassReservation, LexicalReservations,
 };
 use crate::check::checker::library_identities::NativeArrayGroups;
-use crate::check::checker::replay_index::ReplayOwner;
+use crate::check::checker::replay_index::{ReplayClassLookup, ReplayOwner};
 use crate::check::checker::reporting_record::CheckerRecord;
 use crate::class_semantics::{ClassApplicationArguments, DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_type, Diagnostic, IncompleteSurface};
@@ -1532,8 +1532,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
 
+        let inherited_classes = ReplayClassLookup::new(
+            self.type_environment.inherited().classes(),
+            self.replay_trace.clone(),
+        );
         let publication = construction
-            .finish(self.interner)
+            .finish_with_inherited(self.interner, &inherited_classes)
             .expect("class publication must preserve reserved identities");
         self.staged_published_classes = Some(publication.published);
         let application_parameters = publication

@@ -2870,12 +2870,28 @@ impl<'a> ReplayClassLookup<'a> {
     pub fn new(published: &'a PublishedClasses, trace: Option<ReplayDependencyTrace>) -> Self {
         Self { published, trace }
     }
+
+    pub(in crate::check::checker) fn published_class_for(
+        &self,
+        consumer: ClassId,
+        dependency: ClassId,
+    ) -> DemandOutcome<&PublishedClassSurface> {
+        let _scope = self
+            .trace
+            .as_ref()
+            .map(|trace| trace.scope(ReplayOwner::Class(consumer)));
+        self.published_class_terminal(dependency)
+    }
+
+    fn published_class_terminal(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        self.observe_class_demand(class);
+        self.published.published_class(class)
+    }
 }
 
 impl PublishedClassLookup for ReplayClassLookup<'_> {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
-        self.observe_class_demand(class);
-        self.published.published_class(class)
+        self.published_class_terminal(class)
     }
 
     fn publication_identity(&self) -> &Arc<()> {

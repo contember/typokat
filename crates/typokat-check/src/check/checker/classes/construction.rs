@@ -2,8 +2,10 @@
 
 use super::application::{ClassTypeParameter, ClassTypeParameterDefault};
 use super::retained::RetainedClassCallable;
+use crate::check::checker::replay_index::ReplayClassLookup;
 use crate::class_semantics::{
-    ClassConstructionState, PublishedClassPoison, PublishedClassSurface, PublishedClasses,
+    ClassConstructionState, DemandOutcome, Exhaustion, PublishedClassPoison, PublishedClassSurface,
+    PublishedClasses,
 };
 use crate::source::SourceOrdinal;
 use crate::types::repr::{ClassId, FunctionType, ObjectType, TypeParamId, TypeTag};
@@ -412,6 +414,7 @@ impl ClassGraph {
         store: &Store,
         roots: &ReservedSurfaceRoots,
         drafts: &BTreeMap<ClassId, ClassDraft<Ticket>>,
+        inherited: &ReplayClassLookup<'_>,
     ) -> Result<Self, ClassPublicationError> {
         let registered: BTreeSet<ClassId> = drafts.keys().copied().collect();
         let mut graph = ClassGraph::default();
@@ -429,16 +432,20 @@ impl ClassGraph {
                     .iter()
                     .map(|heritage| heritage.target),
             );
-            if let Some(target) = edges
-                .ordinary
-                .union(&edges.heritage)
-                .find(|target| !registered.contains(target))
-            {
+            if let Some(target) = edges.ordinary.union(&edges.heritage).find(|target| {
+                !registered.contains(target)
+                    && matches!(
+                        inherited.published_class_for(class, **target),
+                        DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+                    )
+            }) {
                 return Err(ClassPublicationError::UnknownClassDependency {
                     class,
                     target: *target,
                 });
             }
+            edges.ordinary.retain(|target| registered.contains(target));
+            edges.heritage.retain(|target| registered.contains(target));
             graph.edges.insert(class, edges);
         }
         Ok(graph)
@@ -502,9 +509,20 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::check::checker) fn finish(
         self,
         interner: &mut Interner,
+    ) -> Result<ClassPublication<Ticket>, ClassPublicationError> {
+        let inherited = PublishedClasses::empty();
+        let inherited = ReplayClassLookup::new(&inherited, None);
+        self.finish_with_inherited(interner, &inherited)
+    }
+
+    pub(in crate::check::checker) fn finish_with_inherited(
+        self,
+        interner: &mut Interner,
+        inherited: &ReplayClassLookup<'_>,
     ) -> Result<ClassPublication<Ticket>, ClassPublicationError> {
         for draft in self.drafts.values() {
             let mut previous_overload = None;
@@ -524,7 +542,7 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
             }
         }
 
-        let graph = ClassGraph::build(interner.store(), &self.roots, &self.drafts)?;
+        let graph = ClassGraph::build(interner.store(), &self.roots, &self.drafts, inherited)?;
         let dependency_map: BTreeMap<ClassId, BTreeSet<ClassId>> = graph
             .edges
             .keys()
@@ -568,7 +586,17 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                         return Err(ClassPublicationError::InvalidFinalRegistry);
                     };
                     for heritage in draft.heritage.iter().chain(&draft.instance_heritage) {
-                        if states.get(&heritage.target) == Some(&ClassConstructionState::Poisoned) {
+                        let inherited_poisoned = matches!(
+                            inherited.published_class_for(*class, heritage.target),
+                            DemandOutcome::Exhausted(
+                                Exhaustion::ClassHeritagePoison { .. }
+                                    | Exhaustion::ClassInitializerPoison { .. }
+                                    | Exhaustion::ClassSurfacePoison { .. }
+                            )
+                        );
+                        if states.get(&heritage.target) == Some(&ClassConstructionState::Poisoned)
+                            || inherited_poisoned
+                        {
                             poisoned_base = true;
                             obligations.push(PendingSurfaceObligation::PoisonedBase {
                                 derived: *class,
@@ -620,7 +648,12 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                 } else {
                     let (mut instance_template, static_template, inherited_constructor) =
                         if let Some(heritage) = draft.heritage {
-                            match surfaces.get(&heritage.target).cloned() {
+                            match surfaces.get(&heritage.target).cloned().or_else(
+                                || match inherited.published_class_for(*class, heritage.target) {
+                                    DemandOutcome::Ready(surface) => Some(surface.clone()),
+                                    DemandOutcome::Exhausted(_) => None,
+                                },
+                            ) {
                                 Some(base) => {
                                     let Some(application) = interner
                                         .store()
@@ -670,7 +703,12 @@ impl<Ticket: Copy> ClassConstruction<Ticket> {
                             (draft.instance_template, draft.static_template, None)
                         };
                     for heritage in &draft.instance_heritage {
-                        let Some(base) = surfaces.get(&heritage.target).cloned() else {
+                        let Some(base) = surfaces.get(&heritage.target).cloned().or_else(|| {
+                            match inherited.published_class_for(*class, heritage.target) {
+                                DemandOutcome::Ready(surface) => Some(surface.clone()),
+                                DemandOutcome::Exhausted(_) => None,
+                            }
+                        }) else {
                             if component.contains(&heritage.target) {
                                 // Invalid interface-heritage SCCs recover in stable source
                                 // order: forward edges are cut, already published back-edges
@@ -1284,6 +1322,164 @@ mod tests {
             template,
             None,
         )
+    }
+
+    fn inherited_ready(class: ClassId, instance: TypeId, static_side: TypeId) -> PublishedClasses {
+        PublishedClasses::from_publication(
+            FxHashMap::from_iter([(class, ClassConstructionState::Published)]),
+            FxHashMap::from_iter([(
+                class,
+                PublishedClassSurface::new(class, Vec::new(), instance, static_side, None),
+            )]),
+            FxHashMap::default(),
+        )
+        .expect("inherited ready class is terminal")
+    }
+
+    fn inherited_poisoned(class: ClassId) -> PublishedClasses {
+        PublishedClasses::from_publication(
+            FxHashMap::from_iter([(class, ClassConstructionState::Poisoned)]),
+            FxHashMap::default(),
+            FxHashMap::from_iter([(class, PublishedClassPoison::Surface)]),
+        )
+        .expect("inherited poisoned class is terminal")
+    }
+
+    #[test]
+    fn inherited_ordinary_dependency_is_terminal_but_not_a_local_scc_node() {
+        let mut interner = Interner::with_intrinsics();
+        let empty = interner.intern_object(ObjectType::default());
+        let inherited_class = ClassId(1);
+        let inherited = inherited_ready(inherited_class, empty, empty);
+        let inherited_application = interner.intern_class_instance(inherited_class, Vec::new());
+        let mut local = draft(2, empty, 2);
+        local.add_identity_root(inherited_application);
+        let mut construction = ClassConstruction::default();
+        construction.register(local.finish()).unwrap();
+        let inherited = ReplayClassLookup::new(&inherited, None);
+
+        let publication = construction
+            .finish_with_inherited(&mut interner, &inherited)
+            .unwrap();
+
+        assert!(publication
+            .graph
+            .ordinary_dependencies(ClassId(2))
+            .next()
+            .is_none());
+        assert_eq!(publication.dependency_first_sccs, [vec![ClassId(2)]]);
+        assert!(matches!(
+            publication.published.require(ClassId(2)),
+            DemandOutcome::Ready(())
+        ));
+        assert!(matches!(
+            publication.published.require(inherited_class),
+            DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+        ));
+    }
+
+    #[test]
+    fn inherited_ready_heritage_composes_without_joining_local_publication() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let base_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("inherited", wk.number)],
+            ..Default::default()
+        });
+        let base_static = interner.intern_object(ObjectType::default());
+        let own_instance = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("own", wk.string)],
+            ..Default::default()
+        });
+        let own_static = interner.intern_object(ObjectType::default());
+        let inherited_class = ClassId(1);
+        let inherited = inherited_ready(inherited_class, base_instance, base_static);
+        let base_application = interner.intern_class_instance(inherited_class, Vec::new());
+        let mut local = draft(2, own_instance, 2);
+        local.draft.static_template = own_static;
+        assert!(local.set_heritage(HeritageDependency {
+            target: inherited_class,
+            identity_root: base_application,
+            owner: 17,
+        }));
+        let mut construction = ClassConstruction::default();
+        construction.register(local.finish()).unwrap();
+        let inherited = ReplayClassLookup::new(&inherited, None);
+
+        let publication = construction
+            .finish_with_inherited(&mut interner, &inherited)
+            .unwrap();
+        let DemandOutcome::Ready(surface) = publication.published.published_class(ClassId(2))
+        else {
+            panic!("local derived class must publish")
+        };
+        let properties = interner
+            .store()
+            .object_type(surface.instance_template())
+            .expect("composed instance remains object")
+            .properties
+            .iter()
+            .map(|property| property.name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(properties, BTreeSet::from(["inherited", "own"]));
+        assert!(publication.obligations.is_empty());
+        assert!(matches!(
+            publication.published.require(inherited_class),
+            DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+        ));
+    }
+
+    #[test]
+    fn inherited_poisoned_heritage_fails_closed_through_existing_obligation() {
+        let mut interner = Interner::with_intrinsics();
+        let empty = interner.intern_object(ObjectType::default());
+        let inherited_class = ClassId(1);
+        let inherited = inherited_poisoned(inherited_class);
+        let base_application = interner.intern_class_instance(inherited_class, Vec::new());
+        let mut local = draft(2, empty, 2);
+        assert!(local.set_heritage(HeritageDependency {
+            target: inherited_class,
+            identity_root: base_application,
+            owner: 23,
+        }));
+        let mut construction = ClassConstruction::default();
+        construction.register(local.finish()).unwrap();
+        let inherited = ReplayClassLookup::new(&inherited, None);
+
+        let publication = construction
+            .finish_with_inherited(&mut interner, &inherited)
+            .unwrap();
+
+        assert!(matches!(
+            publication.published.require(ClassId(2)),
+            DemandOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+        ));
+        assert!(publication
+            .obligations
+            .contains(&PendingSurfaceObligation::PoisonedBase {
+                derived: ClassId(2),
+                base: inherited_class,
+                owner: 23,
+            }));
+    }
+
+    #[test]
+    fn missing_nonlocal_dependency_remains_rejected() {
+        let mut interner = Interner::with_intrinsics();
+        let empty = interner.intern_object(ObjectType::default());
+        let missing = interner.intern_class_instance(ClassId(1), Vec::new());
+        let mut local = draft(2, empty, 2);
+        local.add_identity_root(missing);
+        let mut construction = ClassConstruction::default();
+        construction.register(local.finish()).unwrap();
+
+        assert!(matches!(
+            construction.finish(&mut interner),
+            Err(ClassPublicationError::UnknownClassDependency {
+                class: ClassId(2),
+                target: ClassId(1),
+            })
+        ));
     }
 
     #[test]
