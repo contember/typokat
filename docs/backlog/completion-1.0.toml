@@ -330,17 +330,6 @@ links = ["../../tests/cases/sr_deferred_ledger/b62_index_signature.ts", "../refe
 deps = []
 
 [[criterion]]
-id = "C-disjoint-primitive-intersections"
-track = "C"
-title = "Disjoint primitive intersections normalize to never"
-state = "incomplete"
-blocks_release = "true"
-owner = "./107-disjoint-primitive-intersection-never.md"
-witness = "enabled RED acceptance spec: m31_intersections/any_to_disjoint_primitives.ts; cross-check tsc 6.0.3 --strict"
-links = ["../../tests/cases/m31_intersections/any_to_disjoint_primitives.ts", "../reference/divergences.md"]
-deps = []
-
-[[criterion]]
 id = "C-numeric-stringification"
 track = "C"
 title = "JS-exact number stringification (String(n) dtoa) — UNDER-report, not safe FP"
