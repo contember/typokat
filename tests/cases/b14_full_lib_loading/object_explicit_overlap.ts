@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict --target es2025: TS2322 x13 and TS2696 x2 below.
+// tsc 6.0.3 --strict --target es2025: TS2322 x18 and TS2696 x2 below.
 // Object stays top-like when names are absent, but explicit overlaps remain structural.
 
 interface B14WrongObjectInterface {
@@ -86,13 +86,23 @@ const b14ObjectFromPublicOverlap: Object = b14PublicObjectOverlap;
 
 declare const b14FunctionSource: () => void;
 declare const b14ArraySource: number[];
+declare const b14StringSource: string;
+declare const b14TemplateSource: `prefix-${string}`;
+declare const b14TupleSource: [number, number];
+declare const b14ReadonlyArraySource: readonly number[];
+declare const b14ReadonlyTupleSource: readonly [number, number];
 declare const b14NeverSource: never;
 const b14ObjectFromString: Object = "value"; // error[TK2322]
+const b14ObjectFromStringIntrinsic: Object = b14StringSource; // error[TK2322]
+const b14ObjectFromTemplate: Object = b14TemplateSource; // error[TK2322]
 // Number and boolean retain compatible apparent Object members and no `length` overlap.
 const b14ObjectFromNumber: Object = 1;
 const b14ObjectFromBoolean: Object = true;
 const b14ObjectFromFunction: Object = b14FunctionSource; // error[TK2322]
 const b14ObjectFromArray: Object = b14ArraySource; // error[TK2322]
+const b14ObjectFromTuple: Object = b14TupleSource; // error[TK2322]
+const b14ObjectFromReadonlyArray: Object = b14ReadonlyArraySource; // error[TK2322]
+const b14ObjectFromReadonlyTuple: Object = b14ReadonlyTupleSource; // error[TK2322]
 const b14ObjectFromNever: Object = b14NeverSource;
 
 declare const b14UnknownSource: unknown;
