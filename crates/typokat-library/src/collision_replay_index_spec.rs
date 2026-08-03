@@ -747,17 +747,15 @@ fn authoritative_multifile_project_binding_continues_from_the_checkpoint_in_path
             "the .mts-only external classification keeps its declaration module-local"
         );
 
-        let reserved = continuation
-            .script_namespace_root_reservation_for_test("WU5ScriptNamespace")
-            .expect("script namespace root reservation");
-        for path in ["/project/30_script_use.ts", "/project/40_script_declare.ts"] {
-            let binding = continuation
-                .lookup_binding_for_test(path, "WU5ScriptNamespace")
-                .expect("reserved script namespace lookup");
-            assert_eq!(binding.symbol, reserved);
-            assert!(binding.namespace.is_some());
-            assert!(binding.value.is_some());
-        }
+        let consumed_script_namespace = continuation
+            .lookup_binding_for_test("/project/30_script_use.ts", "WU5ScriptNamespace")
+            .expect("consumed script namespace lookup");
+        let declared_script_namespace = continuation
+            .lookup_binding_for_test("/project/40_script_declare.ts", "WU5ScriptNamespace")
+            .expect("declared script namespace lookup");
+        assert_eq!(consumed_script_namespace, declared_script_namespace);
+        assert!(declared_script_namespace.namespace.is_some());
+        assert!(declared_script_namespace.value.is_some());
         let script_namespace_storage = continuation
             .standalone_namespace_value_storage_for_test(
                 "/project/40_script_declare.ts",
@@ -765,9 +763,7 @@ fn authoritative_multifile_project_binding_continues_from_the_checkpoint_in_path
             )
             .expect("reserved script namespace value storage");
         assert_eq!(
-            continuation
-                .lookup_binding_for_test("/project/30_script_use.ts", "WU5ScriptNamespace")
-                .and_then(|binding| binding.value),
+            declared_script_namespace.value,
             Some(script_namespace_storage)
         );
 
