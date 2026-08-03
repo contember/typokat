@@ -8106,6 +8106,41 @@ mod tests {
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
 
+    #[test]
+    fn canonical_property_key_bytes_pin_symbol_discriminants() {
+        let cases = [
+            (WellKnownSymbol::Iterator, 0),
+            (WellKnownSymbol::ToStringTag, 1),
+            (WellKnownSymbol::AsyncIterator, 2),
+            (WellKnownSymbol::Species, 3),
+            (WellKnownSymbol::ToPrimitive, 4),
+            (WellKnownSymbol::Replace, 5),
+            (WellKnownSymbol::Unscopables, 6),
+            (WellKnownSymbol::Split, 7),
+            (WellKnownSymbol::Search, 8),
+            (WellKnownSymbol::Match, 9),
+            (WellKnownSymbol::MatchAll, 10),
+            (WellKnownSymbol::HasInstance, 11),
+        ];
+
+        for (symbol, discriminant) in cases {
+            let mut bytes = CanonicalBytes::domain(b"");
+            bytes
+                .property_key(&PropertyKey::WellKnownSymbol(symbol))
+                .expect("well-known symbol key encodes");
+            assert_eq!(bytes.finish(), vec![1, discriminant], "{symbol}");
+        }
+
+        let mut string = CanonicalBytes::domain(b"");
+        string
+            .property_key(&PropertyKey::String("iterator".to_owned()))
+            .expect("string property key encodes");
+        assert_eq!(
+            string.finish(),
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 8, b'i', b't', b'e', b'r', b'a', b't', b'o', b'r']
+        );
+    }
+
     const PRODUCT_SEMANTIC_LIBRARY: &str = r#"
         interface Array<T> { item: T; }
         interface ReadonlyArray<T> { item: T; }

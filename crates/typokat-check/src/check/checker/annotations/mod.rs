@@ -289,6 +289,28 @@ mod multi_child_recovery_tests {
     }
 
     #[test]
+    fn test_support_without_library_does_not_certify_symbol_spelling() {
+        let source = r#"
+            declare const Symbol: { iterator: "test-support-local" };
+            interface NoLibrarySymbolControl {
+                [Symbol.iterator](): void;
+            }
+        "#;
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert_eq!(output.incomplete.len(), 1, "{:?}", output.incomplete);
+        assert_eq!(
+            output.incomplete[0].id,
+            "signature/method-signature/computed-key"
+        );
+        assert_eq!(
+            output.incomplete[0].span.start,
+            starts(source, "Symbol.iterator")[0]
+        );
+    }
+
+    #[test]
     fn interleaved_overload_diagnostics_keep_global_source_order() {
         let source = r#"
             type Interleaved = {
