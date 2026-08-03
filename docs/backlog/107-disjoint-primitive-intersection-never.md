@@ -17,6 +17,12 @@ gap look cosmetic. `any` is assignable to each retained member, however, so typo
 without a diagnostic while TypeScript 6.0.3 reports `TS2322: Type 'any' is not assignable to type
 'never'`. A value of the intersection also fails to flow back to `never`.
 
+Normalization alone does not close the surface gap. `Relater::relate_uncached` currently handles
+the source-`any`/internal-error shortcut before the target-`never` rule, so even a normalized
+target still accepts `any`. TypeScript has one deliberate exception to `any` bidirectionality:
+`any` is not assignable to `never`. The internal error type must remain assignable to `never` to
+suppress cascades; it cannot be coupled to the source-`any` exception.
+
 The existing `intersection/disjoint-primitives-message` divergence therefore misclassified a
 silent under-report as a message-only difference. The exact witness is
 `tests/cases/m31_intersections/any_to_disjoint_primitives.ts`.
@@ -30,6 +36,11 @@ only has to prove every relevant member pairing disjoint; it does not have to ma
 distributed result or simplify an overlapping union. Keep `void` and `undefined` in one
 potentially overlapping void-like domain. Preserve the existing error/`never`/`any` absorption
 order and do not generalize this into an assignability query inside the interner.
+
+In the relation engine, enforce the target-`never` decision before the source-`any` shortcut while
+keeping the internal error shortcut distinct. The exact boundary is: `any` is not assignable to
+`never`; the internal error type remains assignable to `never`; `never` remains the bottom type;
+and `any` remains bidirectionally assignable with every target other than `never`.
 
 Keep potentially inhabited forms intact: a primitive with its own literal subtype (`string &
 "x"`), overlapping finite primitive/literal/`object`-keyword unions, primitive branding (`string
@@ -48,10 +59,17 @@ inhabited. The boundary matrix also pins primitive/nullish distinctions: `number
 independence, recursive finite-union domain proofs, singleton-literal domains, and every preserved
 boundary above.
 
+Add relation unit coverage for the `any`/`never` rejection and its three controls: internal error
+to `never`, `never` to `any` and other targets, and `any` in both directions with non-`never`
+targets. The committed M31 fixture remains the surface acceptance test; no second fixture is
+required.
+
 ## Touch points
 
 - `crates/typokat-types/src/types/intern/operators.rs`
 - `crates/typokat-types/src/types/intern/tests.rs`
+- `crates/typokat-relate/src/relate/relation/mod.rs`
+- `crates/typokat-relate/src/relate/relation/tests.rs`
 - `tests/cases/m31_intersections/any_to_disjoint_primitives.ts`
 - `docs/reference/divergences.md`
 
