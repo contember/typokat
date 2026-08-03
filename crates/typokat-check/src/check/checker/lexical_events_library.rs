@@ -159,6 +159,32 @@ impl LexicalReservations<LibraryRecordTicket> {
         Ok(())
     }
 
+    pub(crate) fn reserve_continuation_library_program(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+        context: crate::binder::namespace::ModuleBindingContext,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError> {
+        let mut allocator = LibraryReservationAllocator {
+            file_ordinal,
+            reservations: ledger.replay_reservation_domain()?,
+        };
+        self.reserve_continuation_program_with(program, context, &mut allocator)?;
+        let source = SourceSite {
+            unit: allocator.source_unit(),
+            source_start: program.span.start,
+        };
+        let (_, owner) = allocator.reserve_event(source.source_start);
+        allocator.record_owner_site(
+            owner,
+            crate::span::Span::from_oxc(program.span),
+            CollisionReplayEventPhase::Immediate,
+        );
+        self.retain_source_anchor(source, owner);
+        Ok(())
+    }
+
     pub(crate) fn library_semantic_tickets(&self) -> Vec<LibraryRecordTicket> {
         let mut tickets = self.source_anchor_tickets();
         tickets.extend(self.tickets());

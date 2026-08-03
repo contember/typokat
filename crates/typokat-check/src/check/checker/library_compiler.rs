@@ -6208,10 +6208,21 @@ fn compile_owned_injected_frontend(
     );
     let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
         LexicalReservations::default();
-    for (input, parsed) in canonical.iter().zip(&parsed) {
-        lexical_events
-            .reserve_library_program(input.file_ordinal, &parsed.program, &mut ledger)
-            .map_err(InjectedProfileError::Reporting)?;
+    for (index, (input, parsed)) in canonical.iter().zip(&parsed).enumerate() {
+        if user_start.is_some_and(|user_start| index >= user_start) {
+            lexical_events
+                .reserve_continuation_library_program(
+                    input.file_ordinal,
+                    &parsed.program,
+                    ModuleBindingContext::for_program(&parsed.program, input.kind),
+                    &mut ledger,
+                )
+                .map_err(InjectedProfileError::Reporting)?;
+        } else {
+            lexical_events
+                .reserve_library_program(input.file_ordinal, &parsed.program, &mut ledger)
+                .map_err(InjectedProfileError::Reporting)?;
+        }
     }
 
     let mut interner = Interner::with_intrinsics();
