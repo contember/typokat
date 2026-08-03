@@ -56,8 +56,15 @@ pub fn check_project(inputs: Vec<FileInput>) -> Vec<FileReport> {
         return Vec::new();
     }
     let failed_inputs = inputs.clone();
-    match on_raw_check_worker(move || check_project_inner(inputs)) {
-        Ok(reports) => reports,
+    match on_raw_check_worker(move || {
+        let reports = check_project_inner(inputs);
+        let receipt = super::checker::project_binding_thread_receipt_for_test();
+        (reports, receipt)
+    }) {
+        Ok((reports, receipt)) => {
+            super::checker::merge_project_binding_thread_receipt_for_test(receipt);
+            reports
+        }
         Err(context) => failed_inputs
             .into_iter()
             .map(|input| FileReport {
