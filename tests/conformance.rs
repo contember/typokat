@@ -513,6 +513,10 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
     (
         "b43_namespaces_declaration_merging",
+        "wu7_augmented_object_index_validation.ts",
+    ),
+    (
+        "b43_namespaces_declaration_merging",
         "wu7_official_callable_relation.ts",
     ),
     (
