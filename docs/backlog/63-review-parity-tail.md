@@ -51,7 +51,10 @@ do not block backlog `14` from starting. See
   the declaration remains unavailable, so this is diagnostic cardinality rather than permissive
   recovery. The same item explicitly owns the four
   `decl/export-specifier/namespace-payload-unavailable` records that keep the ambient alias-list
-  witness honest while this parity tail remains open.
+  witness honest while this parity tail remains open. (p, added 2026-08-03) a reverse assignment
+  from the library `Object` type to an interface or class with an incompatible explicit
+  `toString(): number` member uses generic `TK2322`; tsc 6.0.3 uses its dedicated `TS2696` code.
+  The verdict and overlapping-member reason agree.
 - **Robustness (k) — PARTIALLY SHIPPED in sprint-2026-07-10 WU3.** The lowering/interning
   half landed: a shared annotation-depth budget (`MAX_ANNOTATION_DEPTH = 200`, reported as
   `TK2589`) paired with a 256 MiB scoped worker thread in the driver (rustc-style; exit

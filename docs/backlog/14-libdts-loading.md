@@ -72,6 +72,12 @@ library, `StrNum extends Array<string | number>` composes its real heritage surf
 pre-existing diagnostics in those files remain measurable. Run the full official-suite ratchet
 after the loader corpus passes; do not rebaseline away any newly exposed dependency.
 
+The loaded `Object` surface must also preserve TypeScript's explicit-overlap rule. A source with no
+declared member matching `Object` stays top-like, but an explicitly declared overlapping member is
+related structurally. The `object_explicit_overlap.ts` fixture pins incompatible and compatible
+`toString` declarations plus an augmented optional `Object` member; its `toString(): void` pair
+also distinguishes the rejected forward assignment from the accepted reverse assignment.
+
 The full library loader replaced the minimal production prelude slice from backlog `38`; its small
 source copy remains only as raw checker test support. The production driver has one canonical
 default-library mechanism.

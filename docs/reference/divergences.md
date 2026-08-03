@@ -838,6 +838,11 @@ set), contextual fresh-literal shaping, and the M24 circular-constraint walk (`T
 
 ## Object relation — which failure is reported
 
+- **Reverse `Object` overlap uses the generic assignment code (cosmetic).** Assigning the library
+  `Object` type to an interface or class with an incompatible explicit `toString(): number`
+  member is rejected by both checkers for the same overlapping-member reason. TypeScript 6.0.3
+  reports `TS2696`; typokat reports `TK2322`.
+  <!-- div: id=objects/object-reverse-overlap-code dir=cosmetic scope=s-assignability owner=../backlog/63-review-parity-tail.md witness=../../tests/cases/b14_full_lib_loading/object_explicit_overlap.ts -->
 - **A missing required property loses to a value mismatch that sorts earlier, and the winner can
   depend on statement order.** `relate_objects` walks the target's properties in canonical name
   order and relates each value as it goes, so the first failing property becomes the headline.
