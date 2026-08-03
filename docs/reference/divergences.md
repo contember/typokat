@@ -393,11 +393,22 @@ flow-node CFG (M23), the single narrowing model.
   nothing, composed or not. Same owner (`51`) as the deferred forms above; pinned
   separately because the composed-condition corpus carries the fixture that fails on it.
   <!-- div: id=narrowing/unmodeled-loop-condition-flow dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b100_logical_condition_narrowing/unmodeled_loop_flow_deferred.ts -->
+- **A redundant guard over an unassigned variable loses tsc's member-error cascade
+  (under-report).** tsc reports the owned `TS2454` definite-assignment errors and keeps the
+  alternate wide enough to reject `x.toFixed`; typokat does not yet model definite assignment,
+  narrows the alternate to `number`, and loses that follow-on `TS2339` too. Backlog `47` owns
+  the root check and its recovery state.
+  <!-- div: id=flow/unassigned-redundant-guard-cascade dir=under scope=a-definite-assignment owner=../backlog/47-definite-assignment.md witness=../../tests/cases/b100_logical_condition_narrowing/official_guard_parity_deferred.ts -->
+- **An assignment inside a nested `||` can miss tsc's `never` alternate (under-report).** In
+  the official assigned-operand shape, tsc narrows the final alternate to `never` and rejects
+  its member access; typokat retains the assigned boolean path and stays silent. Backlog `51`
+  owns the missing assignment-sensitive flow composition.
+  <!-- div: id=narrowing/assigned-or-never-alternate dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b100_logical_condition_narrowing/official_guard_parity_deferred.ts -->
 - **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard;
   independently audited — matched never drops, fn never rises): walking `while` bodies / ternary
   arms / logical RHS surfaces lib-shaped `TK2339` (`.length`/`.toString`/… on correctly-narrowed
   primitives — no `lib.d.ts`) in `controlFlowIteration*`, `typeGuardsIn{If,ConditionalExpression}`,
-  `typeGuards{Redundancy,OnClassProperty}`, `…RightOperandOf{AndAnd,OrOr}Operator`; plus `TK2345`
+  `typeGuardsOnClassProperty`, and `…RightOperandOfAndAndOperator`; plus `TK2345`
   in `controlFlowIterationErrors` from the complex-RHS reset-to-declared rule on a loop back edge
   (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound). Since the
   2026-07-10 statement-checking sprint (WU1) the same lib-shaped `TK2339` also surfaces in
