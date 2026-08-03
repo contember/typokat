@@ -96,6 +96,9 @@ def parse_units(source):
     """Return (options, units). options: lowercased name->value of global @opts.
     units: list of (filename, stripped_content). Multi-file tests yield >1 unit.
     Line numbers in each unit's stripped_content align with the baseline."""
+    if source.startswith("\ufeff"):
+        source = source[1:]
+
     options = {}
     units = []
     cur_name = None
