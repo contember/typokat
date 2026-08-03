@@ -126,6 +126,111 @@ impl ParamTail<'_> {
 }
 
 impl<'a> Relater<'a> {
+    /// Relate to the canonical global `Object` interface without making its
+    /// inherited prototype members required. Merged index/call/construct rows are
+    /// still ordinary structural obligations.
+    pub(super) fn relate_library_object_target(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Option<Relation> {
+        let target = self.store.object_type(tgt)?;
+        let has_index = target.string_index.is_some() || target.number_index.is_some();
+        let has_call = !target.call_signatures.is_empty();
+        let has_construct = !target.construct_signatures.is_empty();
+        let number_index_only = target
+            .number_index
+            .filter(|_| target.string_index.is_none() && !has_call && !has_construct);
+
+        if !has_index && !has_call && !has_construct {
+            return self
+                .is_non_nullish_object_top_source(src)
+                .then_some(Relation::Yes);
+        }
+
+        match self.store.tag(src) {
+            TypeTag::Object => {
+                if let Relation::No(reason) =
+                    self.relate_object_call_signatures(src, tgt, kind, assumed)
+                {
+                    return Some(Relation::No(reason));
+                }
+                if let Relation::No(reason) =
+                    self.relate_object_construct_signatures(src, tgt, kind, assumed)
+                {
+                    return Some(Relation::No(reason));
+                }
+                Some(self.relate_object_index_signatures(src, tgt, kind, assumed))
+            }
+            _ if number_index_only.is_some() => {
+                let values = self.apparent_number_index_values(src)?;
+                let target_value = number_index_only?;
+                for value in values {
+                    if let Relation::No(child) =
+                        self.relate(value, target_value, kind, assumed, self.want_reason)
+                    {
+                        return Some(Relation::No(ReasonChain::of(Reason::IndexSignature {
+                            src,
+                            tgt,
+                            because: Box::new(child.head),
+                        })));
+                    }
+                }
+                Some(Relation::Yes)
+            }
+            TypeTag::Function if has_call && !has_index && !has_construct => {
+                let signatures = target.call_signatures.clone();
+                for signature in signatures {
+                    if let Relation::No(_) = self.relate(src, signature, kind, assumed, false) {
+                        return Some(Relation::No(ReasonChain::leaf(src, tgt)));
+                    }
+                }
+                Some(Relation::Yes)
+            }
+            _ => Some(Relation::No(ReasonChain::leaf(src, tgt))),
+        }
+    }
+
+    /// Values observable through a native numeric index. This is intentionally
+    /// limited to the represented array/tuple/readonly and string families.
+    fn apparent_number_index_values(&self, root: TypeId) -> Option<Vec<TypeId>> {
+        let mut pending = vec![root];
+        let mut seen = FxHashSet::default();
+        let mut values = Vec::new();
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current) {
+                return None;
+            }
+            if let Some(operand) = self.store.readonly_operand(current) {
+                pending.push(operand);
+                continue;
+            }
+            if let Some(array) = self.store.array_type(current) {
+                values.push(array.element);
+                continue;
+            }
+            if let Some(tuple) = self.store.tuple_type(current) {
+                values.extend(tuple.elements.iter().copied());
+                pending.extend(tuple.rest.map(|rest| rest.ty));
+                continue;
+            }
+            if self.store.tag(current) == TypeTag::Template
+                || self.store.intrinsic_kind(current) == Some(IntrinsicKind::String)
+                || self
+                    .store
+                    .literal_value(current)
+                    .is_some_and(|literal| literal.base_kind() == IntrinsicKind::String)
+            {
+                values.push(self.well_known.string);
+                continue;
+            }
+            return None;
+        }
+        Some(values)
+    }
+
     /// Property-wise object relation. Returns the **first** failing target
     /// property (in canonical order) as a precise reason: a `MissingProperty`
     /// when the source lacks a required target property, or a `Property` wrapping
@@ -279,9 +384,27 @@ impl<'a> Relater<'a> {
             return Relation::No(child);
         }
 
-        // M19 — index-signature obligations. Snapshot the target's index value types
-        // and the source's named-property/(index) value types up front so the
-        // recursive `self.relate` below does not overlap the read borrows.
+        self.relate_object_index_signatures(src, tgt, kind, assumed)
+    }
+
+    /// Check only a target object's index signatures. The canonical global
+    /// `Object` route reuses this after deliberately skipping named prototype
+    /// members; ordinary object relations reach it after all other obligations.
+    fn relate_object_index_signatures(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Relation {
+        // M19 — snapshot index value types and source properties up front so the
+        // recursive relations below do not overlap the store borrows.
+        let Some(tgt_obj) = self.store.object_type(tgt) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
+        let Some(src_obj) = self.store.object_type(src) else {
+            return Relation::No(ReasonChain::leaf(src, tgt));
+        };
         let tgt_string_index = tgt_obj.string_index;
         let tgt_number_index = tgt_obj.number_index;
         if tgt_string_index.is_none() && tgt_number_index.is_none() {

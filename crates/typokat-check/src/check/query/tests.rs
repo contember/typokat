@@ -2,8 +2,8 @@ use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
 use crate::types::repr::{
     ClassId, ConditionalType, DeclaredRecipeNode, FunctionType, GenericTypeParam, LiteralValue,
-    MappedType, ModifierOp, ObjectType, ParameterType, PropertyType, TemplateType, TypeParamId,
-    Visibility,
+    MappedType, ModifierOp, ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType,
+    TupleType, TypeParamId, Visibility,
 };
 
 fn published(
@@ -2499,6 +2499,269 @@ fn completed_success_hits_without_planning_again() {
     assert_eq!(measure.planner_transactions, 1);
     assert_eq!(state.completed_relation_len(), 1);
     drop(guard);
+}
+
+#[test]
+fn canonical_object_ignores_named_members_but_enforces_merged_indexes() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let named_only = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("prototypeMember", wk.string)],
+        ..Default::default()
+    });
+    let indexed = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("prototypeMember", wk.string)],
+        string_index: Some(wk.number),
+        ..Default::default()
+    });
+    let compatible = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.number)],
+        ..Default::default()
+    });
+    let incompatible = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", wk.string)],
+        ..Default::default()
+    });
+    let empty = interner.intern_object(ObjectType::default());
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    state.set_library_object_template(Some(named_only));
+    for source in [wk.number, compatible, empty] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, named_only),
+            RelationOutcome::Yes
+        ));
+    }
+
+    state.set_library_object_template(Some(indexed));
+    for source in [compatible, empty] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, indexed),
+            RelationOutcome::Yes
+        ));
+    }
+    for source in [wk.number, incompatible] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, indexed),
+            RelationOutcome::No(_)
+        ));
+    }
+}
+
+#[test]
+fn canonical_object_enforces_merged_call_and_construct_signatures() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let call = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.string,
+    });
+    let wrong_call = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.string)],
+        ret: wk.string,
+    });
+    let callable_object = interner.intern_object(ObjectType {
+        call_signatures: vec![call],
+        ..Default::default()
+    });
+    let constructable_object = interner.intern_object(ObjectType {
+        construct_signatures: vec![call],
+        ..Default::default()
+    });
+    let call_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("prototypeMember", wk.string)],
+        call_signatures: vec![call],
+        ..Default::default()
+    });
+    let construct_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("prototypeMember", wk.string)],
+        construct_signatures: vec![call],
+        ..Default::default()
+    });
+    let empty = interner.intern_object(ObjectType::default());
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    state.set_library_object_template(Some(call_target));
+    for source in [call, callable_object] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, call_target),
+            RelationOutcome::Yes
+        ));
+    }
+    for source in [wrong_call, empty, wk.number] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, call_target),
+            RelationOutcome::No(_)
+        ));
+    }
+
+    state.set_library_object_template(Some(construct_target));
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_assignable(constructable_object, construct_target),
+        RelationOutcome::Yes
+    ));
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_assignable(empty, construct_target),
+        RelationOutcome::No(_)
+    ));
+}
+
+#[test]
+fn canonical_object_number_index_uses_apparent_native_values_in_both_orders() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let target = interner.reserve_object();
+    interner.fill_object(
+        target,
+        ObjectType {
+            properties: vec![PropertyType::public("prototypeMember", wk.string)],
+            number_index: Some(target),
+            ..Default::default()
+        },
+    );
+    let empty_array = interner.intern_array(wk.never);
+    let object_array = interner.intern_array(target);
+    let number_array = interner.intern_array(wk.number);
+    let empty_tuple = interner.intern_tuple(Vec::new());
+    let object_tuple = interner.intern_tuple(vec![target]);
+    let number_tuple = interner.intern_tuple(vec![wk.number]);
+    let object_rest = interner.intern_tuple_type(TupleType::with_rest(
+        Vec::new(),
+        TupleRestType::new(0, object_array),
+    ));
+    let number_rest = interner.intern_tuple_type(TupleType::with_rest(
+        Vec::new(),
+        TupleRestType::new(0, number_array),
+    ));
+    let readonly_object_array = interner.intern_readonly(object_array);
+    let readonly_number_array = interner.intern_readonly(number_array);
+    let string_literal = interner.intern_literal(LiteralValue::String("value".into()));
+    let string_template = interner.intern_template(TemplateType {
+        texts: vec!["value".into(), String::new()],
+        holes: vec![wk.number],
+    });
+    let published = PublishedClasses::empty();
+
+    for ordered in [
+        [(object_array, true), (number_array, false)],
+        [(number_array, false), (object_array, true)],
+    ] {
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        state.set_library_object_template(Some(target));
+        for (source, expected) in ordered {
+            let outcome = SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target);
+            assert_eq!(
+                matches!(outcome, RelationOutcome::Yes),
+                expected,
+                "{outcome:?}"
+            );
+        }
+    }
+
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    state.set_library_object_template(Some(target));
+    for source in [
+        wk.never,
+        empty_array,
+        object_array,
+        empty_tuple,
+        object_tuple,
+        object_rest,
+        readonly_object_array,
+        wk.string,
+        string_literal,
+        string_template,
+    ] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+            RelationOutcome::Yes
+        ));
+    }
+    for source in [
+        number_array,
+        number_tuple,
+        number_rest,
+        readonly_number_array,
+        wk.boolean,
+        wk.number,
+    ] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+            RelationOutcome::No(_)
+        ));
+    }
+
+    let mixed_target = interner.intern_object(ObjectType {
+        number_index: Some(target),
+        string_index: Some(target),
+        ..Default::default()
+    });
+    state.set_library_object_template(Some(mixed_target));
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .is_assignable(object_array, mixed_target),
+        RelationOutcome::No(_)
+    ));
 }
 
 #[test]

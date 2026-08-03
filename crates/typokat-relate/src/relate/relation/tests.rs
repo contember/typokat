@@ -216,6 +216,62 @@ fn planned_and_unplanned_relations_reuse_binder_environment_identity() {
     assert!(planned.binder_environment_identity_hits >= 64);
 }
 
+#[test]
+fn canonical_object_number_index_never_falls_back_past_an_active_binder_constraint() {
+    use crate::types::repr::{GenericTypeParam, TupleRestType, TupleType};
+
+    struct ObjectNormalization(TypeId);
+
+    impl RelationNormalization for ObjectNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            Ok(ty)
+        }
+
+        fn is_library_object_top(&self, ty: TypeId) -> bool {
+            ty == self.0
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let target = interner.reserve_object();
+    interner.fill_object(
+        target,
+        ObjectType {
+            number_index: Some(target),
+            ..Default::default()
+        },
+    );
+    let parameter = TypeParamId(91_013);
+    let parameter_type = interner.intern_type_param(parameter, "T");
+    let stored_constraint = interner.intern_array(target);
+    assert!(interner.set_type_param_constraint(parameter, stored_constraint));
+    let source = interner.intern_tuple_type(TupleType::with_rest(
+        Vec::new(),
+        TupleRestType::new(0, parameter_type),
+    ));
+    let normalization = ObjectNormalization(target);
+
+    for constraints in [[None, Some(wk.number)], [Some(wk.number), None]] {
+        let mut relater =
+            Relater::planned(interner.store(), wk, RelationCache::new(), &normalization);
+        for constraint in constraints {
+            let context = BinderRelationContext::source_specialization(&[GenericTypeParam {
+                id: parameter,
+                constraint,
+                default: None,
+            }]);
+            let outcome = relater.with_binder_context(context, |relater| {
+                relater.is_assignable_outcome(source, target)
+            });
+            assert!(
+                matches!(outcome, RelationOutcome::No(_)),
+                "the active {constraint:?} constraint must block the stored array constraint: {outcome:?}"
+            );
+        }
+    }
+}
+
 fn measure_repeated_contextual_payload(width: usize, reverse: bool) -> RelationMeasure {
     use crate::types::repr::GenericTypeParam;
 

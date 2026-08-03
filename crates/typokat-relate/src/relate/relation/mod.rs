@@ -659,36 +659,6 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
-        // TypeScript's global `Object` interface is the non-nullish top object
-        // target even though its declaration exposes prototype members.
-        if self
-            .normalization
-            .is_some_and(|normalization| normalization.is_library_object_top(tgt))
-            && (matches!(
-                self.store.tag(src),
-                TypeTag::Literal
-                    | TypeTag::Object
-                    | TypeTag::Function
-                    | TypeTag::Array
-                    | TypeTag::Tuple
-                    | TypeTag::Readonly
-                    | TypeTag::Template
-                    | TypeTag::ClassInstance
-            ) || matches!(
-                self.store.intrinsic_kind(src),
-                Some(
-                    IntrinsicKind::Boolean
-                        | IntrinsicKind::Number
-                        | IntrinsicKind::String
-                        | IntrinsicKind::Object
-                        | IntrinsicKind::BigInt
-                        | IntrinsicKind::Symbol
-                )
-            ))
-        {
-            return Relation::Yes;
-        }
-
         // An unresolved indexed access is still identical under the active
         // signature's alpha-renaming when only its bound index id differs.
         if self.contextual_deferred_indexed_accesses_are_identical(src, tgt) {
@@ -1226,6 +1196,12 @@ impl<'a> Relater<'a> {
             return Relation::Yes;
         }
 
+        // `never` is the bottom type. Keep this ahead of target-specific
+        // structural obligations so an apparent member check cannot reject it.
+        if src == wk.never {
+            return Relation::Yes;
+        }
+
         // M24 — apparent type of a constrained type parameter: `TypeParam(T)` is
         // assignable to `tgt` whenever its **constraint** is (the constraint is `T`'s
         // apparent type). This is **one direction only** — `X → TypeParam(T)` stays
@@ -1373,15 +1349,21 @@ impl<'a> Relater<'a> {
             return self.relate_intersection_source(src, tgt, kind, assumed);
         }
 
-        // `unknown` is the top type: everything is assignable TO it.
-        if tgt == wk.unknown {
-            return Relation::Yes;
+        // The global `Object` interface ignores its named prototype members as
+        // target obligations, but declarations merged into it can add real index,
+        // call, or construct constraints. Keep that distinction inside the normal
+        // cache/cycle frame so nested signature and index relations remain sound.
+        if self
+            .normalization
+            .is_some_and(|normalization| normalization.is_library_object_top(tgt))
+        {
+            if let Some(result) = self.relate_library_object_target(src, tgt, kind, assumed) {
+                return result;
+            }
         }
 
-        // `never` is the bottom type: it is assignable to everything. (Nothing
-        // is assignable *to* `never` except `never`, which the `src == tgt` fast
-        // path already accepted.)
-        if src == wk.never {
+        // `unknown` is the top type: everything is assignable TO it.
+        if tgt == wk.unknown {
             return Relation::Yes;
         }
 
@@ -1533,6 +1515,30 @@ impl<'a> Relater<'a> {
                 self.store.intrinsic_kind(id),
                 Some(IntrinsicKind::Any) | Some(IntrinsicKind::Error)
             )
+    }
+
+    fn is_non_nullish_object_top_source(&self, id: TypeId) -> bool {
+        matches!(
+            self.store.tag(id),
+            TypeTag::Literal
+                | TypeTag::Object
+                | TypeTag::Function
+                | TypeTag::Array
+                | TypeTag::Tuple
+                | TypeTag::Readonly
+                | TypeTag::Template
+                | TypeTag::ClassInstance
+        ) || matches!(
+            self.store.intrinsic_kind(id),
+            Some(
+                IntrinsicKind::Boolean
+                    | IntrinsicKind::Number
+                    | IntrinsicKind::String
+                    | IntrinsicKind::Object
+                    | IntrinsicKind::BigInt
+                    | IntrinsicKind::Symbol
+            )
+        )
     }
 
     /// The well-known id for an intrinsic kind.
