@@ -224,7 +224,7 @@ class CompletenessTests(unittest.TestCase):
 
 class FetchIntegrityTests(unittest.TestCase):
     @contextlib.contextmanager
-    def _isolated_paths(self, default_dirs=("conformance/x",)):
+    def _isolated_paths(self, default_dirs=("conformance/x",), authoritative=True):
         """Run corpus/report tests without touching the ignored real artifacts."""
         with tempfile.TemporaryDirectory() as root:
             saved = (ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS,
@@ -236,9 +236,30 @@ class FetchIntegrityTests(unittest.TestCase):
             ts.GIT_CACHE = os.path.join(root, ".tools", "typescript.git")
             ts.GIT_CACHE_MARKER = os.path.join(ts.GIT_CACHE, "typokat-cache-format")
             ts.TS_GIT_URL = "https://example.invalid/TypeScript.git"
+            previous_inventory = getattr(self, "_trusted_manifest_inventory", None)
+            self._trusted_manifest_inventory = None
+            real_publish = ts.publish_corpus
+
+            def publish_and_record(stage):
+                with open(os.path.join(stage, "manifest.json")) as f:
+                    self._trusted_manifest_inventory = json.load(f)["baseline_inventory"]
+                return real_publish(stage)
+
+            def pinned_inventory(_revision, stems):
+                if self._trusted_manifest_inventory is None:
+                    raise ts.FetchFailure("synthetic pinned baseline inventory was not prepared")
+                return {stem: self._trusted_manifest_inventory[stem] for stem in stems}
             try:
-                yield root
+                if authoritative:
+                    with mock.patch.object(ts, "publish_corpus", side_effect=publish_and_record), \
+                         mock.patch.object(
+                             ts, "authoritative_baseline_inventory", side_effect=pinned_inventory
+                         ):
+                        yield root
+                else:
+                    yield root
             finally:
+                self._trusted_manifest_inventory = previous_inventory
                 (ts.CORPUS, ts.REPORT, ts.SCOREBOARD, ts.DEFAULT_DIRS,
                  ts.GIT_CACHE, ts.GIT_CACHE_MARKER, ts.TS_GIT_URL) = saved
 
@@ -259,17 +280,25 @@ class FetchIntegrityTests(unittest.TestCase):
             with open(dst, "w") as f:
                 f.write("const value = 1;\n")
         with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
-            json.dump({
-                "format": 3, "sha": ts.PINNED_SHA, "repo": ts.REPO,
+            manifest = {
+                "format": 4, "sha": ts.PINNED_SHA, "repo": ts.REPO,
                 "dirs": ts.DEFAULT_DIRS, "limit": None,
                 "mode": "full-default", "partial": False,
                 "transport": {"kind": "git-cache-full-blob", "url": ts.TS_GIT_URL,
                               "revision": ts.PINNED_SHA, "cache_format": ts.GIT_CACHE_FORMAT},
+                "baseline_inventory": {os.path.basename(rel)[:-3]: [] for rel in paths},
                 "tests": [{"path": rel, "source": f"tests/cases/{rel}",
-                           "baseline_source": "tests/baselines/reference/"
-                           + os.path.basename(rel)[:-3] + ".errors.txt",
+                           "baseline_mode": "single",
+                           "baseline_sources": [{
+                               "options": {},
+                               "source": "tests/baselines/reference/"
+                               + os.path.basename(rel)[:-3] + ".errors.txt",
+                               "baseline": False,
+                           }],
                            "baseline": False} for rel in paths],
-            }, f)
+            }
+            json.dump(manifest, f)
+        self._trusted_manifest_inventory = manifest["baseline_inventory"]
 
     def _scoreboard_bytes(self):
         with open(ts.SCOREBOARD, "rb") as f:
@@ -278,6 +307,31 @@ class FetchIntegrityTests(unittest.TestCase):
     @staticmethod
     def _tree_entry(mode, typ, oid, path):
         return f"{mode} {typ} {oid}\t{path}\0".encode()
+
+    def _raw_git(self, *args, input_data=None):
+        proc = ts.subprocess.run(
+            ["git", "-C", ts.GIT_CACHE, *args], input=input_data,
+            capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        return proc.stdout.strip()
+
+    def _write_compatible_bare_cache(self):
+        os.makedirs(ts.GIT_CACHE, exist_ok=True)
+        self._raw_git("init", "--bare")
+        self._raw_git("remote", "add", "origin", ts.TS_GIT_URL)
+        with open(ts.GIT_CACHE_MARKER, "w") as f:
+            f.write(ts.GIT_CACHE_FORMAT + "\n")
+
+    def _write_commit_object(self, tree, message):
+        body = (
+            b"tree " + tree + b"\n"
+            b"author Test <test@example.invalid> 0 +0000\n"
+            b"committer Test <test@example.invalid> 0 +0000\n\n"
+            + message + b"\n"
+        )
+        return self._raw_git("hash-object", "-t", "commit", "-w", "--stdin",
+                             input_data=body)
 
     def test_default_dirs_use_keyof_for_indexed_access_cases(self):
         """The pinned tree has indexed-access cases in `keyof`, not a separate
@@ -321,6 +375,8 @@ class FetchIntegrityTests(unittest.TestCase):
                     return (ts.PINNED_SHA + "\n").encode()
                 if args == ("remote", "get-url", "origin"):
                     return (ts.TS_GIT_URL + "\n").encode()
+                if args[:1] == ("for-each-ref",):
+                    return b""
                 if args[:2] == ("config", "--get-regexp"):
                     return b""
                 return b"true\n"
@@ -331,6 +387,67 @@ class FetchIntegrityTests(unittest.TestCase):
             self.assertNotIn(("init", "--bare"), calls)
             self.assertIn(("fetch", "--depth=1", "--no-tags", "origin",
                            f"{ts.PINNED_SHA}:{ts.PINNED_REF}"), calls)
+
+    def test_run_git_disables_replace_objects_and_hostile_git_environment(self):
+        with self._isolated_paths(authoritative=False):
+            self._write_compatible_bare_cache()
+            blob = self._raw_git("hash-object", "-w", "--stdin", input_data=b"trusted\n")
+            tree = self._raw_git(
+                "mktree", input_data=b"100644 blob " + blob + b"\ttrusted.txt\n")
+            empty_tree = self._raw_git("mktree", input_data=b"")
+            original = self._write_commit_object(tree, b"original")
+            replacement = self._write_commit_object(empty_tree, b"replacement")
+            self._raw_git("replace", original.decode(), replacement.decode())
+
+            hostile = {
+                "GIT_DIR": "/tmp/redirected",
+                "GIT_WORK_TREE": "/tmp/redirected-worktree",
+                "GIT_COMMON_DIR": "/tmp/redirected-common",
+                "GIT_OBJECT_DIRECTORY": "/tmp/redirected-objects",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": "/tmp/redirected-alternates",
+                "GIT_REPLACE_REF_BASE": "refs/other",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.repositoryformatversion",
+                "GIT_CONFIG_VALUE_0": "99",
+            }
+            with mock.patch.dict(os.environ, hostile):
+                names = ts.run_git(
+                    ts.GIT_CACHE, "ls-tree", "-r", "--name-only", original.decode())
+            self.assertEqual(names, b"trusted.txt\n")
+
+    def test_cache_rejects_replace_refs_and_legacy_grafts(self):
+        with self._isolated_paths(authoritative=False):
+            self._write_compatible_bare_cache()
+            tree = self._raw_git("mktree", input_data=b"")
+            original = self._write_commit_object(tree, b"original")
+            replacement = self._write_commit_object(tree, b"replacement")
+            pinned_ref = f"refs/typokat/pinned/{original.decode()}"
+            self._raw_git("update-ref", pinned_ref, original.decode())
+            self._raw_git("replace", original.decode(), replacement.decode())
+            with mock.patch.object(ts, "PINNED_SHA", original.decode()), \
+                 mock.patch.object(ts, "PINNED_REF", pinned_ref):
+                self.assertFalse(ts.cache_is_compatible())
+
+        with self._isolated_paths(authoritative=False):
+            self._write_compatible_bare_cache()
+            tree = self._raw_git("mktree", input_data=b"")
+            original = self._write_commit_object(tree, b"original")
+            replacement = self._write_commit_object(tree, b"replacement")
+            pinned_ref = f"refs/typokat/pinned/{original.decode()}"
+            self._raw_git("update-ref", pinned_ref, original.decode())
+            grafts = os.path.join(ts.GIT_CACHE, "info", "grafts")
+            with open(grafts, "wb") as f:
+                f.write(original + b" " + replacement + b"\n")
+            with mock.patch.object(ts, "PINNED_SHA", original.decode()), \
+                 mock.patch.object(ts, "PINNED_REF", pinned_ref):
+                self.assertFalse(ts.cache_is_compatible())
+
+    def test_cache_requires_the_pinned_gc_reachable_ref(self):
+        with self._isolated_paths(authoritative=False):
+            self._write_compatible_bare_cache()
+            tree = self._raw_git("mktree", input_data=b"")
+            self._write_commit_object(tree, b"unreferenced")
+            self.assertFalse(ts.cache_is_compatible())
 
     def test_git_cache_rejects_resolved_sha_mismatch(self):
         with self._isolated_paths():
@@ -343,6 +460,8 @@ class FetchIntegrityTests(unittest.TestCase):
                     return ("f" * 40 + "\n").encode()
                 if args == ("remote", "get-url", "origin"):
                     return (ts.TS_GIT_URL + "\n").encode()
+                if args[:1] == ("for-each-ref",):
+                    return b""
                 if args[:2] == ("config", "--get-regexp"):
                     return b""
                 return b"true\n"
@@ -380,6 +499,8 @@ class FetchIntegrityTests(unittest.TestCase):
                 calls.append(args)
                 if args == ("remote", "get-url", "origin"):
                     return (ts.TS_GIT_URL + "\n").encode()
+                if args[:1] == ("for-each-ref",):
+                    return b""
                 if args[:2] == ("config", "--get-regexp"):
                     return b""
                 if args == ("fsck", "--no-dangling"):
@@ -406,6 +527,8 @@ class FetchIntegrityTests(unittest.TestCase):
                     return (ts.PINNED_SHA + "\n").encode()
                 if args == ("remote", "get-url", "origin"):
                     return (ts.TS_GIT_URL + "\n").encode()
+                if args[:1] == ("for-each-ref",):
+                    return b""
                 if args[:2] == ("config", "--get-regexp"):
                     return b"remote.origin.promisor true\n"
                 return b"true\n"
@@ -448,6 +571,16 @@ class FetchIntegrityTests(unittest.TestCase):
             with mock.patch.object(ts, "run_git", return_value=malformed):
                 with self.assertRaises(ts.FetchFailure):
                     ts.baseline_paths(ts.PINNED_SHA)
+
+    def test_variant_inventory_matches_the_exact_source_basename(self):
+        exact = "tests/baselines/reference/case(target=es5).errors.txt"
+        prefixed = "tests/baselines/reference/case(extra)(target=es5).errors.txt"
+        self.assertEqual(ts.selected_baselines_for_stem({exact, prefixed}, "case"), {exact})
+
+    def test_variant_inventory_rejects_one_baseline_assigned_to_two_stems(self):
+        shared = "tests/baselines/reference/case(target=es5).errors.txt"
+        with self.assertRaises(ts.FetchFailure):
+            ts.selected_baseline_inventory({shared}, ["case", "case(target=es5)"])
 
     def test_equal_option_variants_publish_one_truthful_oracle(self):
         """Option-suffixed baselines with the same parsed diagnostics are one
@@ -519,6 +652,201 @@ class FetchIntegrityTests(unittest.TestCase):
                 report = json.load(f)
             row = next(item for item in report["files"] if item["rel"].endswith("case.ts"))
             self.assertEqual(row["bucket"], "option-variant")
+
+    def test_manifest_rejects_tampered_option_variant_provenance(self):
+        with self._isolated_paths():
+            source = "tests/cases/conformance/x/case.ts"
+            es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+            es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+            blobs = {
+                source: b"// @target: es5, es2015\nconst x: string = 1;\n",
+                es5: b"case.ts(2,7): error TS2322: mismatch\n",
+                es2015: b"case.ts(3,7): error TS2322: mismatch\n",
+            }
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                 mock.patch.object(ts, "baseline_paths", return_value={es5, es2015}), \
+                 mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                ts.cmd_fetch(self._args())
+
+            manifest_path = os.path.join(ts.CORPUS, "manifest.json")
+            with open(manifest_path) as f:
+                original = json.load(f)
+            mutations = [
+                ("options", {"target": "esnext"}),
+                ("source", "tests/baselines/reference/other(target=es5).errors.txt"),
+                ("source", "tests/baselines/reference/../escape.errors.txt"),
+            ]
+            for field, value in mutations:
+                manifest = json.loads(json.dumps(original))
+                manifest["tests"][0]["baseline_sources"][0][field] = value
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest, f)
+                with self.assertRaises(ts.FetchFailure):
+                    ts.load_manifest()
+
+    def test_manifest_rejects_variant_relabelled_as_expected_clean_single(self):
+        source = "tests/cases/conformance/x/case.ts"
+        es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+        es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+        for equal in (True, False):
+            with self.subTest(equal=equal), self._isolated_paths():
+                blobs = {
+                    source: b"// @target: es5, es2015\nconst x: string = 1;\n",
+                    es5: b"case.ts(2,7): error TS2322: mismatch\n",
+                    es2015: (
+                        b"case.ts(2,7): error TS2322: mismatch\n" if equal
+                        else b"case.ts(3,7): error TS2322: mismatch\n"
+                    ),
+                }
+                with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                     mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                     mock.patch.object(ts, "baseline_paths", return_value={es5, es2015}), \
+                     mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                    ts.cmd_fetch(self._args())
+
+                manifest_path = os.path.join(ts.CORPUS, "manifest.json")
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+                entry = manifest["tests"][0]
+                entry["baseline_mode"] = "single"
+                entry["baseline_sources"] = [{
+                    "options": {},
+                    "source": "tests/baselines/reference/case.errors.txt",
+                    "baseline": False,
+                }]
+                entry["baseline"] = False
+                canonical = os.path.join(ts.CORPUS, "conformance/x/case.errors.txt")
+                if os.path.exists(canonical):
+                    os.unlink(canonical)
+                with open(manifest_path, "w") as f:
+                    json.dump(manifest, f)
+                with self.assertRaises(ts.FetchFailure):
+                    ts.load_manifest()
+
+    def test_manifest_rejects_shrinking_a_wildcard_option_domain(self):
+        with self._isolated_paths():
+            source = "tests/cases/conformance/x/case.ts"
+            es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+            es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+            blobs = {
+                source: b"// @target: *\nconst x: string = 1;\n",
+                es5: b"case.ts(2,7): error TS2322: mismatch\n",
+                es2015: b"case.ts(3,7): error TS2322: mismatch\n",
+            }
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                 mock.patch.object(ts, "baseline_paths", return_value={es5, es2015}), \
+                 mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                ts.cmd_fetch(self._args())
+
+            manifest_path = os.path.join(ts.CORPUS, "manifest.json")
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            manifest["tests"][0]["baseline_sources"] = [
+                manifest["tests"][0]["baseline_sources"][0]
+            ]
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+            with self.assertRaises(ts.FetchFailure):
+                ts.load_manifest()
+
+    def test_manifest_rejects_simultaneous_inventory_and_entry_relabel(self):
+        with self._isolated_paths():
+            source = "tests/cases/conformance/x/case.ts"
+            es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+            es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+            blobs = {
+                source: b"// @target: es5, es2015\nconst x: string = 1;\n",
+                es5: b"case.ts(2,7): error TS2322: mismatch\n",
+                es2015: b"case.ts(3,7): error TS2322: mismatch\n",
+            }
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                 mock.patch.object(ts, "baseline_paths", return_value={es5, es2015}), \
+                 mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                ts.cmd_fetch(self._args())
+
+            manifest_path = os.path.join(ts.CORPUS, "manifest.json")
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            manifest["baseline_inventory"]["case"] = []
+            manifest["tests"][0].update({
+                "baseline_mode": "single",
+                "baseline_sources": [{
+                    "options": {},
+                    "source": "tests/baselines/reference/case.errors.txt",
+                    "baseline": False,
+                }],
+                "baseline": False,
+            })
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+            with self.assertRaises(ts.FetchFailure):
+                ts.load_manifest()
+
+    def test_manifest_rejects_substituted_authoritative_inventory(self):
+        with self._isolated_paths():
+            source = "tests/cases/conformance/x/case.ts"
+            es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+            es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+            esnext = "tests/baselines/reference/case(target=esnext).errors.txt"
+            baseline = b"case.ts(2,7): error TS2322: mismatch\n"
+            blobs = {
+                source: b"// @target: es5, es2015, esnext\nconst x: string = 1;\n",
+                es5: baseline,
+                es2015: baseline,
+            }
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                 mock.patch.object(ts, "baseline_paths", return_value={es5, es2015}), \
+                 mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                ts.cmd_fetch(self._args())
+
+            manifest_path = os.path.join(ts.CORPUS, "manifest.json")
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            manifest["baseline_inventory"]["case"] = [es2015, esnext]
+            for item in manifest["tests"][0]["baseline_sources"]:
+                item["baseline"] = item["source"] in {es2015, esnext}
+            with open(manifest_path, "w") as f:
+                json.dump(manifest, f)
+            with self.assertRaises(ts.FetchFailure):
+                ts.load_manifest()
+
+    def test_manifest_requires_matching_offline_pinned_cache(self):
+        with self._isolated_paths(authoritative=False):
+            path = "tests/cases/conformance/x/fresh.ts"
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[path]), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", return_value={
+                     path: b"const fresh = 1;\n",
+                 }):
+                ts.cmd_fetch(self._args())
+
+            with self.assertRaises(ts.FetchFailure):
+                ts.load_manifest()
+            os.makedirs(ts.GIT_CACHE, exist_ok=True)
+            with open(ts.GIT_CACHE_MARKER, "w") as f:
+                f.write(ts.GIT_CACHE_FORMAT + "\n")
+            with mock.patch.object(ts, "cache_is_compatible", return_value=True), \
+                 mock.patch.object(ts, "run_git", return_value=("f" * 40 + "\n").encode()):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.load_manifest()
+
+    def test_fetch_rejects_duplicate_selected_basename(self):
+        with self._isolated_paths():
+            first = "tests/cases/conformance/x/one/case.ts"
+            second = "tests/cases/conformance/x/two/case.ts"
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[first, second]), \
+                 mock.patch.object(ts, "baseline_paths", return_value=set()), \
+                 mock.patch.object(ts, "read_git_blobs", return_value={
+                     first: b"const first = 1;\n", second: b"const second = 2;\n",
+                 }):
+                with self.assertRaises(ts.FetchFailure):
+                    ts.cmd_fetch(self._args())
 
     def test_git_tree_rejects_path_escape_and_links(self):
         escaped = self._tree_entry("100644", "blob", "a" * 40, "tests/cases/../escape.ts")
@@ -596,16 +924,21 @@ class FetchIntegrityTests(unittest.TestCase):
             self.assertNotIn(ts.GIT_CACHE, json.dumps(manifest))
             self.assertEqual(manifest["tests"], [{
                 "path": "conformance/x/fresh.ts", "source": path,
-                "baseline_source": "tests/baselines/reference/fresh.errors.txt",
+                "baseline_mode": "single",
+                "baseline_sources": [{
+                    "options": {},
+                    "source": "tests/baselines/reference/fresh.errors.txt",
+                    "baseline": False,
+                }],
                 "baseline": False,
             }])
             self.assertFalse(os.path.exists(os.path.join(ts.CORPUS, "old.ts")))
 
-    def test_v1_and_v2_manifest_formats_are_rejected(self):
+    def test_v1_v2_and_v3_manifest_formats_are_rejected(self):
         with self._isolated_paths():
             self._write_full_manifest(["conformance/x/a.ts"])
             manifest_path = os.path.join(ts.CORPUS, "manifest.json")
-            for legacy_format in (1, 2):
+            for legacy_format in (1, 2, 3):
                 with open(manifest_path) as f:
                     manifest = json.load(f)
                 manifest["format"] = legacy_format
@@ -1045,12 +1378,17 @@ print(json.dumps(response), flush=True)
                 tests.append({
                     "path": rel,
                     "source": f"tests/cases/{rel}",
-                    "baseline_source": f"tests/baselines/reference/{rel[:-3]}.errors.txt",
+                    "baseline_mode": "single",
+                    "baseline_sources": [{
+                        "options": {},
+                        "source": f"tests/baselines/reference/{rel[:-3]}.errors.txt",
+                        "baseline": False,
+                    }],
                     "baseline": False,
                 })
             with open(os.path.join(ts.CORPUS, "manifest.json"), "w") as f:
                 json.dump({
-                    "format": 3,
+                    "format": 4,
                     "sha": ts.PINNED_SHA,
                     "repo": ts.REPO,
                     "dirs": ts.DEFAULT_DIRS,
@@ -1063,6 +1401,7 @@ print(json.dumps(response), flush=True)
                         "revision": ts.PINNED_SHA,
                         "cache_format": ts.GIT_CACHE_FORMAT,
                     },
+                    "baseline_inventory": {"first": [], "second": []},
                     "tests": tests,
                 }, f)
             binary = fake_binary("exit 0\n")
@@ -1074,7 +1413,10 @@ print(json.dumps(response), flush=True)
                 "rebaseline": False,
             })()
             try:
-                yield args
+                with mock.patch.object(ts, "authoritative_baseline_inventory", return_value={
+                    "first": [], "second": [],
+                }):
+                    yield args
             finally:
                 os.unlink(binary)
                 ts.CORPUS, ts.REPORT = saved

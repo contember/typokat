@@ -40,6 +40,7 @@ import tempfile
 import threading
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from itertools import product
 
 # --- Configuration -----------------------------------------------------------
 
@@ -677,6 +678,184 @@ def validate_baseline_path(path):
     return _validate_posix_path(path, "tests/baselines/reference", "baseline")
 
 
+BASELINE_ROOT = "tests/baselines/reference"
+VARIANT_OPTION_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+VARIANT_OPTION_VALUE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+MAX_VARIANT_OPTION_KEYS = 8
+MAX_VARIANT_VALUES_PER_KEY = 64
+MAX_VARIANT_TUPLES = 256
+
+
+def canonical_baseline_path(stem):
+    return validate_baseline_path(f"{BASELINE_ROOT}/{stem}.errors.txt")
+
+
+def parse_variant_baseline_path(path, stem):
+    """Return normalized option values for one same-basename variant path."""
+    path = validate_baseline_path(path)
+    if os.path.dirname(path) != BASELINE_ROOT:
+        return None
+    suffix = ".errors.txt"
+    name = os.path.basename(path)
+    if not name.endswith(suffix):
+        return None
+    core = name[:-len(suffix)]
+    open_paren = core.rfind("(")
+    if open_paren < 0 or not core.endswith(")") or core[:open_paren] != stem:
+        return None
+    body = core[open_paren + 1:-1]
+    pairs = body.split(",") if body else []
+    options = {}
+    spellings = {}
+    for pair in pairs:
+        if pair.count("=") != 1:
+            raise FetchFailure(f"malformed option-variant baseline path: {path}")
+        raw_name, raw_value = pair.split("=", 1)
+        if (not VARIANT_OPTION_NAME_RE.fullmatch(raw_name)
+                or not VARIANT_OPTION_VALUE_RE.fullmatch(raw_value)):
+            raise FetchFailure(f"malformed option-variant baseline path: {path}")
+        name_key = raw_name.lower()
+        value = raw_value.lower()
+        if name_key in options:
+            raise FetchFailure(f"duplicate option in variant baseline path: {path}")
+        options[name_key] = value
+        spellings[name_key] = raw_name
+    if not options or list(options) != sorted(options):
+        raise FetchFailure(f"non-canonical option-variant baseline path: {path}")
+    return options, spellings
+
+
+def selected_baselines_for_stem(available_baselines, stem):
+    """Select the canonical baseline or every exact-basename option variant."""
+    return set(selected_baseline_inventory(available_baselines, [stem])[stem])
+
+
+def selected_baseline_inventory(available_baselines, stems):
+    """Index the pinned baseline tree once for the exact selected basenames."""
+    selected = set(stems)
+    variants = defaultdict(set)
+    for path in available_baselines:
+        if os.path.dirname(path) != BASELINE_ROOT:
+            continue
+        name = os.path.basename(path)
+        suffix = ".errors.txt"
+        if not name.endswith(suffix):
+            continue
+        core = name[:-len(suffix)]
+        open_paren = core.rfind("(")
+        if open_paren < 0 or not core.endswith(")"):
+            continue
+        stem = core[:open_paren]
+        if stem not in selected or "=" not in core[open_paren + 1:-1]:
+            continue
+        if parse_variant_baseline_path(path, stem) is None:
+            raise FetchFailure(f"malformed option-variant baseline path: {path}")
+        variants[stem].add(path)
+
+    inventory = {}
+    owners = {}
+    for stem in stems:
+        canonical = canonical_baseline_path(stem)
+        stem_variants = variants[stem]
+        if stem_variants and canonical in available_baselines:
+            raise FetchFailure(f"ambiguous canonical and option baselines for {stem}")
+        paths = stem_variants or (
+            {canonical} if canonical in available_baselines else set()
+        )
+        for path in paths:
+            previous = owners.setdefault(path, stem)
+            if previous != stem:
+                raise FetchFailure(
+                    f"baseline path is ambiguous between {previous!r} and {stem!r}: {path}")
+        inventory[stem] = sorted(paths)
+    return inventory
+
+
+def source_option_values(source, keys, observed_values):
+    """Return option values in directive order for the requested variant keys."""
+    options, _units = parse_units(source)
+    selected = []
+    for key, raw_value in options.items():
+        if key not in keys:
+            continue
+        values = [value.strip().lower() for value in raw_value.split(",")]
+        if values == ["*"]:
+            values = observed_values[key]
+        if (not values or any(not VARIANT_OPTION_VALUE_RE.fullmatch(value) for value in values)
+                or len(values) != len(set(values))
+                or len(values) > MAX_VARIANT_VALUES_PER_KEY):
+            raise FetchFailure(f"invalid @{key} values for option-variant baseline")
+        selected.append((key, values))
+    if {key for key, _values in selected} != set(keys):
+        missing = sorted(set(keys) - {key for key, _values in selected})
+        raise FetchFailure(
+            f"option-variant baseline names options absent from source directives: {missing}")
+    return selected
+
+
+def render_variant_baseline_path(stem, options, spellings):
+    pairs = []
+    for key in sorted(options):
+        spelling = spellings[key]
+        pairs.append(f"{spelling}={options[key]}")
+    return validate_baseline_path(f"{BASELINE_ROOT}/{stem}({','.join(pairs)}).errors.txt")
+
+
+def variant_baseline_sources(source, stem, variant_paths):
+    """Derive every option tuple, including tuples with no baseline blob."""
+    parsed = []
+    expected_keys = None
+    spellings = {}
+    present_by_options = {}
+    observed_values = defaultdict(list)
+    for path in sorted(variant_paths):
+        result = parse_variant_baseline_path(path, stem)
+        if result is None:
+            continue
+        options, path_spellings = result
+        keys = tuple(options)
+        if expected_keys is None:
+            expected_keys = keys
+        elif keys != expected_keys:
+            raise FetchFailure(f"inconsistent option keys across {stem} baselines")
+        for key, spelling in path_spellings.items():
+            previous = spellings.setdefault(key, spelling)
+            if previous != spelling:
+                raise FetchFailure(f"inconsistent option spelling across {stem} baselines")
+        option_key = tuple(sorted(options.items()))
+        if option_key in present_by_options:
+            raise FetchFailure(f"duplicate option tuple across {stem} baselines")
+        present_by_options[option_key] = path
+        for key, value in options.items():
+            if value not in observed_values[key]:
+                observed_values[key].append(value)
+        parsed.append(options)
+    if not parsed or expected_keys is None:
+        raise FetchFailure(f"no valid option-variant baselines found for {stem}")
+    if len(expected_keys) > MAX_VARIANT_OPTION_KEYS:
+        raise FetchFailure(f"too many option keys across {stem} baselines")
+
+    dimensions = source_option_values(source, expected_keys, observed_values)
+    tuple_count = 1
+    for _key, values in dimensions:
+        tuple_count *= len(values)
+        if tuple_count > MAX_VARIANT_TUPLES:
+            raise FetchFailure(f"too many option tuples across {stem} baselines")
+    sources = []
+    for values in product(*(values for _key, values in dimensions)):
+        options = {dimensions[index][0]: value for index, value in enumerate(values)}
+        option_key = tuple(sorted(options.items()))
+        path = render_variant_baseline_path(stem, options, spellings)
+        observed = present_by_options.get(option_key)
+        if observed is not None and observed != path:
+            raise FetchFailure(f"option tuple has a non-canonical baseline path: {observed}")
+        sources.append({"options": options, "source": path, "baseline": observed is not None})
+    if set(present_by_options) != {
+            tuple(sorted(item["options"].items())) for item in sources if item["baseline"]}:
+        raise FetchFailure(f"option baseline values disagree with source directives: {stem}")
+    return sources
+
+
 def validate_case_relpath(rel):
     if (not isinstance(rel, str) or not rel or "\\" in rel or rel.startswith("/")
             or any(char in rel for char in ("\0", "\n", "\r"))):
@@ -703,7 +882,13 @@ def stage_path(stage, rel):
 
 def run_git(cache, *args, input_data=None, timeout=60, allow_failure=False):
     """Run one non-interactive git command against the local pinned cache."""
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    })
     command = ["git", "-C", cache, *args]
     try:
         proc = subprocess.run(command, input=input_data, capture_output=True, env=env, timeout=timeout)
@@ -736,6 +921,20 @@ def cache_is_compatible():
         if run_git(GIT_CACHE, "rev-parse", "--is-bare-repository").strip() != b"true":
             return False
         if run_git(GIT_CACHE, "remote", "get-url", "origin").decode().strip() != TS_GIT_URL:
+            return False
+        pinned = run_git(GIT_CACHE, "rev-parse", "--verify", f"{PINNED_REF}^{{commit}}")
+        if pinned.decode().strip() != PINNED_SHA:
+            return False
+        replace_refs = run_git(GIT_CACHE, "for-each-ref", "--format=%(refname)", "refs/replace")
+        if replace_refs.strip():
+            return False
+        forbidden_files = (
+            os.path.join(GIT_CACHE, "info", "grafts"),
+            os.path.join(GIT_CACHE, "objects", "info", "alternates"),
+            os.path.join(GIT_CACHE, "objects", "info", "http-alternates"),
+            os.path.join(GIT_CACHE, "commondir"),
+        )
+        if any(os.path.lexists(path) for path in forbidden_files):
             return False
         partial = run_git(GIT_CACHE, "config", "--get-regexp", r"(promisor|partialclone)",
                           allow_failure=True)
@@ -807,6 +1006,37 @@ def baseline_paths(revision):
     }
 
 
+def authoritative_baseline_inventory(revision, stems):
+    """Derive selected baselines from the verified local pinned tree, offline."""
+    if revision != PINNED_SHA:
+        raise FetchFailure("corpus revision does not match the pinned TypeScript commit")
+    if not cache_is_compatible():
+        raise FetchFailure("missing or incompatible pinned full-blob Git cache — run `fetch`")
+    resolved = run_git(GIT_CACHE, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    resolved = resolved.decode().strip()
+    if resolved != revision:
+        raise FetchFailure(
+            f"local Git cache resolved corpus revision to unexpected commit {resolved!r}")
+    commit = run_git(GIT_CACHE, "cat-file", "commit", revision)
+    commit_hash = run_git(
+        GIT_CACHE, "hash-object", "-t", "commit", "--stdin", input_data=commit
+    ).decode().strip()
+    if commit_hash != revision:
+        raise FetchFailure("pinned Git commit content does not match its object id")
+    tree = run_git(GIT_CACHE, "rev-parse", "--verify", f"{revision}^{{tree}}")
+    tree = tree.decode().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", tree):
+        raise FetchFailure("pinned Git commit has an invalid tree object id")
+    tree_content = run_git(GIT_CACHE, "cat-file", "tree", tree)
+    tree_hash = run_git(
+        GIT_CACHE, "hash-object", "-t", "tree", "--stdin", input_data=tree_content
+    ).decode().strip()
+    if tree_hash != tree:
+        raise FetchFailure("pinned Git tree content does not match its object id")
+    available = baseline_paths(revision)
+    return selected_baseline_inventory(available, stems)
+
+
 def read_git_blobs(revision, paths):
     """Read every selected blob through one NUL-safe, local Git batch process."""
     ordered = sorted(paths)
@@ -855,10 +1085,11 @@ def cmd_fetch(args):
 
     partial = bool(args.dir or args.limit)
     manifest = {
-        "format": 3, "sha": PINNED_SHA, "repo": REPO, "dirs": dirs,
+        "format": 4, "sha": PINNED_SHA, "repo": REPO, "dirs": dirs,
         "limit": args.limit, "mode": "partial" if partial else "full-default",
         "partial": partial, "transport": {"kind": "git-cache-full-blob", "url": TS_GIT_URL,
-                                               "revision": revision, "cache_format": GIT_CACHE_FORMAT}, "tests": [],
+                                               "revision": revision, "cache_format": GIT_CACHE_FORMAT},
+        "baseline_inventory": {}, "tests": [],
     }
     stage = tempfile.mkdtemp(prefix=".corpus-fetch-", dir=os.path.dirname(CORPUS))
 
@@ -866,30 +1097,71 @@ def cmd_fetch(args):
         available_baselines = baseline_paths(revision)
         entries = []
         archive_paths = set(ts_paths)
+        stems = [os.path.basename(source)[:-3] for source in ts_paths]
+        if len(stems) != len(set(stems)):
+            duplicate = min(stem for stem, count in Counter(stems).items() if count > 1)
+            raise FetchFailure(f"duplicate selected test basename: {duplicate}")
+        authoritative_inventory = selected_baseline_inventory(available_baselines, stems)
         for source in ts_paths:
             rel = validate_case_relpath(source.removeprefix("tests/cases/"))
-            baseline = validate_baseline_path(
-                "tests/baselines/reference/" + os.path.basename(source)[:-3] + ".errors.txt")
-            has_baseline = baseline in available_baselines
-            if has_baseline:
-                archive_paths.add(baseline)
-            entries.append({"path": rel, "source": source, "baseline_source": baseline,
-                            "baseline": has_baseline})
+            stem = os.path.basename(source)[:-3]
+            canonical = canonical_baseline_path(stem)
+            selected = set(authoritative_inventory[stem])
+            variants = selected - {canonical}
+            archive_paths.update(selected)
+            manifest["baseline_inventory"][stem] = sorted(selected)
+            entries.append({"path": rel, "source": source, "stem": stem,
+                            "canonical": canonical, "variants": variants})
         files = read_git_blobs(revision, archive_paths)
         for entry in entries:
             dst_ts = stage_path(stage, entry["path"])
             os.makedirs(os.path.dirname(dst_ts), exist_ok=True)
             try:
                 source = files[entry["source"]].decode("utf-8")
-                baseline = files[entry["baseline_source"]].decode("utf-8") if entry["baseline"] else None
             except UnicodeDecodeError as e:
                 raise FetchFailure(f"non-text git archive member: {entry['source']}") from e
+            if entry["variants"]:
+                baseline_sources = variant_baseline_sources(
+                    source, entry["stem"], entry["variants"])
+                contents = []
+                for item in baseline_sources:
+                    if not item["baseline"]:
+                        contents.append(None)
+                        continue
+                    try:
+                        contents.append(files[item["source"]].decode("utf-8"))
+                    except UnicodeDecodeError as e:
+                        raise FetchFailure(
+                            f"non-text git archive member: {item['source']}") from e
+                parsed = [Counter(parse_baseline(content)) for content in contents]
+                stable = all(oracle == parsed[0] for oracle in parsed[1:])
+                baseline_mode = "stable-variants" if stable else "option-variant"
+                baseline = next(
+                    (content for content in contents if content is not None), None
+                ) if stable else None
+            else:
+                has_baseline = entry["canonical"] in available_baselines
+                baseline_sources = [{"options": {}, "source": entry["canonical"],
+                                     "baseline": has_baseline}]
+                baseline_mode = "single"
+                if has_baseline:
+                    try:
+                        baseline = files[entry["canonical"]].decode("utf-8")
+                    except UnicodeDecodeError as e:
+                        raise FetchFailure(
+                            f"non-text git archive member: {entry['canonical']}") from e
+                else:
+                    baseline = None
             with open(dst_ts, "w") as f:
                 f.write(source)
             if baseline is not None:
                 with open(dst_ts[:-3] + ".errors.txt", "w") as f:
                     f.write(baseline)
-            manifest["tests"].append(entry)
+            manifest["tests"].append({
+                "path": entry["path"], "source": entry["source"],
+                "baseline_mode": baseline_mode, "baseline_sources": baseline_sources,
+                "baseline": baseline is not None,
+            })
         manifest["tests"].sort(key=lambda entry: entry["path"])
         with open(os.path.join(stage, "manifest.json"), "w") as f:
             json.dump(manifest, f, indent=2)
@@ -898,8 +1170,10 @@ def cmd_fetch(args):
         shutil.rmtree(stage, ignore_errors=True)
         raise
     n_base = sum(1 for t in manifest["tests"] if t["baseline"])
-    print(f"Done: {len(manifest['tests'])} tests in ./corpus ({n_base} with an errors baseline, "
-          f"{len(manifest['tests']) - n_base} expected-clean).")
+    n_variant = sum(1 for t in manifest["tests"] if t["baseline_mode"] == "option-variant")
+    n_clean = len(manifest["tests"]) - n_base - n_variant
+    print(f"Done: {len(manifest['tests'])} tests in ./corpus ({n_base} with a stable errors "
+          f"oracle, {n_clean} expected-clean, {n_variant} option-variant).")
 
 
 def publish_corpus(stage):
@@ -933,10 +1207,13 @@ def load_manifest():
             manifest = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         raise FetchFailure("invalid or missing corpus manifest — run `tsofficial.py fetch`") from e
-    required = {"format", "sha", "repo", "dirs", "limit", "mode", "partial", "transport", "tests"}
-    if not isinstance(manifest, dict) or required - manifest.keys() or manifest["format"] != 3:
+    required = {"format", "sha", "repo", "dirs", "limit", "mode", "partial", "transport",
+                "baseline_inventory", "tests"}
+    if (not isinstance(manifest, dict) or set(manifest) != required or manifest["format"] != 4
+            or manifest["sha"] != PINNED_SHA or manifest["repo"] != REPO):
         raise FetchFailure("corpus manifest has an unsupported format")
     tests = manifest["tests"]
+    baseline_inventory = manifest["baseline_inventory"]
     transport = manifest["transport"]
     if (not isinstance(transport, dict)
             or set(transport) != {"kind", "url", "revision", "cache_format"}
@@ -944,30 +1221,98 @@ def load_manifest():
             or transport["cache_format"] != GIT_CACHE_FORMAT
             or transport["revision"] != manifest["sha"]):
         raise FetchFailure("corpus manifest has invalid Git transport provenance")
-    if not isinstance(tests, list) or not tests:
+    if (not isinstance(tests, list) or not tests
+            or not isinstance(baseline_inventory, dict)):
         raise FetchFailure("corpus manifest has no tests")
     paths = []
+    stems = []
+    seen_stems = set()
     expected_files = {"manifest.json"}
     for entry in tests:
         if (not isinstance(entry, dict)
-                or set(entry) != {"path", "source", "baseline_source", "baseline"}
+                or set(entry) != {"path", "source", "baseline_mode", "baseline_sources",
+                                  "baseline"}
                 or not isinstance(entry["path"], str) or not isinstance(entry["source"], str)
-                or not isinstance(entry["baseline_source"], str)
+                or entry["baseline_mode"] not in {
+                    "single", "stable-variants", "option-variant"}
+                or not isinstance(entry["baseline_sources"], list)
                 or not isinstance(entry["baseline"], bool)
                 or validate_case_relpath(entry["path"]) != entry["path"]
                 or validate_case_path(entry["source"]) != entry["source"]
                 or entry["source"] != f"tests/cases/{entry['path']}"):
             raise FetchFailure("corpus manifest has an invalid test entry")
-        expected_baseline = validate_baseline_path(
-            "tests/baselines/reference/" + os.path.basename(entry["path"])[:-3] + ".errors.txt")
-        if entry["baseline_source"] != expected_baseline:
-            raise FetchFailure("corpus manifest has an invalid baseline entry")
+        stem = os.path.basename(entry["path"])[:-3]
+        if stem in seen_stems:
+            raise FetchFailure(f"corpus manifest has duplicate test basename: {stem}")
+        seen_stems.add(stem)
+        stems.append(stem)
+        expected_baseline = canonical_baseline_path(stem)
+        inventory = baseline_inventory.get(stem)
+        if (not isinstance(inventory, list)
+                or any(not isinstance(path, str) for path in inventory)
+                or len(inventory) > MAX_VARIANT_TUPLES
+                or inventory != sorted(inventory)
+                or len(inventory) != len(set(inventory))):
+            raise FetchFailure("corpus manifest has an invalid baseline inventory")
+        for baseline_path in inventory:
+            if validate_baseline_path(baseline_path) != baseline_path:
+                raise FetchFailure("corpus manifest has an invalid baseline inventory path")
+        has_canonical = expected_baseline in inventory
+        variant_inventory = {
+            path for path in inventory
+            if parse_variant_baseline_path(path, stem) is not None
+        }
+        if len(variant_inventory) + (1 if has_canonical else 0) != len(inventory):
+            raise FetchFailure("corpus manifest baseline inventory has a foreign basename")
+        if has_canonical and variant_inventory:
+            raise FetchFailure("corpus manifest mixes canonical and variant baselines")
+        sources = entry["baseline_sources"]
+        for source in sources:
+            if (not isinstance(source, dict)
+                    or set(source) != {"options", "source", "baseline"}
+                    or not isinstance(source["options"], dict)
+                    or not isinstance(source["source"], str)
+                    or not isinstance(source["baseline"], bool)
+                    or validate_baseline_path(source["source"]) != source["source"]):
+                raise FetchFailure("corpus manifest has an invalid baseline source")
+            for key, value in source["options"].items():
+                if (not isinstance(key, str) or not isinstance(value, str)
+                        or key != key.lower() or value != value.lower()
+                        or not VARIANT_OPTION_NAME_RE.fullmatch(key)
+                        or not VARIANT_OPTION_VALUE_RE.fullmatch(value)):
+                    raise FetchFailure("corpus manifest has invalid baseline options")
+        if not variant_inventory:
+            expected_sources = [{"options": {}, "source": expected_baseline,
+                                 "baseline": has_canonical}]
+            if (entry["baseline_mode"] != "single" or entry["baseline"] != has_canonical
+                    or sources != expected_sources):
+                raise FetchFailure("corpus manifest has an invalid single baseline entry")
+        else:
+            if (entry["baseline_mode"] not in {"stable-variants", "option-variant"}
+                    or not sources or any(not source["options"] for source in sources)
+                    or not any(source["baseline"] for source in sources)
+                    or entry["baseline"] != (entry["baseline_mode"] == "stable-variants")):
+                raise FetchFailure("corpus manifest has an invalid option-variant entry")
+            ts_path = stage_path(CORPUS, entry["path"])
+            try:
+                with open(ts_path) as f:
+                    source_text = f.read()
+            except OSError as e:
+                raise FetchFailure(f"missing corpus source: {entry['path']}") from e
+            expected_sources = variant_baseline_sources(source_text, stem, variant_inventory)
+            if sources != expected_sources:
+                raise FetchFailure("corpus manifest has tampered option baseline sources")
         paths.append(entry["path"])
         expected_files.add(entry["path"])
         if entry["baseline"]:
             expected_files.add(entry["path"][:-3] + ".errors.txt")
     if len(paths) != len(set(paths)):
         raise FetchFailure("corpus manifest has duplicate test paths")
+    if set(baseline_inventory) != set(stems):
+        raise FetchFailure("corpus manifest baseline inventory does not match selected tests")
+    authoritative_inventory = authoritative_baseline_inventory(transport["revision"], stems)
+    if baseline_inventory != authoritative_inventory:
+        raise FetchFailure("corpus baseline inventory differs from the pinned Git tree")
     filesystem_paths = {
         os.path.relpath(os.path.join(root, fn), CORPUS).replace(os.sep, "/")
         for root, _dirs, files in os.walk(CORPUS) for fn in files
@@ -1002,7 +1347,7 @@ def validate_scoreboard_metadata():
 
 
 def validate_full_default_manifest():
-    """Require a complete format-3 default corpus before any scoreboard write."""
+    """Require a complete format-4 default corpus before any scoreboard write."""
     manifest = load_manifest()
     if (manifest["sha"] != PINNED_SHA or manifest["repo"] != REPO
             or manifest["dirs"] != DEFAULT_DIRS or manifest["limit"] is not None
@@ -1064,6 +1409,7 @@ def cmd_run(args):
     # the protocol.
     prepared = []
     batch_cases = []
+    baseline_modes = {entry["path"]: entry["baseline_mode"] for entry in manifest["tests"]}
     for rel, ts_path, base_path in tests:
         with open(ts_path) as f:
             source = f.read()
@@ -1072,6 +1418,10 @@ def cmd_run(args):
                "matched": 0, "fn": 0, "fp": 0, "expected": 0,
                "matched_detail": [], "fn_detail": [], "fp_detail": [],
                "incomplete_detail": []}
+
+        if baseline_modes[rel] == "option-variant":
+            rec["bucket"] = "option-variant"
+            prepared.append((rec, None, None)); continue
 
         if len(units) > 1:
             rec["bucket"] = "multifile"
@@ -1229,7 +1579,7 @@ def print_dashboard(binary, results):
     return {
         "when": now, "sha": PINNED_SHA, "binary": binary,
         "corpus": n, "in_scope": n_in, "buckets": dict(buckets),
-        "files": inscope,
+        "files": results,
     }
 
 

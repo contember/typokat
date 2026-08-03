@@ -53,7 +53,7 @@ and a scoreboard whose TS SHA matches `PINNED_SHA`.
 When deliberately replacing the pinned corpus/baseline, use the explicit
 `python3 tsofficial.py run --save --rebaseline` after a successful full default
 fetch and review. This is the only operation that may replace a missing or
-stale scoreboard SHA/set; it still validates the complete format-3 corpus and
+stale scoreboard SHA/set; it still validates the complete format-4 corpus and
 filesystem first. Treat it as an intentional baseline migration, not a fix for
 a failed ordinary `--save`.
 
@@ -63,7 +63,20 @@ partial-clone settings, corrupt repositories, or incompatible origins are recrea
 before one non-interactive shallow fetch writes the exact pinned commit to a persistent
 `refs/typokat/pinned/<SHA>` ref. The verified local tree and blob batch then need no
 per-file network requests. There is no GitHub API or raw-file fallback. `run` only
-needs Python 3 and the binary.
+uses local data, but it requires the compatible full-blob Git cache produced by
+`fetch` in addition to Python 3 and the binary. It never fetches during `run`.
+
+The format-4 manifest keeps the selected same-basename baseline inventory separate
+from each test's derived mode and option tuples. Loading reconstructs the latter
+from that inventory and the source directives, then independently derives the
+inventory again from the pinned commit in the local Git cache. A missing,
+incompatible, or wrong-revision cache fails closed. Relabelling a variant as a
+clean single test, shrinking a wildcard domain, or substituting a baseline path
+therefore fails before discovery even if the manifest fields are changed together.
+Git commands discard inherited `GIT_*` redirection/configuration, disable replace
+objects, require the exact GC-reachable pinned ref, and re-hash the commit and tree
+objects. Replace refs, legacy grafts, object alternates, and linked common-dir
+redirects make the cache incompatible.
 
 > **Build a current binary first.** `run` measures whatever binary you point at — a
 > *stale* `target/release/typokat` (not rebuilt after a checker change) silently
@@ -72,12 +85,23 @@ needs Python 3 and the binary.
 
 ## How a test is handled
 
-1. **Unit parsing (line fidelity).** TS strips `// @option: value` directive lines
+1. **Baseline selection.** An ordinary unsuffixed baseline remains one oracle. For
+   option-suffixed baselines, fetch derives every exact option tuple from the
+   source directives and the suffix keys, including tuples whose missing file
+   means a clean result. If all tuple oracles have the same parsed line/code
+   multiset, fetch publishes one canonical local `.errors.txt` and the test runs
+   normally. If they differ, the test is explicitly `option-variant`; it never
+   becomes an expected-clean test.
+
+2. **Unit parsing (line fidelity).** TS strips `// @option: value` directive lines
    from the test content, which shifts every following line up. The harness
    replicates this and checks the **stripped** content, so typokat's line
    N equals baseline line N. `@filename:` splits multi-file tests.
 
-2. **Gating ("discover").** Each test lands in exactly one bucket:
+3. **Gating ("discover").** Each test lands in exactly one bucket:
+   - `option-variant` — compiler-option tuples have different tsc diagnostic
+     multisets. typokat currently runs one fixed production profile, so no single
+     oracle would be truthful.
    - `multifile` — more than one `@filename` unit (modules / cross-file).
    - `syntax:<feature>` — uses a checking feature typokat doesn't model and that
      wouldn't self-report (`enum`, decorators, `namespace`/`import`/`export`,
@@ -95,7 +119,7 @@ needs Python 3 and the binary.
      This self-gates out lib/module dependence without maintaining a denylist.
    - otherwise **in-scope** → diffed.
 
-3. **Diff.** Codes map by number (typokat mirrors tsc: `TS2322` == `TK2322`).
+4. **Diff.** Codes map by number (typokat mirrors tsc: `TS2322` == `TK2322`).
    Per source line, the multiset of typokat codes is compared to the baseline's:
    - **matched** — same code on the same line.
    - **false negative** — baseline had it, typokat didn't (surfaced loudly).
@@ -152,7 +176,7 @@ Workflow:
   this file *is* the score-over-time record).
 - `run --save --rebaseline` is the deliberate escape hatch for a reviewed
   pinned-SHA migration: it replaces a missing or stale scoreboard with results
-  from a validated full default format-3 corpus. It cannot be combined with
+  from a validated full default format-4 corpus. It cannot be combined with
   `--check` and should not be used to bypass ordinary ratchet failures.
 - `run --check` re-runs and diffs against it by **diagnostic identity**: prints
   **REGRESS** for any previously in-scope file that drops a matched identity, gains
@@ -216,8 +240,9 @@ python3 -m unittest test_tsofficial -v
   with its own snapshot tests, and columns are the most baseline-fragile field.
 - Message text isn't compared. Codes + lines are the robust contract; message
   wording diverges by design in documented places (see `docs/reference/divergences.md`).
-- A test whose baseline has a non-default name (multi-variant baselines) is treated
-  as expected-clean. Rare in the curated single-config dirs.
+- Option-sensitive compiler configurations are recorded as `option-variant`
+  instead of choosing one configuration. They can move in scope only when the
+  harness gains a matching profile-aware execution route.
 
 ## Licensing
 
