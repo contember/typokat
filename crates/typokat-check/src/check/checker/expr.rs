@@ -14,8 +14,8 @@ use crate::diagnostics::{render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
-    ClassId, IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId, TypeTag,
-    Visibility,
+    ClassId, FunctionType, IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId,
+    TypeTag, Visibility,
 };
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
@@ -908,12 +908,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let alternate = self.infer_initializer(scope, &cond.alternate, context);
         // An arm outside the expression subset contributes no member; a smaller union
         // only ever under-reports, never invents a mismatch.
-        let members = consequent
-            .into_iter()
-            .chain(alternate)
-            .map(|(ty, _)| ty)
-            .collect();
-        Some((self.interner.union(members), Span::from_oxc(cond.span)))
+        let ty = match (consequent, alternate) {
+            (Some((left, _)), Some((right, _))) => {
+                if self.conditional_undefined_arity_subtype(left, right) {
+                    right
+                } else if self.conditional_undefined_arity_subtype(right, left) {
+                    left
+                } else {
+                    self.interner.union(vec![left, right])
+                }
+            }
+            (Some((ty, _)), None) | (None, Some((ty, _))) => ty,
+            (None, None) => self.interner.well_known().never,
+        };
+        Some((ty, Span::from_oxc(cond.span)))
+    }
+
+    /// The bounded part of tsc's subtype-reducing conditional union needed for
+    /// required `T | undefined` versus optional callable parameters. Explicit unions
+    /// keep their own union-call arity; only conditional arm selection uses this probe.
+    fn conditional_undefined_arity_subtype(&self, source: TypeId, target: TypeId) -> bool {
+        conditional_undefined_arity_subtype(self.interner.store(), source, target)
     }
 
     /// Infer a logical expression (`&&`/`||`/`??`, backlog `101`): the surviving part of
@@ -2238,6 +2253,126 @@ fn members_undecided(store: &Store, members: &[TypeId], depth: u32) -> bool {
     members
         .iter()
         .any(|member| is_undecided_operand_shape(store, *member, depth - 1))
+}
+
+fn conditional_undefined_arity_subtype(store: &Store, source: TypeId, target: TypeId) -> bool {
+    match (store.tag(source), store.tag(target)) {
+        (TypeTag::Function, TypeTag::Function) => store
+            .function_type(source)
+            .zip(store.function_type(target))
+            .is_some_and(|(source, target)| {
+                conditional_undefined_arity_function_subtype(store, source, target)
+            }),
+        (TypeTag::Object, TypeTag::Object) => store
+            .object_type(source)
+            .zip(store.object_type(target))
+            .is_some_and(|(source, target)| {
+                conditional_undefined_arity_object_subtype(store, source, target)
+            }),
+        _ => false,
+    }
+}
+
+fn conditional_undefined_arity_object_subtype(
+    store: &Store,
+    source: &ObjectType,
+    target: &ObjectType,
+) -> bool {
+    if source.properties.len() != target.properties.len()
+        || source.string_index != target.string_index
+        || source.number_index != target.number_index
+        || source.call_signatures != target.call_signatures
+        || source.construct_signatures != target.construct_signatures
+    {
+        return false;
+    }
+    source
+        .properties
+        .iter()
+        .zip(&target.properties)
+        .try_fold(false, |changed, (source, target)| {
+            let same_metadata = source.name == target.name
+                && source.write_ty == target.write_ty
+                && source.optional == target.optional
+                && source.visibility == target.visibility
+                && source.declaring_class == target.declaring_class
+                && source.readonly == target.readonly
+                && source.is_accessor == target.is_accessor;
+            if !same_metadata {
+                return None;
+            }
+            if source.ty == target.ty {
+                return Some(changed);
+            }
+            store
+                .function_type(source.ty)
+                .zip(store.function_type(target.ty))
+                .filter(|(source, target)| {
+                    conditional_undefined_arity_function_subtype(store, source, target)
+                })
+                .map(|_| true)
+        })
+        == Some(true)
+}
+
+fn conditional_undefined_arity_function_subtype(
+    store: &Store,
+    source: &FunctionType,
+    target: &FunctionType,
+) -> bool {
+    if !source.type_params.is_empty()
+        || !target.type_params.is_empty()
+        || source.receiver != target.receiver
+        || source.ret != target.ret
+        || source.params.len() != target.params.len()
+    {
+        return false;
+    }
+    let mut changed_arity = false;
+    for (source, target) in source.params.iter().zip(&target.params) {
+        let unchanged = source.ty == target.ty
+            && source.optional == target.optional
+            && source.has_default == target.has_default
+            && source.rest == target.rest;
+        if unchanged {
+            continue;
+        }
+        let required_undefined_to_optional = !source.rest
+            && !source.optional
+            && !source.has_default
+            && target.optional
+            && !target.rest
+            && conditional_parameter_type_within(store, target.ty, source.ty);
+        if !required_undefined_to_optional {
+            return false;
+        }
+        changed_arity = true;
+    }
+    changed_arity
+}
+
+fn conditional_parameter_type_within(store: &Store, candidate: TypeId, container: TypeId) -> bool {
+    let Some(container_members) = store.union_members(container) else {
+        return false;
+    };
+    if !container_members
+        .iter()
+        .any(|member| store.intrinsic_kind(*member) == Some(IntrinsicKind::Undefined))
+    {
+        return false;
+    }
+    let within = |candidate: TypeId| {
+        container_members.iter().any(|container| {
+            candidate == *container
+                || store.literal_value(candidate).is_some_and(|literal| {
+                    store.intrinsic_kind(*container) == Some(literal.base_kind())
+                })
+        })
+    };
+    store.union_members(candidate).map_or_else(
+        || within(candidate),
+        |members| members.iter().copied().all(within),
+    )
 }
 
 /// Whether a binary operator is an arithmetic, bitwise, or shift operator — the family
