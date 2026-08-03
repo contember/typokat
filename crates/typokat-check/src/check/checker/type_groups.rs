@@ -1283,12 +1283,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     &preview,
                     self.interner.store(),
                 );
-            if selected.all_ready() {
+            let relation_context = selected.object_relation_context();
+            if selected.all_ready() && relation_context.is_some() {
                 self.semantic_queries
-                    .set_library_object_template(selected.object_template());
+                    .set_library_object_context(relation_context);
                 self.library_semantic_identities = Some(selected);
             } else {
-                self.semantic_queries.set_library_object_template(None);
+                self.semantic_queries.set_library_object_context(None);
                 identity_selection_pending = identities_were_installed;
                 self.library_semantic_identities = None;
             }

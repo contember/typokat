@@ -1293,6 +1293,86 @@ fn nominal_protected_member_breaks_structural_assignability() {
     );
 }
 
+#[test]
+fn non_public_source_members_do_not_satisfy_public_targets_in_any_order() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let private = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "secret",
+            wk.number,
+            Visibility::Private,
+            Some(ClassId(10)),
+        )],
+        ..Default::default()
+    });
+    let protected = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "secret",
+            wk.number,
+            Visibility::Protected,
+            Some(ClassId(11)),
+        )],
+        ..Default::default()
+    });
+    let public = interner.intern_object(ObjectType {
+        properties: vec![prop("secret", wk.number)],
+        ..Default::default()
+    });
+    let empty = interner.intern_object(ObjectType::default());
+
+    for ordered in [[private, protected], [protected, private]] {
+        let mut relater = Relater::new(interner.store(), wk);
+        for source in ordered {
+            assert!(matches!(
+                relater.is_assignable(source, public),
+                Relation::No(_)
+            ));
+            assert!(matches!(
+                relater.is_assignable(source, public),
+                Relation::No(_)
+            ));
+        }
+        assert!(relater.is_assignable(public, public).is_yes());
+        assert!(relater.is_assignable(private, empty).is_yes());
+    }
+}
+
+#[test]
+fn public_target_requires_a_public_intersection_contributor() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let private = interner.intern_object(ObjectType {
+        properties: vec![nominal_prop(
+            "secret",
+            wk.number,
+            Visibility::Private,
+            Some(ClassId(12)),
+        )],
+        ..Default::default()
+    });
+    let public = interner.intern_object(ObjectType {
+        properties: vec![prop("secret", wk.number)],
+        ..Default::default()
+    });
+    let extra = interner.intern_object(ObjectType {
+        properties: vec![prop("extra", wk.string)],
+        ..Default::default()
+    });
+    let private_only = interner.intersection(vec![private, extra]);
+    let mixed = interner.intersection(vec![private, public, extra]);
+
+    for ordered in [
+        [(private_only, false), (mixed, true)],
+        [(mixed, true), (private_only, false)],
+    ] {
+        let mut relater = Relater::new(interner.store(), wk);
+        for (source, expected) in ordered {
+            assert_eq!(relater.is_assignable(source, public).is_yes(), expected);
+        }
+    }
+}
+
 /// WU3 — the nominal-origin rule must hold when the SOURCE is an intersection (the
 /// merged-source relation path). A purely structural intersection cannot satisfy a
 /// private-member target (unsound accept if it could); an intersection that INCLUDES the

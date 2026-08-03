@@ -11,17 +11,222 @@ use crate::check::checker::eval::{ConditionalEvaluator, DEFAULT_STEP_BUDGET};
 use crate::check::infer::{infer_from_types_for_query, Candidates};
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
 use crate::relate::cache::RelationCache;
+use crate::relate::relation::ApparentSurface;
 use crate::relate::{
     ReasonChain, Relater, RelationAttempt, RelationDemand, RelationNormalization, RelationOutcome,
 };
-use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
+use crate::types::repr::{ClassId, IntrinsicKind, LiteralValue, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::substitute::SubstitutionOutcome;
-use crate::types::{substitute, Interner};
+use crate::types::{substitute, substitute_with_outcome, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 pub const MAX_CLASS_PROJECTION_EXPANSIONS: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GenericNativeSurface {
+    template: TypeId,
+    parameter: TypeParamId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LibraryObjectRelationContext {
+    object: TypeId,
+    array: GenericNativeSurface,
+    readonly_array: GenericNativeSurface,
+    string: TypeId,
+    number: TypeId,
+    boolean: TypeId,
+    callable_function: TypeId,
+}
+
+impl LibraryObjectRelationContext {
+    pub(crate) fn new(
+        object: TypeId,
+        array: (TypeId, TypeParamId),
+        readonly_array: (TypeId, TypeParamId),
+        string: TypeId,
+        number: TypeId,
+        boolean: TypeId,
+        callable_function: TypeId,
+    ) -> Self {
+        Self {
+            object,
+            array: GenericNativeSurface {
+                template: array.0,
+                parameter: array.1,
+            },
+            readonly_array: GenericNativeSurface {
+                template: readonly_array.0,
+                parameter: readonly_array.1,
+            },
+            string,
+            number,
+            boolean,
+            callable_function,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeSourceSurface {
+    Array {
+        readonly: bool,
+        argument: TypeId,
+        length: TypeId,
+    },
+    String,
+    Number,
+    Boolean,
+    Object,
+    Function,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeSourceSurfaceClass {
+    Array { readonly: bool, native: TypeId },
+    Static(NativeStaticSurface),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeStaticSurface {
+    String,
+    Number,
+    Boolean,
+    Object,
+    Function,
+}
+
+struct NativeTupleShape {
+    elements: Vec<TypeId>,
+    exact_length: Option<usize>,
+}
+
+fn classify_native_tuple_shape(
+    store: &Store,
+    ty: TypeId,
+    seen: &mut FxHashSet<TypeId>,
+) -> Option<NativeTupleShape> {
+    let tuple = store.readonly_operand(ty).unwrap_or(ty);
+    if !seen.insert(tuple) {
+        return None;
+    }
+    let tuple = store.tuple_type(tuple)?.clone();
+    if tuple
+        .rest
+        .is_some_and(|rest| rest.position > tuple.elements.len())
+    {
+        return None;
+    }
+    let mut exact_length = Some(tuple.elements.len());
+    let mut elements = tuple.elements;
+    if let Some(rest) = tuple.rest {
+        let container = store.readonly_operand(rest.ty).unwrap_or(rest.ty);
+        if let Some(element) = store.array_type(container).map(|array| array.element) {
+            elements.push(element);
+            exact_length = None;
+        } else if store.tag(container) == TypeTag::Tuple {
+            let nested = classify_native_tuple_shape(store, container, seen)?;
+            elements.extend(nested.elements);
+            exact_length = match (exact_length, nested.exact_length) {
+                (Some(outer), Some(nested)) => Some(outer.checked_add(nested)?),
+                _ => None,
+            };
+        } else {
+            return None;
+        }
+    }
+    Some(NativeTupleShape {
+        elements,
+        exact_length,
+    })
+}
+
+fn classify_native_source_surface_class(
+    store: &Store,
+    ty: TypeId,
+) -> Option<NativeSourceSurfaceClass> {
+    let readonly = store.readonly_operand(ty).is_some();
+    let native = store.readonly_operand(ty).unwrap_or(ty);
+    if matches!(store.tag(native), TypeTag::Array | TypeTag::Tuple) {
+        return Some(NativeSourceSurfaceClass::Array { readonly, native });
+    }
+    if store.tag(ty) == TypeTag::Template {
+        return Some(NativeSourceSurfaceClass::Static(
+            NativeStaticSurface::String,
+        ));
+    }
+    let intrinsic = store
+        .literal_value(ty)
+        .map(LiteralValue::base_kind)
+        .or_else(|| store.intrinsic_kind(ty));
+    match intrinsic {
+        Some(IntrinsicKind::String) => Some(NativeSourceSurfaceClass::Static(
+            NativeStaticSurface::String,
+        )),
+        Some(IntrinsicKind::Number) => Some(NativeSourceSurfaceClass::Static(
+            NativeStaticSurface::Number,
+        )),
+        Some(IntrinsicKind::Boolean) => Some(NativeSourceSurfaceClass::Static(
+            NativeStaticSurface::Boolean,
+        )),
+        Some(IntrinsicKind::Object) => Some(NativeSourceSurfaceClass::Static(
+            NativeStaticSurface::Object,
+        )),
+        _ if store.tag(ty) == TypeTag::Function => Some(NativeSourceSurfaceClass::Static(
+            NativeStaticSurface::Function,
+        )),
+        _ => None,
+    }
+}
+
+pub(crate) fn classify_native_source_surface(
+    interner: &mut Interner,
+    ty: TypeId,
+) -> Option<NativeSourceSurface> {
+    let class = classify_native_source_surface_class(interner.store(), ty)?;
+    let (readonly, native) = match class {
+        NativeSourceSurfaceClass::Array { readonly, native } => (readonly, native),
+        NativeSourceSurfaceClass::Static(surface) => {
+            return Some(match surface {
+                NativeStaticSurface::String => NativeSourceSurface::String,
+                NativeStaticSurface::Number => NativeSourceSurface::Number,
+                NativeStaticSurface::Boolean => NativeSourceSurface::Boolean,
+                NativeStaticSurface::Object => NativeSourceSurface::Object,
+                NativeStaticSurface::Function => NativeSourceSurface::Function,
+            });
+        }
+    };
+    if let Some(element) = interner
+        .store()
+        .array_type(native)
+        .map(|array| array.element)
+    {
+        return Some(NativeSourceSurface::Array {
+            readonly,
+            argument: element,
+            length: interner.well_known().number,
+        });
+    }
+    if interner.store().tag(native) == TypeTag::Tuple {
+        let tuple =
+            classify_native_tuple_shape(interner.store(), native, &mut FxHashSet::default())?;
+        let argument = interner.union(tuple.elements);
+        let length = if let Some(fixed_length) = tuple.exact_length {
+            let fixed_length = u32::try_from(fixed_length).ok()?;
+            interner.intern_literal(LiteralValue::Number(f64::from(fixed_length)))
+        } else {
+            interner.well_known().number
+        };
+        return Some(NativeSourceSurface::Array {
+            readonly,
+            argument,
+            length,
+        });
+    }
+    None
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AlphaBinderKey {
@@ -422,7 +627,7 @@ pub struct SemanticQueryState {
     publication_store_identity: Option<Arc<()>>,
     publication_snapshot_identity: Option<Arc<()>>,
     array_definitely_lacks_then: bool,
-    library_object_template: Option<TypeId>,
+    library_object_context: Option<LibraryObjectRelationContext>,
     journal: Vec<SemanticQueryUndo>,
     savepoints: Vec<usize>,
 }
@@ -445,8 +650,11 @@ impl SemanticQueryState {
         self.array_definitely_lacks_then = value;
     }
 
-    pub(crate) fn set_library_object_template(&mut self, value: Option<TypeId>) {
-        if self.library_object_template == value || !self.savepoints.is_empty() {
+    pub(crate) fn set_library_object_context(
+        &mut self,
+        value: Option<LibraryObjectRelationContext>,
+    ) {
+        if self.library_object_context == value || !self.savepoints.is_empty() {
             return;
         }
         self.projection_memo.clear();
@@ -459,7 +667,7 @@ impl SemanticQueryState {
         self.publication_store_identity = None;
         self.publication_snapshot_identity = None;
         self.journal.clear();
-        self.library_object_template = value;
+        self.library_object_context = value;
     }
 
     /// Open a speculative layer. Nothing is copied: later writes are journaled and
@@ -750,7 +958,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_template,
+            self.state.library_object_context,
         )
         .plan_demand(root);
         *self.next_type_param = transaction.next_type_param;
@@ -827,7 +1035,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_template,
+            self.state.library_object_context,
         );
         let mut retry = IdentityRetryState::default();
         let outcome = loop {
@@ -1685,7 +1893,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_template,
+            self.state.library_object_context,
         );
         planner.prepare_relation_roots(&[src, tgt]);
         let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
@@ -1711,6 +1919,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             match attempt {
                 RelationAttempt::Decided(outcome) => break outcome,
                 RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+                RelationAttempt::NeedsBatch(demands) => {
+                    for demand in demands {
+                        planner.expand_relation_demand(demand);
+                    }
+                }
             }
         };
         let transaction = planner.finish();
@@ -1804,7 +2017,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_template,
+            self.state.library_object_context,
         )
         .plan(&[source, target]);
         *self.next_type_param = transaction.next_type_param;
@@ -1861,7 +2074,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             &self.state.evaluation_memo,
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
-            self.state.library_object_template,
+            self.state.library_object_context,
         );
         planner.prepare_relation_roots(&[overload, implementation]);
         let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
@@ -1888,6 +2101,11 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             match attempt {
                 RelationAttempt::Decided(outcome) => break outcome,
                 RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+                RelationAttempt::NeedsBatch(demands) => {
+                    for demand in demands {
+                        planner.expand_relation_demand(demand);
+                    }
+                }
             }
         };
         let transaction = planner.finish();
@@ -1959,7 +2177,9 @@ pub struct ProjectionPlan<'a> {
     frontier: FxHashMap<TypeId, Exhaustion>,
     durable_evaluation_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
     array_definitely_lacks_then: bool,
-    library_object_template: Option<TypeId>,
+    library_object_context: Option<LibraryObjectRelationContext>,
+    apparent_surface_overlay: FxHashMap<TypeId, TypeId>,
+    apparent_surface_unavailable: FxHashSet<TypeId>,
 }
 
 impl RelationNormalization for ProjectionPlan<'_> {
@@ -1998,7 +2218,43 @@ impl RelationNormalization for ProjectionPlan<'_> {
     }
 
     fn is_library_object_top(&self, ty: TypeId) -> bool {
-        self.library_object_template == Some(ty)
+        self.library_object_context
+            .is_some_and(|context| context.object == ty)
+    }
+
+    fn apparent_surface(&self, store: &Store, ty: TypeId) -> ApparentSurface {
+        if let Some(surface) = self.apparent_surface_overlay.get(&ty).copied() {
+            return ApparentSurface::Ready(surface);
+        }
+        if self.apparent_surface_unavailable.contains(&ty) {
+            return ApparentSurface::Unavailable;
+        }
+        let Some(class) = classify_native_source_surface_class(store, ty) else {
+            return ApparentSurface::NotApplicable;
+        };
+        let Some(context) = self.library_object_context else {
+            return ApparentSurface::Unavailable;
+        };
+        match class {
+            NativeSourceSurfaceClass::Array { .. } => {
+                ApparentSurface::Needs(RelationDemand::ApparentSurface(ty))
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::String) => {
+                ApparentSurface::Ready(context.string)
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Number) => {
+                ApparentSurface::Ready(context.number)
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Boolean) => {
+                ApparentSurface::Ready(context.boolean)
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Object) => {
+                ApparentSurface::Ready(context.object)
+            }
+            NativeSourceSurfaceClass::Static(NativeStaticSurface::Function) => {
+                ApparentSurface::Ready(context.callable_function)
+            }
+        }
     }
 
     fn relation_demand(&self, store: &Store, ty: TypeId) -> Option<RelationDemand> {
@@ -2105,7 +2361,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         durable_evaluation_memo: &'memo FxHashMap<TypeId, TypeId>,
         next_type_param: u32,
         array_definitely_lacks_then: bool,
-        library_object_template: Option<TypeId>,
+        library_object_context: Option<LibraryObjectRelationContext>,
     ) -> Self {
         #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| {
@@ -2121,7 +2377,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             plan: ProjectionPlan {
                 durable_evaluation_memo: Some(durable_evaluation_memo),
                 array_definitely_lacks_then,
-                library_object_template,
+                library_object_context,
                 ..ProjectionPlan::default()
             },
             pending_projection_writes: FxHashMap::default(),
@@ -2211,7 +2467,78 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             RelationDemand::Evaluation(ty) => {
                 self.visit_relation_root(ty);
             }
+            RelationDemand::ApparentSurface(ty) => {
+                self.project_apparent_surface(ty);
+            }
         }
+    }
+
+    fn project_apparent_surface(&mut self, source: TypeId) {
+        if self.plan.apparent_surface_overlay.contains_key(&source)
+            || self.plan.apparent_surface_unavailable.contains(&source)
+        {
+            return;
+        }
+        let Some(context) = self.plan.library_object_context else {
+            self.plan.apparent_surface_unavailable.insert(source);
+            return;
+        };
+        let Some(native) = classify_native_source_surface(self.interner, source) else {
+            self.plan.apparent_surface_unavailable.insert(source);
+            return;
+        };
+        let surface = match native {
+            NativeSourceSurface::Array {
+                readonly,
+                argument,
+                length,
+            } => {
+                let generic = if readonly {
+                    context.readonly_array
+                } else {
+                    context.array
+                };
+                let substitutions = FxHashMap::from_iter([(generic.parameter, argument)]);
+                let surface = match substitute_with_outcome(
+                    self.interner,
+                    generic.template,
+                    &substitutions,
+                ) {
+                    SubstitutionOutcome::CycleClean(surface) => surface,
+                    SubstitutionOutcome::CycleTainted(surface) => {
+                        self.cache_tainted = true;
+                        surface
+                    }
+                };
+                self.override_native_length(surface, length)
+            }
+            NativeSourceSurface::String => Some(context.string),
+            NativeSourceSurface::Number => Some(context.number),
+            NativeSourceSurface::Boolean => Some(context.boolean),
+            NativeSourceSurface::Object => Some(context.object),
+            NativeSourceSurface::Function => Some(context.callable_function),
+        };
+        match surface {
+            Some(surface) => {
+                self.plan.apparent_surface_overlay.insert(source, surface);
+            }
+            None => {
+                self.plan.apparent_surface_unavailable.insert(source);
+            }
+        }
+    }
+
+    fn override_native_length(&mut self, surface: TypeId, length: TypeId) -> Option<TypeId> {
+        let mut object = self.interner.store().object_type(surface)?.clone();
+        let property = object
+            .properties
+            .iter_mut()
+            .find(|property| property.name == "length")?;
+        property.ty = length;
+        if property.write_ty.is_some() {
+            property.write_ty = Some(length);
+        }
+        Some(self.interner.intern_object(object))
     }
 
     fn finish(self) -> PlannedQuery<'memo> {

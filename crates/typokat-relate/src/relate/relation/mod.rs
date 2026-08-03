@@ -277,10 +277,21 @@ pub enum RelationOutcome {
 /// One semantic node that the read-only relation engine reached before it could
 /// decide the enclosing query. The mutable query coordinator expands it and
 /// retries with a larger immutable overlay.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationDemand {
     ClassProjection(TypeId),
     Evaluation(TypeId),
+    ApparentSurface(TypeId),
+}
+
+/// Query-local apparent member surface for a type whose native representation
+/// does not itself carry named properties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApparentSurface {
+    NotApplicable,
+    Ready(TypeId),
+    Unavailable,
+    Needs(RelationDemand),
 }
 
 /// Internal coordinator protocol. A demand never crosses the checker/reporting
@@ -289,6 +300,7 @@ pub enum RelationDemand {
 pub enum RelationAttempt {
     Decided(RelationOutcome),
     Needs(RelationDemand),
+    NeedsBatch(Vec<RelationDemand>),
 }
 
 /// Query-local normalization visible to the read-only relation engine.
@@ -307,6 +319,10 @@ pub trait RelationNormalization {
     /// Whether `ty` is the active library's canonical `Object` interface.
     fn is_library_object_top(&self, _ty: TypeId) -> bool {
         false
+    }
+
+    fn apparent_surface(&self, _store: &Store, _ty: TypeId) -> ApparentSurface {
+        ApparentSurface::NotApplicable
     }
 
     /// Return the next unresolved semantic operation for lazy relation planning.
@@ -344,6 +360,8 @@ pub struct Relater<'a> {
     query_exhaustion: Option<Exhaustion>,
     allow_relation_demand: bool,
     query_demand: Option<RelationDemand>,
+    query_apparent_demands: Vec<RelationDemand>,
+    query_apparent_demand_set: FxHashSet<RelationDemand>,
     query_demand_observed: bool,
     /// Assume-true-until-disproven stack (architecture §6.3): when a query
     /// re-enters a relation already in flight, we assume it holds and continue,
@@ -505,6 +523,8 @@ impl<'a> Relater<'a> {
             query_exhaustion: None,
             allow_relation_demand: false,
             query_demand: None,
+            query_apparent_demands: Vec::new(),
+            query_apparent_demand_set: FxHashSet::default(),
             query_demand_observed: false,
             stack: FxHashSet::default(),
             completed_contextual_yes: FxHashSet::default(),
@@ -533,6 +553,8 @@ impl<'a> Relater<'a> {
             query_exhaustion: None,
             allow_relation_demand: false,
             query_demand: None,
+            query_apparent_demands: Vec::new(),
+            query_apparent_demand_set: FxHashSet::default(),
             query_demand_observed: false,
             stack: FxHashSet::default(),
             completed_contextual_yes: FxHashSet::default(),
@@ -565,11 +587,17 @@ impl<'a> Relater<'a> {
         self.allow_relation_demand = true;
         self.query_exhaustion = None;
         self.query_demand = None;
+        self.query_apparent_demands.clear();
+        self.query_apparent_demand_set.clear();
         self.query_demand_observed = false;
         let mut assumed = FxHashSet::default();
         let relation = self.relate(src, tgt, RelationKind::Assignable, &mut assumed, true);
         if let Some(reason) = self.query_exhaustion.take() {
             return RelationAttempt::Decided(RelationOutcome::Exhausted(reason));
+        }
+        if !self.query_apparent_demands.is_empty() {
+            self.query_apparent_demand_set.clear();
+            return RelationAttempt::NeedsBatch(std::mem::take(&mut self.query_apparent_demands));
         }
         if let Some(demand) = self.query_demand.take() {
             return RelationAttempt::Needs(demand);
@@ -826,7 +854,7 @@ impl<'a> Relater<'a> {
         //   * a `true` is cacheable only when it rested on no outstanding ancestor
         //     assumption (otherwise it is provisional and would poison the cache).
         // A recompute of an already-cached failure must not re-insert.
-        if cacheable && cached.is_none() {
+        if cacheable && cached.is_none() && !self.query_demand_observed {
             if !result.is_yes() {
                 if self.normalization.is_some() {
                     self.pending_cache.insert(key, false);
@@ -842,6 +870,13 @@ impl<'a> Relater<'a> {
             }
         }
         result
+    }
+
+    fn record_apparent_surface_demand(&mut self, demand: RelationDemand) {
+        self.query_demand_observed = true;
+        if self.query_demand.is_none() && self.query_apparent_demand_set.insert(demand) {
+            self.query_apparent_demands.push(demand);
+        }
     }
 
     /// Run `body` under an explicit reporting mode, restoring the caller's on exit.
@@ -1424,6 +1459,16 @@ impl<'a> Relater<'a> {
             )
         )) {
             return Relation::Yes;
+        }
+
+        // Native wrappers use their library-backed named surface for ordinary object
+        // targets. This precedes template-pattern dispatch only for an object target;
+        // every non-object template relation keeps the M27 ordering below.
+        if self.store.tag(src) != TypeTag::Object && self.store.tag(tgt) == TypeTag::Object {
+            if let Some(result) = self.relate_native_apparent_object_target(src, tgt, kind, assumed)
+            {
+                return result;
+            }
         }
 
         // Template literal patterns (M27). A surviving template node is a *pattern*

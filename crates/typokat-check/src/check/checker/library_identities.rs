@@ -8,10 +8,11 @@ use crate::binder::declaration::TypeGroupId;
 use crate::binder::roots::LibraryRootProjection;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
-use crate::span::Span;
-use crate::types::repr::{
-    ClassId, IntrinsicKind, LiteralValue, TypeFlags, TypeParamId, TypeTag, Visibility,
+use crate::check::query::{
+    classify_native_source_surface, LibraryObjectRelationContext, NativeSourceSurface,
 };
+use crate::span::Span;
+use crate::types::repr::{ClassId, LiteralValue, TypeFlags, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -296,11 +297,46 @@ impl LibrarySemanticIdentities {
             })
     }
 
-    pub(in crate::check::checker) fn object_template(&self) -> Option<TypeId> {
-        match &self.inner.object {
-            LibraryIdentityTerminal::Ready(identity) => Some(identity.template),
-            LibraryIdentityTerminal::Unavailable(_) => None,
-        }
+    pub(in crate::check::checker) fn object_relation_context(
+        &self,
+    ) -> Option<LibraryObjectRelationContext> {
+        let LibraryIdentityTerminal::Ready(array) = &self.inner.array else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(readonly_array) = &self.inner.readonly_array else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(string) = &self.inner.string else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(number) = &self.inner.number else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(boolean) = &self.inner.boolean else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(object) = &self.inner.object else {
+            return None;
+        };
+        let LibraryIdentityTerminal::Ready(callable_function) = &self.inner.callable_function
+        else {
+            return None;
+        };
+        let [array_parameter] = array.parameters.as_slice() else {
+            return None;
+        };
+        let [readonly_array_parameter] = readonly_array.parameters.as_slice() else {
+            return None;
+        };
+        Some(LibraryObjectRelationContext::new(
+            object.template,
+            (array.template, *array_parameter),
+            (readonly_array.template, *readonly_array_parameter),
+            string.template,
+            number.template,
+            boolean.template,
+            callable_function.template,
+        ))
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -470,7 +506,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         assert!(self.library_semantic_identities.is_none());
         self.semantic_queries
-            .set_library_object_template(identities.object_template());
+            .set_library_object_context(identities.object_relation_context());
         self.library_semantic_identities = Some(identities);
     }
 
@@ -754,84 +790,47 @@ fn native_bridge(
     ty: TypeId,
     identities: &LibrarySemanticIdentities,
 ) -> Option<NativeMemberBridge> {
-    let readonly = interner.store().readonly_operand(ty);
-    let native = readonly.unwrap_or(ty);
-    if let Some(element) = interner
-        .store()
-        .array_type(native)
-        .map(|array| array.element)
-    {
-        return Some(NativeMemberBridge::Generic {
-            terminal: if readonly.is_some() {
-                identities.inner.readonly_array.clone()
-            } else {
-                identities.inner.array.clone()
-            },
-            argument: element,
-            incomplete_id: "library-bridge/array/identity",
-        });
-    }
-    if let Some(tuple) = interner.store().tuple_type(native).cloned() {
-        let mut elements = tuple.elements;
-        if let Some(rest) = tuple.rest {
-            let rest_element = interner
-                .store()
-                .array_type(rest.ty)
-                .map(|array| array.element)
-                .unwrap_or(rest.ty);
-            elements.push(rest_element);
-        }
-        let argument = interner.union(elements);
-        return Some(NativeMemberBridge::Generic {
-            terminal: if readonly.is_some() {
+    match classify_native_source_surface(interner, ty)? {
+        NativeSourceSurface::Array {
+            readonly, argument, ..
+        } => Some(NativeMemberBridge::Generic {
+            terminal: if readonly {
                 identities.inner.readonly_array.clone()
             } else {
                 identities.inner.array.clone()
             },
             argument,
-            incomplete_id: "library-bridge/tuple/identity",
-        });
+            incomplete_id: if interner
+                .store()
+                .tuple_type(interner.store().readonly_operand(ty).unwrap_or(ty))
+                .is_some()
+            {
+                "library-bridge/tuple/identity"
+            } else {
+                "library-bridge/array/identity"
+            },
+        }),
+        NativeSourceSurface::String => Some(NativeMemberBridge::Plain {
+            terminal: identities.inner.string.clone(),
+            incomplete_id: "library-bridge/string/identity",
+        }),
+        NativeSourceSurface::Number => Some(NativeMemberBridge::Plain {
+            terminal: identities.inner.number.clone(),
+            incomplete_id: "library-bridge/number/identity",
+        }),
+        NativeSourceSurface::Boolean => Some(NativeMemberBridge::Plain {
+            terminal: identities.inner.boolean.clone(),
+            incomplete_id: "library-bridge/boolean/identity",
+        }),
+        NativeSourceSurface::Object => Some(NativeMemberBridge::Plain {
+            terminal: identities.inner.object.clone(),
+            incomplete_id: "library-bridge/object/identity",
+        }),
+        NativeSourceSurface::Function => Some(NativeMemberBridge::Plain {
+            terminal: identities.inner.callable_function.clone(),
+            incomplete_id: "library-bridge/callable-function/identity",
+        }),
     }
-    let terminal = match interner
-        .store()
-        .literal_value(ty)
-        .map(LiteralValue::base_kind)
-    {
-        Some(IntrinsicKind::String) => {
-            Some((&identities.inner.string, "library-bridge/string/identity"))
-        }
-        Some(IntrinsicKind::Number) => {
-            Some((&identities.inner.number, "library-bridge/number/identity"))
-        }
-        Some(IntrinsicKind::Boolean) => {
-            Some((&identities.inner.boolean, "library-bridge/boolean/identity"))
-        }
-        _ => match interner.store().intrinsic_kind(ty) {
-            Some(IntrinsicKind::String) => {
-                Some((&identities.inner.string, "library-bridge/string/identity"))
-            }
-            Some(IntrinsicKind::Number) => {
-                Some((&identities.inner.number, "library-bridge/number/identity"))
-            }
-            Some(IntrinsicKind::Boolean) => {
-                Some((&identities.inner.boolean, "library-bridge/boolean/identity"))
-            }
-            Some(IntrinsicKind::Object) => {
-                Some((&identities.inner.object, "library-bridge/object/identity"))
-            }
-            // FunctionType carries call signatures only; construct shapes need a
-            // separate NewableFunction identity when the representation gains them.
-            _ if interner.store().tag(ty) == TypeTag::Function => Some((
-                &identities.inner.callable_function,
-                "library-bridge/callable-function/identity",
-            )),
-            _ => None,
-        },
-    }?;
-    Some(NativeMemberBridge::Plain {
-        terminal: terminal.0.clone(),
-        incomplete_id: terminal.1,
-    })
 }
 
 #[cfg(test)]

@@ -15,6 +15,12 @@ struct ParamShape {
     non_array_rest: bool,
 }
 
+#[derive(Copy, Clone)]
+enum MissingPropertyPolicy {
+    RequireTargetPresence,
+    IgnoreMissing,
+}
+
 impl ParamShape {
     fn min_len(&self) -> usize {
         // Reaching a trailing suffix consumes every preceding prefix position.
@@ -126,6 +132,98 @@ impl ParamTail<'_> {
 }
 
 impl<'a> Relater<'a> {
+    pub(super) fn relate_native_apparent_object_target(
+        &mut self,
+        src: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+    ) -> Option<Relation> {
+        let target = self.store.object_type(tgt)?;
+        if target.properties.is_empty()
+            || target.string_index.is_some()
+            || target.number_index.is_some()
+            || !target.call_signatures.is_empty()
+            || !target.construct_signatures.is_empty()
+        {
+            return None;
+        }
+        let surface = match self
+            .normalization
+            .map_or(ApparentSurface::NotApplicable, |normalization| {
+                normalization.apparent_surface(self.store, src)
+            }) {
+            ApparentSurface::NotApplicable => return None,
+            ApparentSurface::Ready(surface) => surface,
+            ApparentSurface::Unavailable => return Some(Relation::No(ReasonChain::leaf(src, tgt))),
+            ApparentSurface::Needs(demand) => {
+                if self.allow_relation_demand {
+                    self.record_apparent_surface_demand(demand);
+                    return Some(Relation::Yes);
+                }
+                return Some(Relation::No(ReasonChain::leaf(src, tgt)));
+            }
+        };
+        let weak = target.properties.iter().all(|property| property.optional);
+        let object_keyword = self.store.intrinsic_kind(src) == Some(IntrinsicKind::Object);
+        let function_source = self.store.tag(src) == TypeTag::Function;
+        if weak
+            && !object_keyword
+            && (function_source || !self.object_property_names_overlap(surface, tgt))
+        {
+            return Some(Relation::No(ReasonChain::leaf(src, tgt)));
+        }
+        let relation = self.relate_object_named_properties(
+            src,
+            surface,
+            tgt,
+            kind,
+            assumed,
+            MissingPropertyPolicy::RequireTargetPresence,
+        );
+        Some(match relation {
+            Relation::No(reason)
+                if self.native_missing_property_uses_leaf(src)
+                    && matches!(reason.head(), Reason::MissingProperty { .. }) =>
+            {
+                Relation::No(ReasonChain::leaf(src, tgt))
+            }
+            relation => relation,
+        })
+    }
+
+    fn object_property_names_overlap(&self, left: TypeId, right: TypeId) -> bool {
+        let Some(left) = self.store.object_type(left) else {
+            return false;
+        };
+        let Some(right) = self.store.object_type(right) else {
+            return false;
+        };
+        let mut left_index = 0;
+        let mut right_index = 0;
+        while let (Some(left), Some(right)) = (
+            left.properties.get(left_index),
+            right.properties.get(right_index),
+        ) {
+            match left.name.cmp(&right.name) {
+                std::cmp::Ordering::Less => left_index += 1,
+                std::cmp::Ordering::Greater => right_index += 1,
+                std::cmp::Ordering::Equal => return true,
+            }
+        }
+        false
+    }
+
+    fn native_missing_property_uses_leaf(&self, source: TypeId) -> bool {
+        matches!(
+            self.store.tag(source),
+            TypeTag::Literal | TypeTag::Template | TypeTag::Function
+        ) || matches!(
+            self.store.intrinsic_kind(source),
+            Some(IntrinsicKind::String | IntrinsicKind::Number | IntrinsicKind::Boolean)
+        )
+    }
+
     /// Relate to the canonical global `Object` interface without making its
     /// inherited prototype members required. Merged index/call/construct rows are
     /// still ordinary structural obligations.
@@ -140,9 +238,48 @@ impl<'a> Relater<'a> {
         let has_index = target.string_index.is_some() || target.number_index.is_some();
         let has_call = !target.call_signatures.is_empty();
         let has_construct = !target.construct_signatures.is_empty();
+        let has_named = !target.properties.is_empty();
         let number_index_only = target
             .number_index
             .filter(|_| target.string_index.is_none() && !has_call && !has_construct);
+
+        let source_tag = self.store.tag(src);
+        let named_surface = if matches!(source_tag, TypeTag::Object) {
+            Some(src)
+        } else if !has_named {
+            None
+        } else {
+            match self
+                .normalization
+                .map_or(ApparentSurface::NotApplicable, |normalization| {
+                    normalization.apparent_surface(self.store, src)
+                }) {
+                ApparentSurface::NotApplicable => None,
+                ApparentSurface::Ready(surface) => Some(surface),
+                ApparentSurface::Unavailable => {
+                    return Some(Relation::No(ReasonChain::leaf(src, tgt)))
+                }
+                ApparentSurface::Needs(demand) => {
+                    if self.allow_relation_demand {
+                        self.record_apparent_surface_demand(demand);
+                        return Some(Relation::Yes);
+                    }
+                    return Some(Relation::No(ReasonChain::leaf(src, tgt)));
+                }
+            }
+        };
+        if let Some(surface) = named_surface {
+            if let Relation::No(reason) = self.relate_object_named_properties(
+                src,
+                surface,
+                tgt,
+                kind,
+                assumed,
+                MissingPropertyPolicy::IgnoreMissing,
+            ) {
+                return Some(Relation::No(reason));
+            }
+        }
 
         if !has_index && !has_call && !has_construct {
             return self
@@ -150,7 +287,7 @@ impl<'a> Relater<'a> {
                 .then_some(Relation::Yes);
         }
 
-        match self.store.tag(src) {
+        match source_tag {
             TypeTag::Object => {
                 if let Relation::No(reason) =
                     self.relate_object_call_signatures(src, tgt, kind, assumed)
@@ -254,15 +391,52 @@ impl<'a> Relater<'a> {
         kind: RelationKind,
         assumed: &mut AssumedSet,
     ) -> Relation {
-        // Both ids are object-tagged here; the side-tables always resolve. The
-        // `else` arms are defensive (an object tag without a payload is a store
-        // invariant violation, never expected) and produce a leaf rather than
-        // panicking. These borrows are of `*self.store` (lifetime `'a`), independent
-        // of `&mut self`, so they live across the recursive `self.relate` calls.
+        if let Relation::No(reason) = self.relate_object_named_properties(
+            src,
+            src,
+            tgt,
+            kind,
+            assumed,
+            MissingPropertyPolicy::RequireTargetPresence,
+        ) {
+            return Relation::No(reason);
+        }
+
+        // F1/WU2 — call-signature obligation. A target object with a call
+        // signature requires the source object to have a compatible call
+        // signature; an object without one cannot satisfy a callable target. This
+        // obligation goes through `self.relate` on the interned FunctionType ids,
+        // preserving the relation cache/cycle-stack invariants.
+        if let Relation::No(child) = self.relate_object_call_signatures(src, tgt, kind, assumed) {
+            return Relation::No(child);
+        }
+
+        // F1/WU3 — construct-signature obligation. Mirrors the call-signature
+        // obligation above: a target object with `new (...)` requires the source
+        // object to have a compatible single construct signature, compared by the
+        // existing FunctionType relation through `self.relate`.
+        if let Relation::No(child) =
+            self.relate_object_construct_signatures(src, tgt, kind, assumed)
+        {
+            return Relation::No(child);
+        }
+
+        self.relate_object_index_signatures(src, tgt, kind, assumed)
+    }
+
+    fn relate_object_named_properties(
+        &mut self,
+        src: TypeId,
+        surface: TypeId,
+        tgt: TypeId,
+        kind: RelationKind,
+        assumed: &mut AssumedSet,
+        missing_policy: MissingPropertyPolicy,
+    ) -> Relation {
         let Some(tgt_obj) = self.store.object_type(tgt) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
-        let Some(src_obj) = self.store.object_type(src) else {
+        let Some(src_obj) = self.store.object_type(surface) else {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
@@ -348,6 +522,9 @@ impl<'a> Relater<'a> {
                 }
                 // Target property absent in the source.
                 None => {
+                    if matches!(missing_policy, MissingPropertyPolicy::IgnoreMissing) {
+                        continue;
+                    }
                     // M21: an *optional* target property may be absent — skip it. Its
                     // effective type already includes `undefined` (unioned in at
                     // lowering), so a *present* source value is related normally in the
@@ -364,32 +541,12 @@ impl<'a> Relater<'a> {
                 }
             }
         }
-
-        // F1/WU2 — call-signature obligation. A target object with a call
-        // signature requires the source object to have a compatible call
-        // signature; an object without one cannot satisfy a callable target. This
-        // obligation goes through `self.relate` on the interned FunctionType ids,
-        // preserving the relation cache/cycle-stack invariants.
-        if let Relation::No(child) = self.relate_object_call_signatures(src, tgt, kind, assumed) {
-            return Relation::No(child);
-        }
-
-        // F1/WU3 — construct-signature obligation. Mirrors the call-signature
-        // obligation above: a target object with `new (...)` requires the source
-        // object to have a compatible single construct signature, compared by the
-        // existing FunctionType relation through `self.relate`.
-        if let Relation::No(child) =
-            self.relate_object_construct_signatures(src, tgt, kind, assumed)
-        {
-            return Relation::No(child);
-        }
-
-        self.relate_object_index_signatures(src, tgt, kind, assumed)
+        Relation::Yes
     }
 
     /// Check only a target object's index signatures. The canonical global
-    /// `Object` route reuses this after deliberately skipping named prototype
-    /// members; ordinary object relations reach it after all other obligations.
+    /// `Object` route reuses this after checking present named overlaps; ordinary
+    /// object relations reach it after all other obligations.
     fn relate_object_index_signatures(
         &mut self,
         src: TypeId,
@@ -1020,11 +1177,19 @@ impl<'a> Relater<'a> {
         self.allow_relation_demand = true;
         self.query_exhaustion = None;
         self.query_demand = None;
+        self.query_apparent_demands.clear();
+        self.query_apparent_demand_set.clear();
         self.query_demand_observed = false;
         let compatible =
             self.overload_implementation_compatible_inner(overload_ty, implementation_ty);
         if let Some(exhaustion) = self.query_exhaustion.take() {
             return super::RelationAttempt::Decided(super::RelationOutcome::Exhausted(exhaustion));
+        }
+        if !self.query_apparent_demands.is_empty() {
+            self.query_apparent_demand_set.clear();
+            return super::RelationAttempt::NeedsBatch(std::mem::take(
+                &mut self.query_apparent_demands,
+            ));
         }
         if let Some(demand) = self.query_demand.take() {
             return super::RelationAttempt::Needs(demand);
@@ -1698,8 +1863,8 @@ fn is_numeric_property_name(name: &str) -> bool {
 /// declaring class; a failed check must make the relation fail.
 fn nominal_origin_ok(tgt_prop: &PropertyType, src_prop: &PropertyType) -> bool {
     match tgt_prop.visibility {
-        // Public target member: structural only — no origin constraint.
-        Visibility::Public => true,
+        // A non-public source cannot satisfy a public structural member.
+        Visibility::Public => src_prop.visibility == Visibility::Public,
         // Non-public target member: the source member must share its exact origin
         // (same visibility and same declaring class). A class's own instances pass
         // trivially (the identity fast path in `relate` short-circuits same-id
