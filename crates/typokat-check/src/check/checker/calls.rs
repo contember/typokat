@@ -1251,7 +1251,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         let Some(current) = combined else {
                             break;
                         };
-                        combined = match self.combine_union_signature_pair(current, matched) {
+                        combined = match self.combine_union_signature_pair(
+                            current,
+                            matched,
+                            SignatureCombinationMode::Matching,
+                        ) {
                             DemandOutcome::Ready(SignatureCombination::Combined(combined)) => {
                                 Some(combined)
                             }
@@ -1286,7 +1290,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             };
             let mut combined = Vec::with_capacity(fallback.len());
             for existing in fallback {
-                let next = match self.combine_union_signature_pair(existing, signature) {
+                let next = match self.combine_union_signature_pair(
+                    existing,
+                    signature,
+                    SignatureCombinationMode::Fallback,
+                ) {
                     DemandOutcome::Ready(SignatureCombination::Combined(next)) => next,
                     DemandOutcome::Ready(SignatureCombination::NoCommon) => {
                         return DemandOutcome::Ready(CommonUnionSignatures::Ready(Vec::new()))
@@ -1557,6 +1565,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         left_ty: TypeId,
         right_ty: TypeId,
+        mode: SignatureCombinationMode,
     ) -> DemandOutcome<SignatureCombination> {
         let Some(left) = self.interner.store().function_type(left_ty).cloned() else {
             return DemandOutcome::Ready(SignatureCombination::Unavailable);
@@ -1630,35 +1639,60 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
         let left_arity = self.call_arity(&left.params);
         let right_arity = self.call_arity(&right.params);
-        let either_rest = left_arity.max.is_none() || right_arity.max.is_none();
+        let combined_min = left_arity.min.max(right_arity.min);
+        // A partial match keeps its representative's bound; fallback combines both shapes.
+        let left_controls_arity = left_arity.min == combined_min;
+        let right_controls_arity = right_arity.min == combined_min;
+        let combined_rest = match mode {
+            SignatureCombinationMode::Matching => {
+                (left_controls_arity && left_arity.max.is_none())
+                    || (right_controls_arity && right_arity.max.is_none())
+            }
+            SignatureCombinationMode::Fallback => {
+                left_arity.max.is_none() || right_arity.max.is_none()
+            }
+        };
+        let combined_max = [
+            left_controls_arity.then_some(left_arity.max).flatten(),
+            right_controls_arity.then_some(right_arity.max).flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .max();
+        let parameter_count = if combined_rest {
+            longest_count
+        } else {
+            combined_max.unwrap_or(longest_count)
+        };
         let longest_rest = if longest_is_right {
             right_arity.max.is_none()
         } else {
             left_arity.max.is_none()
         };
-        let needs_extra_rest = either_rest && !longest_rest;
-        let mut params = Vec::with_capacity(longest_count + usize::from(needs_extra_rest));
+        let needs_extra_rest = combined_rest && (!longest_rest || parameter_count <= combined_min);
+        let mut params = Vec::with_capacity(parameter_count + usize::from(needs_extra_rest));
         let unknown = self.interner.well_known().unknown;
 
-        for position in 0..longest_count {
-            let left_param = match self.signature_type_at_position(&left, position, longest_count) {
+        for position in 0..parameter_count {
+            let left_param = match self.signature_type_at_position(&left, position, parameter_count)
+            {
                 SignaturePosition::Type(ty) => ty,
                 SignaturePosition::Missing => unknown,
                 SignaturePosition::Unavailable => {
                     return DemandOutcome::Ready(SignatureCombination::Unavailable)
                 }
             };
-            let right_param = match self.signature_type_at_position(&right, position, longest_count)
-            {
-                SignaturePosition::Type(ty) => substitute(self.interner, ty, &right_map),
-                SignaturePosition::Missing => unknown,
-                SignaturePosition::Unavailable => {
-                    return DemandOutcome::Ready(SignatureCombination::Unavailable)
-                }
-            };
+            let right_param =
+                match self.signature_type_at_position(&right, position, parameter_count) {
+                    SignaturePosition::Type(ty) => substitute(self.interner, ty, &right_map),
+                    SignaturePosition::Missing => unknown,
+                    SignaturePosition::Unavailable => {
+                        return DemandOutcome::Ready(SignatureCombination::Unavailable)
+                    }
+                };
             let ty = self.interner.intersection(vec![left_param, right_param]);
             let name = self.combined_parameter_name(&left, &right, position);
-            let is_rest = either_rest && !needs_extra_rest && position + 1 == longest_count;
+            let is_rest = combined_rest && !needs_extra_rest && position + 1 == parameter_count;
             let optional = position >= left_arity.min && position >= right_arity.min;
             params.push(if is_rest {
                 ParameterType::rest(name, self.interner.intern_array(ty))
@@ -1669,18 +1703,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             });
         }
         if needs_extra_rest {
-            let shorter = if longest_is_right { &left } else { &right };
-            let mut ty =
-                match self.signature_type_at_position(shorter, longest_count, longest_count + 1) {
-                    SignaturePosition::Type(ty) => ty,
-                    SignaturePosition::Missing => {
-                        return DemandOutcome::Ready(SignatureCombination::NoCommon)
-                    }
-                    SignaturePosition::Unavailable => {
-                        return DemandOutcome::Ready(SignatureCombination::Unavailable)
-                    }
-                };
-            if !longest_is_right {
+            let (rest_source, rest_is_right) = if left_arity.max.is_none() {
+                (&left, false)
+            } else if right_arity.max.is_none() {
+                (&right, true)
+            } else {
+                return DemandOutcome::Ready(SignatureCombination::NoCommon);
+            };
+            let mut ty = match self.signature_type_at_position(
+                rest_source,
+                parameter_count,
+                parameter_count + 1,
+            ) {
+                SignaturePosition::Type(ty) => ty,
+                SignaturePosition::Missing => {
+                    return DemandOutcome::Ready(SignatureCombination::NoCommon)
+                }
+                SignaturePosition::Unavailable => {
+                    return DemandOutcome::Ready(SignatureCombination::Unavailable)
+                }
+            };
+            if rest_is_right {
                 ty = substitute(self.interner, ty, &right_map);
             }
             params.push(ParameterType::rest("args", self.interner.intern_array(ty)));
@@ -4530,6 +4573,11 @@ enum SignatureCombination {
     Combined(TypeId),
     NoCommon,
     Unavailable,
+}
+
+enum SignatureCombinationMode {
+    Matching,
+    Fallback,
 }
 
 enum SignaturePosition {
