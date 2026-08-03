@@ -23,10 +23,11 @@ Three slices, in value order:
    the head, or an aliasable write, resets the path). The big slice, and a prerequisite
    piece of `49`'s member-access-guard half.
 3. **Closure narrowing** for `const` / never-reassigned `let` per tsc.
-4. **Precise truthiness split** — `NarrowOp::Truthy` keeps a falsy-capable primitive whole in
-   both branches. Since backlog `101` that imprecision is also visible in a *value*: `a && b`
-   is `string | b` where tsc says `"" | b`. One splitter, so one fix (see the
-   `narrowing/logical-value-falsy-split` entry in `../reference/divergences.md`).
+4. **Remaining string/number truthiness split** — `NarrowOp::Truthy` precisely splits boolean,
+   but keeps broad `string` and `number` whole in both branches. Since backlog `101` that
+   imprecision is also visible in a *value*: `a && b` is `string | b` where tsc says `"" | b`.
+   One splitter, so one fix (see the `narrowing/logical-value-falsy-split` entry in
+   `../reference/divergences.md`).
 
 ## Approach / acceptance
 

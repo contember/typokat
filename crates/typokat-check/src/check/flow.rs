@@ -108,8 +108,8 @@ pub enum NarrowOp {
     /// `typeof x === <tag>` (the positive sense). The then-branch keeps the
     /// members matching the tag; the else-branch keeps the complement.
     Typeof(TypeofTag),
-    /// Truthiness. Falsy-capable primitives are not split, so each branch remains
-    /// a superset of the precise narrowing.
+    /// Truthiness. Boolean is split into its exact literal branch; broad string
+    /// and number remain safe supersets of their precise branches.
     Truthy,
     /// `x === null` / `x === undefined` (the positive sense). The then-branch keeps
     /// only that nullish member; the else-branch removes it. The target nullish
@@ -202,19 +202,42 @@ pub fn narrow_by_typeof(interner: &mut Interner, ty: TypeId, tag: TypeofTag, kee
     })
 }
 
-/// Narrow by truthiness. Falsy-capable primitives are deliberately not split, so
-/// both branches remain safe supersets of the precise narrowing.
+/// Narrow by truthiness. Boolean is split into its exact literal branch. Broad
+/// string and number deliberately remain in both branches as safe supersets.
 pub fn narrow_by_truthiness(interner: &mut Interner, ty: TypeId, truthy: bool) -> TypeId {
     let wk = interner.well_known();
-    filter_union(interner, ty, |store, member| {
-        if truthy {
-            // Drop the always-falsy members.
-            member != wk.null && member != wk.undefined
-        } else {
-            // Drop the always-truthy members (objects/functions are always truthy).
-            !is_always_truthy(store, member)
+    if ty == wk.any || ty == wk.error {
+        return ty;
+    }
+
+    let boolean_branch = interner.intern_literal(LiteralValue::Boolean(truthy));
+    let members = interner
+        .store()
+        .union_members(ty)
+        .map_or_else(|| vec![ty], |members| members.to_vec());
+    let mut narrowed = Vec::with_capacity(members.len());
+
+    for member in members {
+        if member == wk.boolean {
+            narrowed.push(boolean_branch);
+            continue;
         }
-    })
+
+        let boolean_literal = match interner.store().literal_value(member) {
+            Some(LiteralValue::Boolean(value)) => Some(*value),
+            _ => None,
+        };
+        let keep = match boolean_literal {
+            Some(value) => value == truthy,
+            None if truthy => member != wk.null && member != wk.undefined,
+            None => !is_always_truthy(interner.store(), member),
+        };
+        if keep {
+            narrowed.push(member);
+        }
+    }
+
+    interner.union(narrowed)
 }
 
 /// Narrow by strict null/undefined equality: then keeps only the targeted nullish
@@ -779,9 +802,9 @@ mod tests {
         );
     }
 
-    /// A falsy-capable primitive is NOT split — it survives into both branches.
+    /// Broad string remains deliberately unsplit in both branches.
     #[test]
-    fn truthiness_does_not_split_primitives() {
+    fn truthiness_does_not_split_broad_string() {
         let mut interner = Interner::with_intrinsics();
         let wk = interner.well_known();
         // `string | null`: truthy branch removes null → `string` (string kept,
@@ -795,6 +818,32 @@ mod tests {
         assert_eq!(
             narrow_by_truthiness(&mut interner, str_or_null, false),
             str_or_null
+        );
+    }
+
+    /// Broad boolean becomes the exact literal selected by the branch.
+    #[test]
+    fn truthiness_splits_broad_boolean_and_filters_literals() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let true_literal = interner.intern_literal(LiteralValue::Boolean(true));
+        let false_literal = interner.intern_literal(LiteralValue::Boolean(false));
+
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, wk.boolean, true),
+            true_literal
+        );
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, wk.boolean, false),
+            false_literal
+        );
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, false_literal, true),
+            wk.never
+        );
+        assert_eq!(
+            narrow_by_truthiness(&mut interner, true_literal, false),
+            wk.never
         );
     }
 
