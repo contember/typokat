@@ -200,7 +200,7 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                         if needs_separator {
                             context.append("; ");
                         }
-                        context.append(&property.name);
+                        context.append(&property.key.to_string());
                         context.append(": ");
                         render_type_inner(store, property.ty, false, context);
                         needs_separator = true;

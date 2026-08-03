@@ -4,13 +4,13 @@ use super::*;
 use crate::types::repr::{ArrayType, FunctionType, ObjectType, TupleType};
 
 impl Interner {
-    /// Intern an object type. Properties are sorted by name before hashing and
+    /// Intern an object type. Properties are sorted by key before hashing and
     /// comparison, so source member order does not affect the shared `TypeId`.
     pub fn intern_object(&mut self, mut object: ObjectType) -> TypeId {
-        // Canonical order: sort by property name. The sort is stable, so the
-        // relative order of any (illegal-in-the-subset) duplicate names is
+        // Canonical order: sort by property key. The sort is stable, so the
+        // relative order of any (illegal-in-the-subset) duplicate keys is
         // preserved deterministically.
-        object.properties.sort_by(|a, b| a.name.cmp(&b.name));
+        object.properties.sort_by(|a, b| a.key.cmp(&b.key));
 
         let key = StructuralKey::Object {
             properties: &object.properties,

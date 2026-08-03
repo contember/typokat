@@ -726,7 +726,7 @@ impl Interner {
 
         for fill in &mut fills {
             if let ReservedTypeFill::Object(_, object) = fill {
-                object.properties.sort_by(|a, b| a.name.cmp(&b.name));
+                object.properties.sort_by(|a, b| a.key.cmp(&b.key));
             }
         }
 
@@ -880,7 +880,7 @@ impl Interner {
     }
 }
 
-/// Structural equality of two **canonical** (name-sorted) property lists — the
+/// Structural equality of two **canonical** (key-sorted) property lists — the
 /// dedup-bucket tie-break for object types. Property types compare by `TypeId`,
 /// which is itself canonical thanks to hash-consing, so nested object equality is
 /// decided cheaply by id without recursing.
@@ -888,7 +888,7 @@ fn object_props_eq(a: &[PropertyType], b: &[PropertyType]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| {
             // Match every identity-bearing property field; see `PropertyType`.
-            x.name == y.name
+            x.key == y.key
                 && x.optional == y.optional
                 && x.ty == y.ty
                 && x.write_ty == y.write_ty

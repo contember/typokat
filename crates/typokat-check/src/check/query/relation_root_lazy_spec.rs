@@ -176,7 +176,7 @@ fn demanded_outer_mismatch_preserves_the_first_failure() {
     assert!(
         matches!(
             reason.head(),
-            Reason::Property { name, .. } if name == "a_mismatch"
+            Reason::Property { name, .. } if name.as_string() == Some("a_mismatch")
         ),
         "the first decisive property must remain the failure reason: {reason:#?}"
     );

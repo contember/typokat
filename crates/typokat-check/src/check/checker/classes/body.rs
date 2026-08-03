@@ -51,17 +51,19 @@ impl BodyMemberEnvironment {
         let members = object
             .properties
             .iter()
-            .map(|property| {
-                (
-                    property.name.clone(),
-                    BodyMemberSlot {
-                        value: BodyMemberValue::Known {
-                            read_ty: property.ty,
-                            write_ty: property.write_ty,
+            .filter_map(|property| {
+                property.key.as_string().map(|name| {
+                    (
+                        name.to_owned(),
+                        BodyMemberSlot {
+                            value: BodyMemberValue::Known {
+                                read_ty: property.ty,
+                                write_ty: property.write_ty,
+                            },
+                            metadata: BodyMemberMetadata::from_property(property),
                         },
-                        metadata: BodyMemberMetadata::from_property(property),
-                    },
-                )
+                    )
+                })
             })
             .collect();
         Self {

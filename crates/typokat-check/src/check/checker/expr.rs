@@ -14,8 +14,8 @@ use crate::diagnostics::{render_type, Diagnostic};
 use crate::relate::RelationOutcome;
 use crate::span::Span;
 use crate::types::repr::{
-    ClassId, FunctionType, IntrinsicKind, LiteralValue, ObjectType, PropertyType, TypeParamId,
-    TypeTag, Visibility,
+    ClassId, FunctionType, IntrinsicKind, LiteralValue, ObjectType, PropertyKey, PropertyType,
+    TypeParamId, TypeTag, Visibility,
 };
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
@@ -1756,15 +1756,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             any_readonly: bool,
             any_accessor: bool,
         }
-        let mut order: Vec<String> = Vec::new();
-        let mut props: FxHashMap<String, Acc> = FxHashMap::default();
+        let mut order: Vec<PropertyKey> = Vec::new();
+        let mut props: FxHashMap<PropertyKey, Acc> = FxHashMap::default();
         let mut string_index_values: Vec<TypeId> = Vec::new();
         let mut number_index_values: Vec<TypeId> = Vec::new();
 
         for (member_props, string_index, number_index) in snapshots {
             for prop in member_props {
                 let write_ty = prop.write_ty.unwrap_or(prop.ty);
-                match props.get_mut(&prop.name) {
+                match props.get_mut(&prop.key) {
                     Some(acc) => {
                         acc.tys.push(prop.ty);
                         acc.write_tys.push(write_ty);
@@ -1774,9 +1774,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         acc.any_accessor |= prop.is_accessor;
                     }
                     None => {
-                        order.push(prop.name.clone());
+                        order.push(prop.key.clone());
                         props.insert(
-                            prop.name.clone(),
+                            prop.key.clone(),
                             Acc {
                                 all_optional: prop.optional,
                                 any_readonly: prop.readonly,
@@ -2291,7 +2291,7 @@ fn conditional_undefined_arity_object_subtype(
         .iter()
         .zip(&target.properties)
         .try_fold(false, |changed, (source, target)| {
-            let same_metadata = source.name == target.name
+            let same_metadata = source.key == target.key
                 && source.write_ty == target.write_ty
                 && source.optional == target.optional
                 && source.visibility == target.visibility

@@ -31,8 +31,8 @@ pub(super) fn measure_inference(update: impl FnOnce(&mut InferenceMeasure)) {
     INFERENCE_MEASURE.with(|measure| update(&mut measure.borrow_mut()));
 }
 
-/// The `(name, type)` pairs of an object type, or `None` if `ty` is not an object.
-pub(super) fn property_pairs(store: &Store, ty: TypeId) -> Option<Vec<(String, TypeId)>> {
+/// The `(key, type)` pairs of an object type, or `None` if `ty` is not an object.
+pub(super) fn property_pairs(store: &Store, ty: TypeId) -> Option<Vec<(PropertyKey, TypeId)>> {
     store.object_type(ty).map(|object| {
         #[cfg(test)]
         measure_inference(|measure| measure.object_snapshot_vectors += 1);
@@ -43,9 +43,10 @@ pub(super) fn property_pairs(store: &Store, ty: TypeId) -> Option<Vec<(String, T
                 #[cfg(test)]
                 measure_inference(|measure| {
                     measure.object_snapshot_entries += 1;
-                    measure.object_snapshot_name_bytes += p.name.len() as u64;
+                    measure.object_snapshot_name_bytes +=
+                        p.key.as_string().map_or(0, str::len) as u64;
                 });
-                (p.name.clone(), p.ty)
+                (p.key.clone(), p.ty)
             })
             .collect()
     })

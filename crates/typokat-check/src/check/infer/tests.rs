@@ -1,7 +1,7 @@
 use super::*;
 use crate::types::repr::{
     FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
-    TypeParamId,
+    TypeParamId, WellKnownSymbol,
 };
 use std::time::Instant;
 
@@ -136,7 +136,7 @@ fn ordered_object_inference_cursor_preserves_candidates_and_duplicate_parity() {
     let t = interner.intern_type_param(t_id, "T");
 
     // The input orders are deliberately scrambled; interning establishes the stable
-    // name order used by the cursor. Source-only names occur before, between, and
+    // key order used by the cursor. Source-only keys occur before, between, and
     // after the target names.
     let extras_source = interner.intern_object(ObjectType {
         properties: vec![
@@ -503,6 +503,56 @@ fn infers_from_object_property() {
         Some(wk.number),
         "T = number"
     );
+}
+
+#[test]
+fn object_inference_matches_iterator_and_async_iterator_by_exact_key() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(90_301);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let iterator_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            parameter,
+        )],
+        ..Default::default()
+    });
+    let iterator_source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            wk.string,
+        )],
+        ..Default::default()
+    });
+    let async_source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::AsyncIterator,
+            wk.number,
+        )],
+        ..Default::default()
+    });
+    let mut next_type_param = 90_302;
+
+    let matched = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[parameter_id],
+        &[iterator_target],
+        &[iterator_source],
+        &[],
+    );
+    assert_eq!(matched.get(&parameter_id), Some(&wk.string));
+
+    let mismatched = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[parameter_id],
+        &[iterator_target],
+        &[async_source],
+        &[],
+    );
+    assert_eq!(mismatched.get(&parameter_id), Some(&wk.unknown));
 }
 
 /// A type parameter under a function parameter is inferred from both the

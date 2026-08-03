@@ -1638,7 +1638,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let owner =
             self.merged_header_owner(group.index(), prepared.fragment.declaration, span.start);
         for class_property in &class_object.properties {
-            let Some(base_property) = base.property(&class_property.name) else {
+            let Some(base_property) = base.property_by_key(&class_property.key) else {
                 continue;
             };
             if class_property.ty == base_property.ty
@@ -2886,11 +2886,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .checked_add(1)
                     .expect("interface heritage pair ordinal fits u32");
                 for left_property in &left.properties {
-                    let Some(right_property) = right.property(&left_property.name) else {
+                    let Some(right_property) = right.property_by_key(&left_property.key) else {
                         continue;
                     };
                     // A complete own property replaces the inherited candidates.
-                    if own.property(&left_property.name).is_some() {
+                    if own.property_by_key(&left_property.key).is_some() {
                         continue;
                     }
                     if left_property.ty == right_property.ty
@@ -2913,7 +2913,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     });
                     alternatives.push(InterfaceTypedAlternative {
                         kind: InterfaceAlternativeKind::Heritage,
-                        key: left_property.name.clone(),
+                        key: left_property.key.to_string(),
                         types: vec![left_property.ty, right_property.ty],
                     });
                     self.with_ticket_effects(diagnostic_owner, |pass| {
@@ -3007,7 +3007,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut alternatives = Vec::new();
         for (_, _, base_name, base) in surfaces {
             for own_property in &own.properties {
-                let Some(base_property) = base.property(&own_property.name) else {
+                let Some(base_property) = base.property_by_key(&own_property.key) else {
                     continue;
                 };
                 if own_property.ty == base_property.ty
@@ -3030,7 +3030,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 });
                 alternatives.push(InterfaceTypedAlternative {
                     kind: InterfaceAlternativeKind::Heritage,
-                    key: own_property.name.clone(),
+                    key: own_property.key.to_string(),
                     types: vec![own_property.ty, base_property.ty],
                 });
                 self.with_ticket_effects(diagnostic.owner, |pass| {
@@ -3099,7 +3099,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         if let Some(string_index) = complete.string_index {
             for property in &complete.properties {
-                let own_property = own_owners.properties.get(&property.name).copied();
+                let Some(name) = property.key.as_string() else {
+                    continue;
+                };
+                let own_property = own_owners.properties.get(name).copied();
                 let own_string = own_owners.string_index;
                 if own_property.is_some() && own_string.is_some() {
                     continue;
@@ -3113,7 +3116,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         target: string_index,
                         span,
                         kind: InterfaceRelationKind::PropertyStringIndex {
-                            name: property.name.clone(),
+                            name: name.to_owned(),
                         },
                         report: InterfaceRelationReport::Always,
                     });

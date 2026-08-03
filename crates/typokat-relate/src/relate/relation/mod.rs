@@ -10,7 +10,7 @@ mod set_types;
 
 use crate::class_semantics::Exhaustion;
 use crate::relate::cache::{RelationCache, RelationKey};
-use crate::types::repr::{GenericTypeParam, IntrinsicKind, TypeParamId, TypeTag};
+use crate::types::repr::{GenericTypeParam, IntrinsicKind, PropertyKey, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::WellKnown;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -151,13 +151,13 @@ pub enum Reason {
     Leaf { src: TypeId, tgt: TypeId },
     /// Required target property missing from the source object (`TK2741`).
     MissingProperty {
-        name: String,
+        name: PropertyKey,
         src: TypeId,
         tgt: TypeId,
     },
     /// Present property has an incompatible value type (`TK2322`).
     Property {
-        name: String,
+        name: PropertyKey,
         src: TypeId,
         tgt: TypeId,
         because: Box<Reason>,

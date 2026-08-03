@@ -89,7 +89,9 @@ use crate::span::Span;
 use crate::types::repr::ClassId;
 use crate::types::repr::TypeParamId;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::types::repr::{IntrinsicKind, LiteralValue, ModifierOp, TypeTag, Visibility};
+use crate::types::repr::{
+    IntrinsicKind, LiteralValue, ModifierOp, PropertyKey, TypeTag, Visibility, WellKnownSymbol,
+};
 use crate::types::repr::{ObjectType, PropertyType};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::types::store::Store;
@@ -3778,6 +3780,21 @@ impl CanonicalBytes {
     }
 
     #[cfg(any(test, feature = "test-utils"))]
+    fn property_key(&mut self, key: &PropertyKey) -> Result<(), InjectedProfileError> {
+        match key {
+            PropertyKey::String(name) => {
+                self.byte(0);
+                self.string(name)
+            }
+            PropertyKey::WellKnownSymbol(symbol) => {
+                self.byte(1);
+                self.byte(well_known_symbol_code(*symbol));
+                Ok(())
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
     fn type_id(&mut self, value: TypeId) {
         self.u32(value.0);
     }
@@ -3839,6 +3856,24 @@ fn visibility_code(visibility: Visibility) -> u8 {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+fn well_known_symbol_code(symbol: WellKnownSymbol) -> u8 {
+    match symbol {
+        WellKnownSymbol::Iterator => 0,
+        WellKnownSymbol::ToStringTag => 1,
+        WellKnownSymbol::AsyncIterator => 2,
+        WellKnownSymbol::Species => 3,
+        WellKnownSymbol::ToPrimitive => 4,
+        WellKnownSymbol::Replace => 5,
+        WellKnownSymbol::Unscopables => 6,
+        WellKnownSymbol::Split => 7,
+        WellKnownSymbol::Search => 8,
+        WellKnownSymbol::Match => 9,
+        WellKnownSymbol::MatchAll => 10,
+        WellKnownSymbol::HasInstance => 11,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 fn modifier_code(modifier: ModifierOp) -> u8 {
     match modifier {
         ModifierOp::Keep => 0,
@@ -3883,7 +3918,7 @@ fn encode_store_row(
             })?;
             bytes.usize(object.properties.len())?;
             for property in &object.properties {
-                bytes.string(&property.name)?;
+                bytes.property_key(&property.key)?;
                 bytes.type_id(property.ty);
                 bytes.optional_type_id(property.write_ty);
                 bytes.bool(property.optional);
@@ -7589,7 +7624,7 @@ fn type_probe(
             object
                 .properties
                 .iter()
-                .map(|property| property.name.clone())
+                .map(|property| property.key.to_string())
                 .collect()
         })
         .unwrap_or_default();
@@ -7662,7 +7697,7 @@ fn value_probe_for_symbol(
             object
                 .properties
                 .iter()
-                .map(|property| property.name.clone())
+                .map(|property| property.key.to_string())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();

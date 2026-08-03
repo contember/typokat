@@ -453,11 +453,14 @@ impl<'a> ConditionalEvaluator<'a> {
                 return;
             };
             for prop in props {
+                let Some(name) = prop.key.as_string().map(str::to_owned) else {
+                    continue;
+                };
                 #[cfg(test)]
                 measure_mapped_property_context(mapped.value_template, prop.ty);
                 let value = self.replace_mapped_value(mapped.value_template, prop.ty);
                 meta.push(MappedProp {
-                    name: prop.name,
+                    name,
                     optional: mapped.optional_modifier.apply(prop.optional),
                     readonly: mapped.readonly_modifier.apply(prop.readonly),
                     // `-?` over an optional source member strips `undefined` from the
@@ -667,14 +670,14 @@ impl<'a> ConditionalEvaluator<'a> {
         // Intersect: keep the first member's keys present in EVERY member, collecting
         // each member's value type + flags. (A union always has ≥ 2 members.)
         let (first, rest) = member_objects.split_first()?;
-        let mut common: Vec<(String, Vec<TypeId>, bool, bool)> = Vec::new();
+        let mut common = Vec::new();
         for prop in first {
             let mut tys = vec![prop.ty];
             let mut optional = prop.optional;
             let mut readonly = prop.readonly;
             let mut in_all = true;
             for other in rest {
-                match other.iter().find(|p| p.name == prop.name) {
+                match other.iter().find(|p| p.key == prop.key) {
                     Some(p) => {
                         tys.push(p.ty);
                         optional |= p.optional;
@@ -687,17 +690,23 @@ impl<'a> ConditionalEvaluator<'a> {
                 }
             }
             if in_all {
-                common.push((prop.name.clone(), tys, optional, readonly));
+                common.push((prop.key.clone(), tys, optional, readonly));
             }
         }
         // Union the per-member value types outside the store borrow.
         let mut out: Vec<PropertyType> = Vec::with_capacity(common.len());
-        for (name, tys, optional, readonly) in common {
+        for (key, tys, optional, readonly) in common {
             let ty = self.interner.union(tys);
-            let mut prop = PropertyType::public(name, ty);
-            prop.optional = optional;
-            prop.readonly = readonly;
-            out.push(prop);
+            out.push(PropertyType {
+                key,
+                ty,
+                write_ty: None,
+                optional,
+                visibility: Visibility::Public,
+                declaring_class: None,
+                readonly,
+                is_accessor: false,
+            });
         }
         Some(out)
     }
@@ -706,7 +715,7 @@ impl<'a> ConditionalEvaluator<'a> {
         &mut self,
         members: &[TypeId],
     ) -> Option<Vec<PropertyType>> {
-        let mut entries: Vec<(String, Vec<TypeId>, bool, bool)> = Vec::new();
+        let mut entries: Vec<(PropertyKey, Vec<TypeId>, bool, bool)> = Vec::new();
         {
             let store = self.interner.store();
             for &member in members {
@@ -715,17 +724,14 @@ impl<'a> ConditionalEvaluator<'a> {
                     return None;
                 }
                 for prop in &object.properties {
-                    match entries
-                        .iter_mut()
-                        .find(|(name, _, _, _)| *name == prop.name)
-                    {
+                    match entries.iter_mut().find(|(key, _, _, _)| *key == prop.key) {
                         Some((_, tys, optional, readonly)) => {
                             tys.push(prop.ty);
                             *optional &= prop.optional;
                             *readonly |= prop.readonly;
                         }
                         None => entries.push((
-                            prop.name.clone(),
+                            prop.key.clone(),
                             vec![prop.ty],
                             prop.optional,
                             prop.readonly,
@@ -736,11 +742,18 @@ impl<'a> ConditionalEvaluator<'a> {
         }
 
         let mut props = Vec::with_capacity(entries.len());
-        for (name, tys, optional, readonly) in entries {
-            let mut prop = PropertyType::public(name, self.interner.intersection(tys));
-            prop.optional = optional;
-            prop.readonly = readonly;
-            props.push(prop);
+        for (key, tys, optional, readonly) in entries {
+            let ty = self.interner.intersection(tys);
+            props.push(PropertyType {
+                key,
+                ty,
+                write_ty: None,
+                optional,
+                visibility: Visibility::Public,
+                declaring_class: None,
+                readonly,
+                is_accessor: false,
+            });
         }
         Some(props)
     }

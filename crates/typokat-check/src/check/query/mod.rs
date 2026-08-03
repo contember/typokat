@@ -1200,7 +1200,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     if index < property_end {
                         let left = &left.properties[index];
                         let right = &right.properties[index];
-                        if left.name != right.name
+                        if left.key != right.key
                             || left.optional != right.optional
                             || left.visibility != right.visibility
                             || (left.visibility != Visibility::Public
@@ -2533,7 +2533,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         let property = object
             .properties
             .iter_mut()
-            .find(|property| property.name == "length")?;
+            .find(|property| property.key.as_string() == Some("length"))?;
         property.ty = length;
         if property.write_ty.is_some() {
             property.write_ty = Some(length);

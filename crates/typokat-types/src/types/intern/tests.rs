@@ -1,13 +1,108 @@
 use super::*;
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
-    ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId,
-    TypeTag,
+    ObjectType, ParameterType, PropertyKey, PropertyType, TemplateType, TupleRestType, TupleType,
+    TypeParamId, TypeTag, WellKnownSymbol,
 };
 
 /// Build a required public property `name: ty`.
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+#[test]
+fn symbol_property_identity_survives_interning_freeze_and_reserved_fill() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let string_spelling = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("Symbol.iterator", number)],
+        ..Default::default()
+    });
+    let iterator = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            number,
+        )],
+        ..Default::default()
+    });
+    let async_iterator = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::AsyncIterator,
+            number,
+        )],
+        ..Default::default()
+    });
+    assert_ne!(string_spelling, iterator);
+    assert_ne!(iterator, async_iterator);
+    let iterator_object = interner
+        .store()
+        .object_type(iterator)
+        .expect("iterator object is stored");
+    assert!(iterator_object.property("Symbol.iterator").is_none());
+    assert!(iterator_object
+        .property_by_key(&PropertyKey::WellKnownSymbol(WellKnownSymbol::Iterator))
+        .is_some());
+
+    let reordered = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::well_known_symbol(WellKnownSymbol::AsyncIterator, number),
+            PropertyType::well_known_symbol(WellKnownSymbol::Iterator, number),
+        ],
+        ..Default::default()
+    });
+    let canonical = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::well_known_symbol(WellKnownSymbol::Iterator, number),
+            PropertyType::well_known_symbol(WellKnownSymbol::AsyncIterator, number),
+        ],
+        ..Default::default()
+    });
+    assert_eq!(reordered, canonical);
+
+    let reserved = interner.reserve_object();
+    interner
+        .fill_reserved_type_batch(vec![ReservedTypeFill::Object(
+            reserved,
+            ObjectType {
+                properties: vec![PropertyType::well_known_symbol(
+                    WellKnownSymbol::Iterator,
+                    number,
+                )],
+                ..Default::default()
+            },
+        )])
+        .expect("symbol-keyed reservation fills");
+    assert_eq!(
+        interner
+            .store()
+            .object_type(reserved)
+            .and_then(|object| object.properties.first())
+            .and_then(|property| property.key.as_well_known_symbol()),
+        Some(WellKnownSymbol::Iterator)
+    );
+
+    interner
+        .freeze_as_base()
+        .expect("complete symbol base seals");
+    let mut delta = interner.fork_delta().expect("symbol base forks");
+    assert_eq!(
+        delta.intern_object(ObjectType {
+            properties: vec![PropertyType::well_known_symbol(
+                WellKnownSymbol::Iterator,
+                number,
+            )],
+            ..Default::default()
+        }),
+        iterator
+    );
+    assert_eq!(
+        delta
+            .store()
+            .object_type(iterator)
+            .and_then(|object| object.properties.first())
+            .map(|property| &property.key),
+        Some(&PropertyKey::WellKnownSymbol(WellKnownSymbol::Iterator))
+    );
 }
 
 struct ColdFamilyRows {
@@ -426,8 +521,9 @@ fn every_cold_payload_family_routes_across_nonzero_base_offsets() {
             .object_type(reserved_object)
             .expect("reserved local object is readable")
             .properties[0]
-            .name,
-        "local-reserved"
+            .key
+            .as_string(),
+        Some("local-reserved")
     );
     assert!(delta
         .store()
@@ -521,12 +617,16 @@ fn object_canonicalization_dedups_by_member_set() {
     });
     assert_ne!(ab, abc, "differing property sets must not dedup");
 
-    // The canonical stored order is name-sorted regardless of input order.
+    // The canonical stored order is key-sorted regardless of input order.
     let stored = interner
         .store()
         .object_type(ba)
         .expect("ba is an object type");
-    let names: Vec<&str> = stored.properties.iter().map(|p| p.name.as_str()).collect();
+    let names: Vec<&str> = stored
+        .properties
+        .iter()
+        .filter_map(|property| property.key.as_string())
+        .collect();
     assert_eq!(names, ["a", "b"], "stored order must be canonical (sorted)");
 
     // Nested object identity flows through: two outer objects whose nested
@@ -591,7 +691,7 @@ fn reserved_type_batch_fills_and_freezes_every_placeholder_kind() {
     let names: Vec<&str> = stored_object
         .properties
         .iter()
-        .map(|property| property.name.as_str())
+        .filter_map(|property| property.key.as_string())
         .collect();
     assert_eq!(names, ["a", "z"]);
     let stored_conditional = interner
@@ -791,8 +891,9 @@ fn reserved_type_batch_rejects_target_kind_and_state_before_writing() {
             .object_type(pending)
             .expect("filled object must remain readable")
             .properties[0]
-            .name,
-        "stable"
+            .key
+            .as_string(),
+        Some("stable")
     );
 }
 

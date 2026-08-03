@@ -838,7 +838,7 @@ fn merge_heritage_instance(
         if let Some(index) = merged
             .properties
             .iter()
-            .position(|inherited| inherited.name == property.name)
+            .position(|inherited| inherited.key == property.key)
         {
             merged.properties[index] = property;
         } else {
@@ -1419,7 +1419,7 @@ mod tests {
             .expect("composed instance remains object")
             .properties
             .iter()
-            .map(|property| property.name.as_str())
+            .filter_map(|property| property.key.as_string())
             .collect::<BTreeSet<_>>();
         assert_eq!(properties, BTreeSet::from(["inherited", "own"]));
         assert!(publication.obligations.is_empty());

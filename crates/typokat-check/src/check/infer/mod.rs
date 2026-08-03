@@ -17,7 +17,9 @@ use helpers::widen;
 use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClasses};
 use crate::relate::{RelationNormalization, RelationOutcome};
-use crate::types::repr::{GenericTypeParam, IntrinsicKind, ParameterType, TypeParamId, TypeTag};
+use crate::types::repr::{
+    GenericTypeParam, IntrinsicKind, ParameterType, PropertyKey, TypeParamId, TypeTag,
+};
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};

@@ -675,7 +675,7 @@ mod tests {
         });
         let object = interner.reserve_object();
         let class_property = PropertyType {
-            name: "classy".to_owned(),
+            key: crate::types::repr::PropertyKey::String("classy".to_owned()),
             ty: literal,
             write_ty: Some(wk.string),
             optional: false,

@@ -2749,7 +2749,7 @@ pub(in crate::check::checker) fn emit_obligation_failure(
         ObligationKind::Assignment => match head {
             Reason::MissingProperty { name, tgt, .. } => {
                 let tgt = render_type(store, *tgt, /* widen */ false);
-                Diagnostic::property_missing(diagnostic_span, name, &tgt)
+                Diagnostic::property_missing(diagnostic_span, &name.to_string(), &tgt)
             }
             Reason::Leaf { .. }
             | Reason::Property { .. }
@@ -2816,7 +2816,7 @@ pub(in crate::check::checker) fn emit_obligation_failure(
 
 fn obligation_source_span(ob: &AssignObligation, reason: &Reason) -> Span {
     let member = match reason {
-        Reason::Property { name, .. } => Some(AssignSourceMember::Property(name.clone())),
+        Reason::Property { name, .. } => Some(AssignSourceMember::Property(name.to_string())),
         Reason::TupleElement { index, .. } => Some(AssignSourceMember::Element(*index)),
         Reason::UnionSourceMember { because, .. }
         | Reason::ArrayElement { because, .. }

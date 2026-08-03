@@ -1,13 +1,72 @@
 use super::*;
 use crate::class_semantics::Exhaustion;
 use crate::types::repr::{
-    ClassId, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, Visibility,
+    ClassId, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyKey, PropertyType,
+    Visibility, WellKnownSymbol,
 };
 use crate::types::Interner;
 use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+#[test]
+fn relation_matches_exact_symbol_keys_and_excludes_them_from_string_indices() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let iterator_number = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            wk.number,
+        )],
+        ..Default::default()
+    });
+    let iterator_number_again = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            wk.number,
+        )],
+        ..Default::default()
+    });
+    let async_iterator_number = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::AsyncIterator,
+            wk.number,
+        )],
+        ..Default::default()
+    });
+    let string_spelling = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("Symbol.iterator", wk.number)],
+        ..Default::default()
+    });
+    let string_index = interner.intern_object(ObjectType {
+        string_index: Some(wk.string),
+        ..Default::default()
+    });
+    let number_index = interner.intern_object(ObjectType {
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+
+    let mut relater = Relater::new(interner.store(), wk);
+    assert!(relater
+        .is_assignable(iterator_number, iterator_number_again)
+        .is_yes());
+    assert!(matches!(
+        relater.is_assignable(async_iterator_number, iterator_number),
+        Relation::No(_)
+    ));
+    assert!(matches!(
+        relater.is_assignable(string_spelling, iterator_number),
+        Relation::No(_)
+    ));
+    assert!(relater
+        .is_assignable(iterator_number, string_index)
+        .is_yes());
+    assert!(relater
+        .is_assignable(iterator_number, number_index)
+        .is_yes());
 }
 
 #[test]
@@ -50,7 +109,7 @@ fn nominal_prop(
     declaring_class: Option<ClassId>,
 ) -> PropertyType {
     PropertyType {
-        name: name.to_string(),
+        key: PropertyKey::String(name.to_string()),
         ty,
         write_ty: None,
         optional: false,
@@ -399,7 +458,9 @@ fn completed_contextual_reuse_replays_specialization_in_each_fresh_frame() {
                 let result = relater.is_assignable(string_payload, generic_payload);
                 match result {
                     Relation::No(reason) => match reason.head {
-                        Reason::Property { name, .. } => assert_eq!(name, "value"),
+                        Reason::Property { name, .. } => {
+                            assert_eq!(name.as_string(), Some("value"))
+                        }
                         other => {
                             panic!("expected value mismatch in fresh frame {pass}, got {other:?}")
                         }
@@ -765,7 +826,7 @@ fn measure_relation_keeps_first_target_failure_order() {
     let result = Relater::new(interner.store(), wk).is_assignable(source, target);
     match result {
         Relation::No(reason) => match reason.head {
-            Reason::Property { name, .. } => assert_eq!(name, "a"),
+            Reason::Property { name, .. } => assert_eq!(name.as_string(), Some("a")),
             other => panic!("expected first property mismatch, got {other:?}"),
         },
         Relation::Yes => panic!("the mismatched first target property must fail"),
@@ -893,7 +954,7 @@ fn ordered_object_cursor_preserves_width_and_first_failure_semantics() {
     reset_relation_measure();
     match relater.is_assignable(early_missing_source, early_missing_target) {
         Relation::No(reason) => match reason.head {
-            Reason::MissingProperty { name, .. } => assert_eq!(name, "a"),
+            Reason::MissingProperty { name, .. } => assert_eq!(name.as_string(), Some("a")),
             other => panic!("expected the first missing target property, got {other:?}"),
         },
         Relation::Yes => panic!("the first target property must be missing"),
@@ -904,7 +965,7 @@ fn ordered_object_cursor_preserves_width_and_first_failure_semantics() {
     reset_relation_measure();
     match relater.is_assignable(late_missing_source, late_missing_target) {
         Relation::No(reason) => match reason.head {
-            Reason::MissingProperty { name, .. } => assert_eq!(name, "c"),
+            Reason::MissingProperty { name, .. } => assert_eq!(name.as_string(), Some("c")),
             other => panic!("expected the last missing target property, got {other:?}"),
         },
         Relation::Yes => panic!("the final target property must be missing"),
@@ -915,7 +976,7 @@ fn ordered_object_cursor_preserves_width_and_first_failure_semantics() {
     reset_relation_measure();
     match relater.is_assignable(missing_source, missing_target) {
         Relation::No(reason) => match reason.head {
-            Reason::MissingProperty { name, .. } => assert_eq!(name, "c"),
+            Reason::MissingProperty { name, .. } => assert_eq!(name.as_string(), Some("c")),
             other => panic!("expected the first missing target property, got {other:?}"),
         },
         Relation::Yes => panic!("the middle target property must be missing"),
@@ -926,7 +987,7 @@ fn ordered_object_cursor_preserves_width_and_first_failure_semantics() {
     reset_relation_measure();
     match relater.is_assignable(early_mismatch_source, early_mismatch_target) {
         Relation::No(reason) => match reason.head {
-            Reason::Property { name, .. } => assert_eq!(name, "a"),
+            Reason::Property { name, .. } => assert_eq!(name.as_string(), Some("a")),
             other => panic!("expected the first target mismatch, got {other:?}"),
         },
         Relation::Yes => panic!("the first target property must mismatch"),
@@ -937,7 +998,7 @@ fn ordered_object_cursor_preserves_width_and_first_failure_semantics() {
     reset_relation_measure();
     match relater.is_assignable(mismatch_source, mismatch_target) {
         Relation::No(reason) => match reason.head {
-            Reason::Property { name, .. } => assert_eq!(name, "d"),
+            Reason::Property { name, .. } => assert_eq!(name.as_string(), Some("d")),
             other => panic!("expected the later target mismatch, got {other:?}"),
         },
         Relation::Yes => panic!("the later target property must mismatch"),
@@ -1019,7 +1080,7 @@ fn object_width_depth_and_reason_kinds() {
     // Missing required property: { a } is NOT assignable to { a; b }.
     match rel.is_assignable(a_only, ab) {
         Relation::No(chain) => match chain.head() {
-            Reason::MissingProperty { name, .. } => assert_eq!(name, "b"),
+            Reason::MissingProperty { name, .. } => assert_eq!(name.as_string(), Some("b")),
             other => panic!("expected MissingProperty, got {other:?}"),
         },
         Relation::Yes => panic!("expected a missing-property failure"),
@@ -1029,7 +1090,7 @@ fn object_width_depth_and_reason_kinds() {
     match rel.is_assignable(a_only, a_str) {
         Relation::No(chain) => match chain.head() {
             Reason::Property { name, because, .. } => {
-                assert_eq!(name, "a");
+                assert_eq!(name.as_string(), Some("a"));
                 assert!(matches!(**because, Reason::Leaf { .. }));
             }
             other => panic!("expected Property, got {other:?}"),
@@ -1458,7 +1519,7 @@ fn readonly_does_not_affect_assignability() {
     // `{ readonly x: number }` and `{ x: number }`.
     let readonly_obj = interner.intern_object(ObjectType {
         properties: vec![PropertyType {
-            name: "x".to_string(),
+            key: PropertyKey::String("x".to_string()),
             ty: wk.number,
             write_ty: None,
             optional: false,
@@ -1534,7 +1595,7 @@ fn is_accessor_does_not_affect_assignability() {
     // A get-only accessor models as `readonly: true, is_accessor: true`.
     let accessor_obj = interner.intern_object(ObjectType {
         properties: vec![PropertyType {
-            name: "x".to_string(),
+            key: PropertyKey::String("x".to_string()),
             ty: wk.number,
             write_ty: None,
             optional: false,
@@ -1548,7 +1609,7 @@ fn is_accessor_does_not_affect_assignability() {
     // A `readonly` data field: same shape but `is_accessor: false`.
     let readonly_field_obj = interner.intern_object(ObjectType {
         properties: vec![PropertyType {
-            name: "x".to_string(),
+            key: PropertyKey::String("x".to_string()),
             ty: wk.number,
             write_ty: None,
             optional: false,
@@ -1616,10 +1677,12 @@ fn object_nested_depth_reason_nests() {
     match rel.is_assignable(outer_src, outer_tgt) {
         Relation::No(chain) => match chain.head() {
             Reason::Property { name, because, .. } => {
-                assert_eq!(name, "a");
+                assert_eq!(name.as_string(), Some("a"));
                 // Inner reason is the property `b` mismatch.
                 match &**because {
-                    Reason::Property { name, .. } => assert_eq!(name, "b"),
+                    Reason::Property { name, .. } => {
+                        assert_eq!(name.as_string(), Some("b"))
+                    }
                     other => panic!("expected nested Property, got {other:?}"),
                 }
             }
@@ -4130,7 +4193,7 @@ fn recursive_relation_terminates() {
     // The rebuilt reason still points at the offending `tag` property.
     match second {
         Relation::No(chain) => match chain.head() {
-            Reason::Property { name, .. } => assert_eq!(name, "tag"),
+            Reason::Property { name, .. } => assert_eq!(name.as_string(), Some("tag")),
             other => panic!("expected the `tag` Property failure, got {other:?}"),
         },
         Relation::Yes => unreachable!(),
@@ -4229,7 +4292,7 @@ fn merged_intersection_source_recurses_to_a_fixpoint() {
     // 3. The leaf mismatch behind the recursion must still be reached + reported.
     match rel.is_assignable(cell_and_extra, cell_wrong) {
         Relation::No(chain) => match chain.head() {
-            Reason::Property { name, .. } => assert_eq!(name, "value"),
+            Reason::Property { name, .. } => assert_eq!(name.as_string(), Some("value")),
             other => panic!("expected the `value` Property failure, got {other:?}"),
         },
         Relation::Yes => panic!("the `value: number` vs `value: string` mismatch must be caught"),

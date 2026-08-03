@@ -2,7 +2,7 @@ use super::resolve::QualifiedTypeSegment;
 use super::*;
 use crate::binder::scope::ScopeId;
 use crate::span::Span;
-use crate::types::repr::{ObjectType, PropertyType};
+use crate::types::repr::{ObjectType, PropertyKey, PropertyType};
 use crate::types::store::TypeId;
 use oxc_ast::ast::{Expression, TSInterfaceHeritage, TSSignature};
 use oxc_span::GetSpan;
@@ -183,17 +183,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for property in overlay.properties {
             let Some(existing) = properties
                 .iter_mut()
-                .find(|existing| existing.name == property.name)
+                .find(|existing| existing.key == property.key)
             else {
-                if overlay_methods.contains(&property.name) {
-                    first_method_members.insert(property.name.clone());
+                if let Some(name) = property.key.as_string() {
+                    if overlay_methods.contains(name) {
+                        first_method_members.insert(name.to_owned());
+                    }
                 }
                 properties.push(property);
                 continue;
             };
-            if !first_method_members.contains(&property.name)
-                || !overlay_methods.contains(&property.name)
-            {
+            let Some(name) = property.key.as_string() else {
+                continue;
+            };
+            if !first_method_members.contains(name) || !overlay_methods.contains(name) {
                 continue;
             }
             let mut overloads = match self.interner.store().tag(existing.ty) {
@@ -591,7 +594,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 pub(super) fn merge_object_members_overlay(base: ObjectType, overlay: ObjectType) -> ObjectType {
     let mut properties = base.properties;
     for prop in overlay.properties {
-        match properties.iter_mut().find(|p| p.name == prop.name) {
+        match properties.iter_mut().find(|p| p.key == prop.key) {
             Some(existing) => *existing = prop,
             None => properties.push(prop),
         }
@@ -641,12 +644,12 @@ impl HeritageBaseNameProbeScopeForTest {
 
 /// Compose base surfaces in source order without letting later conflicts replace the first.
 ///
-/// One name set spans the whole chain. Folding the bases pairwise instead re-tests every
+/// One key set spans the whole chain. Folding the bases pairwise instead re-tests every
 /// member already accumulated, which is quadratic in a composed surface that reaches
 /// hundreds of members.
 pub(super) fn compose_base_members_first(bases: &[&ObjectType]) -> ObjectType {
     let member_count = bases.iter().map(|base| base.properties.len()).sum();
-    let mut names = FxHashSet::with_capacity_and_hasher(member_count, Default::default());
+    let mut keys = FxHashSet::with_capacity_and_hasher(member_count, Default::default());
     let mut properties = Vec::with_capacity(member_count);
     let mut string_index = None;
     let mut number_index = None;
@@ -656,7 +659,7 @@ pub(super) fn compose_base_members_first(bases: &[&ObjectType]) -> ObjectType {
         for property in &base.properties {
             #[cfg(test)]
             record_heritage_base_name_probes_for_test(1);
-            if names.insert(property.name.as_str()) {
+            if keys.insert(&property.key) {
                 properties.push(property.clone());
             }
         }
@@ -692,7 +695,7 @@ pub(in crate::check::checker) fn merge_intersection_objects(
     }
 
     let mut order = Vec::new();
-    let mut properties: BTreeMap<String, PropertyAccumulator> = BTreeMap::new();
+    let mut properties: BTreeMap<PropertyKey, PropertyAccumulator> = BTreeMap::new();
     let mut string_indices = Vec::new();
     let mut number_indices = Vec::new();
     let mut call_signatures = Vec::new();
@@ -700,7 +703,7 @@ pub(in crate::check::checker) fn merge_intersection_objects(
     for object in objects {
         for property in object.properties {
             let write_type = property.write_ty.unwrap_or(property.ty);
-            if let Some(existing) = properties.get_mut(&property.name) {
+            if let Some(existing) = properties.get_mut(&property.key) {
                 existing.types.push(property.ty);
                 existing.write_types.push(write_type);
                 existing.has_write_type |= property.write_ty.is_some();
@@ -708,9 +711,9 @@ pub(in crate::check::checker) fn merge_intersection_objects(
                 existing.any_readonly |= property.readonly;
                 existing.any_accessor |= property.is_accessor;
             } else {
-                order.push(property.name.clone());
+                order.push(property.key.clone());
                 properties.insert(
-                    property.name.clone(),
+                    property.key.clone(),
                     PropertyAccumulator {
                         all_optional: property.optional,
                         any_readonly: property.readonly,

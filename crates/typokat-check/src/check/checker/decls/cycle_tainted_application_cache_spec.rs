@@ -395,7 +395,7 @@ fn pass_and_universe_isolation_hold_even_when_numeric_ids_collide() {
         observations.push((
             template.0,
             result.0,
-            object.properties[0].name.clone(),
+            object.properties[0].key.clone(),
             object.properties[1].ty,
         ));
     }

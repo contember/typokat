@@ -2,6 +2,7 @@
 //! structs, and `LiteralValue`.
 
 use crate::types::store::TypeId;
+use std::fmt;
 
 /// Discriminant for the SoA arena: selects which cold side-table `payload`
 /// indexes into. Kept to one byte so the hot `tag` vec is cache-dense.
@@ -297,12 +298,88 @@ pub enum Visibility {
     Protected,
 }
 
+/// A well-known ECMAScript symbol that can identify an object property.
+///
+/// Keep this list explicit: its ordering is part of object canonicalization.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WellKnownSymbol {
+    Iterator,
+    ToStringTag,
+    AsyncIterator,
+    Species,
+    ToPrimitive,
+    Replace,
+    Unscopables,
+    Split,
+    Search,
+    Match,
+    MatchAll,
+    HasInstance,
+}
+
+impl WellKnownSymbol {
+    pub const fn name(self) -> &'static str {
+        match self {
+            WellKnownSymbol::Iterator => "iterator",
+            WellKnownSymbol::ToStringTag => "toStringTag",
+            WellKnownSymbol::AsyncIterator => "asyncIterator",
+            WellKnownSymbol::Species => "species",
+            WellKnownSymbol::ToPrimitive => "toPrimitive",
+            WellKnownSymbol::Replace => "replace",
+            WellKnownSymbol::Unscopables => "unscopables",
+            WellKnownSymbol::Split => "split",
+            WellKnownSymbol::Search => "search",
+            WellKnownSymbol::Match => "match",
+            WellKnownSymbol::MatchAll => "matchAll",
+            WellKnownSymbol::HasInstance => "hasInstance",
+        }
+    }
+}
+
+impl fmt::Display for WellKnownSymbol {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+/// Collision-free identity for an object property.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PropertyKey {
+    String(String),
+    WellKnownSymbol(WellKnownSymbol),
+}
+
+impl PropertyKey {
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            PropertyKey::String(name) => Some(name),
+            PropertyKey::WellKnownSymbol(_) => None,
+        }
+    }
+
+    pub const fn as_well_known_symbol(&self) -> Option<WellKnownSymbol> {
+        match self {
+            PropertyKey::String(_) => None,
+            PropertyKey::WellKnownSymbol(symbol) => Some(*symbol),
+        }
+    }
+}
+
+impl fmt::Display for PropertyKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PropertyKey::String(name) => formatter.write_str(name),
+            PropertyKey::WellKnownSymbol(symbol) => write!(formatter, "[Symbol.{symbol}]"),
+        }
+    }
+}
+
 /// A member of an object type. M13–M15 metadata is identity-bearing so interning
 /// preserves nominal origins and write-target behavior; assignability uses
 /// visibility/origin but ignores `readonly`/`is_accessor`.
 #[derive(Clone, Debug)]
 pub struct PropertyType {
-    pub name: String,
+    pub key: PropertyKey,
     /// The type observed by reads and structural assignability.
     pub ty: TypeId,
     /// The type accepted by writes when it differs from [`ty`](Self::ty), as for
@@ -341,7 +418,21 @@ impl PropertyType {
     /// default consistently.
     pub fn public(name: impl Into<String>, ty: TypeId) -> Self {
         PropertyType {
-            name: name.into(),
+            key: PropertyKey::String(name.into()),
+            ty,
+            write_ty: None,
+            optional: false,
+            visibility: Visibility::Public,
+            declaring_class: None,
+            readonly: false,
+            is_accessor: false,
+        }
+    }
+
+    /// Build a plain public property identified by a well-known symbol.
+    pub fn well_known_symbol(symbol: WellKnownSymbol, ty: TypeId) -> Self {
+        PropertyType {
+            key: PropertyKey::WellKnownSymbol(symbol),
             ty,
             write_ty: None,
             optional: false,
@@ -354,7 +445,7 @@ impl PropertyType {
 }
 
 /// Structural object type (object literal types, interfaces). Interned via
-/// `Interner::intern_object` (canonicalized: properties sorted by name) and
+/// `Interner::intern_object` (canonicalized: properties sorted by key) and
 /// compared property-wise by the relation engine (width + depth).
 ///
 /// M19 index signatures store only the value type for fixed `string`/`number`
@@ -368,7 +459,7 @@ impl PropertyType {
 /// properties and index signatures and are part of object identity.
 #[derive(Clone, Debug, Default)]
 pub struct ObjectType {
-    /// Members in canonical name order. The interner sorts before hash-consing;
+    /// Members in canonical key order. The interner sorts before hash-consing;
     /// the renderer prints this canonical order.
     pub properties: Vec<PropertyType>,
     /// The **value** type of the string index signature `[k: string]: T` (M19), or
@@ -390,9 +481,16 @@ pub struct ObjectType {
 impl ObjectType {
     /// Look up a property by name, returning its declared type. `O(n)` linear
     /// scan — object types in the subset are small, and a plain `Vec` keeps the
-    /// canonical (name-sorted) order the renderer prints.
+    /// canonical (key-sorted) order the renderer prints.
     pub fn property(&self, name: &str) -> Option<&PropertyType> {
-        self.properties.iter().find(|p| p.name == name)
+        self.properties
+            .iter()
+            .find(|property| property.key.as_string() == Some(name))
+    }
+
+    /// Look up a property by its exact string-or-symbol identity.
+    pub fn property_by_key(&self, key: &PropertyKey) -> Option<&PropertyType> {
+        self.properties.iter().find(|property| &property.key == key)
     }
 }
 
@@ -875,7 +973,58 @@ pub struct MappedType {
 
 #[cfg(test)]
 mod tests {
-    use super::{decimal_number_to_string, number_to_string, TypeTag};
+    use super::{
+        decimal_number_to_string, number_to_string, PropertyKey, TypeTag, WellKnownSymbol,
+    };
+
+    #[test]
+    fn property_keys_keep_string_and_well_known_symbol_identities_distinct() {
+        let string = PropertyKey::String("Symbol.iterator".to_owned());
+        let iterator = PropertyKey::WellKnownSymbol(WellKnownSymbol::Iterator);
+        let async_iterator = PropertyKey::WellKnownSymbol(WellKnownSymbol::AsyncIterator);
+
+        assert_ne!(string, iterator);
+        assert_ne!(iterator, async_iterator);
+        assert_eq!(string.as_string(), Some("Symbol.iterator"));
+        assert_eq!(iterator.as_string(), None);
+        assert_eq!(iterator.to_string(), "[Symbol.iterator]");
+        assert_eq!(async_iterator.to_string(), "[Symbol.asyncIterator]");
+    }
+
+    #[test]
+    fn well_known_symbol_names_are_pinned() {
+        let symbols = [
+            WellKnownSymbol::Iterator,
+            WellKnownSymbol::ToStringTag,
+            WellKnownSymbol::AsyncIterator,
+            WellKnownSymbol::Species,
+            WellKnownSymbol::ToPrimitive,
+            WellKnownSymbol::Replace,
+            WellKnownSymbol::Unscopables,
+            WellKnownSymbol::Split,
+            WellKnownSymbol::Search,
+            WellKnownSymbol::Match,
+            WellKnownSymbol::MatchAll,
+            WellKnownSymbol::HasInstance,
+        ];
+        assert_eq!(
+            symbols.map(WellKnownSymbol::name),
+            [
+                "iterator",
+                "toStringTag",
+                "asyncIterator",
+                "species",
+                "toPrimitive",
+                "replace",
+                "unscopables",
+                "split",
+                "search",
+                "match",
+                "matchAll",
+                "hasInstance",
+            ]
+        );
+    }
 
     #[test]
     fn type_tag_discriminants_are_source_pinned_and_append_only() {

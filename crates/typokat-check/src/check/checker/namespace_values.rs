@@ -850,7 +850,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         if let Some(property) = plan
                             .properties
                             .iter_mut()
-                            .find(|property| property.name == name)
+                            .find(|property| property.key.as_string() == Some(&name))
                         {
                             property.ty = ty;
                             property.readonly = readonly;
@@ -876,7 +876,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         if let Some(property) = object
                             .properties
                             .iter_mut()
-                            .find(|property| property.name == name)
+                            .find(|property| property.key.as_string() == Some(&name))
                         {
                             property.ty = ty;
                             property.readonly = readonly;
@@ -1289,7 +1289,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let function_properties = self.stage_namespace_function_properties(&functions);
         if let Some(mut function_properties) = function_properties {
             for property in &mut function_properties {
-                let Some(merge) = legal_existing_merges.get(&property.name) else {
+                let Some(name) = property.key.as_string() else {
+                    continue;
+                };
+                let Some(merge) = legal_existing_merges.get(name) else {
                     continue;
                 };
                 if merge.kind != MergeDeclarationKind::Function {
@@ -1341,7 +1344,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for function in functions {
             let property_ty = properties
                 .iter()
-                .find(|property| property.name == function.input.name)
+                .find(|property| property.key.as_string() == Some(&function.input.name))
                 .map(|property| property.ty);
             if let Some(property_ty) = property_ty {
                 if self.decl_type_replay(function.input.storage).is_none() {
@@ -1923,7 +1926,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for function in functions {
             let property_ty = properties
                 .iter()
-                .find(|property| property.name == function.input.name)
+                .find(|property| property.key.as_string() == Some(&function.input.name))
                 .map(|property| property.ty);
             if let Some(property_ty) = property_ty {
                 if self.decl_type_replay(function.input.storage).is_none() {
@@ -2240,18 +2243,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> Vec<ClassNamespacePropertyPayload<Ticket>> {
         properties
             .into_iter()
-            .map(|property| {
+            .filter_map(|property| {
+                let name = property.key.as_string()?;
                 let member = attachment
                     .members
                     .iter()
-                    .find(|member| member.name == property.name)
+                    .find(|member| member.name == name)
                     .expect("published namespace property has one exact declaration");
                 let owner = self
                     .lexical_events
                     .declaration_owner(member.declaration)
                     .expect("published namespace property retains its exact owner")
                     .ticket;
-                ClassNamespacePropertyPayload {
+                Some(ClassNamespacePropertyPayload {
                     property,
                     declaration: member.declaration,
                     owner_span: member.owner_span,
@@ -2261,7 +2265,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         declaration_ordinal: member.declaration.0,
                     },
                     owner,
-                }
+                })
             })
             .collect()
     }
@@ -3665,7 +3669,7 @@ namespace Dotted {
                     dotted_object
                         .properties
                         .iter()
-                        .filter(|property| property.name == "Chain")
+                        .filter(|property| property.key.as_string() == Some("Chain"))
                         .count(),
                     1,
                     "repeated dotted child members stage one dependency"

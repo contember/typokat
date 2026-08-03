@@ -1,7 +1,7 @@
 use super::*;
 use crate::types::repr::{
     ClassId, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
-    TupleRestType, TupleType,
+    TupleRestType, TupleType, WellKnownSymbol,
 };
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -28,6 +28,33 @@ fn type_param_is_replaced() {
     );
     // An intrinsic is unaffected.
     assert_eq!(substitute(&mut interner, wk.string, &map), wk.string);
+}
+
+#[test]
+fn substitution_preserves_well_known_symbol_property_key() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(90_300);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let object = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            parameter,
+        )],
+        ..Default::default()
+    });
+    let map = FxHashMap::from_iter([(parameter_id, wk.string)]);
+    let substituted = substitute(&mut interner, object, &map);
+    let property = interner
+        .store()
+        .object_type(substituted)
+        .and_then(|object| object.properties.first())
+        .expect("substituted object retains its property");
+    assert_eq!(
+        property.key.as_well_known_symbol(),
+        Some(WellKnownSymbol::Iterator)
+    );
+    assert_eq!(property.ty, wk.string);
 }
 
 #[test]

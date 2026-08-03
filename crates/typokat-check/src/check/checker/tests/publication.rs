@@ -784,7 +784,7 @@ const wrong: string = value.next.b;
                         object
                             .properties
                             .iter()
-                            .map(|property| property.name.as_str())
+                            .filter_map(|property| property.key.as_string())
                             .collect::<Vec<_>>(),
                         expected
                     );
@@ -1404,7 +1404,7 @@ interface A<T> extends External<T>, B<T> { a: T; wrapped: { inner: T[] } }
                     a_object
                         .properties
                         .iter()
-                        .map(|property| property.name.as_str())
+                        .filter_map(|property| property.key.as_string())
                         .collect::<Vec<_>>(),
                     vec!["a", "external", "wrapped"]
                 );
@@ -1412,7 +1412,7 @@ interface A<T> extends External<T>, B<T> { a: T; wrapped: { inner: T[] } }
                     b_object
                         .properties
                         .iter()
-                        .map(|property| property.name.as_str())
+                        .filter_map(|property| property.key.as_string())
                         .collect::<Vec<_>>(),
                     vec!["b"]
                 );

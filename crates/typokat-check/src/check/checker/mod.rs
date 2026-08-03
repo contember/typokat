@@ -162,7 +162,7 @@ fn compose_global_this_value_surface(mut base: ObjectType, overlay: ObjectType) 
         if !base
             .properties
             .iter()
-            .any(|existing| existing.name == property.name)
+            .any(|existing| existing.key == property.key)
         {
             base.properties.push(property);
         }
@@ -2435,7 +2435,7 @@ fn private_project_visible_root_members_for_test(
             object
                 .properties
                 .iter()
-                .map(|property| property.name.clone())
+                .map(|property| property.key.to_string())
         })
         .collect()
 }
@@ -2604,7 +2604,7 @@ fn private_project_semantic_evidence_for_test(
             object
                 .properties
                 .iter()
-                .map(|property| property.name.clone())
+                .map(|property| property.key.to_string())
         })
         .collect();
     let normalized_semantic_identities = pass
@@ -5281,7 +5281,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             if let Some(property) = object
                 .properties
                 .iter_mut()
-                .find(|property| property.name == name)
+                .find(|property| property.key.as_string() == Some(name))
             {
                 if property.ty == ty {
                     return;
@@ -5291,7 +5291,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
                 object.properties.push(PropertyType::public(name, ty));
                 object
                     .properties
-                    .sort_by(|left, right| left.name.cmp(&right.name));
+                    .sort_by(|left, right| left.key.cmp(&right.key));
             }
             pass.global_object_type = Some(pass.interner.intern_object(object));
         });
@@ -5345,7 +5345,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             if let Some(property) = object
                 .properties
                 .iter_mut()
-                .find(|property| property.name == name)
+                .find(|property| property.key.as_string() == Some(&name))
             {
                 property.ty = ty;
             } else {
@@ -5354,7 +5354,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         }
         object
             .properties
-            .sort_by(|left, right| left.name.cmp(&right.name));
+            .sort_by(|left, right| left.key.cmp(&right.key));
         self.global_object_type = Some(self.interner.intern_object(object));
     }
 

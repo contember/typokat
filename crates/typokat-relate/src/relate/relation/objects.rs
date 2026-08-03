@@ -205,7 +205,7 @@ impl<'a> Relater<'a> {
             left.properties.get(left_index),
             right.properties.get(right_index),
         ) {
-            match left.name.cmp(&right.name) {
+            match left.key.cmp(&right.key) {
                 std::cmp::Ordering::Less => left_index += 1,
                 std::cmp::Ordering::Greater => right_index += 1,
                 std::cmp::Ordering::Equal => return true,
@@ -440,16 +440,16 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         };
 
-        // Both `intern_object` and `fill_object` sort properties by name. Advance the
-        // source cursor monotonically while retaining a same-name match so malformed
-        // duplicate target names still observe the first matching source property.
+        // Both `intern_object` and `fill_object` sort properties by key. Advance the
+        // source cursor monotonically while retaining a same-key match so malformed
+        // duplicate target keys still observe the first matching source property.
         let mut source_cursor = 0;
-        let mut previous_target_name: Option<&str> = None;
+        let mut previous_target_key = None;
         let mut previous_source_property: Option<&PropertyType> = None;
         for tgt_prop in &tgt_obj.properties {
             #[cfg(test)]
             super::measure_relation(|measure| measure.object_target_properties += 1);
-            let source_property = if previous_target_name == Some(tgt_prop.name.as_str()) {
+            let source_property = if previous_target_key == Some(&tgt_prop.key) {
                 previous_source_property
             } else {
                 let found = loop {
@@ -460,7 +460,7 @@ impl<'a> Relater<'a> {
                     super::measure_relation(|measure| {
                         measure.object_source_property_comparisons += 1
                     });
-                    match src_prop.name.cmp(&tgt_prop.name) {
+                    match src_prop.key.cmp(&tgt_prop.key) {
                         std::cmp::Ordering::Less => source_cursor += 1,
                         std::cmp::Ordering::Equal => {
                             source_cursor += 1;
@@ -469,7 +469,7 @@ impl<'a> Relater<'a> {
                         std::cmp::Ordering::Greater => break None,
                     }
                 };
-                previous_target_name = Some(tgt_prop.name.as_str());
+                previous_target_key = Some(&tgt_prop.key);
                 previous_source_property = found;
                 found
             };
@@ -513,7 +513,7 @@ impl<'a> Relater<'a> {
                         self.relate(src_prop.ty, tgt_prop.ty, kind, assumed, self.want_reason)
                     {
                         return Relation::No(ReasonChain::of(Reason::Property {
-                            name: tgt_prop.name.clone(),
+                            name: tgt_prop.key.clone(),
                             src,
                             tgt,
                             because: Box::new(child.head),
@@ -534,7 +534,7 @@ impl<'a> Relater<'a> {
                         continue;
                     }
                     return Relation::No(ReasonChain::of(Reason::MissingProperty {
-                        name: tgt_prop.name.clone(),
+                        name: tgt_prop.key.clone(),
                         src,
                         tgt,
                     }));
@@ -575,7 +575,12 @@ impl<'a> Relater<'a> {
         let src_props: Vec<(String, TypeId)> = src_obj
             .properties
             .iter()
-            .map(|p| (p.name.clone(), p.ty))
+            .filter_map(|property| {
+                property
+                    .key
+                    .as_string()
+                    .map(|name| (name.to_owned(), property.ty))
+            })
             .collect();
         let src_string_index = src_obj.string_index;
         let src_number_index = src_obj.number_index;
@@ -734,7 +739,7 @@ impl<'a> Relater<'a> {
         for tgt_prop in &tgt_obj.properties {
             if !tgt_prop.optional {
                 return Relation::No(ReasonChain::of(Reason::MissingProperty {
-                    name: tgt_prop.name.clone(),
+                    name: tgt_prop.key.clone(),
                     src,
                     tgt,
                 }));
@@ -1789,7 +1794,7 @@ impl<'a> Relater<'a> {
                     .filter_map(|&m| {
                         self.store
                             .object_type(m)
-                            .and_then(|o| o.property(&tgt_prop.name))
+                            .and_then(|object| object.property_by_key(&tgt_prop.key))
                             .cloned()
                     })
                     .collect();
@@ -1801,7 +1806,7 @@ impl<'a> Relater<'a> {
             .collect();
 
         for ob in obligations {
-            let name = ob.tgt_prop.name.clone();
+            let name = ob.tgt_prop.key.clone();
             if ob.contributors.is_empty() {
                 // An optional target property may be absent from the merged source;
                 // a required one is genuinely missing.

@@ -2107,7 +2107,7 @@ fn modifiers_source_preserves_values_and_flags() {
     let get = |name: &str| {
         props
             .iter()
-            .find(|p| p.name == name)
+            .find(|property| property.key.as_string() == Some(name))
             .unwrap_or_else(|| panic!("property {name} present"))
             .clone()
     };
@@ -2167,7 +2167,7 @@ fn required_strips_undefined_from_optional_source_values() {
     let get = |name: &str| {
         props
             .iter()
-            .find(|p| p.name == name)
+            .find(|property| property.key.as_string() == Some(name))
             .unwrap_or_else(|| panic!("property {name} present"))
             .clone()
     };
@@ -2289,7 +2289,7 @@ fn recursive_mapped_value_terminates_with_stable_identity() {
         .object_type(first)
         .expect("mapped result is an object");
     assert_eq!(result_obj.properties.len(), 1);
-    assert_eq!(result_obj.properties[0].name, "a");
+    assert_eq!(result_obj.properties[0].key.as_string(), Some("a"));
     assert_eq!(
         result_obj.properties[0].ty, rec,
         "the recursive value template keeps its identity"

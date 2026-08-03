@@ -167,9 +167,9 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
             // with the shorter one under the streaming hasher.
             properties.len().hash(&mut h);
             for prop in *properties {
-                // Properties arrive in canonical (name-sorted) order, so this is
+                // Properties arrive in canonical (key-sorted) order, so this is
                 // order-independent across two structurally equal object types.
-                prop.name.hash(&mut h);
+                prop.key.hash(&mut h);
                 prop.optional.hash(&mut h);
                 prop.ty.0.hash(&mut h);
                 prop.write_ty.map(|ty| ty.0).hash(&mut h);

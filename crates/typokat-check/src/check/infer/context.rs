@@ -287,27 +287,27 @@ impl<'query> InferenceContext<'query> {
         let Some(target_pairs) = property_pairs(interner.store(), target) else {
             return;
         };
-        // `property_pairs` preserves the stable name order established by both object
-        // interning paths. Reuse a same-name match so duplicate target names retain
+        // `property_pairs` preserves the stable key order established by both object
+        // interning paths. Reuse a same-key match so duplicate target keys retain
         // the prior first-source-member behavior.
         let mut source_cursor = 0;
-        let mut previous_target_name: Option<&str> = None;
+        let mut previous_target_key = None;
         let mut previous_source_ty: Option<TypeId> = None;
-        for (name, target_ty) in &target_pairs {
+        for (key, target_ty) in &target_pairs {
             #[cfg(test)]
             super::helpers::measure_inference(|measure| measure.object_target_properties += 1);
-            let source_ty = if previous_target_name == Some(name.as_str()) {
+            let source_ty = if previous_target_key == Some(key) {
                 previous_source_ty
             } else {
                 let found = loop {
-                    let Some((source_name, source_ty)) = source_pairs.get(source_cursor) else {
+                    let Some((source_key, source_ty)) = source_pairs.get(source_cursor) else {
                         break None;
                     };
                     #[cfg(test)]
                     super::helpers::measure_inference(|measure| {
                         measure.object_source_property_comparisons += 1
                     });
-                    match source_name.cmp(name) {
+                    match source_key.cmp(key) {
                         std::cmp::Ordering::Less => source_cursor += 1,
                         std::cmp::Ordering::Equal => {
                             source_cursor += 1;
@@ -316,7 +316,7 @@ impl<'query> InferenceContext<'query> {
                         std::cmp::Ordering::Greater => break None,
                     }
                 };
-                previous_target_name = Some(name);
+                previous_target_key = Some(key);
                 previous_source_ty = found;
                 found
             };

@@ -170,7 +170,7 @@ pub(in crate::check::checker) fn keyof_of_object(
         .properties
         .iter()
         .filter(|property| property.visibility == Visibility::Public)
-        .map(|property| property.name.clone())
+        .filter_map(|property| property.key.as_string().map(str::to_owned))
         .collect();
     let has_string_index = object.string_index.is_some();
     let has_number_index = object.number_index.is_some();
@@ -209,7 +209,7 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
                 .properties
                 .iter()
                 .filter(|property| property.visibility == Visibility::Public)
-                .map(|property| property.name.clone())
+                .filter_map(|property| property.key.as_string().map(str::to_owned))
                 .collect();
             let name_set = names.iter().cloned().collect();
             infos.push(UnionKeyInfo {

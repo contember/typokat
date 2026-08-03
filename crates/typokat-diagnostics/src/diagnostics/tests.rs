@@ -3,13 +3,31 @@ use crate::relate::Reason;
 use crate::span::Span;
 use crate::types::repr::{
     ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, ObjectType,
-    ParameterType, PropertyType, TupleRestType, TupleType, TypeParamId, TypeTag,
+    ParameterType, PropertyKey, PropertyType, TupleRestType, TupleType, TypeParamId, TypeTag,
+    WellKnownSymbol,
 };
 use crate::types::store::TypeId;
 use crate::types::Interner;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+#[test]
+fn object_renderer_uses_symbol_property_syntax() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let object = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            number,
+        )],
+        ..Default::default()
+    });
+    assert_eq!(
+        render_type(interner.store(), object, false),
+        "{ [Symbol.iterator]: number }"
+    );
 }
 
 fn display_len(rendered: &str) -> usize {
@@ -235,11 +253,11 @@ fn nested_property_chain_renders_leaf_last() {
 
     // The reason chain the relation engine builds for this failure.
     let head = Reason::Property {
-        name: "a".to_string(),
+        name: PropertyKey::String("a".to_string()),
         src: outer_src,
         tgt: outer_tgt,
         because: Box::new(Reason::Property {
-            name: "b".to_string(),
+            name: PropertyKey::String("b".to_string()),
             src: inner_str,
             tgt: inner_num,
             because: Box::new(Reason::Leaf {
@@ -287,7 +305,7 @@ fn missing_property_head_has_no_elaboration() {
     let store = interner.store();
 
     let head = Reason::MissingProperty {
-        name: "b".to_string(),
+        name: PropertyKey::String("b".to_string()),
         src: a_only,
         tgt: ab,
     };
@@ -374,7 +392,7 @@ fn union_source_head_descends_into_member_cause() {
         src: union,
         tgt: inner_num,
         because: Box::new(Reason::Property {
-            name: "b".to_string(),
+            name: PropertyKey::String("b".to_string()),
             src: inner_str,
             tgt: inner_num,
             because: Box::new(Reason::Leaf {
@@ -900,7 +918,7 @@ fn deep_property_chain(src: TypeId, tgt: TypeId, leaf: (TypeId, TypeId), levels:
     };
     for _ in 0..levels {
         reason = Reason::Property {
-            name: "p".to_string(),
+            name: PropertyKey::String("p".to_string()),
             src,
             tgt,
             because: Box::new(reason),

@@ -342,7 +342,7 @@ fn an_early_instantiated_property_mismatch_keeps_the_first_reason() {
     assert!(
         matches!(
             reason.head(),
-            Reason::Property { name, .. } if name == "a_selected"
+            Reason::Property { name, .. } if name.as_string() == Some("a_selected")
         ),
         "the first selected-property mismatch must remain authoritative: {reason:#?}"
     );

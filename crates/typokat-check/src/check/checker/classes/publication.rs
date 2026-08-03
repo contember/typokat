@@ -47,7 +47,8 @@ use crate::source::SourceOrdinal;
 use crate::span::Span as CheckSpan;
 use crate::types::layered::LayeredMap;
 use crate::types::repr::{
-    ClassId, FunctionType, ObjectType, PropertyType, TypeParamId, Visibility,
+    ClassId, FunctionType, ObjectType, PropertyKey as TypePropertyKey, PropertyType, TypeParamId,
+    Visibility,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
@@ -143,17 +144,20 @@ fn merge_class_owned_fragment(
     for property in overlay.properties {
         let Some(existing) = properties
             .iter_mut()
-            .find(|existing| existing.name == property.name)
+            .find(|existing| existing.key == property.key)
         else {
-            if overlay_methods.contains(&property.name) {
-                first_method_members.insert(property.name.clone());
+            if let Some(name) = property.key.as_string() {
+                if overlay_methods.contains(name) {
+                    first_method_members.insert(name.to_owned());
+                }
             }
             properties.push(property);
             continue;
         };
-        if !first_method_members.contains(&property.name)
-            || !overlay_methods.contains(&property.name)
-        {
+        let Some(name) = property.key.as_string() else {
+            continue;
+        };
+        if !first_method_members.contains(name) || !overlay_methods.contains(name) {
             continue;
         }
         let mut overloads = match factory.store().tag(existing.ty) {
@@ -203,7 +207,7 @@ fn overlay_class_owned_members(base: ObjectType, own: ObjectType) -> ObjectType 
     for property in own.properties {
         match properties
             .iter_mut()
-            .find(|existing| existing.name == property.name)
+            .find(|existing| existing.key == property.key)
         {
             Some(existing) => *existing = property,
             None => properties.push(property),
@@ -1246,7 +1250,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             payload.source_order.declaration_ordinal,
                             payload.declaration.0
                         );
-                        let name = payload.property.name.clone();
+                        let Some(name) = payload.property.key.as_string().map(str::to_owned) else {
+                            static_object.properties.push(payload.property);
+                            continue;
+                        };
                         if name == "prototype" {
                             records.push(TicketRecord::diagnostic(
                                 payload.owner,
@@ -1310,7 +1317,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 if let Some(existing) = static_object
                                     .properties
                                     .iter_mut()
-                                    .find(|property| property.name == name)
+                                    .find(|property| property.key.as_string() == Some(&name))
                                 {
                                     *existing = payload.property;
                                 } else {
@@ -2263,7 +2270,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                     ty = factory.union(vec![ty, factory.well_known().undefined]);
                 }
                 let lowered = PropertyType {
-                    name: name.clone(),
+                    key: TypePropertyKey::String(name.clone()),
                     ty,
                     write_ty: None,
                     optional: property.optional,
@@ -2572,7 +2579,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                             continue;
                         };
                         instance.properties.push(PropertyType {
-                            name: identifier.name.to_string(),
+                            key: TypePropertyKey::String(identifier.name.to_string()),
                             ty,
                             write_ty: None,
                             optional: parameter.optional,
@@ -2610,7 +2617,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                         continue;
                     }
                     let lowered = PropertyType {
-                        name: name.clone(),
+                        key: TypePropertyKey::String(name.clone()),
                         ty: callable,
                         write_ty: None,
                         optional: false,
@@ -2725,7 +2732,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
             continue;
         };
         let property = PropertyType {
-            name,
+            key: TypePropertyKey::String(name),
             ty,
             write_ty: accessor.setter,
             optional: false,
@@ -2750,7 +2757,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
             ..Default::default()
         });
         let property = PropertyType {
-            name: name.clone(),
+            key: TypePropertyKey::String(name.clone()),
             ty,
             write_ty: None,
             optional: false,
@@ -2797,7 +2804,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
     }
 
     static_side.properties.push(PropertyType {
-        name: "prototype".to_string(),
+        key: TypePropertyKey::String("prototype".to_string()),
         ty: open_application,
         write_ty: None,
         optional: false,
