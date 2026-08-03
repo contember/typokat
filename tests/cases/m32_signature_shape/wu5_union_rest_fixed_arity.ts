@@ -20,3 +20,28 @@ type RestNumberOrString = (x: string, ...rest: (number | string)[]) => void;
 declare const allRest: RestNumberOrBoolean | RestNumberOrString;
 allRest("x");
 allRest("x", 1, 2, 3);
+
+type GenericRest = <T>(x: T, ...rest: number[]) => T;
+type GenericFixedTwo = <U>(x: U, y: number) => U;
+
+declare const genericRestThenFixed: GenericRest | GenericFixedTwo;
+genericRestThenFixed("x"); // error[TK2555]: Expected at least 2 arguments, but got 1
+genericRestThenFixed("x", 1);
+genericRestThenFixed("x", 1, 2);
+
+declare const genericFixedThenRest: GenericFixedTwo | GenericRest;
+genericFixedThenRest("x"); // error[TK2555]: Expected at least 2 arguments, but got 1
+genericFixedThenRest("x", 1);
+genericFixedThenRest("x", 1, 2);
+
+type GenericFixedThree = <V>(x: V, y: number, z: number) => V;
+
+declare const genericTripleForward: GenericRest | GenericFixedTwo | GenericFixedThree;
+genericTripleForward("x", 1); // error[TK2555]: Expected at least 3 arguments, but got 2
+genericTripleForward("x", 1, 2);
+genericTripleForward("x", 1, 2, 3);
+
+declare const genericTripleReverse: GenericFixedThree | GenericFixedTwo | GenericRest;
+genericTripleReverse("x", 1); // error[TK2555]: Expected at least 3 arguments, but got 2
+genericTripleReverse("x", 1, 2);
+genericTripleReverse("x", 1, 2, 3);
