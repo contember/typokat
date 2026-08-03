@@ -11,6 +11,7 @@ use crate::binder::namespace::{
     DeclarationOwner, NamespaceValueAttachmentDisposition, SourceFileKind,
 };
 use crate::binder::scope::ScopeId;
+use crate::binder::scope::ScopeKind;
 use crate::binder::symbol::SymbolId;
 use crate::check::checker::events::UserEventReservationScopeForTest;
 use crate::check::checker::library_compiler::{
@@ -22,6 +23,7 @@ use crate::check::query::QueryCacheWriteScopeForTest;
 use crate::frontend::FileInput;
 use crate::relate::cache::RelationCacheWriteScopeForTest;
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
@@ -369,6 +371,184 @@ fn assert_dense(actual: impl IntoIterator<Item = usize>, start: usize, end: usiz
         actual.into_iter().collect::<Vec<_>>(),
         (start..end).collect::<Vec<_>>()
     );
+}
+
+fn assert_acyclic_parent_graph_before_resolution(binder: &crate::binder::bind::Binder) {
+    let scope_count = binder.graph.len();
+    for start in 0..scope_count {
+        let start = ScopeId(u32::try_from(start).expect("scope id fits u32"));
+        let mut seen = HashSet::new();
+        let mut current = Some(start);
+        for _ in 0..=scope_count {
+            let Some(scope) = current else {
+                break;
+            };
+            assert!(
+                seen.insert(scope),
+                "scope-parent cycle reached from {start:?} at {scope:?}"
+            );
+            current = binder
+                .graph
+                .get(scope)
+                .unwrap_or_else(|| panic!("parent traversal reached missing {scope:?}"))
+                .parent;
+        }
+        assert!(
+            current.is_none(),
+            "scope-parent traversal from {start:?} exceeded the graph bound"
+        );
+    }
+}
+
+#[test]
+fn empty_checkpoint_continuation_preserves_the_library_scope_graph_and_current_module() {
+    let profile = ExactLibraryProfile::load_packaged().expect("pinned library profile");
+    let reference_checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("reference binder checkpoint");
+    let reference_inspection = reference_checkpoint.inspection_for_test();
+    let checkpoint_ends = reference_inspection.ends;
+    let prior_module = reference_inspection
+        .library_units
+        .last()
+        .map(|unit| unit.module)
+        .expect("library checkpoint has a current module");
+    let (reference_builder, _) = reference_checkpoint.into_continuation();
+    let reference_binder = reference_builder.finish(prior_module);
+    let original_parents = (0..checkpoint_ends.scopes)
+        .map(|index| {
+            let scope = ScopeId(u32::try_from(index).expect("scope id fits u32"));
+            reference_binder
+                .graph
+                .get(scope)
+                .unwrap_or_else(|| panic!("reference scope {scope:?}"))
+                .parent
+        })
+        .collect::<Vec<_>>();
+
+    let checkpoint = LibraryCompiler::new()
+        .compile_binder_checkpoint(&profile)
+        .expect("continued binder checkpoint");
+    let bound = crate::check::checker::library_compiler::continue_library_project_binder(
+        checkpoint,
+        Vec::new(),
+    )
+    .expect("empty project continuation");
+    let binder = &bound.binder;
+
+    assert!(bound.module_scopes.is_empty());
+    assert!(bound.project_sources.is_empty());
+    assert_acyclic_parent_graph_before_resolution(binder);
+    assert_eq!(
+        binder.resolve_type(binder.module, "WU5DefinitelyMissing"),
+        None,
+        "missing-name resolution must terminate after the graph is proven acyclic"
+    );
+    assert_eq!(
+        binder.module, prior_module,
+        "an empty continuation preserves the checkpoint's current module"
+    );
+    for (index, expected_parent) in original_parents.into_iter().enumerate() {
+        let scope = ScopeId(u32::try_from(index).expect("scope id fits u32"));
+        assert_eq!(
+            binder
+                .graph
+                .get(scope)
+                .unwrap_or_else(|| panic!("continued scope {scope:?}"))
+                .parent,
+            expected_parent,
+            "empty continuation reparented pre-existing {scope:?}"
+        );
+    }
+}
+
+#[test]
+fn unique_declare_global_type_links_across_modules_in_both_input_orders() {
+    const DECLARATION_PATH: &str = "/project/00_global.ts";
+    const CONSUMER_PATH: &str = "/project/99_consumer.ts";
+    const DECLARATION_SOURCE: &str = r#"export {};
+declare global {
+  interface WUUniqueGlobalType { value: number }
+}
+"#;
+    const CONSUMER_SOURCE: &str = r#"export {};
+const value: WUUniqueGlobalType = { value: 1 };
+"#;
+
+    let bind = |reversed| {
+        let mut inputs = vec![
+            UserDeltaProjectInputForTest {
+                path: DECLARATION_PATH,
+                source: DECLARATION_SOURCE,
+            },
+            UserDeltaProjectInputForTest {
+                path: CONSUMER_PATH,
+                source: CONSUMER_SOURCE,
+            },
+        ];
+        if reversed {
+            inputs.reverse();
+        }
+        shared_library_base_provider_for_test()
+            .continue_library_binder_checkpoint_for_test(&inputs, |_, _| {})
+            .expect("declare-global project continuation")
+    };
+
+    for continuation in [bind(false), bind(true)] {
+        let module_for = |path: &str| {
+            continuation
+                .project_sources_for_test()
+                .iter()
+                .find(|row| row.normalized_path == path)
+                .map(|row| row.module)
+                .unwrap_or_else(|| panic!("continued module {path}"))
+        };
+        let declaration_module = module_for(DECLARATION_PATH);
+        let consumer_module = module_for(CONSUMER_PATH);
+        let binder = &continuation.bound.binder;
+        let type_group_for = |module| {
+            binder
+                .resolve_type(module, "WUUniqueGlobalType")
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.ty)
+                .unwrap_or_else(|| panic!("WUUniqueGlobalType from {module:?}"))
+        };
+        let declaration_group = type_group_for(declaration_module);
+        let consumer_group = type_group_for(consumer_module);
+        assert_eq!(declaration_group, consumer_group);
+        assert!(
+            binder
+                .type_groups
+                .get(declaration_group)
+                .is_some_and(|group| !group.fragments.is_empty()),
+            "the shared identity owns its declare-global fragment"
+        );
+
+        let binding_start = u32::try_from(
+            DECLARATION_SOURCE
+                .find("WUUniqueGlobalType")
+                .expect("unique global binding"),
+        )
+        .expect("binding offset fits u32");
+        let declaration = binder
+            .exact_declaration_at(
+                declaration_module,
+                binding_start,
+                DeclarationKind::Interface,
+            )
+            .expect("exact declare-global interface declaration");
+        let lexical_scope = declaration.site.scope.expect("interface lexical scope");
+        let lexical_scope = binder
+            .graph
+            .get(lexical_scope)
+            .expect("declare-global lexical scope");
+        assert_eq!(lexical_scope.kind, ScopeKind::GlobalOverlay);
+        assert_eq!(
+            lexical_scope.parent,
+            Some(declaration_module),
+            "global publication must retain the syntax module as its lexical parent"
+        );
+    }
 }
 
 #[test]
