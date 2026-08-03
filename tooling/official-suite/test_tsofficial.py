@@ -449,6 +449,77 @@ class FetchIntegrityTests(unittest.TestCase):
                 with self.assertRaises(ts.FetchFailure):
                     ts.baseline_paths(ts.PINNED_SHA)
 
+    def test_equal_option_variants_publish_one_truthful_oracle(self):
+        """Option-suffixed baselines with the same parsed diagnostics are one
+        stable oracle, never an expected-clean test."""
+        with self._isolated_paths():
+            source = "tests/cases/conformance/x/case.ts"
+            es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+            es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+            baseline = b"case.ts(2,7): error TS2322: mismatch\n"
+            blobs = {
+                source: b"// @target: es5, es2015\nconst x: string = 1;\n",
+                es5: baseline,
+                es2015: baseline,
+            }
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                 mock.patch.object(ts, "baseline_paths", return_value={es5, es2015}), \
+                 mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                ts.cmd_fetch(self._args())
+
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                manifest = json.load(f)
+            entry = manifest["tests"][0]
+            self.assertEqual(manifest["format"], 4)
+            self.assertEqual(entry["baseline_mode"], "stable-variants")
+            self.assertEqual(entry["baseline_sources"], [
+                {"options": {"target": "es5"}, "source": es5, "baseline": True},
+                {"options": {"target": "es2015"}, "source": es2015,
+                 "baseline": True},
+            ])
+            with open(os.path.join(ts.CORPUS, "conformance/x/case.errors.txt"), "rb") as f:
+                self.assertEqual(f.read(), baseline)
+
+    def test_option_sensitive_variants_are_explicitly_out_of_scope(self):
+        """A missing clean variant and an error-bearing variant cannot be
+        collapsed or silently called expected-clean."""
+        with self._isolated_paths():
+            source = "tests/cases/conformance/x/case.ts"
+            es5 = "tests/baselines/reference/case(target=es5).errors.txt"
+            es2015 = "tests/baselines/reference/case(target=es2015).errors.txt"
+            blobs = {
+                source: b"// @target: es5, es2015\nconst x: string = 1;\n",
+                es2015: b"case.ts(2,7): error TS2322: mismatch\n",
+            }
+            with mock.patch.object(ts, "prepare_git_cache", return_value=ts.PINNED_SHA), \
+                 mock.patch.object(ts, "collect_git_ts_paths", return_value=[source]), \
+                 mock.patch.object(ts, "baseline_paths", return_value={es2015}), \
+                 mock.patch.object(ts, "read_git_blobs", return_value=blobs):
+                ts.cmd_fetch(self._args())
+
+            with open(os.path.join(ts.CORPUS, "manifest.json")) as f:
+                manifest = json.load(f)
+            entry = manifest["tests"][0]
+            self.assertEqual(entry["baseline_mode"], "option-variant")
+            self.assertEqual(entry["baseline_sources"], [
+                {"options": {"target": "es5"}, "source": es5, "baseline": False},
+                {"options": {"target": "es2015"}, "source": es2015,
+                 "baseline": True},
+            ])
+            self.assertFalse(os.path.exists(
+                os.path.join(ts.CORPUS, "conformance/x/case.errors.txt")))
+
+            binary = fake_clean_batch_binary()
+            try:
+                ts.cmd_run(self._args(binary=binary))
+            finally:
+                os.unlink(binary)
+            with open(os.path.join(ts.REPORT, "latest.json")) as f:
+                report = json.load(f)
+            row = next(item for item in report["files"] if item["rel"].endswith("case.ts"))
+            self.assertEqual(row["bucket"], "option-variant")
+
     def test_git_tree_rejects_path_escape_and_links(self):
         escaped = self._tree_entry("100644", "blob", "a" * 40, "tests/cases/../escape.ts")
         with self.assertRaises(ts.FetchFailure):
