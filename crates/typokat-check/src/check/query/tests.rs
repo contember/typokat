@@ -4082,3 +4082,55 @@ fn malformed_nested_declared_relation_cannot_succeed_through_error() {
     ));
     assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
 }
+
+fn cyclic_nested_declared_root(interner: &mut Interner) -> TypeId {
+    let first = crate::types::repr::DeclaredRecipeId(
+        u32::try_from(interner.store().all_declared_recipes().count())
+            .expect("recipe count fits u32"),
+    );
+    let second = crate::types::repr::DeclaredRecipeId(
+        first.0.checked_add(1).expect("second recipe id fits u32"),
+    );
+    assert_eq!(
+        interner.intern_declared_recipe(DeclaredRecipeNode::Array(second)),
+        first
+    );
+    assert_eq!(
+        interner.intern_declared_recipe(DeclaredRecipeNode::Readonly(first)),
+        second
+    );
+    interner.intern_declared(first, [])
+}
+
+#[test]
+fn cyclic_nested_declared_demand_exhausts_as_invalid() {
+    let mut interner = Interner::with_intrinsics();
+    let root = cyclic_nested_declared_root(&mut interner);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(root),
+        DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: root })
+    );
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn cyclic_nested_declared_relation_cannot_succeed_or_overflow() {
+    let mut interner = Interner::with_intrinsics();
+    let target = interner.well_known().string;
+    let root = cyclic_nested_declared_root(&mut interner);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(root, target),
+        RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty }) if ty == root
+    ));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+}
