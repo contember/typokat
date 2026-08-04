@@ -1574,6 +1574,36 @@ fn planner_bounds_successive_evaluator_results_as_one_query() {
 }
 
 #[test]
+fn invalid_declared_evaluation_records_a_typed_frontier_instead_of_panicking() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let published = PublishedClasses::empty();
+    let projection_memo = FxHashMap::default();
+    let evaluation_memo = FxHashMap::default();
+
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut planner = ProjectionPlanner::new(
+            &mut interner,
+            &published,
+            &projection_memo,
+            &evaluation_memo,
+            0,
+            false,
+            None,
+        );
+        planner.evaluate_declared(wk.number, SemanticVisitPolicy::DemandOuterOnly);
+        planner.finish()
+    }));
+    let transaction = match attempt {
+        Ok(transaction) => transaction,
+        Err(_) => panic!("an invalid declared evaluator input must become a typed frontier"),
+    };
+
+    assert!(transaction.planning_tainted);
+    assert!(transaction.plan.normalize(wk.number).is_err());
+}
+
+#[test]
 fn exhausted_inference_attempt_contributes_no_candidate_or_write() {
     let mut interner = Interner::with_intrinsics();
     let class = ClassId(80_006);
