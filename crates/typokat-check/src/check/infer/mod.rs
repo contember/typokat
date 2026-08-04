@@ -7,6 +7,8 @@
 //! guard makes recursive matching terminate.
 
 mod context;
+#[cfg(test)]
+mod derivation_identity_spec;
 mod helpers;
 #[cfg(test)]
 mod tests;
