@@ -4043,3 +4043,42 @@ fn repeated_queries_reclaim_occurrence_provenance() {
         );
     }
 }
+
+fn malformed_nested_declared_root(interner: &mut Interner) -> TypeId {
+    let missing_child = crate::types::repr::DeclaredRecipeId(u32::MAX);
+    let recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Array(missing_child));
+    interner.intern_declared(recipe, [])
+}
+
+#[test]
+fn malformed_nested_declared_demand_exhausts_as_invalid() {
+    let mut interner = Interner::with_intrinsics();
+    let root = malformed_nested_declared_root(&mut interner);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .demand(root),
+        DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: root })
+    );
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn malformed_nested_declared_relation_cannot_succeed_through_error() {
+    let mut interner = Interner::with_intrinsics();
+    let target = interner.well_known().string;
+    let root = malformed_nested_declared_root(&mut interner);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(root, target),
+        RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty }) if ty == root
+    ));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+}
