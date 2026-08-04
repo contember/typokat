@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict --target es2025: TS2322, TS7053 x3, then TS2322.
+// tsc 6.0.3 --strict --target es2025: TS2322, TS7053 x3, then TS2322 x3.
 // Backlogs 48, 49, and 75 own exact-key element-access diagnostics and primitive
 // library members. Until they ship, typokat must fail closed instead of returning error.
 
@@ -21,3 +21,9 @@ const b14ExactUnionSymbolMissing: string = b14ExactSymbolMixed[Symbol.iterator](
 
 declare const b14ExactSymbolText: string;
 const b14ExactStringIteratorWrong: number = b14ExactSymbolText[Symbol.iterator](); // incomplete[expr-infer/element-access/unsupported-symbol-receiver]
+
+declare const b14ExactSymbolArray: number[];
+const b14ExactArrayIteratorWrong: number = b14ExactSymbolArray[Symbol.iterator]; // incomplete[expr-infer/element-access/unsupported-symbol-receiver]
+
+declare const b14ExactSymbolTuple: [number, string];
+const b14ExactTupleIteratorWrong: number = b14ExactSymbolTuple[Symbol.iterator]; // incomplete[expr-infer/element-access/unsupported-symbol-receiver]
