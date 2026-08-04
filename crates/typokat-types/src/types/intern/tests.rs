@@ -2011,3 +2011,26 @@ fn intrinsics_get_small_fixed_ids() {
     }
     assert_eq!(interner.store().len(), IntrinsicKind::ALL.len());
 }
+
+#[test]
+fn freeze_does_not_publish_transient_occurrence_derivations() {
+    let mut interner = Interner::with_intrinsics();
+    let string = interner.well_known().string;
+    let application = interner.intern_class_instance(ClassId(80_000), vec![string]);
+    let occurrence = interner
+        .class_instance_occurrence_derived(application)
+        .expect("class application has an occurrence graph");
+    assert!(occurrence.derivation.is_some());
+    let (base_before, local_before) = interner.derivation_storage_counts_for_test();
+    assert_eq!(base_before, 0);
+    assert!(local_before > 0, "negative control must allocate provenance");
+
+    interner.freeze_as_base().expect("complete interner seals");
+    assert_eq!(
+        interner.derivation_storage_counts_for_test(),
+        (0, 0),
+        "freezing semantic types must discard transient occurrence provenance"
+    );
+    let delta = interner.fork_delta().expect("sealed interner forks");
+    assert_eq!(delta.derivation_storage_counts_for_test(), (0, 0));
+}

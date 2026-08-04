@@ -3995,3 +3995,51 @@ fn completed_generic_failure_preserves_binder_and_fresh_id_result() {
     assert_eq!(next_type_param, after_promotion);
     assert_eq!(state.completed_relation_len(), 1);
 }
+
+#[test]
+fn repeated_queries_reclaim_occurrence_provenance() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let alias_parameter = TypeParamId(99_293);
+    let alias_parameter_ty = interner.intern_type_param(alias_parameter, "Alias");
+    let alias_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", alias_parameter_ty)],
+        ..Default::default()
+    });
+    let source = interner.intern_instantiation(alias_template, vec![(alias_parameter, wk.string)]);
+    let inferred_parameter = TypeParamId(99_294);
+    let inferred = interner.intern_type_param(inferred_parameter, "T");
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", inferred)],
+        ..Default::default()
+    });
+    let active = FxHashSet::from_iter([inferred_parameter]);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for attempt in 0..64 {
+        let mut candidates = Candidates::default();
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .infer_types_for_params(source, target, &mut candidates, &active),
+            DemandOutcome::Ready(()),
+            "attempt {attempt} inference must complete"
+        );
+        assert_eq!(
+            candidates.get(&inferred_parameter),
+            Some(&vec![wk.string]),
+            "attempt {attempt} must infer through the exact instantiation occurrence"
+        );
+        assert_eq!(
+            interner.derivation_storage_counts_for_test(),
+            (0, 0),
+            "attempt {attempt} must reclaim its query-local occurrence provenance"
+        );
+    }
+}

@@ -878,6 +878,11 @@ impl Interner {
             .flat_map(|bucket| bucket.iter().copied())
             .find(|&id| eq(&self.store, id))
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn derivation_storage_counts_for_test(&self) -> (usize, usize) {
+        (self.derivations.base.len(), self.derivations.local.len())
+    }
 }
 
 /// Structural equality of two **canonical** (key-sorted) property lists — the
