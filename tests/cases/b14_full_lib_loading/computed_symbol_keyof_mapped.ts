@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict --target es2025: TS2741 then TS2322 below.
+// tsc 6.0.3 --strict --target es2025: TS2741 then TS2322 x2 below.
 
 interface B14SymbolMappedSource {
   label: string;
@@ -17,3 +17,6 @@ const b14SymbolMappedMissing: B14SymbolMappedCopy<B14SymbolMappedSource> = {
 
 declare const b14SymbolKey: keyof B14SymbolMappedSource;
 const b14SymbolKeyImpossible: never = b14SymbolKey; // error[TK2322]: not assignable to type 'never'
+
+declare const b14ArbitrarySymbolKey: symbol;
+const b14SymbolKeyMustStayExact: keyof B14SymbolMappedSource = b14ArbitrarySymbolKey; // error[TK2322]
