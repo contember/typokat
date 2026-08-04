@@ -1637,6 +1637,120 @@ fn exhausted_inference_preserves_caller_candidates() {
 }
 
 #[test]
+fn cycle_tainted_declared_inference_exhausts_without_mutating_caller_state() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_parameter = TypeParamId(80_306);
+    let source_parameter_ty = interner.intern_type_param(source_parameter, "Source");
+    let template = interner.reserve_object();
+    interner.fill_object(
+        template,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("self", template),
+                PropertyType::public("value", source_parameter_ty),
+            ],
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        substitute_with_outcome(
+            &mut interner,
+            template,
+            &FxHashMap::from_iter([(source_parameter, wk.string)]),
+        ),
+        SubstitutionOutcome::CycleTainted(_)
+    ));
+
+    let string = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![source_parameter],
+        arguments: vec![string],
+    });
+    let source = interner.intern_declared(source_recipe, []);
+    let inferred_parameter = TypeParamId(80_307);
+    let target = interner.intern_type_param(inferred_parameter, "Inferred");
+    let sentinel_parameter = TypeParamId(80_308);
+    let sentinel = Candidates::from_iter([(sentinel_parameter, vec![wk.number])]);
+    let mut candidates = sentinel.clone();
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let durable_before = state.durable_lengths();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .infer_types(source, target, &mut candidates);
+    assert_eq!(durable_before, (0, 0, 0, 0, 0));
+    assert_eq!(
+        (outcome, candidates, state.durable_lengths()),
+        (
+            DemandOutcome::Exhausted(Exhaustion::EvaluationCycle { ty: source }),
+            sentinel,
+            durable_before,
+        )
+    );
+}
+
+#[test]
+fn cycle_tainted_class_projection_inference_exhausts_without_mutating_caller_state() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let class = ClassId(80_309);
+    let source_parameter = TypeParamId(80_309);
+    let source_parameter_ty = interner.intern_type_param(source_parameter, "Source");
+    let instance_template = interner.reserve_object();
+    interner.fill_object(
+        instance_template,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("self", instance_template),
+                PropertyType::public("value", source_parameter_ty),
+            ],
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        substitute_with_outcome(
+            &mut interner,
+            instance_template,
+            &FxHashMap::from_iter([(source_parameter, wk.string)]),
+        ),
+        SubstitutionOutcome::CycleTainted(_)
+    ));
+
+    let published = published(
+        class,
+        vec![source_parameter],
+        instance_template,
+        wk.error,
+    );
+    let source = interner.intern_class_instance(class, vec![wk.string]);
+    let inferred_parameter = TypeParamId(80_310);
+    let target = interner.intern_type_param(inferred_parameter, "Inferred");
+    let sentinel_parameter = TypeParamId(80_311);
+    let sentinel = Candidates::from_iter([(sentinel_parameter, vec![wk.number])]);
+    let mut candidates = sentinel.clone();
+    let mut state = SemanticQueryState::default();
+    let durable_before = state.durable_lengths();
+    let mut next_type_param = 0;
+
+    let outcome =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .infer_types(source, target, &mut candidates);
+    assert_eq!(durable_before, (0, 0, 0, 0, 0));
+    assert_eq!(
+        (outcome, candidates, state.durable_lengths()),
+        (
+            DemandOutcome::Exhausted(Exhaustion::EvaluationCycle { ty: source }),
+            sentinel,
+            durable_before,
+        )
+    );
+}
+
+#[test]
 fn relation_preserves_frontier_vs_earlier_mismatch_order() {
     fn recursive_surface(
         interner: &mut Interner,
