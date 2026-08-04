@@ -1,4 +1,4 @@
-// tsc 6.0.3 --strict --target es2025: TS2322 x2 below. Computed and dotted
+// tsc 6.0.3 --strict --target es2025: TS2322 x3 below. Computed and dotted
 // access to the certified Symbol binding name the same exact well-known keys.
 
 interface B14ComputedSymbolIterator {
@@ -10,3 +10,4 @@ declare const b14ComputedSymbolIterator: B14ComputedSymbolIterator;
 
 const b14ComputedSymbolIteratorWrong: string = b14ComputedSymbolIterator[Symbol["iterator"]](); // error[TK2322]
 const b14ComputedAsyncIteratorWrong: number = b14ComputedSymbolIterator[Symbol["asyncIterator"]](); // error[TK2322]
+const b14ParenthesizedSymbolIteratorWrong: string = b14ComputedSymbolIterator[Symbol[("iterator")]](); // error[TK2322]
