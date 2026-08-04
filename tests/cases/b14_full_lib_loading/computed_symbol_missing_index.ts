@@ -1,5 +1,5 @@
 // tsc 6.0.3 --strict --target es2025: TS2322, TS7053 x3, TS2322 x3,
-// TS18046, TS18047, then TS18048. The any and never controls are clean.
+// TS18046, TS18047, TS18048, TS18047, then TS18048. The any and never controls are clean.
 // Backlogs 48, 49, and 75 own exact-key element-access diagnostics and primitive
 // library members. Until they ship, typokat must fail closed instead of returning error.
 
@@ -37,6 +37,12 @@ b14ExactSymbolNull[Symbol.iterator]; // incomplete[expr-infer/element-access/nul
 
 declare const b14ExactSymbolUndefined: undefined;
 b14ExactSymbolUndefined[Symbol.iterator]; // incomplete[expr-infer/element-access/nullish-receiver]
+
+declare const b14ExactSymbolMaybeNull: B14ExactSymbolIterator | null;
+b14ExactSymbolMaybeNull[Symbol.iterator](); // incomplete[expr-infer/element-access/nullish-receiver]
+
+declare const b14ExactSymbolMaybeUndefined: B14ExactSymbolIterator | undefined;
+b14ExactSymbolMaybeUndefined[Symbol.iterator](); // incomplete[expr-infer/element-access/nullish-receiver]
 
 declare const b14ExactSymbolAny: any;
 b14ExactSymbolAny[Symbol.iterator];
