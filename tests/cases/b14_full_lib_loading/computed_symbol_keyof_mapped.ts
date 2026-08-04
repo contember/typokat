@@ -11,9 +11,9 @@ declare const b14SymbolMappedCopy: B14SymbolMappedCopy<B14SymbolMappedSource>;
 const b14SymbolMappedLabel: string = b14SymbolMappedCopy.label;
 b14SymbolMappedCopy[Symbol.iterator]();
 
-const b14SymbolMappedMissing: B14SymbolMappedCopy<B14SymbolMappedSource> = {
+const b14SymbolMappedMissing: B14SymbolMappedCopy<B14SymbolMappedSource> = { // error[TK2741]
   label: "missing symbol",
-}; // error[TK2741]
+};
 
 declare const b14SymbolKey: keyof B14SymbolMappedSource;
 const b14SymbolKeyImpossible: never = b14SymbolKey; // error[TK2322]: not assignable to type 'never'
