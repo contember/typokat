@@ -67,6 +67,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
 
+  # Rebuild the source-backed library package in clean roots and verify its
+  # complete pinned asset inventory and extracted crates.
+  library-package:
+    name: library package (reproducible artifact)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify clean package extraction
+        run: >-
+          cargo test --test library_package_assets
+          cargo_package_ships_every_library_source_and_checks_clean
+          -- --ignored --exact --nocapture
+
   # The official-suite harness's own stdlib-only unit tests (no third-party deps).
   python-harness:
     name: python harness tests
