@@ -302,9 +302,13 @@ fn check_source_against_library(
             continue_source_with_library_runtime(state, source)
         }
         Ok(RoutedLibraryProject::Private(private)) => {
+            #[cfg(test)]
+            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
             continue_private_source_with_library(private, source)
         }
         Ok(RoutedLibraryProject::CompleteSourceFallback(fallback)) => {
+            #[cfg(test)]
+            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
             continue_complete_source_with_library(
                 *fallback,
                 vec![FileInput {
@@ -395,9 +399,13 @@ fn check_project_against_library(
             continue_project_with_library_runtime(state, inputs)
         }
         Ok(RoutedLibraryProject::Private(private)) => {
+            #[cfg(test)]
+            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
             continue_private_project_with_library(private, inputs)
         }
         Ok(RoutedLibraryProject::CompleteSourceFallback(fallback)) => {
+            #[cfg(test)]
+            crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
             continue_complete_source_with_library(*fallback, inputs)
         }
     }
@@ -488,6 +496,8 @@ fn continue_complete_source_with_library(
     fallback: typokat_library::CompleteSourceFallbackRuntime,
     inputs: Vec<FileInput>,
 ) -> Result<Vec<FileReport>, String> {
+    #[cfg(test)]
+    crate::check::checker::library_compiler::record_private_replay_fallback_invocation_for_test();
     let auxiliary = fallback
         .sources
         .iter()
@@ -608,22 +618,21 @@ fn check_project_inner_with_checker<F>(inputs: Vec<FileInput>, check_project: F)
 where
     F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Vec<CheckResult>,
 {
-    match check_project_reports::<_, std::convert::Infallible>(inputs, |interner, units| {
-        Ok(check_project(interner, units))
-    }) {
-        Ok(reports) => reports,
-        Err(never) => match never {},
-    }
+    check_project_reports(inputs, |interner, units| Ok(check_project(interner, units)))
+        .expect("test checker returns complete project result coverage")
 }
 
 /// [`check_project_inner_with_checker`] for a checker that can refuse the run outright. A refusal
 /// yields `Err` before any [`FileReport`] is built, so no partial user output precedes it.
-fn check_project_reports<F, E>(
+fn check_project_reports<F>(
     inputs: Vec<FileInput>,
     check_project: F,
-) -> Result<Vec<FileReport>, E>
+) -> Result<Vec<FileReport>, &'static str>
 where
-    F: for<'ast> FnOnce(&mut Interner, &[ProjectProgram<'ast>]) -> Result<Vec<CheckResult>, E>,
+    F: for<'ast> FnOnce(
+        &mut Interner,
+        &[ProjectProgram<'ast>],
+    ) -> Result<Vec<CheckResult>, &'static str>,
 {
     if inputs.is_empty() {
         return Ok(Vec::new());
@@ -639,54 +648,120 @@ where
     project_reports_from_frontend_run(run)
 }
 
-type CheckedProjectFrontendProduct<E> = (Vec<usize>, Result<Vec<CheckResult>, E>);
+type CheckedProjectFrontendProduct = (Vec<usize>, Result<Vec<CheckResult>, &'static str>);
 
-fn project_reports_from_frontend_run<E>(
-    run: ProjectFrontendRun<CheckedProjectFrontendProduct<E>>,
-) -> Result<Vec<FileReport>, E> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectReportAssemblyError {
+    InputCoverage,
+    ParseCoverage,
+    ProjectUnitOutOfRange,
+    DuplicateProjectUnit,
+    ResultCoverage,
+    ResultOrder,
+    ResultOutOfRange,
+    ResultMisindexed,
+    DuplicateResult,
+    MissingResult,
+}
+
+impl ProjectReportAssemblyError {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::InputCoverage => "project unit coverage does not match the input count",
+            Self::ParseCoverage => "project parse coverage does not match the input count",
+            Self::ProjectUnitOutOfRange => "project unit references an out-of-range input",
+            Self::DuplicateProjectUnit => "project units contain a duplicate input",
+            Self::ResultCoverage => "checker result count does not match the input count",
+            Self::ResultOrder => "checker results are not in dependency order",
+            Self::ResultOutOfRange => "checker result references an out-of-range input",
+            Self::ResultMisindexed => "checker result does not match its project unit",
+            Self::DuplicateResult => "checker results contain a duplicate input",
+            Self::MissingResult => "checker results do not cover every input",
+        }
+    }
+}
+
+fn project_reports_from_frontend_run(
+    run: ProjectFrontendRun<CheckedProjectFrontendProduct>,
+) -> Result<Vec<FileReport>, &'static str> {
     let ProjectFrontendRun {
         inputs,
         parse_errors,
         product: (project_units_by_slot, ordered_results),
     } = run;
     let ordered_results = ordered_results?;
-    let mut diagnostics_by_original: Vec<Vec<Diagnostic>> =
-        (0..inputs.len()).map(|_| Vec::new()).collect();
-    let mut incomplete_by_original: Vec<Vec<IncompleteSurface>> =
-        (0..inputs.len()).map(|_| Vec::new()).collect();
-    for result in ordered_results {
-        let original = result.module_ordinal.index();
-        debug_assert_eq!(
-            project_units_by_slot.get(result.unit_slot.index()).copied(),
-            Some(result.module_ordinal.index())
-        );
-        if let Some(slot) = diagnostics_by_original.get_mut(original) {
-            *slot = result.diagnostics;
-        }
-        if let Some(slot) = incomplete_by_original.get_mut(original) {
-            *slot = result.incomplete;
-        }
+    assemble_project_reports(inputs, parse_errors, project_units_by_slot, ordered_results)
+        .map_err(ProjectReportAssemblyError::message)
+}
+
+fn assemble_project_reports(
+    inputs: Vec<FileInput>,
+    parse_errors: Vec<Vec<String>>,
+    project_units_by_slot: Vec<usize>,
+    ordered_results: Vec<CheckResult>,
+) -> Result<Vec<FileReport>, ProjectReportAssemblyError> {
+    let input_count = inputs.len();
+    if project_units_by_slot.len() != input_count {
+        return Err(ProjectReportAssemblyError::InputCoverage);
+    }
+    if parse_errors.len() != input_count {
+        return Err(ProjectReportAssemblyError::ParseCoverage);
     }
 
-    Ok(inputs
+    let mut expected_inputs = vec![false; input_count];
+    for &original in &project_units_by_slot {
+        let Some(seen) = expected_inputs.get_mut(original) else {
+            return Err(ProjectReportAssemblyError::ProjectUnitOutOfRange);
+        };
+        if std::mem::replace(seen, true) {
+            return Err(ProjectReportAssemblyError::DuplicateProjectUnit);
+        }
+    }
+    if ordered_results.len() != input_count {
+        return Err(ProjectReportAssemblyError::ResultCoverage);
+    }
+
+    let mut channels_by_original: Vec<Option<(Vec<Diagnostic>, Vec<IncompleteSurface>)>> =
+        (0..input_count).map(|_| None).collect();
+    for (ordered_slot, result) in ordered_results.into_iter().enumerate() {
+        let original = result.module_ordinal.index();
+        if result.unit_slot.index() != ordered_slot {
+            return Err(ProjectReportAssemblyError::ResultOrder);
+        }
+        if original >= input_count {
+            return Err(ProjectReportAssemblyError::ResultOutOfRange);
+        }
+        if project_units_by_slot.get(ordered_slot).copied() != Some(original) {
+            return Err(ProjectReportAssemblyError::ResultMisindexed);
+        }
+        let Some(slot) = channels_by_original.get_mut(original) else {
+            return Err(ProjectReportAssemblyError::ResultOutOfRange);
+        };
+        if slot.is_some() {
+            return Err(ProjectReportAssemblyError::DuplicateResult);
+        }
+        *slot = Some((result.diagnostics, result.incomplete));
+    }
+
+    inputs
         .into_iter()
-        .enumerate()
-        .map(|(index, input)| FileReport {
-            name: input.name,
-            source: input.source,
-            output: CheckOutput {
-                diagnostics: diagnostics_by_original
-                    .get_mut(index)
-                    .map(std::mem::take)
-                    .unwrap_or_default(),
-                parse_errors: parse_errors.get(index).cloned().unwrap_or_default(),
-                incomplete: incomplete_by_original
-                    .get_mut(index)
-                    .map(std::mem::take)
-                    .unwrap_or_default(),
-            },
+        .zip(parse_errors)
+        .zip(channels_by_original)
+        .map(|((input, parse_errors), channels)| {
+            let Some((diagnostics, incomplete)) = channels else {
+                return Err(ProjectReportAssemblyError::MissingResult);
+            };
+            Ok(FileReport {
+                name: input.name,
+                source: input.source,
+                output: CheckOutput {
+                    diagnostics,
+                    parse_errors,
+                    incomplete,
+                },
+            })
         })
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
