@@ -394,6 +394,50 @@ fn cold_route_preserves_library_value_winners_on_identifiers_and_global_this() -
 }
 
 #[test]
+fn cold_route_refreshes_inferred_global_this_contributors() -> Result<(), String> {
+    let inferred = compare_routes(vec![FileInput {
+        name: "/wu6/inferred-global-value.ts".to_owned(),
+        source: concat!(
+            "function inferredGlobalValue() { return 1; }\n",
+            "const value: number = globalThis.inferredGlobalValue();\n",
+        )
+        .to_owned(),
+    }])?;
+    let [inferred] = inferred.as_slice() else {
+        return Err("inferred global-value project must return one report".to_owned());
+    };
+    if !inferred.output.diagnostics.is_empty() {
+        return Err(format!(
+            "globalThis must observe the finalized inferred return type: {:?}",
+            shape(&inferred.output)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn cold_route_preserves_direct_global_this_static_overlay() -> Result<(), String> {
+    let direct_global_this = compare_routes(vec![FileInput {
+        name: "/wu6/direct-global-this.ts".to_owned(),
+        source: concat!(
+            "class globalThis { static invented: number; }\n",
+            "const value: number = globalThis.invented;\n",
+        )
+        .to_owned(),
+    }])?;
+    let [direct_global_this] = direct_global_this.as_slice() else {
+        return Err("direct globalThis project must return one report".to_owned());
+    };
+    if diagnostic_codes(&direct_global_this.output) != ["TK2397"] {
+        return Err(format!(
+            "direct globalThis must retain its static overlay after TK2397: {:?}",
+            shape(&direct_global_this.output)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn cold_route_matches_shared_collision_semantics_in_both_orders() -> Result<(), String> {
     for reverse in [false, true] {
         let reports = compare_routes(collision_project(reverse))?;
