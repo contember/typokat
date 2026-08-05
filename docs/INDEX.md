@@ -63,6 +63,9 @@ decisions → reference → archive.
   collision-path conflict: a private epoch may share proven-unaffected immutable rows from that
   source-compiled base, while every affected meaning, identity, event, cache, and suffix stays
   private and republishes through the ordinary checker.
+  [`ADR-0021`](decisions/0021-use-complete-source-compilation-for-standalone-cli-checks.md) gives
+  one-project standalone CLI checks a separate complete-source lifecycle with one semantic
+  publication, while persistent batch and repeated API consumers retain the shared base.
   [`ADR-0018`](decisions/0018-pin-library-owned-records-as-a-named-census.md) settles what happens
   to the 875 records the library reports against itself: no process retains one, and the suite pins
   the complete set as a named `(code, site)` multiset

@@ -180,6 +180,35 @@ assumption.
   committed. A failing row stops closure and cannot be relabelled out of scope.
 - **Touch points.** `tooling/full-lib-bench/` and evidence only after WU5 is green.
 
+### WU6A — replace the failed standalone lifecycle (effort L)
+
+- **Problem.** The first authoritative WU6 run is NO-GO because a one-project CLI process builds
+  the shared base and then takes complete-source fallback. The non-authoritative probe provides
+  `PROMISING` evidence sufficient to specify a one-publication candidate, but its example discards
+  project import dependencies and is not a production route.
+- **Verify first.** Pin the probe's `m29_modules/basic_named` false-`TK2304` result as a negative
+  control. Trace one production entry from parse and dependency ordering through the library binder
+  checkpoint and semantic publication. Reject any candidate that acquires the provider, constructs
+  replay state, parses a packaged library source twice, or binds user imports with an empty
+  dependency list.
+- **Scope.** Implement ADR-0021 behind the real project frontend. A distinct `check_project_once`
+  entry point gives ordinary standalone CLI checks one complete library-plus-project source
+  publication. Existing driver APIs and the official batch retain the shared provider. Add distinct
+  route attestations; keep parse-first routing, original report order, the exact fixed profile,
+  library-ledger completion and census coverage, and the 256 MiB worker. Do not delete ADR-0020
+  machinery or promote the test-only example.
+- **Acceptance / witness.** Spec-first tests cover imports in both input orders, dependency cycles
+  and missing modules, every B102/B103 shape in both orders, parser diagnostic/panic precedence,
+  exit-3 incomplete output, mixed output, original report order, exactly one cold source compile,
+  provider non-initialization, and one-base isolated batch reuse. Cross-route output is exact on the
+  complete conformance corpus; the known broken import probe fires; full WU5 gates are rerun before
+  WU6 is repeated.
+- **Stop / falsifier.** Stop if project-correct complete-source checking requires a second semantic
+  publication, a second library parse, a cache/snapshot, or loses any all-row `>1.00` probe gate.
+- **Touch points.** `crates/typokat-frontend`, `crates/typokat-check`,
+  `crates/typokat-library`, `crates/typokat-driver`, `src/main.rs`, production acceptance tests,
+  and the benchmark route contract.
+
 ### WU7 — independent closure review (effort L)
 
 - **Problem.** Base/delta identity, project-global merging, route selection, parse ordering, cache
@@ -217,8 +246,10 @@ assumption.
 ## Sequencing
 
 WU0 → WU1. WU2 may run read-only alongside WU1 implementation/review. WU2 then selects exactly one
-WU3 path. WU3 → WU4 → WU5 → WU6 → WU7 are serial gates. No authoritative timing begins before
-semantic, production-acceptance, official-suite, differential, package, and CI gates are green.
+WU3 path. WU3 → WU4 → WU5 → WU6 (initial NO-GO) → WU6A → WU5 rerun → WU6 rerun → WU7 are serial
+gates. No authoritative timing begins before semantic, production-acceptance, official-suite,
+differential, package, and CI gates are green. A bounded non-authoritative remediation probe may run
+after a WU6 NO-GO, but it cannot support a product claim.
 
 ## Run log
 
@@ -291,3 +322,24 @@ semantic, production-acceptance, official-suite, differential, package, and CI g
   no diagnostic or incomplete identity and found no error-type success channel. The scoreboard was
   saved with ordinary `--save`, never `--rebaseline`; a fresh full `--check` then reported zero
   regressions, zero progress, and complete corpus/scoreboard membership.
+- **2026-08-05 — WU5 driver coverage and remote CI closed.** The WU6 harness exposed a driver
+  assembly bug that could turn missing project results into false-clean reports. Commits `b3ec832`,
+  `ca5d1e2`, and `e26d856` pin the coverage, ordering, and route failure classes and make every
+  missing or misindexed result fail closed. Commit `6de4977` separates the shared-route witness from
+  lifecycle tracing. GitHub Actions run `31009015017` passed every job; the later probe-parser fix
+  at `4694880` also passed every job in run `31026499352`.
+- **2026-08-05 — WU6 authoritative run stopped NO-GO.** Commit `2d3a73f` retains the raw evidence.
+  Across its three windows, fast-clean and fast-errors remained faster than tsgo at about
+  `1.05x`–`1.08x`, but collision and fanout were only `0.56x`–`0.58x`; p95 failed in the same
+  direction. Both private rows ultimately took the full-source fallback. The binding all-row gate
+  therefore stopped closure without changing the contract or relabelling either row.
+- **2026-08-05 — complete-source remediation probe passed conditionally.** Commits `51171fc` through
+  `4694880` specify, implement, harden, and independently review a non-authoritative one-pass probe.
+  Its validated evidence (SHA-256
+  `a2f1f0be310ec56952e42476a095ac7956407faa1fedceabfba5a9060c22c5ad`) was `PROMISING`: all four
+  one-pass/tsgo median, p95, and bootstrap lower bounds exceeded `1.00`, with median speedups
+  `1.1457`, `1.1484`, `1.1591`, and `1.1364` and 84 MiB median RSS. The probe itself is not
+  project-correct: `m29_modules/basic_named` proves that it discards import dependencies and emits
+  false `TK2304` diagnostics. The accepted direction is therefore the lifecycle measured by the
+  probe behind the real production frontend, never promotion of the example. →
+  [`ADR-0021`](../decisions/0021-use-complete-source-compilation-for-standalone-cli-checks.md).
