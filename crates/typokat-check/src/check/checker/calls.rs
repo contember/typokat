@@ -952,9 +952,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         call: &CallExpression<'_>,
+        contextual_return: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
         self.with_provisional_argument_effects(
-            |pass| pass.infer_call_inner(scope, call),
+            |pass| pass.infer_call_inner(scope, call, contextual_return),
             |pass| pass.rewalk_memoized_raw_arguments(scope, &call.arguments),
         )
     }
@@ -963,6 +964,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         call: &CallExpression<'_>,
+        contextual_return: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
         let wk = self.interner.well_known();
         let call_span = Span::from_oxc(call.span);
@@ -1099,18 +1101,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         };
 
-        let candidate = match self.select_call_candidate(
+        let candidate = match self.select_candidate(CandidateSelectionRequest {
             scope,
-            call,
-            &signatures,
-            PreparedCallArgs {
+            signatures: &signatures,
+            type_arguments: call.type_arguments.as_deref(),
+            args: PreparedCallArgs {
                 types: &arg_types,
                 fresh: &arg_fresh,
                 exprs: &arg_exprs,
             },
-            call_span,
-            call_receiver.map(|(receiver, _)| receiver),
-        ) {
+            span: call_span,
+            receiver: CandidateReceiver::Call(call_receiver.map(|(receiver, _)| receiver)),
+            contextual_return,
+        }) {
             DemandOutcome::Ready(Some(candidate)) => candidate,
             DemandOutcome::Ready(None) => return Some((wk.error, call_span)),
             DemandOutcome::Exhausted(exhaustion) => {
@@ -1933,25 +1936,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn select_call_candidate(
-        &mut self,
-        scope: ScopeId,
-        call: &CallExpression<'_>,
-        signatures: &[TypeId],
-        args: PreparedCallArgs<'_, '_>,
-        call_span: Span,
-        receiver: Option<TypeId>,
-    ) -> DemandOutcome<Option<CallCandidate>> {
-        self.select_candidate(CandidateSelectionRequest {
-            scope,
-            signatures,
-            type_arguments: call.type_arguments.as_deref(),
-            args,
-            span: call_span,
-            receiver: CandidateReceiver::Call(receiver),
-        })
-    }
-
     /// Ordered overload selection shared by call and construct wrappers.
     fn select_candidate(
         &mut self,
@@ -1964,6 +1948,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             args,
             span,
             receiver,
+            contextual_return,
         } = request;
         let overload = signatures.len() > 1;
         if !overload {
@@ -1976,6 +1961,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 type_arguments,
                 args,
                 call_receiver: receiver.inference_source(),
+                contextual_return,
                 commit_constraints: true,
                 reject_inferred_constraint_violations: false,
             }) {
@@ -2002,6 +1988,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     type_arguments,
                     args,
                     call_receiver: receiver.inference_source(),
+                    contextual_return,
                     commit_constraints: false,
                     reject_inferred_constraint_violations: true,
                 })
@@ -2062,6 +2049,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             type_arguments,
                             args,
                             call_receiver: receiver.inference_source(),
+                            contextual_return,
                             commit_constraints: true,
                             reject_inferred_constraint_violations: true,
                         })
@@ -2124,6 +2112,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             type_arguments,
             args,
             call_receiver,
+            contextual_return,
             commit_constraints,
             reject_inferred_constraint_violations,
         } = request;
@@ -2284,24 +2273,43 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     );
                     #[cfg(test)]
                     measure_call(|measure| measure.generic_full_inference_runs += 1);
-                    match infer::infer_signature_type_arguments_from_params(
-                        self.interner,
-                        &mut self.next_type_param,
-                        self.type_environment.published().classes(),
-                        &mut self.semantic_queries,
-                        infer::SignatureInferenceRequest {
-                            type_params: &generic_params,
-                            params: &params,
-                            args: &inference_args,
-                            fresh_args: args.fresh,
-                            receiver: call_receiver.zip(
-                                self.interner
-                                    .store()
-                                    .function_type(signature_ty)
-                                    .and_then(|function| function.receiver),
-                            ),
-                        },
+                    let request = infer::SignatureInferenceRequest {
+                        type_params: &generic_params,
+                        params: &params,
+                        args: &inference_args,
+                        fresh_args: args.fresh,
+                        receiver: call_receiver.zip(
+                            self.interner
+                                .store()
+                                .function_type(signature_ty)
+                                .and_then(|function| function.receiver),
+                        ),
+                    };
+                    let inferred = match contextual_return.zip(
+                        self.interner
+                            .store()
+                            .function_type(signature_ty)
+                            .map(|function| function.ret),
                     ) {
+                        Some((source, target)) => {
+                            infer::infer_signature_type_arguments_with_return_context(
+                                self.interner,
+                                &mut self.next_type_param,
+                                self.type_environment.published().classes(),
+                                &mut self.semantic_queries,
+                                request,
+                                (source, target),
+                            )
+                        }
+                        None => infer::infer_signature_type_arguments_from_params(
+                            self.interner,
+                            &mut self.next_type_param,
+                            self.type_environment.published().classes(),
+                            &mut self.semantic_queries,
+                            request,
+                        ),
+                    };
+                    match inferred {
                         DemandOutcome::Ready(result) => {
                             if inference_exhaustion.is_none() {
                                 inference_exhaustion = result.exhaustion;
@@ -3523,6 +3531,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             args,
             span,
             receiver: CandidateReceiver::Construct,
+            contextual_return: None,
         })
     }
 
@@ -4634,6 +4643,7 @@ struct CandidateSelectionRequest<'signatures, 'type_arguments, 'args, 'ast> {
     args: PreparedCallArgs<'args, 'ast>,
     span: Span,
     receiver: CandidateReceiver,
+    contextual_return: Option<TypeId>,
 }
 
 struct SignatureCandidateRequest<'a, 'ast> {
@@ -4642,6 +4652,7 @@ struct SignatureCandidateRequest<'a, 'ast> {
     type_arguments: Option<&'a TSTypeParameterInstantiation<'ast>>,
     args: PreparedCallArgs<'a, 'ast>,
     call_receiver: Option<TypeId>,
+    contextual_return: Option<TypeId>,
     commit_constraints: bool,
     reject_inferred_constraint_violations: bool,
 }

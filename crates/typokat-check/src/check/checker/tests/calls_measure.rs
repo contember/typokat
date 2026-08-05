@@ -103,6 +103,60 @@ fn measure_call_pipeline_fresh_literal_formula() {
 }
 
 #[test]
+fn contextual_result_inference_preserves_overload_order_and_candidate_count() {
+    let without_context = measure(
+        r#"
+        declare function choose<T>(): { kind: "first"; value: T };
+        declare function choose<T>(): { kind: "second"; value: T };
+        const selected = choose();
+        "#,
+    );
+    let with_context = measure(
+        r#"
+        declare function choose<T>(): { kind: "first"; value: T };
+        declare function choose<T>(): { kind: "second"; value: T };
+        const selected: { kind: "first"; value: string } = choose();
+        "#,
+    );
+    assert_eq!(with_context.speculative_candidate_builds, 1);
+    assert_eq!(with_context.committed_candidate_builds, 1);
+    assert_eq!(with_context.candidate_trials, 1);
+    assert_eq!(with_context.candidate_matches, 1);
+    assert_eq!(
+        (
+            with_context.speculative_candidate_builds,
+            with_context.committed_candidate_builds,
+            with_context.candidate_trials,
+            with_context.candidate_matches,
+            with_context.candidate_mismatches,
+            with_context.candidate_arity_failures,
+        ),
+        (
+            without_context.speculative_candidate_builds,
+            without_context.committed_candidate_builds,
+            without_context.candidate_trials,
+            without_context.candidate_matches,
+            without_context.candidate_mismatches,
+            without_context.candidate_arity_failures,
+        ),
+    );
+
+    let (ordered, diagnostics) = measure_with_diagnostics(
+        r#"
+        declare function choose<T>(): { kind: "first"; value: T };
+        declare function choose<T>(): { kind: "second"; value: T };
+        const selected: { kind: "second"; value: string } = choose();
+        "#,
+    );
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].0, "TK2322");
+    assert_eq!(ordered.speculative_candidate_builds, 1);
+    assert_eq!(ordered.committed_candidate_builds, 1);
+    assert_eq!(ordered.candidate_trials, 1);
+    assert_eq!(ordered.candidate_matches, 1);
+}
+
+#[test]
 fn contextual_numeric_callback_return_is_a_real_inference_candidate() {
     let (measure, diagnostics) = measure_with_diagnostics(
         r#"

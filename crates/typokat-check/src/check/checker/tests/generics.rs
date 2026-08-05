@@ -44,6 +44,124 @@ const c = identity<number>(\"s\");
     );
 }
 
+/// A call's expected result type fills only binders that ordinary call inputs did
+/// not fix. Explicit arguments and ordinary arguments stay authoritative, while a
+/// context-free call keeps the existing `unknown` fallback.
+#[test]
+fn contextual_call_result_infers_only_unfixed_type_parameters() {
+    let src = "\
+declare function from<T>(): T[];
+declare function from_arg<T>(value: T): T[];
+const inferred: string[] = from();
+const argument_wins: number[] = from_arg(\"text\");
+const explicit_wins: string[] = from<number>();
+const incompatible_shape: { value: string } = from();
+const unconstrained = from();
+const no_context_control: number[] = unconstrained;
+";
+    assert_eq!(
+        diags(src),
+        vec![
+            (4, "TK2322".to_string()),
+            (5, "TK2322".to_string()),
+            (6, "TK2322".to_string()),
+            (8, "TK2322".to_string()),
+        ]
+    );
+}
+
+/// Contextual-result evidence does not participate in overload applicability.
+/// An incompatible candidate falls back to the declaration constraint, so the
+/// first overload remains selected and the assignment reports the mismatch.
+#[test]
+fn contextual_result_constraint_violation_keeps_first_overload() {
+    let src = "\
+declare function constrained<T extends string>(): T[];
+declare function constrained(): number[];
+const selected: number[] = constrained();
+";
+    assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+}
+
+/// The same fallback is stable without overload selection: compatible context
+/// still infers, while incompatible context uses the constraint or default and
+/// leaves the ordinary assignment check responsible for the error.
+#[test]
+fn contextual_result_respects_single_signature_constraint_and_default() {
+    let src = "\
+declare function constrained<T extends string>(): T[];
+declare function defaulted<T extends string = \"fallback\">(): T[];
+const compatible: string[] = constrained();
+const incompatible: number[] = constrained();
+const default_fallback: number[] = defaulted();
+";
+    assert_eq!(
+        diags(src),
+        vec![(4, "TK2322".to_string()), (5, "TK2322".to_string())]
+    );
+}
+
+/// Contextual inference rechecks an earlier binder after a later binder's default
+/// is available. The optional context cannot bypass `T extends keyof U` while `U`
+/// is still unresolved.
+#[test]
+fn contextual_result_rechecks_constraint_after_later_default() {
+    let src = "\
+interface Keys { good: string }
+declare function later_key<T extends keyof U, U = Keys>(): T;
+const bad: \"bad\" = later_key();
+";
+    assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+}
+
+/// A compatible expected key remains useful after the later default is fixed.
+#[test]
+fn contextual_result_accepts_constraint_after_later_default() {
+    let src = "\
+interface Keys { good: string }
+declare function later_key<T extends keyof U, U = Keys>(): T;
+const good: \"good\" = later_key();
+";
+    assert!(diags(src).is_empty());
+}
+
+/// A later default remains authoritative when that binder also has a constraint.
+/// The complete proposal validates the earlier `keyof` candidate against `Keys`.
+#[test]
+fn contextual_result_rechecks_constraint_after_later_constrained_default() {
+    let src = "\
+interface Keys { good: string }
+declare function later_key<T extends keyof U, U extends Keys = Keys>(): T;
+const bad: \"bad\" = later_key();
+const good: \"good\" = later_key();
+";
+    assert_eq!(diags(src), vec![(3, "TK2322".to_string())]);
+}
+
+/// A contextual binder updates dependent defaults before a later contextual
+/// candidate is checked against them.
+#[test]
+fn contextual_result_recomputes_dependent_default_before_constraint() {
+    let src = "\
+declare function infer_pair<T, U = T, V extends U = U>(): [T, V];
+const bad: [string, number] = infer_pair();
+const good: [string, string] = infer_pair();
+";
+    assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+}
+
+/// Default dependencies propagate through the complete proposal rather than
+/// relying on one declaration-order pass.
+#[test]
+fn contextual_result_recomputes_multihop_default_chain() {
+    let src = "\
+declare function infer_chain<T, U = T, V = U, W extends V = V>(): [T, W];
+const bad: [string, number] = infer_chain();
+const good: [string, string] = infer_chain();
+";
+    assert_eq!(diags(src), vec![(2, "TK2322".to_string())]);
+}
+
 /// Two type parameters substitute independently and positionally: `pick<A, B>`
 /// returns `A`, so `pick<string, number>` returns `string`.
 #[test]

@@ -92,7 +92,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some((id, Span::from_oxc(obj.span)))
             }
             Expression::StaticMemberExpression(member) => self.infer_member_access(scope, member),
-            Expression::CallExpression(call) => self.infer_call(scope, call),
+            Expression::CallExpression(call) => self.infer_call(scope, call, None),
             // M11: `new ClassName(args)` — check the constructor signature and yield the
             // instance type.
             Expression::NewExpression(new_expr) => self.infer_new(scope, new_expr),
@@ -1050,9 +1050,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.interner.intern_array(element)
     }
 
-    /// Infer an initializer/source expression with a known target type. Only fresh
-    /// object/array literals are contextually shaped; every other expression remains
-    /// context-free through [`infer_expr`].
+    /// Infer an initializer/source expression with a known target type. Structured
+    /// expressions receive the target through their dedicated contextual paths;
+    /// all remaining expressions use [`infer_expr`].
     pub(in crate::check::checker) fn infer_initializer(
         &mut self,
         scope: ScopeId,
@@ -1068,6 +1068,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             Expression::LogicalExpression(logical) => {
                 return self.infer_logical(scope, logical, context);
+            }
+            Expression::CallExpression(call) => {
+                return self.infer_call(scope, call, context);
             }
             _ => {}
         }

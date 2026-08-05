@@ -113,6 +113,16 @@ struct CandidateCollectionRequest<'a> {
     receiver: Option<(TypeId, TypeId)>,
 }
 
+struct ReturnContextInferenceRequest<'a> {
+    type_params: &'a [GenericTypeParam],
+    active_params: &'a FxHashSet<TypeParamId>,
+    ordinary_bound: &'a FxHashSet<TypeParamId>,
+    constraints: &'a FxHashMap<TypeParamId, Option<TypeId>>,
+    baseline: FixedSignatureParams,
+    source: TypeId,
+    target: TypeId,
+}
+
 pub(crate) struct SignatureInferenceResult<T> {
     pub(crate) arguments: T,
     pub(crate) exhaustion: Option<Exhaustion>,
@@ -149,6 +159,10 @@ enum CallSiteSource {
     /// The explicit `this` receiver is a semantic inference input, never a
     /// synthetic positional argument.
     Receiver {
+        occurrence: usize,
+    },
+    /// Lower-priority evidence from the expected type of the call expression.
+    ReturnContext {
         occurrence: usize,
     },
 }
@@ -265,6 +279,38 @@ pub(crate) fn infer_signature_type_arguments_from_params(
     queries: &mut SemanticQueryState,
     request: SignatureInferenceRequest<'_>,
 ) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+    infer_signature_type_arguments(interner, next_type_param, published, queries, request, None)
+}
+
+/// Infer a generic signature from its ordinary call inputs plus the call
+/// expression's contextual result type. Argument and receiver candidates have
+/// higher priority and replace contextual-return candidates for the same binder.
+pub(crate) fn infer_signature_type_arguments_with_return_context(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+    return_context: (TypeId, TypeId),
+) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
+    infer_signature_type_arguments(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        request,
+        Some(return_context),
+    )
+}
+
+fn infer_signature_type_arguments(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: SignatureInferenceRequest<'_>,
+    return_context: Option<(TypeId, TypeId)>,
+) -> DemandOutcome<SignatureInferenceResult<FxHashMap<TypeParamId, TypeId>>> {
     let SignatureInferenceRequest {
         type_params,
         params,
@@ -289,6 +335,7 @@ pub(crate) fn infer_signature_type_arguments_from_params(
     );
     let candidates = collection.candidates;
     let exempt = fresh_exempt_params(&candidates);
+    let ordinary_bound: FxHashSet<_> = candidates.keys().copied().collect();
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
         .iter()
         .map(|param| (param.id, param.constraint))
@@ -316,6 +363,27 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         fixed,
         &exempt,
     );
+    let ordinary_complete = collection.exhaustion.is_none();
+    let outcome = match (outcome, return_context, ordinary_complete) {
+        (DemandOutcome::Ready(fixed), Some((source, target)), true) => {
+            DemandOutcome::Ready(apply_return_context_candidates(
+                interner,
+                next_type_param,
+                published,
+                queries,
+                ReturnContextInferenceRequest {
+                    type_params,
+                    active_params: &active_params,
+                    ordinary_bound: &ordinary_bound,
+                    constraints: &constraints,
+                    baseline: fixed,
+                    source,
+                    target,
+                },
+            ))
+        }
+        (outcome, _, _) => outcome,
+    };
     if matches!(outcome, DemandOutcome::Ready(_)) && collection.exhaustion.is_none() {
         queries.commit();
     } else {
@@ -328,6 +396,288 @@ pub(crate) fn infer_signature_type_arguments_from_params(
             constraint_violations: fixed.constraint_violations,
         }),
         DemandOutcome::Exhausted(exhaustion) => DemandOutcome::Exhausted(exhaustion),
+    }
+}
+
+fn apply_return_context_candidates(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    request: ReturnContextInferenceRequest<'_>,
+) -> FixedSignatureParams {
+    let contextual_active: FxHashSet<_> = request
+        .active_params
+        .difference(request.ordinary_bound)
+        .copied()
+        .collect();
+    if contextual_active.is_empty() {
+        return request.baseline;
+    }
+
+    // Contextual-result evidence is optional and atomic. No collection, fixing,
+    // evaluation, or relation failure may affect overload applicability.
+    queries.savepoint();
+    let contextual = collect_return_context_candidates_query(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        &contextual_active,
+        request.source,
+        request.target,
+    );
+    if contextual.exhaustion.is_some() || contextual.candidates.is_empty() {
+        queries.rollback();
+        return request.baseline;
+    }
+    let contextual = match fix_call_site_candidates(
+        interner,
+        next_type_param,
+        published,
+        queries,
+        contextual.candidates,
+        request.constraints,
+    ) {
+        DemandOutcome::Ready(contextual) if !contextual.is_empty() => contextual,
+        DemandOutcome::Ready(_) | DemandOutcome::Exhausted(_) => {
+            queries.rollback();
+            return request.baseline;
+        }
+    };
+
+    let baseline = &request.baseline.arguments;
+    let mut proposal = baseline.clone();
+    proposal.extend(
+        contextual
+            .iter()
+            .map(|(&param, &candidate)| (param, candidate)),
+    );
+
+    // Defaults and constraint fallbacks can depend transitively on contextual
+    // binders. Recompute the whole non-authoritative layer simultaneously until
+    // it stabilizes; ordinary and contextual binders remain authoritative.
+    let mut stabilized = false;
+    for _ in 0..=request.type_params.len() {
+        let mut next = proposal.clone();
+        for type_param in request.type_params {
+            let param = type_param.id;
+            let value = if request.ordinary_bound.contains(&param) {
+                baseline.get(&param).copied()
+            } else if let Some(&candidate) = contextual.get(&param) {
+                substitute_to_fixed_point(interner, candidate, &proposal)
+            } else if let Some(default) = type_param.default {
+                let Some(baseline_default) = substitute_to_fixed_point(interner, default, baseline)
+                else {
+                    queries.rollback();
+                    return request.baseline;
+                };
+                let Some(proposed_default) =
+                    substitute_to_fixed_point(interner, default, &proposal)
+                else {
+                    queries.rollback();
+                    return request.baseline;
+                };
+                if proposed_default == baseline_default {
+                    baseline.get(&param).copied()
+                } else {
+                    Some(proposed_default)
+                }
+            } else if let Some(constraint) = type_param.constraint {
+                let Some(baseline_constraint) =
+                    substitute_to_fixed_point(interner, constraint, baseline)
+                else {
+                    queries.rollback();
+                    return request.baseline;
+                };
+                let Some(proposed_constraint) =
+                    substitute_to_fixed_point(interner, constraint, &proposal)
+                else {
+                    queries.rollback();
+                    return request.baseline;
+                };
+                if proposed_constraint == baseline_constraint {
+                    baseline.get(&param).copied()
+                } else {
+                    match evaluate_return_context_constraint(
+                        interner,
+                        next_type_param,
+                        published,
+                        queries,
+                        proposed_constraint,
+                    ) {
+                        Some(evaluated) => Some(evaluated),
+                        None => {
+                            queries.rollback();
+                            return request.baseline;
+                        }
+                    }
+                }
+            } else {
+                baseline.get(&param).copied()
+            };
+            let Some(value) = value else {
+                queries.rollback();
+                return request.baseline;
+            };
+            next.insert(param, value);
+        }
+        if next == proposal {
+            stabilized = true;
+            break;
+        }
+        proposal = next;
+    }
+    if !stabilized {
+        queries.rollback();
+        return request.baseline;
+    }
+
+    // Validate every constraint whose binder or substituted boundary changed.
+    // This includes ordinary binders when a contextual later binder completes a
+    // previously unresolved forward constraint.
+    for type_param in request.type_params {
+        let Some(raw_constraint) = type_param.constraint else {
+            continue;
+        };
+        let Some(baseline_constraint) =
+            substitute_to_fixed_point(interner, raw_constraint, baseline)
+        else {
+            queries.rollback();
+            return request.baseline;
+        };
+        let Some(proposed_constraint) =
+            substitute_to_fixed_point(interner, raw_constraint, &proposal)
+        else {
+            queries.rollback();
+            return request.baseline;
+        };
+        let baseline_value = baseline.get(&type_param.id).copied();
+        let proposed_value = proposal.get(&type_param.id).copied();
+        let affected = contextual.contains_key(&type_param.id)
+            || proposed_value != baseline_value
+            || proposed_constraint != baseline_constraint;
+        if !affected {
+            continue;
+        }
+        let Some(candidate) = proposed_value else {
+            queries.rollback();
+            return request.baseline;
+        };
+        let Some(evaluated) = evaluate_return_context_constraint(
+            interner,
+            next_type_param,
+            published,
+            queries,
+            proposed_constraint,
+        ) else {
+            queries.rollback();
+            return request.baseline;
+        };
+        let relation = {
+            let mut coordinator =
+                SemanticQueryCoordinator::new(interner, published, queries, next_type_param);
+            coordinator.is_assignable(candidate, evaluated)
+        };
+        match relation {
+            RelationOutcome::Yes => {}
+            RelationOutcome::No(_) | RelationOutcome::Exhausted(_) => {
+                queries.rollback();
+                return request.baseline;
+            }
+        }
+    }
+
+    queries.commit();
+    FixedSignatureParams {
+        arguments: proposal,
+        constraint_violations: request.baseline.constraint_violations,
+    }
+}
+
+fn evaluate_return_context_constraint(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    constraint: TypeId,
+) -> Option<TypeId> {
+    let demand = {
+        let mut coordinator =
+            SemanticQueryCoordinator::new(interner, published, queries, next_type_param);
+        coordinator.demand(constraint)
+    };
+    let DemandOutcome::Ready(evaluated) = demand else {
+        return None;
+    };
+    (!crate::check::checker::eval::contains_deferred_keyof(interner, evaluated))
+        .then_some(evaluated)
+}
+
+fn substitute_to_fixed_point(
+    interner: &mut Interner,
+    ty: TypeId,
+    map: &FxHashMap<TypeParamId, TypeId>,
+) -> Option<TypeId> {
+    let mut current = ty;
+    for _ in 0..=map.len() {
+        let next = substitute(interner, current, map);
+        if next == current {
+            return Some(current);
+        }
+        current = next;
+    }
+    (substitute(interner, current, map) == current).then_some(current)
+}
+
+fn collect_return_context_candidates_query(
+    interner: &mut Interner,
+    next_type_param: &mut u32,
+    published: &PublishedClasses,
+    queries: &mut SemanticQueryState,
+    active_params: &FxHashSet<TypeParamId>,
+    source: TypeId,
+    target: TypeId,
+) -> CandidateCollectionResult {
+    let source = contextual_return_inference_source(interner.store(), source, target);
+    let mut local = Candidates::default();
+    let outcome = infer_types_for_active_params(
+        SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
+        source,
+        target,
+        &mut local,
+        Some(active_params),
+    );
+    let mut candidates = CallSiteCandidates::default();
+    if matches!(outcome, DemandOutcome::Ready(())) {
+        record_call_site_candidates(
+            &mut candidates,
+            local,
+            |occurrence| CallSiteSource::ReturnContext { occurrence },
+            false,
+        );
+    }
+    CandidateCollectionResult {
+        candidates,
+        exhaustion: match outcome {
+            DemandOutcome::Ready(()) => None,
+            DemandOutcome::Exhausted(exhaustion) => Some(exhaustion),
+        },
+    }
+}
+
+fn contextual_return_inference_source(store: &Store, source: TypeId, target: TypeId) -> TypeId {
+    let Some(operand) = store.readonly_operand(source) else {
+        return source;
+    };
+    let source_tag = store.tag(operand);
+    let target_tag = store.tag(target);
+    if matches!(source_tag, TypeTag::Array | TypeTag::Tuple)
+        && matches!(target_tag, TypeTag::Array | TypeTag::Tuple)
+    {
+        operand
+    } else {
+        source
     }
 }
 
@@ -1156,6 +1506,7 @@ fn fix_signature_params(
         };
         map.insert(param, value);
     }
+
     DemandOutcome::Ready(FixedSignatureParams {
         arguments: map,
         constraint_violations,
@@ -1518,6 +1869,50 @@ mod wu7_measurements {
                 evaluation_cycle_exhaustions: 0,
             }
         );
+    }
+
+    #[test]
+    fn contextual_constraint_exhaustion_discards_optional_proposal() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = TypeParamId(98_020);
+        let parameter_ty = interner.intern_type_param(parameter, "T");
+        let constraint = runaway_evaluation(&mut interner);
+        let type_params = [GenericTypeParam {
+            id: parameter,
+            constraint: Some(constraint),
+            default: None,
+        }];
+        let active_params = FxHashSet::from_iter([parameter]);
+        let ordinary_bound = FxHashSet::default();
+        let constraints = FxHashMap::from_iter([(parameter, Some(constraint))]);
+        let unknown = interner.well_known().unknown;
+        let baseline = FixedSignatureParams {
+            arguments: FxHashMap::from_iter([(parameter, unknown)]),
+            constraint_violations: FxHashSet::default(),
+        };
+        let source = interner.well_known().string;
+        let published = PublishedClasses::empty();
+        let mut queries = SemanticQueryState::default();
+        let mut next_type_param = 98_021;
+
+        let fixed = apply_return_context_candidates(
+            &mut interner,
+            &mut next_type_param,
+            &published,
+            &mut queries,
+            ReturnContextInferenceRequest {
+                type_params: &type_params,
+                active_params: &active_params,
+                ordinary_bound: &ordinary_bound,
+                constraints: &constraints,
+                baseline,
+                source,
+                target: parameter_ty,
+            },
+        );
+
+        assert_eq!(fixed.arguments.get(&parameter), Some(&unknown));
+        assert!(fixed.constraint_violations.is_empty());
     }
 
     #[test]
