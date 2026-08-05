@@ -142,7 +142,6 @@ impl<'a> Relater<'a> {
         let target = self.store.object_type(tgt)?;
         if target.properties.is_empty()
             || target.string_index.is_some()
-            || target.number_index.is_some()
             || !target.call_signatures.is_empty()
             || !target.construct_signatures.is_empty()
         {
@@ -164,7 +163,20 @@ impl<'a> Relater<'a> {
                 return Some(Relation::No(ReasonChain::leaf(src, tgt)));
             }
         };
-        let weak = target.properties.iter().all(|property| property.optional);
+        if target.number_index.is_some()
+            && self
+                .store
+                .object_type(surface)
+                .is_none_or(|surface| surface.number_index.is_none())
+        {
+            return Some(Relation::No(ReasonChain::leaf(src, tgt)));
+        }
+        let weak = !target.properties.is_empty()
+            && target.properties.iter().all(|property| property.optional)
+            && target.string_index.is_none()
+            && target.number_index.is_none()
+            && target.call_signatures.is_empty()
+            && target.construct_signatures.is_empty();
         let object_keyword = self.store.intrinsic_kind(src) == Some(IntrinsicKind::Object);
         let function_source = self.store.tag(src) == TypeTag::Function;
         if weak
@@ -173,7 +185,7 @@ impl<'a> Relater<'a> {
         {
             return Some(Relation::No(ReasonChain::leaf(src, tgt)));
         }
-        let relation = self.relate_object_named_properties(
+        let named_relation = self.relate_object_named_properties(
             src,
             surface,
             tgt,
@@ -181,7 +193,7 @@ impl<'a> Relater<'a> {
             assumed,
             MissingPropertyPolicy::RequireTargetPresence,
         );
-        Some(match relation {
+        let named_relation = match named_relation {
             Relation::No(reason)
                 if self.native_missing_property_uses_leaf(src)
                     && matches!(reason.head(), Reason::MissingProperty { .. }) =>
@@ -189,7 +201,11 @@ impl<'a> Relater<'a> {
                 Relation::No(ReasonChain::leaf(src, tgt))
             }
             relation => relation,
-        })
+        };
+        if matches!(named_relation, Relation::No(_)) {
+            return Some(named_relation);
+        }
+        Some(self.relate_object_index_signatures(surface, tgt, kind, assumed))
     }
 
     fn object_property_names_overlap(&self, left: TypeId, right: TypeId) -> bool {

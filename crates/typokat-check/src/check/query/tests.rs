@@ -1,5 +1,6 @@
 use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
+use crate::relate::Reason;
 use crate::types::repr::{
     ClassId, ConditionalType, DeclaredRecipeNode, FunctionType, GenericTypeParam, LiteralValue,
     MappedType, ModifierOp, ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType,
@@ -3991,6 +3992,222 @@ fn canonical_object_substitutes_array_elements_and_overrides_tuple_length() {
     assert!(matches!(
         SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
             .is_assignable(rest_tuple, target_length_number),
+        RelationOutcome::Yes
+    ));
+}
+
+#[test]
+fn native_array_surface_satisfies_array_like_object_targets() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(99_003);
+    let parameter_ty = interner.intern_type_param(parameter, "T");
+    let parameter_array = interner.intern_array(parameter_ty);
+    let join = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::optional("separator", wk.string)],
+        ret: wk.string,
+    });
+    let slice = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![
+            ParameterType::optional("start", wk.number),
+            ParameterType::optional("end", wk.number),
+        ],
+        ret: parameter_array,
+    });
+    let array_template = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("join", join),
+            PropertyType::public("length", wk.number),
+            PropertyType::public("slice", slice),
+        ],
+        number_index: Some(parameter_ty),
+        ..Default::default()
+    });
+    let string_array = interner.intern_array(wk.string);
+    let number_array = interner.intern_array(wk.number);
+    let mixed_tuple = interner.intern_tuple(vec![wk.string, wk.number]);
+    let target_slice = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![
+            ParameterType::optional("start", wk.number),
+            ParameterType::optional("end", wk.number),
+        ],
+        ret: string_array,
+    });
+    let array_like = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("join", join),
+            PropertyType::public("length", wk.number),
+            PropertyType::public("slice", target_slice),
+        ],
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+    let indexed_array_like = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("length", wk.number)],
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+    let object = interner.intern_object(ObjectType::default());
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    state.set_library_object_context(Some(library_object_context_with_array_templates_for_test(
+        &mut interner,
+        object,
+        array_template,
+        array_template,
+        parameter,
+    )));
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(string_array, array_like),
+        RelationOutcome::Yes
+    ));
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(number_array, array_like),
+        RelationOutcome::No(_)
+    ));
+    for source in [number_array, mixed_tuple] {
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(source, indexed_array_like);
+        assert!(
+            matches!(
+                &outcome,
+                RelationOutcome::No(reason)
+                    if matches!(reason.head(), Reason::IndexSignature { .. })
+            ),
+            "{outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn non_indexed_native_surfaces_do_not_satisfy_number_index_targets() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(99_005);
+    let parameter_ty = interner.intern_type_param(parameter, "T");
+    let array_template = interner.intern_object(ObjectType {
+        number_index: Some(parameter_ty),
+        ..Default::default()
+    });
+    let to_string = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::optional("radix", wk.number)],
+        ret: wk.string,
+    });
+    let value_of = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: wk.boolean,
+    });
+    let number_surface = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("toString", to_string)],
+        ..Default::default()
+    });
+    let boolean_surface = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("valueOf", value_of)],
+        ..Default::default()
+    });
+    let string_surface = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("length", wk.number)],
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+    let object_surface = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("toString", to_string)],
+        ..Default::default()
+    });
+    let function_surface = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("length", wk.number),
+            PropertyType::public("name", wk.string),
+        ],
+        ..Default::default()
+    });
+    let number_index_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("toString", to_string)],
+        number_index: Some(wk.unknown),
+        ..Default::default()
+    });
+    let boolean_index_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("valueOf", value_of)],
+        number_index: Some(wk.unknown),
+        ..Default::default()
+    });
+    let object_index_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("toString", to_string)],
+        number_index: Some(wk.unknown),
+        ..Default::default()
+    });
+    let function_index_target = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("length", wk.number),
+            PropertyType::public("name", wk.string),
+        ],
+        number_index: Some(wk.unknown),
+        ..Default::default()
+    });
+    let string_index_target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("length", wk.number)],
+        number_index: Some(wk.string),
+        ..Default::default()
+    });
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: wk.void,
+    });
+    let context = LibraryObjectRelationContext::new(
+        object_surface,
+        (array_template, parameter),
+        (array_template, parameter),
+        string_surface,
+        number_surface,
+        boolean_surface,
+        function_surface,
+    );
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    state.set_library_object_context(Some(context));
+
+    for (source, target) in [
+        (wk.number, number_index_target),
+        (wk.boolean, boolean_index_target),
+        (wk.object, object_index_target),
+        (function, function_index_target),
+    ] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .is_assignable(source, target),
+            RelationOutcome::No(_)
+        ));
+    }
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(wk.string, string_index_target),
         RelationOutcome::Yes
     ));
 }
