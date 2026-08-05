@@ -165,20 +165,21 @@ enum HolePart {
 
 /// The string a literal value contributes to a constructed template (M27): a string
 /// literal is its value, a number is JS-`String(n)`, a boolean is `"false"`/`"true"`.
-fn literal_to_string(lit: &LiteralValue) -> String {
+fn literal_to_string(lit: &LiteralValue) -> Option<String> {
     match lit {
-        LiteralValue::String(s) => s.clone(),
-        LiteralValue::Number(n) => crate::types::repr::number_to_string(*n),
-        LiteralValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+        LiteralValue::String(s) => Some(s.clone()),
+        LiteralValue::Number(n) => Some(crate::types::repr::number_to_string(*n)),
+        LiteralValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_string()),
+        LiteralValue::WellKnownSymbol(_) => None,
     }
 }
 
-/// One resolved output property of a mapped type (M26): its name and the
+/// One resolved output property of a mapped type (M26): its key and the
 /// modifier-arithmetic result flags. The property's value type is evaluated separately
 /// (routed through the work-stack) and paired back by position in
 /// [`Task::BuildMappedObject`].
 struct MappedProp {
-    name: String,
+    key: PropertyKey,
     optional: bool,
     readonly: bool,
     /// `-?` over an **optional** source member also strips `undefined` from the

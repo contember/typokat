@@ -352,24 +352,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         members: &[TSSignature<'_>],
     ) -> Option<TypeId> {
         let mut object = ObjectType::default();
-        let overloaded_method_names = self.overloaded_method_names(members);
-        let mut overloads: FxHashMap<String, MethodOverloadAccumulator> = FxHashMap::default();
+        let overloaded_method_keys = self.overloaded_method_keys(scope, members);
+        let mut overloads: FxHashMap<PropertyKey, MethodOverloadAccumulator> = FxHashMap::default();
         let mut overload_order = Vec::new();
         let mut unavailable = false;
         for member in members {
             match member {
                 TSSignature::TSPropertySignature(sig) => {
-                    if sig.computed {
-                        self.record_property_signature_computed_key(&sig.key);
-                        if let Some(annotation) = sig.type_annotation.as_ref() {
-                            self.with_indirection(|p| {
-                                p.lower_annotation(scope, &annotation.type_annotation)
-                            });
-                        }
-                        unavailable = true;
-                        continue;
-                    }
-                    let Some(name) = sig.key.static_name() else {
+                    let Some(key) = self.signature_property_key(scope, &sig.key, sig.computed)
+                    else {
                         self.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
                             self.with_indirection(|p| {
@@ -379,12 +370,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         unavailable = true;
                         continue;
                     };
-                    if overloaded_method_names.contains(name.as_ref()) {
-                        let name = name.into_owned();
-                        if !overloads.contains_key(&name) {
-                            overload_order.push(name.clone());
+                    if overloaded_method_keys.contains(&key) {
+                        if !overloads.contains_key(&key) {
+                            overload_order.push(key.clone());
                         }
-                        let overload = overloads.entry(name).or_default();
+                        let overload = overloads.entry(key).or_default();
                         overload.unsupported = true;
                         let lowered = sig.type_annotation.as_ref().and_then(|annotation| {
                             self.with_indirection(|p| {
@@ -417,7 +407,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     } else {
                         ty
                     };
-                    let mut prop = PropertyType::public(name.into_owned(), ty);
+                    let mut prop = Self::public_signature_property(key, ty);
                     prop.optional = sig.optional;
                     // F5/backlog-03: `readonly` is structural identity and gates
                     // assignment targets (`TK2540`), but does not affect assignability.
@@ -434,19 +424,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                 }
                 TSSignature::TSMethodSignature(sig) => {
-                    if sig.computed {
-                        self.record_method_signature_computed_key(&sig.key);
-                        self.lower_generic_strict_signature_function_type(
-                            scope,
-                            sig.type_parameters.as_deref(),
-                            sig.this_param.as_deref(),
-                            &sig.params,
-                            sig.return_type.as_deref(),
-                        );
-                        unavailable = true;
-                        continue;
-                    }
-                    let Some(name) = sig.key.static_name() else {
+                    let Some(key) = self.signature_property_key(scope, &sig.key, sig.computed)
+                    else {
                         self.record_method_signature_computed_key(&sig.key);
                         self.lower_generic_strict_signature_function_type(
                             scope,
@@ -458,12 +437,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         unavailable = true;
                         continue;
                     };
-                    if overloaded_method_names.contains(name.as_ref()) {
-                        let name = name.into_owned();
-                        if !overloads.contains_key(&name) {
-                            overload_order.push(name.clone());
+                    if overloaded_method_keys.contains(&key) {
+                        if !overloads.contains_key(&key) {
+                            overload_order.push(key.clone());
                         }
-                        let overload = overloads.entry(name).or_default();
+                        let overload = overloads.entry(key).or_default();
                         let signature = self.lower_generic_strict_signature_function_type(
                             scope,
                             sig.type_parameters.as_deref(),
@@ -504,9 +482,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
         }
-        for name in overload_order {
+        for key in overload_order {
             let overload = overloads
-                .remove(&name)
+                .remove(&key)
                 .expect("every overload name retains its accumulator");
             if overload.unavailable || overload.call_signatures.is_empty() {
                 unavailable = true;
@@ -520,7 +498,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ..Default::default()
                 })
             };
-            object.properties.push(PropertyType::public(name, ty));
+            object
+                .properties
+                .push(Self::public_signature_property(key, ty));
         }
         if unavailable {
             return None;

@@ -516,7 +516,7 @@ fn canonical_array_type_group_seed_matches_the_independent_full_scan_oracle() {
         sparse.iter().copied().collect::<BTreeSet<_>>(),
         oracle.owners.iter().copied().collect::<BTreeSet<_>>()
     );
-    assert_eq!(sparse.len(), 34);
-    assert_eq!(oracle.sccs, 34);
-    assert_eq!(oracle.reverse_edges, 42);
+    assert_eq!(sparse.len(), 19);
+    assert_eq!(oracle.sccs, 19);
+    assert_eq!(oracle.reverse_edges, 27);
 }

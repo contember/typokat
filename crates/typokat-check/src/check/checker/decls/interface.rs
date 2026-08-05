@@ -17,6 +17,7 @@ struct InterfaceMethodOverloadAccumulator {
 
 pub(super) struct LoweredInterfaceMembers {
     pub(super) object: ObjectType,
+    pub(super) method_keys: BTreeSet<PropertyKey>,
     pub(super) unavailable: bool,
 }
 
@@ -176,8 +177,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         base: ObjectType,
         overlay: ObjectType,
-        first_method_members: &mut BTreeSet<String>,
-        overlay_methods: &BTreeSet<String>,
+        first_method_members: &mut BTreeSet<PropertyKey>,
+        overlay_methods: &BTreeSet<PropertyKey>,
     ) -> ObjectType {
         let mut properties = base.properties;
         for property in overlay.properties {
@@ -185,18 +186,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .iter_mut()
                 .find(|existing| existing.key == property.key)
             else {
-                if let Some(name) = property.key.as_string() {
-                    if overlay_methods.contains(name) {
-                        first_method_members.insert(name.to_owned());
-                    }
+                if overlay_methods.contains(&property.key) {
+                    first_method_members.insert(property.key.clone());
                 }
                 properties.push(property);
                 continue;
             };
-            let Some(name) = property.key.as_string() else {
-                continue;
-            };
-            if !first_method_members.contains(name) || !overlay_methods.contains(name) {
+            if !first_method_members.contains(&property.key)
+                || !overlay_methods.contains(&property.key)
+            {
                 continue;
             }
             let mut overloads = match self.interner.store().tag(existing.ty) {
@@ -380,22 +378,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) -> LoweredInterfaceMembers {
         let mut object = ObjectType::default();
         let mut unavailable = false;
-        let overloaded_method_names = self.overloaded_method_names(members);
-        let mut overloads: FxHashMap<String, InterfaceMethodOverloadAccumulator> =
+        let overloaded_method_keys = self.overloaded_method_keys(scope, members);
+        let mut overloads: FxHashMap<PropertyKey, InterfaceMethodOverloadAccumulator> =
             FxHashMap::default();
         let mut overload_order = Vec::new();
+        let mut seen_member_keys = BTreeSet::new();
+        let mut method_keys = BTreeSet::new();
         for member in members {
             let mut lower = |pass: &mut Self| match member {
                 TSSignature::TSPropertySignature(sig) => {
-                    if sig.computed {
-                        unavailable = true;
-                        pass.record_property_signature_computed_key(&sig.key);
-                        if let Some(annotation) = sig.type_annotation.as_ref() {
-                            pass.lower_annotation(scope, &annotation.type_annotation);
-                        }
-                        return;
-                    }
-                    let Some(name) = sig.key.static_name() else {
+                    let Some(key) = pass.signature_property_key(scope, &sig.key, sig.computed)
+                    else {
                         unavailable = true;
                         pass.record_property_signature_computed_key(&sig.key);
                         if let Some(annotation) = sig.type_annotation.as_ref() {
@@ -403,12 +396,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         }
                         return;
                     };
-                    if overloaded_method_names.contains(name.as_ref()) {
-                        let name = name.into_owned();
-                        if !overloads.contains_key(&name) {
-                            overload_order.push(name.clone());
+                    seen_member_keys.insert(key.clone());
+                    if overloaded_method_keys.contains(&key) {
+                        if !overloads.contains_key(&key) {
+                            overload_order.push(key.clone());
                         }
-                        let overload = overloads.entry(name).or_default();
+                        let overload = overloads.entry(key).or_default();
                         overload.unsupported = true;
                         let lowered = sig.type_annotation.as_ref().and_then(|annotation| {
                             #[cfg(test)]
@@ -455,7 +448,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     } else {
                         ty
                     };
-                    let mut prop = PropertyType::public(name.into_owned(), ty);
+                    let mut prop = Self::public_signature_property(key, ty);
                     prop.optional = sig.optional;
                     // Preserve `readonly` on interface members. It is hashed into
                     // structural identity, ignored for assignability, and gates only
@@ -476,19 +469,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                 }
                 TSSignature::TSMethodSignature(sig) => {
-                    if sig.computed {
-                        unavailable = true;
-                        pass.record_method_signature_computed_key(&sig.key);
-                        pass.lower_generic_strict_signature_function_type(
-                            scope,
-                            sig.type_parameters.as_deref(),
-                            sig.this_param.as_deref(),
-                            &sig.params,
-                            sig.return_type.as_deref(),
-                        );
-                        return;
-                    }
-                    let Some(name) = sig.key.static_name() else {
+                    let Some(key) = pass.signature_property_key(scope, &sig.key, sig.computed)
+                    else {
                         unavailable = true;
                         pass.record_method_signature_computed_key(&sig.key);
                         pass.lower_generic_strict_signature_function_type(
@@ -500,12 +482,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         );
                         return;
                     };
-                    if overloaded_method_names.contains(name.as_ref()) {
-                        let name = name.into_owned();
-                        if !overloads.contains_key(&name) {
-                            overload_order.push(name.clone());
+                    if seen_member_keys.insert(key.clone()) {
+                        method_keys.insert(key.clone());
+                    }
+                    if overloaded_method_keys.contains(&key) {
+                        if !overloads.contains_key(&key) {
+                            overload_order.push(key.clone());
                         }
-                        let overload = overloads.entry(name).or_default();
+                        let overload = overloads.entry(key).or_default();
                         let signature = pass.lower_generic_strict_signature_function_type(
                             scope,
                             sig.type_parameters.as_deref(),
@@ -566,9 +550,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 lower(self);
             }
         }
-        for name in overload_order {
+        for key in overload_order {
             let overload = overloads
-                .remove(&name)
+                .remove(&key)
                 .expect("every interface overload retains its accumulator");
             if overload.unavailable || overload.call_signatures.is_empty() {
                 continue;
@@ -581,10 +565,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ..Default::default()
                 })
             };
-            object.properties.push(PropertyType::public(name, ty));
+            object
+                .properties
+                .push(Self::public_signature_property(key, ty));
         }
         LoweredInterfaceMembers {
             object,
+            method_keys,
             unavailable,
         }
     }

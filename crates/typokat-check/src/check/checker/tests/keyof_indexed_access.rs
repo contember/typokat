@@ -3,7 +3,19 @@
 //! error-type fallback for missing/out-of-scope cases. Fixture acceptance lives
 //! in `m20_keyof/`.
 
+use crate::check::checker::expr::{
+    combine_exact_symbol_member_lookups, exact_symbol_receiver_guard, object_element_access,
+    ElementAccessLookup, ExactSymbolReceiverGuard,
+};
+use crate::check::checker::library_compiler::{
+    check_caller_certified_collision_free_source_with_owned_library,
+    compile_owned_injected_profile, InjectedLibrarySource,
+};
 use crate::check::test_support::check_source;
+use crate::diagnostics::DiagnosticCode;
+use crate::source::LibraryFileOrdinal;
+use crate::types::repr::{LiteralValue, ObjectType, PropertyType, WellKnownSymbol};
+use crate::types::Interner;
 
 /// Run the checker and return the sorted `(1-based line, code)` of every
 /// diagnostic, keyed on its primary-span start line (matching the conformance
@@ -23,6 +35,348 @@ fn diags(source: &str) -> Vec<(u32, String)> {
         .collect();
     v.sort();
     v
+}
+
+fn incompletes(source: &str) -> Vec<(u32, String)> {
+    let out = check_source(source);
+    assert!(
+        out.parse_errors.is_empty(),
+        "unexpected parse error(s): {:?}",
+        out.parse_errors
+    );
+    let index = crate::span::LineIndex::new(source);
+    out.incomplete
+        .iter()
+        .map(|record| (index.line_of(record.span.start), record.id.clone()))
+        .collect()
+}
+
+#[test]
+fn exact_symbol_object_lookup_distinguishes_missing_from_recovery_types() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let error = interner.well_known().error;
+    let iterator_key =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    let async_iterator_key = interner.intern_literal(LiteralValue::WellKnownSymbol(
+        WellKnownSymbol::AsyncIterator,
+    ));
+    let present = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            number,
+        )],
+        ..ObjectType::default()
+    });
+    let recovery = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            error,
+        )],
+        ..ObjectType::default()
+    });
+    let missing = interner.intern_object(ObjectType::default());
+
+    assert_eq!(
+        object_element_access(interner.store(), present, Some(iterator_key)),
+        ElementAccessLookup::Found(number)
+    );
+    assert_eq!(
+        object_element_access(interner.store(), recovery, Some(iterator_key)),
+        ElementAccessLookup::Found(error),
+        "a present recovery-typed property is not a missing property"
+    );
+    assert_eq!(
+        object_element_access(interner.store(), missing, Some(iterator_key)),
+        ElementAccessLookup::MissingObjectKey
+    );
+    assert_eq!(
+        object_element_access(interner.store(), present, Some(async_iterator_key)),
+        ElementAccessLookup::MissingObjectKey
+    );
+}
+
+#[test]
+fn exact_symbol_union_lookup_requires_every_member_to_support_the_key() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let string = interner.well_known().string;
+    let iterator_key =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    let first = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            number,
+        )],
+        ..ObjectType::default()
+    });
+    let second = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            string,
+        )],
+        ..ObjectType::default()
+    });
+    let missing = interner.intern_object(ObjectType::default());
+
+    let expected = interner.union(vec![number, string]);
+    let found =
+        combine_exact_symbol_member_lookups(&mut interner, &[first, second], Some(iterator_key));
+    assert_eq!(found, ElementAccessLookup::Found(expected));
+    assert_eq!(
+        combine_exact_symbol_member_lookups(&mut interner, &[first, missing], Some(iterator_key),),
+        ElementAccessLookup::MissingObjectKey
+    );
+}
+
+#[test]
+fn exact_symbol_lookup_rejects_non_object_receiver_routes() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let string = interner.well_known().string;
+    let iterator_key =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    let array = interner.intern_array(number);
+    let tuple = interner.intern_tuple(vec![number, string]);
+
+    for receiver in [string, array, tuple] {
+        assert_eq!(
+            object_element_access(interner.store(), receiver, Some(iterator_key)),
+            ElementAccessLookup::UnsupportedReceiver
+        );
+    }
+}
+
+#[test]
+fn exact_symbol_receiver_guard_preserves_owner_specific_and_recovery_routes() {
+    let interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+
+    assert_eq!(
+        exact_symbol_receiver_guard(wk.unknown, &wk),
+        ExactSymbolReceiverGuard::Unknown
+    );
+    for receiver in [wk.null, wk.undefined] {
+        assert_eq!(
+            exact_symbol_receiver_guard(receiver, &wk),
+            ExactSymbolReceiverGuard::Nullish
+        );
+    }
+    for receiver in [wk.any, wk.error, wk.never] {
+        assert_eq!(
+            exact_symbol_receiver_guard(receiver, &wk),
+            ExactSymbolReceiverGuard::Recovery(wk.error)
+        );
+    }
+    assert_eq!(
+        exact_symbol_receiver_guard(wk.string, &wk),
+        ExactSymbolReceiverGuard::Continue
+    );
+}
+
+#[test]
+fn certified_computed_and_wrapped_symbol_accesses_share_exact_authority() -> Result<(), String> {
+    let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+        file_ordinal: LibraryFileOrdinal::new(0),
+        name: "computed-symbol-auth.d.ts",
+        source: "declare const Symbol: {};",
+    }])
+    .map_err(|error| format!("{error:?}"))?;
+    let run = check_caller_certified_collision_free_source_with_owned_library(
+        state,
+        r#"
+            interface ExactSymbols {
+                [Symbol.iterator](): number;
+                [Symbol.asyncIterator](): string;
+            }
+            declare const value: ExactSymbols;
+            const directWrong: string = value[Symbol.iterator]();
+            const computedWrong: string = value[Symbol["iterator"]]();
+            const keyWrappedWrong: string = value[Symbol[("iterator")]]();
+            const objectWrappedWrong: string = value[(Symbol)["iterator"]]();
+            const wholeWrappedWrong: string = value[(Symbol["iterator"])]();
+            const asyncWrong: number = value[Symbol["asyncIterator"]]();
+        "#,
+    )?;
+    assert!(
+        run.result.incomplete.is_empty(),
+        "{:?}",
+        run.result.incomplete
+    );
+    assert_eq!(
+        run.result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        vec![DiagnosticCode::TK2322; 6]
+    );
+    Ok(())
+}
+
+#[test]
+fn exact_symbol_nullable_union_routes_through_nullish_owner() {
+    let mut interner = Interner::with_intrinsics();
+    let number = interner.well_known().number;
+    let null = interner.well_known().null;
+    let undefined = interner.well_known().undefined;
+    let iterator_key =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    let supported = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            number,
+        )],
+        ..ObjectType::default()
+    });
+
+    for nullish in [null, undefined] {
+        assert_eq!(
+            combine_exact_symbol_member_lookups(
+                &mut interner,
+                &[supported, nullish],
+                Some(iterator_key),
+            ),
+            ElementAccessLookup::NullishReceiver
+        );
+    }
+}
+
+#[test]
+fn broad_symbol_element_access_fails_closed_once_for_objects_and_object_unions() {
+    let object = "\
+declare const key: symbol;
+declare const value: { x: number };
+value[key];
+";
+    assert_eq!(
+        incompletes(object),
+        vec![(3, "expr-infer/element-access/implicit-any-index".to_owned())]
+    );
+
+    let union = "\
+declare const key: symbol;
+declare const value: { x: number } | { y: string };
+value[key];
+";
+    assert_eq!(
+        incompletes(union),
+        vec![(3, "expr-infer/element-access/implicit-any-index".to_owned())]
+    );
+}
+
+#[test]
+fn broad_symbol_element_access_fails_closed_for_mixed_unions_and_intersections() {
+    let mixed_union = "\
+declare const key: symbol;
+declare const value: { item: number } | string;
+value[key];
+";
+    assert_eq!(
+        incompletes(mixed_union),
+        vec![(3, "expr-infer/element-access/implicit-any-index".to_owned())]
+    );
+
+    let intersection = "\
+declare const key: symbol;
+declare const value: { item: number } & { tag: \"x\" };
+value[key];
+";
+    assert_eq!(
+        incompletes(intersection),
+        vec![(3, "expr-infer/element-access/implicit-any-index".to_owned())]
+    );
+}
+
+#[test]
+fn broad_symbol_guard_does_not_capture_supported_or_recovery_routes() {
+    let source = "\
+declare const stringKey: string;
+declare const numberKey: number;
+declare const broadSymbol: symbol;
+declare const stringIndex: { [key: string]: number };
+declare const numberIndex: { [key: number]: string };
+declare const anyBase: any;
+stringIndex[stringKey];
+numberIndex[numberKey];
+anyBase[broadSymbol];
+MissingBase[broadSymbol];
+";
+    assert!(
+        incompletes(source).is_empty(),
+        "string/number index and any/error recovery routes stay outside the guard"
+    );
+}
+
+#[test]
+fn broad_symbol_guard_covers_array_and_primitive_receivers() {
+    let source = "\
+declare const key: symbol;
+declare const arrayBase: number[];
+declare const numberBase: number;
+arrayBase[key];
+numberBase[key];
+";
+    assert_eq!(
+        incompletes(source),
+        vec![
+            (4, "expr-infer/element-access/implicit-any-index".to_owned()),
+            (5, "expr-infer/element-access/implicit-any-index".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn broad_symbol_guard_routes_unknown_nullish_and_never_separately() {
+    let source = "\
+declare const key: symbol;
+declare const unknownBase: unknown;
+declare const neverBase: never;
+declare const nullBase: null;
+declare const undefinedBase: undefined;
+unknownBase[key];
+neverBase[key];
+nullBase[key];
+undefinedBase[key];
+";
+    assert_eq!(
+        incompletes(source),
+        vec![
+            (6, "expr-infer/element-access/unknown-receiver".to_owned()),
+            (8, "expr-infer/element-access/nullish-receiver".to_owned()),
+            (9, "expr-infer/element-access/nullish-receiver".to_owned()),
+        ],
+        "unknown and nullish receivers fail closed once; never remains tsc-clean"
+    );
+}
+
+#[test]
+fn shadowed_symbol_member_expression_is_not_an_authenticated_symbol_key() {
+    let source = "\
+declare const Symbol: { iterator: \"local\" };
+declare const value: { local: number };
+const clean: number = value[Symbol.iterator];
+const wrong: string = value[Symbol.iterator];
+const computedClean: number = value[Symbol[\"iterator\"]];
+const computedWrong: string = value[(Symbol)[(\"iterator\")]];
+";
+    assert!(incompletes(source).is_empty());
+    assert_eq!(
+        diags(source),
+        vec![(4, "TK2322".to_owned()), (6, "TK2322".to_owned())]
+    );
+}
+
+#[test]
+fn inferred_string_literal_key_selects_the_exact_property() {
+    let source = "\
+declare const key: \"local\";
+declare const value: { local: number };
+const clean: number = value[key];
+const wrong: string = value[key];
+";
+    assert!(incompletes(source).is_empty());
+    assert_eq!(diags(source), vec![(4, "TK2322".to_owned())]);
 }
 
 /// `keyof T` for an object is the `union(...)` of its property **names** as

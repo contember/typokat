@@ -415,6 +415,7 @@ pub(in crate::check::checker) struct FrozenCheckerRuntimeMetadata {
     namespace_terminals: namespace_values::FrozenNamespaceValueTerminals,
     named_function_symbols: LayeredSet<SymbolId>,
     global_object_type: Option<TypeId>,
+    certified_library_values: context::CertifiedLibraryValues,
 }
 
 pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
@@ -435,6 +436,7 @@ pub(in crate::check::checker) struct FrozenCheckerRuntimeSnapshotParts {
         namespace_values::FrozenNamespaceValueTerminalsSnapshotParts,
     pub(in crate::check::checker) named_function_symbols: Vec<SymbolId>,
     pub(in crate::check::checker) global_object_type: Option<TypeId>,
+    pub(in crate::check::checker) certified_library_values: context::CertifiedLibraryValues,
 }
 
 impl FrozenCheckerRuntimeMetadata {
@@ -464,6 +466,7 @@ impl FrozenCheckerRuntimeMetadata {
             namespace_terminals: self.namespace_terminals.fork_delta()?,
             named_function_symbols: self.named_function_symbols.fork_delta()?,
             global_object_type: self.global_object_type,
+            certified_library_values: self.certified_library_values,
         })
     }
 
@@ -481,6 +484,7 @@ impl FrozenCheckerRuntimeMetadata {
             namespace_terminals: self.namespace_terminals.fork_sparse_delta()?,
             named_function_symbols: self.named_function_symbols.fork_delta()?,
             global_object_type: self.global_object_type,
+            certified_library_values: self.certified_library_values,
         })
     }
 
@@ -509,6 +513,7 @@ impl FrozenCheckerRuntimeMetadata {
                 .named_function_symbols
                 .shares_base_with(&other.named_function_symbols)
             && self.global_object_type == other.global_object_type
+            && self.certified_library_values == other.certified_library_values
     }
 
     pub(in crate::check::checker) fn snapshot_parts(
@@ -582,6 +587,7 @@ impl FrozenCheckerRuntimeMetadata {
             namespace_terminals: self.namespace_terminals.snapshot_parts()?,
             named_function_symbols,
             global_object_type: self.global_object_type,
+            certified_library_values: self.certified_library_values,
         })
     }
 
@@ -674,6 +680,7 @@ impl FrozenCheckerRuntimeMetadata {
                 .collect::<FxHashSet<_>>()
                 .into(),
             global_object_type: parts.global_object_type,
+            certified_library_values: parts.certified_library_values,
         })
     }
 }
@@ -1155,6 +1162,7 @@ where
         .install_frozen_terminals(runtime.namespace_terminals);
     pass.named_function_symbols = runtime.named_function_symbols;
     pass.global_object_type = runtime.global_object_type;
+    pass.certified_library_values = runtime.certified_library_values;
     pass.install_private_collision_epoch(private_collision_epoch);
     #[cfg(any(test, feature = "test-utils"))]
     library_compiler::record_private_replay_trace_for_test(|trace, _| {
@@ -2039,6 +2047,7 @@ where
         .install_frozen_terminals(runtime.namespace_terminals);
     pass.named_function_symbols = runtime.named_function_symbols;
     pass.global_object_type = runtime.global_object_type;
+    pass.certified_library_values = runtime.certified_library_values;
     let complete_source_replay = private_collision_epoch
         .as_ref()
         .is_some_and(|epoch| epoch.complete_source_replay);
@@ -5555,6 +5564,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         }),
         semantic_queries: SemanticQueryState::default(),
         library_semantic_identities: None,
+        certified_library_values: context::CertifiedLibraryValues::default(),
         lexical_array_alias: None,
         class_application_parameters: LayeredMap::default(),
         staged_class_validation: None,

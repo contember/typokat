@@ -425,23 +425,23 @@ mod tests {
             .iter()
             .filter(|(_, record)| record.is_diagnostic())
             .count();
-        assert_eq!(diagnostic_count, 265);
-        assert_eq!(evidence.diagnostics.len(), 125_251);
+        assert_eq!(diagnostic_count, 267);
+        assert_eq!(evidence.diagnostics.len(), 125_629);
         assert_eq!(
             digest(&evidence.diagnostics),
-            "79ef18a2496c296b380e3d37dd71e589ad036614ce2fe0f9b49073cc3bf5d427"
+            "640fb065d80690ba28de25430cb65b51935b9f34488d4d01a83c187bbc960ab6"
         );
-        assert_eq!(run.library_records.len() - diagnostic_count, 433);
-        assert_eq!(evidence.incompletes.len(), 69_619);
+        assert_eq!(run.library_records.len() - diagnostic_count, 292);
+        assert_eq!(evidence.incompletes.len(), 45_356);
         assert_eq!(
             digest(&evidence.incompletes),
-            "6febf130a617d6108b40e28e6aaecacb9aa247218a183e5ce0de11f274d18e51"
+            "5d608971d0ff1a97e56c6616cbdb8cb2ee3cd4e5615eca7b44fa2d26df653842"
         );
-        assert_eq!(run.library_records.len(), 698);
-        assert_eq!(evidence.ledger.len(), 194_839);
+        assert_eq!(run.library_records.len(), 559);
+        assert_eq!(evidence.ledger.len(), 170_954);
         assert_eq!(
             digest(&evidence.ledger),
-            "dbfe5132c3d37c5378c177df22b9f00ec1fab26713ce9b80a57c43a7dccb50e3"
+            "1adde6c30479466ec76a9781a740f7525d3f195d1e75155fc2578bdc6bcd6db0"
         );
         assert_eq!(owned_sources.len(), 82);
     }

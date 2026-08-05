@@ -1,7 +1,7 @@
 //! Measurement-only compiler for injected declaration-library profiles.
 
 use super::classes::application::ClassTypeParameterDefault;
-use super::context::{DeclTypes, TypeDecl};
+use super::context::{CertifiedLibraryValues, DeclTypes, TypeDecl};
 use super::events_library::{
     library_record_ticket_key, LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError,
     LibraryRecordTicket, LibrarySemanticReportingAdapter,
@@ -1227,6 +1227,22 @@ fn validate_owned_library_product_parts(
     }
 
     validate_library_source_prefix(&parts.binder, parts.source_file_count)?;
+    let authenticated_symbol = collect_root_rows(&parts.binder)
+        .map_err(|_| "product binder root projection is invalid")?
+        .into_iter()
+        .find(|row| row.name == "Symbol")
+        .and_then(|row| row.value);
+    if parts
+        .runtime
+        .certified_library_values
+        .symbol
+        .is_some_and(|storage| storage.0 >= parts.binder.decl_count)
+    {
+        return Err("product certified Symbol value is out of range");
+    }
+    if parts.runtime.certified_library_values.symbol != authenticated_symbol {
+        return Err("product certified Symbol value does not match the authenticated root");
+    }
     if parts.published_types.groups.len() != parts.binder.type_groups.len() {
         return Err("product published type-group count does not match the binder");
     }
@@ -3740,6 +3756,16 @@ fn seed_trusted_library_markers(
     }
 }
 
+fn certify_library_values(roots: &LibraryRootProjection) -> CertifiedLibraryValues {
+    let symbol = roots
+        .root_rows
+        .binary_search_by(|row| row.name.as_str().cmp("Symbol"))
+        .ok()
+        .and_then(|index| roots.root_rows.get(index))
+        .and_then(|row| row.value);
+    CertifiedLibraryValues { symbol }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static CANONICAL_FRONTEND_ENTRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -3977,6 +4003,10 @@ fn encode_store_row(
             LiteralValue::Boolean(value) => {
                 bytes.byte(2);
                 bytes.bool(*value);
+            }
+            LiteralValue::WellKnownSymbol(symbol) => {
+                bytes.byte(3);
+                bytes.byte(well_known_symbol_code(*symbol));
             }
         },
         TypeTag::Object => {
@@ -6440,6 +6470,7 @@ fn compile_owned_injected_frontend(
             ticket_key: library_record_ticket_key,
         },
     );
+    pass.certified_library_values = certify_library_values(&collision_root_provenance);
     if let Some(user_start) = user_start {
         let user_modules = module_scopes[user_start..].to_vec();
         let user_values = binder
@@ -6749,6 +6780,7 @@ fn compile_owned_injected_frontend(
         standalone_namespace_value_aliases,
         class_names,
         function_groups,
+        certified_library_values,
         ..
     } = pass;
     let super::type_groups::TypeEnvironmentState::Published(published_types) = type_environment
@@ -6769,6 +6801,7 @@ fn compile_owned_injected_frontend(
         namespace_terminals,
         named_function_symbols: named_function_symbols.into(),
         global_object_type,
+        certified_library_values,
     };
     let selected_semantic_identities = semantic_identities
         .all_ready()
@@ -8206,6 +8239,108 @@ mod tests {
         assert_eq!(
             string.finish(),
             vec![0, 0, 0, 0, 0, 0, 0, 0, 8, b'i', b't', b'e', b'r', b'a', b't', b'o', b'r']
+        );
+    }
+
+    fn compile_symbol_product_parts() -> OwnedLibraryRuntimeProductParts {
+        let (_, state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "certified-symbol.d.ts",
+            source: r#"
+                declare const Other: {};
+                declare const Symbol: {};
+                interface CertifiedSymbolSurface {
+                    [Symbol.iterator](): string;
+                }
+            "#,
+        }])
+        .expect("certified Symbol library compiles");
+        state.into_product_parts().expect("extract Symbol product")
+    }
+
+    #[test]
+    fn authenticated_symbol_root_is_installed_before_interface_fill() {
+        let records = compile_owned_injected_records(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "early-certified-symbol.d.ts",
+            source: r#"
+                declare const Symbol: {};
+                interface CertifiedSymbolSurface {
+                    [Symbol.iterator](): string;
+                    [Symbol.asyncIterator](): number;
+                }
+            "#,
+        }])
+        .expect("certified Symbol library compiles");
+        assert!(records.iter().all(|(_, record)| {
+            !matches!(
+                record,
+                CheckerRecord::Incomplete(incomplete)
+                    if incomplete.id == "signature/method-signature/computed-key"
+            )
+        }));
+    }
+
+    #[test]
+    fn symbol_certificate_round_trips_and_rejects_corruption() {
+        let parts = compile_symbol_product_parts();
+        let certified = parts
+            .runtime
+            .certified_library_values
+            .symbol
+            .expect("Symbol root is certified");
+        let restored = OwnedLibraryRuntimeState::from_product_parts(parts)
+            .expect("certified Symbol product restores");
+        assert_eq!(
+            restored.runtime.certified_library_values.symbol,
+            Some(certified)
+        );
+
+        let mut mismatched = compile_symbol_product_parts();
+        let other = collect_root_rows(&mismatched.binder)
+            .expect("product binder roots project")
+            .into_iter()
+            .find(|row| row.name == "Other")
+            .and_then(|row| row.value)
+            .expect("other in-range value root");
+        mismatched.runtime.certified_library_values.symbol = Some(other);
+        assert_product_restore_error(
+            mismatched,
+            "product certified Symbol value does not match the authenticated root",
+        );
+
+        let mut out_of_range = compile_symbol_product_parts();
+        out_of_range.runtime.certified_library_values.symbol =
+            Some(ValueStorageId(out_of_range.binder.decl_count));
+        assert_product_restore_error(
+            out_of_range,
+            "product certified Symbol value is out of range",
+        );
+    }
+
+    #[test]
+    fn symbol_certificate_survives_dense_and_sparse_forks() {
+        let (_, mut base) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "forked-certified-symbol.d.ts",
+            source: "declare const Symbol: {};",
+        }])
+        .expect("certified Symbol library compiles");
+        let certified = base
+            .runtime
+            .certified_library_values
+            .symbol
+            .expect("Symbol root is certified");
+        base.freeze_as_library_base().expect("Symbol base freezes");
+        let dense = base.fork_user_delta_for_test().expect("dense fork");
+        let sparse = base.fork_sparse_collision_epoch().expect("sparse fork");
+        assert_eq!(
+            dense.runtime.certified_library_values.symbol,
+            Some(certified)
+        );
+        assert_eq!(
+            sparse.runtime.certified_library_values.symbol,
+            Some(certified)
         );
     }
 

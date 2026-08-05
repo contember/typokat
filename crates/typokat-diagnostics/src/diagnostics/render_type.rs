@@ -983,6 +983,10 @@ fn render_literal(lit: &crate::types::repr::LiteralValue, context: &mut RenderCo
                 context.append(&format!("{n}"));
             }
         }
+        LiteralValue::WellKnownSymbol(symbol) => {
+            context.append("typeof Symbol.");
+            context.append(symbol.name());
+        }
     }
 }
 

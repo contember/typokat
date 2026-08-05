@@ -20,8 +20,8 @@ const PIN_PATH: &str = "tests/fixtures/library-owned-records.txt";
 /// Rewrite the pin instead of failing. Deliberate, and never set in CI.
 const BLESS: &str = "TYPOKAT_BLESS_LIBRARY_RECORDS";
 
-const PINNED_DIAGNOSTICS: usize = 265;
-const PINNED_INCOMPLETES: usize = 433;
+const PINNED_DIAGNOSTICS: usize = 267;
+const PINNED_INCOMPLETES: usize = 292;
 const FULL_LIBRARY_CLEAN: &str =
     include_str!("../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 const PROFILE_IDENTITY: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const REPLAY_MANIFEST_IDENTITY: &str =
-    "6460d58af3031dc687f714361ce9a6fe7f25ee05389afe8a16b781b67654f3d6";
+    "bc331e8d8a9d15f2edae631caaa7c3fd0a9fb5a249033845356058d2c703855d";
 /// The process-wide source-compiled base. Compiling all 82 packaged sources costs seconds, so
 /// every spec in this binary shares one.
 fn acquire() -> Arc<FrozenLibraryBase> {
@@ -215,7 +215,7 @@ fn source_compiled_replay_index_matches_its_pinned_shape_and_identity() {
     assert_eq!(index.schema, 1);
     assert_eq!(base.identity().profile_sha256(), PROFILE_IDENTITY);
     assert_eq!(base.identity().schema_sha256(), COMPILER_SCHEMA_SHA256);
-    assert_eq!(index.canonical_manifest_len(), 10_991_777);
+    assert_eq!(index.canonical_manifest_len(), 10_989_313);
     // The regression canary for unattributed library-diagnostic drift: the manifest digests
     // every owner's rendered records, so a changed diagnostic moves it.
     assert_eq!(
@@ -225,9 +225,9 @@ fn source_compiled_replay_index_matches_its_pinned_shape_and_identity() {
     assert_eq!(index.owner_partition.len(), 45_925);
     assert_eq!(index.root_slots.len(), 2_238);
     assert_eq!(index.owner_sites.len(), 47_253);
-    assert_eq!(index.reverse_edges.len(), 9_780);
-    assert_eq!(index.root_slot_consumers.len(), 6_940);
-    assert_eq!(index.scc_membership.len(), 45_236);
+    assert_eq!(index.reverse_edges.len(), 9_654);
+    assert_eq!(index.root_slot_consumers.len(), 7_049);
+    assert_eq!(index.scc_membership.len(), 45_234);
     assert_eq!(index.statement_owners.len(), 42_496);
     assert_eq!(index.baseline_records.len(), 45_925);
     assert_eq!(index.unowned_demand_count, 0);

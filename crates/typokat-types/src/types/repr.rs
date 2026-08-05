@@ -255,6 +255,9 @@ pub enum LiteralValue {
     Number(f64),
     String(String),
     Boolean(bool),
+    /// The exact `unique symbol` type of an authenticated ECMAScript well-known
+    /// symbol. Distinct from the broad `symbol` intrinsic.
+    WellKnownSymbol(WellKnownSymbol),
 }
 
 impl LiteralValue {
@@ -266,6 +269,7 @@ impl LiteralValue {
             LiteralValue::Number(_) => IntrinsicKind::Number,
             LiteralValue::String(_) => IntrinsicKind::String,
             LiteralValue::Boolean(_) => IntrinsicKind::Boolean,
+            LiteralValue::WellKnownSymbol(_) => IntrinsicKind::Symbol,
         }
     }
 }

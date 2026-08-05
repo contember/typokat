@@ -152,6 +152,17 @@ and validated the same way.
   `intrinsic` ×5, `symbol` ×3, and `bigint` ×1. These are non-permissive incomplete
   results rather than silent fallback, but tsc accepts the declarations.
   <!-- div: id=lib-es5/annotation-surface-tail dir=over scope=b-semantic-candidate-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+- **Generic iterator heritage over-reports after computed-symbol publication.** In the pinned
+  full profile, strict tsc 6.0.3 accepts `HTMLCollectionOf<T> extends HTMLCollectionBase` and
+  `NodeListOf<T> extends NodeList`. typokat reports one `TK2430` for the former and four for the
+  latter: the pre-existing `forEach`/`entries`/`values` rows and the newly represented
+  `[Symbol.iterator]` row all reach the same rejected `ArrayIterator<T>` relation through
+  `IteratorObject.reduce`. The checker uses its strict nested-callback relation where TypeScript's
+  method variance accepts the constrained element type. The same census change replaces, rather
+  than removes, `TK2344` at `lib.es5.d.ts:1873:155`: its first `ArrayBufferLike` branch now
+  truthfully includes the published `[Symbol.toStringTag]: "ArrayBuffer"` member. Its code and site
+  are unchanged.
+  <!-- div: id=lib/generic-iterator-heritage-variance dir=over scope=s-assignability owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/library-owned-records.txt -->
 - **Newly traversed official surfaces expose missing standard-library globals
   (over-report / OOS movement).** Tuple-label and generic-heritage review now reaches
   `Error`, `Promise`, `Generator`, `AsyncGenerator`, `CloseEvent`, `Number`, `String`, `Object`,

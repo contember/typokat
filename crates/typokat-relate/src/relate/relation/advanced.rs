@@ -234,7 +234,7 @@ fn hole_matches_segment(store: &Store, hole: TypeId, seg: &str) -> bool {
         _ => {}
     }
     if let Some(lit) = store.literal_value(hole) {
-        return literal_segment(lit) == seg;
+        return literal_segment(lit).is_some_and(|literal| literal == seg);
     }
     if let Some(members) = store.union_members(hole) {
         return members
@@ -245,11 +245,12 @@ fn hole_matches_segment(store: &Store, hole: TypeId, seg: &str) -> bool {
 }
 
 /// The string form of a literal for template-segment matching (M27).
-fn literal_segment(lit: &LiteralValue) -> String {
+fn literal_segment(lit: &LiteralValue) -> Option<String> {
     match lit {
-        LiteralValue::String(s) => s.clone(),
-        LiteralValue::Number(n) => crate::types::repr::number_to_string(*n),
-        LiteralValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+        LiteralValue::String(s) => Some(s.clone()),
+        LiteralValue::Number(n) => Some(crate::types::repr::number_to_string(*n)),
+        LiteralValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_string()),
+        LiteralValue::WellKnownSymbol(_) => None,
     }
 }
 

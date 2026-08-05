@@ -96,7 +96,7 @@ mod params;
 mod resolve;
 
 struct InterfaceOwnMemberOwners<Ticket: Copy> {
-    properties: BTreeMap<String, (Ticket, Span)>,
+    properties: BTreeMap<crate::types::repr::PropertyKey, (Ticket, Span)>,
     string_index: Option<(Ticket, Span)>,
     number_index: Option<(Ticket, Span)>,
 }
@@ -501,7 +501,7 @@ pub(in crate::check::checker) struct PreparedClassInstanceHeritage<Ticket: Copy>
 pub(in crate::check::checker) struct PreparedClassInterfaceFragment<'ast, Ticket: Copy> {
     pub(in crate::check::checker) fragment: InterfaceFragment<'ast>,
     pub(in crate::check::checker) object: crate::types::repr::ObjectType,
-    pub(in crate::check::checker) method_names: BTreeSet<String>,
+    pub(in crate::check::checker) method_names: BTreeSet<crate::types::repr::PropertyKey>,
     pub(in crate::check::checker) heritage_surfaces: Vec<(String, crate::types::repr::ObjectType)>,
     pub(in crate::check::checker) instance_heritage: Vec<PreparedClassInstanceHeritage<Ticket>>,
 }
@@ -1155,6 +1155,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         fragment.members,
                     )
                 });
+                let method_names = own.method_keys;
                 let own = own.object;
                 conflict_inputs.push((fragment.clone(), own.clone()));
 
@@ -1212,7 +1213,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         }
                     }
                 }
-                let method_names = interface_method_names(fragment.members);
                 lowered.push(PreparedClassInterfaceFragment {
                     fragment,
                     object: own,
@@ -1260,6 +1260,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         #[derive(Clone)]
         struct Member<Ticket: Copy> {
+            key: crate::types::repr::PropertyKey,
             name: String,
             declaration_kind: DeclarationKind,
             declaration_origin: DeclarationOrigin,
@@ -1378,6 +1379,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         continue;
                     };
                     members.push(Member {
+                        key: crate::types::repr::PropertyKey::String(name.clone()),
                         name,
                         declaration_kind: DeclarationKind::Property,
                         declaration_origin: DeclarationOrigin::Class,
@@ -1410,6 +1412,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     };
                     let accessor_is_paired = paired_accessors.contains(&name);
                     members.push(Member {
+                        key: crate::types::repr::PropertyKey::String(name.clone()),
                         name,
                         declaration_kind: match method.kind {
                             oxc_ast::ast::MethodDefinitionKind::Method => DeclarationKind::Method,
@@ -1436,31 +1439,33 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         for prepared in interfaces {
             for signature in prepared.fragment.members {
-                let (name, declaration_kind, optional, readonly, span) = match signature {
-                    oxc_ast::ast::TSSignature::TSPropertySignature(signature)
-                        if !signature.computed =>
-                    {
-                        let Some(name) = signature.key.static_name().map(|name| name.into_owned())
-                        else {
+                let (key, declaration_kind, optional, readonly, span) = match signature {
+                    oxc_ast::ast::TSSignature::TSPropertySignature(signature) => {
+                        let Some(key) = self.signature_property_key(
+                            prepared.fragment.scope,
+                            &signature.key,
+                            signature.computed,
+                        ) else {
                             continue;
                         };
                         (
-                            name,
+                            key,
                             DeclarationKind::Property,
                             signature.optional,
                             signature.readonly,
                             Span::from_oxc(signature.span),
                         )
                     }
-                    oxc_ast::ast::TSSignature::TSMethodSignature(signature)
-                        if !signature.computed =>
-                    {
-                        let Some(name) = signature.key.static_name().map(|name| name.into_owned())
-                        else {
+                    oxc_ast::ast::TSSignature::TSMethodSignature(signature) => {
+                        let Some(key) = self.signature_property_key(
+                            prepared.fragment.scope,
+                            &signature.key,
+                            signature.computed,
+                        ) else {
                             continue;
                         };
                         (
-                            name,
+                            key,
                             DeclarationKind::Method,
                             signature.optional,
                             false,
@@ -1469,9 +1474,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     _ => continue,
                 };
-                let Some(surface) = prepared.object.property(&name) else {
+                let Some(surface) = prepared.object.property_by_key(&key) else {
                     continue;
                 };
+                let name = key.to_string();
                 let owner = self
                     .lexical_events
                     .interface_occurrence_owner(
@@ -1481,6 +1487,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     )
                     .expect("attached interface member has one exact owner");
                 members.push(Member {
+                    key,
                     name,
                     declaration_kind,
                     declaration_origin: DeclarationOrigin::Interface,
@@ -1501,17 +1508,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
         members.sort_by_key(|member| (member.order, member.span.end));
-        let mut by_name: BTreeMap<String, Vec<Member<Ticket>>> = BTreeMap::new();
+        let mut by_name: BTreeMap<crate::types::repr::PropertyKey, Vec<Member<Ticket>>> =
+            BTreeMap::new();
         let mut modifier_reports = BTreeSet::new();
         let mut duplicate_reports = BTreeSet::new();
         let mut accessibility_reports = BTreeSet::new();
         for member in members {
             let Some(first) = by_name
-                .get(&member.name)
+                .get(&member.key)
                 .and_then(|occurrences| occurrences.first())
                 .cloned()
             else {
-                by_name.entry(member.name.clone()).or_default().push(member);
+                by_name.entry(member.key.clone()).or_default().push(member);
                 continue;
             };
             if first.is_property_declaration() && member.conflicts_as_later_duplicate(&first) {
@@ -1571,15 +1579,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let member_ty = member.comparison_ty();
                 if first_ty != member_ty {
                     let source = self.interner.intern_object(crate::types::repr::ObjectType {
-                        properties: vec![crate::types::repr::PropertyType::public(
-                            member.name.clone(),
+                        properties: vec![Self::public_signature_property(
+                            member.key.clone(),
                             first_ty,
                         )],
                         ..Default::default()
                     });
                     let target = self.interner.intern_object(crate::types::repr::ObjectType {
-                        properties: vec![crate::types::repr::PropertyType::public(
-                            member.name.clone(),
+                        properties: vec![Self::public_signature_property(
+                            member.key.clone(),
                             member_ty,
                         )],
                         ..Default::default()
@@ -1597,7 +1605,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     });
                 }
             }
-            by_name.entry(member.name.clone()).or_default().push(member);
+            by_name.entry(member.key.clone()).or_default().push(member);
         }
 
         let derived_name = self
@@ -1862,35 +1870,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         matches!(origin, crate::source::CompilationOrigin::User(_))
                     });
                 unavailable |= lowered.unavailable && fragment_is_user;
+                let fragment_methods = lowered.method_keys;
                 let fragment_own = lowered.object;
-                let mut seen_names = BTreeSet::new();
-                let fragment_methods = fragment
-                    .members
-                    .iter()
-                    .filter_map(|member| match member {
-                        oxc_ast::ast::TSSignature::TSPropertySignature(signature)
-                            if !signature.computed =>
-                        {
-                            signature
-                                .key
-                                .static_name()
-                                .map(|name| (name.into_owned(), false))
-                        }
-                        oxc_ast::ast::TSSignature::TSMethodSignature(signature)
-                            if !signature.computed =>
-                        {
-                            signature
-                                .key
-                                .static_name()
-                                .map(|name| (name.into_owned(), true))
-                        }
-                        _ => None,
-                    })
-                    .filter_map(|(name, method)| {
-                        seen_names.insert(name.clone()).then_some((name, method))
-                    })
-                    .filter_map(|(name, method)| method.then_some(name))
-                    .collect::<BTreeSet<_>>();
                 lowered_fragments.push((fragment, fragment_own.clone()));
                 own = self.merge_interface_fragment_members(
                     own,
@@ -2546,7 +2527,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             ty: TypeId,
         }
 
-        let mut members: BTreeMap<String, Vec<Member<Ticket>>> = BTreeMap::new();
+        let mut members: BTreeMap<crate::types::repr::PropertyKey, Vec<Member<Ticket>>> =
+            BTreeMap::new();
         let mut all_properties = Vec::new();
         let mut string_index: Option<Index<Ticket>> = None;
         let mut number_index: Option<Index<Ticket>> = None;
@@ -2560,16 +2542,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         for (fragment, object) in fragments {
             for signature in fragment.members {
                 match signature {
-                    oxc_ast::ast::TSSignature::TSPropertySignature(signature)
-                        if !signature.computed =>
-                    {
-                        let Some(name) = signature.key.static_name().map(|name| name.into_owned())
-                        else {
+                    oxc_ast::ast::TSSignature::TSPropertySignature(signature) => {
+                        let Some(key) = self.signature_property_key(
+                            fragment.scope,
+                            &signature.key,
+                            signature.computed,
+                        ) else {
                             continue;
                         };
-                        let Some(property) = object.property(&name) else {
+                        let Some(property) = object.property_by_key(&key) else {
                             continue;
                         };
+                        let name = key.to_string();
                         let span = Span::from_oxc(signature.span);
                         let member = Member {
                             owner: self
@@ -2587,29 +2571,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             readonly: signature.readonly,
                             name: name.clone(),
                         };
-                        all_properties.push(member.clone());
-                        if let Some(first) = members.get(&name).and_then(|items| items.first()) {
+                        if key.as_string().is_some() {
+                            all_properties.push(member.clone());
+                        }
+                        if let Some(first) = members.get(&key).and_then(|items| items.first()) {
                             if first.kind != member.kind {
                                 if first.ty != member.ty {
                                     let source = self.interner.intern_object(
                                         crate::types::repr::ObjectType {
-                                            properties: vec![
-                                                crate::types::repr::PropertyType::public(
-                                                    name.clone(),
-                                                    first.ty,
-                                                ),
-                                            ],
+                                            properties: vec![Self::public_signature_property(
+                                                key.clone(),
+                                                first.ty,
+                                            )],
                                             ..Default::default()
                                         },
                                     );
                                     let target = self.interner.intern_object(
                                         crate::types::repr::ObjectType {
-                                            properties: vec![
-                                                crate::types::repr::PropertyType::public(
-                                                    name.clone(),
-                                                    member.ty,
-                                                ),
-                                            ],
+                                            properties: vec![Self::public_signature_property(
+                                                key.clone(),
+                                                member.ty,
+                                            )],
                                             ..Default::default()
                                         },
                                     );
@@ -2648,17 +2630,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 }
                                 if first.ty != member.ty {
                                     let mut first_property =
-                                        crate::types::repr::PropertyType::public(
-                                            name.clone(),
-                                            first.ty,
-                                        );
+                                        Self::public_signature_property(key.clone(), first.ty);
                                     first_property.optional = first.optional;
                                     first_property.readonly = first.readonly;
                                     let mut later_property =
-                                        crate::types::repr::PropertyType::public(
-                                            name.clone(),
-                                            member.ty,
-                                        );
+                                        Self::public_signature_property(key.clone(), member.ty);
                                     later_property.optional = member.optional;
                                     later_property.readonly = member.readonly;
                                     let source = self.interner.intern_object(
@@ -2688,18 +2664,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 }
                             }
                         }
-                        members.entry(name).or_default().push(member);
+                        members.entry(key).or_default().push(member);
                     }
-                    oxc_ast::ast::TSSignature::TSMethodSignature(signature)
-                        if !signature.computed =>
-                    {
-                        let Some(name) = signature.key.static_name().map(|name| name.into_owned())
-                        else {
+                    oxc_ast::ast::TSSignature::TSMethodSignature(signature) => {
+                        let Some(key) = self.signature_property_key(
+                            fragment.scope,
+                            &signature.key,
+                            signature.computed,
+                        ) else {
                             continue;
                         };
-                        let Some(property) = object.property(&name) else {
+                        let Some(property) = object.property_by_key(&key) else {
                             continue;
                         };
+                        let name = key.to_string();
                         let span = Span::from_oxc(signature.span);
                         let member = Member {
                             owner: self
@@ -2717,8 +2695,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             readonly: false,
                             name: name.clone(),
                         };
-                        all_properties.push(member.clone());
-                        if let Some(first) = members.get(&name).and_then(|items| items.first()) {
+                        if key.as_string().is_some() {
+                            all_properties.push(member.clone());
+                        }
+                        if let Some(first) = members.get(&key).and_then(|items| items.first()) {
                             if first.kind != member.kind {
                                 for conflict in [first, &member] {
                                     if reported_duplicate_members.insert((
@@ -2737,7 +2717,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 }
                             }
                         }
-                        members.entry(name).or_default().push(member);
+                        members.entry(key).or_default().push(member);
                     }
                     oxc_ast::ast::TSSignature::TSIndexSignature(signature) => {
                         let key = signature
@@ -2833,10 +2813,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         let mut alternatives: Vec<InterfaceTypedAlternative> = members
             .into_iter()
-            .filter_map(|(name, occurrences)| {
+            .filter_map(|(key, occurrences)| {
                 (occurrences.len() > 1).then(|| InterfaceTypedAlternative {
                     kind: InterfaceAlternativeKind::Member,
-                    key: name,
+                    key: key.to_string(),
                     types: occurrences
                         .into_iter()
                         .map(|occurrence| occurrence.ty)
@@ -2951,24 +2931,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     )
                     .expect("interface member has one exact preallocated owner");
                 match member {
-                    oxc_ast::ast::TSSignature::TSPropertySignature(signature)
-                        if !signature.computed =>
-                    {
-                        if let Some(name) = signature.key.static_name() {
-                            owners
-                                .properties
-                                .entry(name.into_owned())
-                                .or_insert((owner, span));
+                    oxc_ast::ast::TSSignature::TSPropertySignature(signature) => {
+                        if let Some(key) = self.signature_property_key(
+                            fragment.scope,
+                            &signature.key,
+                            signature.computed,
+                        ) {
+                            owners.properties.entry(key).or_insert((owner, span));
                         }
                     }
-                    oxc_ast::ast::TSSignature::TSMethodSignature(signature)
-                        if !signature.computed =>
-                    {
-                        if let Some(name) = signature.key.static_name() {
-                            owners
-                                .properties
-                                .entry(name.into_owned())
-                                .or_insert((owner, span));
+                    oxc_ast::ast::TSSignature::TSMethodSignature(signature) => {
+                        if let Some(key) = self.signature_property_key(
+                            fragment.scope,
+                            &signature.key,
+                            signature.computed,
+                        ) {
+                            owners.properties.entry(key).or_insert((owner, span));
                         }
                     }
                     oxc_ast::ast::TSSignature::TSIndexSignature(signature) => {
@@ -3102,7 +3080,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 let Some(name) = property.key.as_string() else {
                     continue;
                 };
-                let own_property = own_owners.properties.get(name).copied();
+                let own_property = own_owners.properties.get(&property.key).copied();
                 let own_string = own_owners.string_index;
                 if own_property.is_some() && own_string.is_some() {
                     continue;
@@ -4691,30 +4669,6 @@ fn sort_interface_fragments(
             .position(|candidate| candidate.declaration == fragment.declaration)
             .unwrap_or(usize::MAX)
     });
-}
-
-fn interface_method_names(members: &[oxc_ast::ast::TSSignature<'_>]) -> BTreeSet<String> {
-    let mut seen = BTreeSet::new();
-    members
-        .iter()
-        .filter_map(|member| match member {
-            oxc_ast::ast::TSSignature::TSPropertySignature(signature) if !signature.computed => {
-                signature
-                    .key
-                    .static_name()
-                    .map(|name| (name.into_owned(), false))
-            }
-            oxc_ast::ast::TSSignature::TSMethodSignature(signature) if !signature.computed => {
-                signature
-                    .key
-                    .static_name()
-                    .map(|name| (name.into_owned(), true))
-            }
-            _ => None,
-        })
-        .filter_map(|(name, method)| seen.insert(name.clone()).then_some((name, method)))
-        .filter_map(|(name, method)| method.then_some(name))
-        .collect()
 }
 
 #[derive(Copy, Clone)]

@@ -1,6 +1,6 @@
 //! Single checker-owned indexed-access kernel shared by eager and dormant demand.
 
-use crate::types::repr::{LiteralValue, TypeTag};
+use crate::types::repr::{LiteralValue, PropertyKey, TypeTag};
 use crate::types::store::TypeId;
 use crate::types::Interner;
 
@@ -42,6 +42,17 @@ fn resolve_single(interner: &mut Interner, object: TypeId, index: TypeId) -> Typ
                     .or(object.string_index)
             })
             .unwrap_or(wk.error);
+    }
+
+    if let Some(LiteralValue::WellKnownSymbol(symbol)) = store.literal_value(index) {
+        return match store.object_type(object).and_then(|object| {
+            object
+                .property_by_key(&PropertyKey::WellKnownSymbol(*symbol))
+                .map(|property| property.ty)
+        }) {
+            Some(property) => property,
+            None => wk.error,
+        };
     }
 
     if let Some(LiteralValue::Number(number)) = store.literal_value(index) {

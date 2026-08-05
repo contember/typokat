@@ -42,6 +42,15 @@ use super::type_groups::{
     TypeGroupConstruction,
 };
 
+/// Authenticated value-space roots that may authorize syntax-directed lowering.
+///
+/// These ids come only from the retained library root projection. A same-spelled
+/// user binding therefore cannot acquire library authority.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::check::checker) struct CertifiedLibraryValues {
+    pub(in crate::check::checker) symbol: Option<ValueStorageId>,
+}
+
 /// Which diagnostic an assignability obligation produces on failure. The
 /// structural verdict is the same relation query; only the code/message mapping
 /// differs (mvp-plan §6 "code mapping").
@@ -1823,6 +1832,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
     /// Source-provider-selected full-library roots for native-syntax member surfaces.
     pub(in crate::check::checker) library_semantic_identities: Option<LibrarySemanticIdentities>,
+    /// Value roots authenticated before any library interface is filled.
+    pub(in crate::check::checker) certified_library_values: CertifiedLibraryValues,
     /// Identity of the transitional minimal-prelude Array alias.
     pub(in crate::check::checker) lexical_array_alias: Option<TypeGroupId>,
     /// Frozen class parameter descriptors retained from the atomic publication.

@@ -70,6 +70,23 @@ fn relation_matches_exact_symbol_keys_and_excludes_them_from_string_indices() {
 }
 
 #[test]
+fn well_known_symbol_literal_is_exact_and_widens_only_outward() {
+    let mut interner = Interner::with_intrinsics();
+    let iterator =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    let async_iterator = interner.intern_literal(LiteralValue::WellKnownSymbol(
+        WellKnownSymbol::AsyncIterator,
+    ));
+    let wk = interner.well_known();
+    let mut relater = Relater::new(interner.store(), wk);
+
+    assert!(relater.is_assignable(iterator, iterator).is_yes());
+    assert!(relater.is_assignable(iterator, wk.symbol).is_yes());
+    assert!(!relater.is_assignable(wk.symbol, iterator).is_yes());
+    assert!(!relater.is_assignable(async_iterator, iterator).is_yes());
+}
+
+#[test]
 fn typed_relation_outcome_requires_exhaustive_matching() {
     fn classify(value: RelationOutcome) -> u8 {
         match value {

@@ -3,6 +3,89 @@ use super::*;
 use oxc_ast::ast::TSTypeParameterDeclaration;
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    pub(in crate::check::checker) fn signature_property_key(
+        &self,
+        scope: ScopeId,
+        key: &oxc_ast::ast::PropertyKey<'_>,
+        computed: bool,
+    ) -> Option<PropertyKey> {
+        if !computed {
+            return key
+                .static_name()
+                .map(|name| PropertyKey::String(name.into_owned()));
+        }
+        let oxc_ast::ast::PropertyKey::StaticMemberExpression(member) = key else {
+            return None;
+        };
+        let symbol = well_known_symbol_from_name(member.property.name.as_str())?;
+        self.authenticate_well_known_symbol_object(scope, &member.object, symbol)
+    }
+
+    pub(in crate::check::checker) fn authenticated_well_known_symbol_expression_key(
+        &self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+    ) -> Option<PropertyKey> {
+        let expression = unparenthesized_expression(expression);
+        let (object, symbol) = match expression {
+            Expression::StaticMemberExpression(member) => (
+                &member.object,
+                well_known_symbol_from_name(member.property.name.as_str())?,
+            ),
+            Expression::ComputedMemberExpression(member) => (
+                &member.object,
+                well_known_symbol_from_key_expression(&member.expression)?,
+            ),
+            _ => return None,
+        };
+        self.authenticate_well_known_symbol_object(
+            scope,
+            unparenthesized_expression(object),
+            symbol,
+        )
+    }
+
+    fn authenticate_well_known_symbol_object(
+        &self,
+        scope: ScopeId,
+        object: &Expression<'_>,
+        symbol: WellKnownSymbol,
+    ) -> Option<PropertyKey> {
+        let Expression::Identifier(object) = object else {
+            return None;
+        };
+        if object.name != "Symbol" {
+            return None;
+        }
+        let certified = self.certified_library_values.symbol?;
+        let crate::binder::bind::ValueResolution::Resolved {
+            symbol: binding, ..
+        } = self.resolve_value_binding_replay(scope, "Symbol")
+        else {
+            return None;
+        };
+        if self
+            .binder
+            .symbols
+            .get(binding)
+            .and_then(|binding| binding.value)
+            != Some(certified)
+        {
+            return None;
+        }
+        Some(PropertyKey::WellKnownSymbol(symbol))
+    }
+
+    pub(in crate::check::checker) fn public_signature_property(
+        key: PropertyKey,
+        ty: TypeId,
+    ) -> PropertyType {
+        match key {
+            PropertyKey::String(name) => PropertyType::public(name, ty),
+            PropertyKey::WellKnownSymbol(symbol) => PropertyType::well_known_symbol(symbol, ty),
+        }
+    }
+
     /// Record the incomplete surface for a skipped computed property-signature key
     /// (`{ [expr]: T }`, owner 75). Shared by object-type and interface member
     /// collection so a computed key is accounted before the member is dropped (WU5).
@@ -37,7 +120,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         sig: &TSMethodSignature<'_>,
     ) -> Option<PropertyType> {
-        let name = sig.key.static_name();
+        let key = self.signature_property_key(scope, &sig.key, sig.computed);
         let ty = self.lower_generic_strict_signature_function_type(
             scope,
             sig.type_parameters.as_deref(),
@@ -48,10 +131,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if sig.kind != TSMethodSignatureKind::Method || sig.optional {
             return None;
         }
-        let (Some(name), Some(ty)) = (name, ty) else {
+        let (Some(key), Some(ty)) = (key, ty) else {
             return None;
         };
-        Some(PropertyType::public(name.into_owned(), ty))
+        Some(Self::public_signature_property(key, ty))
     }
 
     /// Lower a call signature with represented optional/default/rest shape.
@@ -133,33 +216,36 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         )?))
     }
 
-    pub(in crate::check::checker) fn overloaded_method_names(
+    pub(in crate::check::checker) fn overloaded_method_keys(
         &self,
+        scope: ScopeId,
         members: &[TSSignature<'_>],
-    ) -> FxHashSet<String> {
-        let mut counts: FxHashMap<String, (usize, bool)> = FxHashMap::default();
+    ) -> FxHashSet<PropertyKey> {
+        let mut counts: FxHashMap<PropertyKey, (usize, bool)> = FxHashMap::default();
         for member in members {
-            let (name, is_method) = match member {
-                TSSignature::TSPropertySignature(sig) if !sig.computed => {
-                    (sig.key.static_name(), false)
-                }
-                TSSignature::TSMethodSignature(sig) if !sig.computed => {
-                    (sig.key.static_name(), true)
-                }
+            let (key, is_method) = match member {
+                TSSignature::TSPropertySignature(sig) => (
+                    self.signature_property_key(scope, &sig.key, sig.computed),
+                    false,
+                ),
+                TSSignature::TSMethodSignature(sig) => (
+                    self.signature_property_key(scope, &sig.key, sig.computed),
+                    true,
+                ),
                 _ => (None, false),
             };
-            let Some(name) = name else {
+            let Some(key) = key else {
                 continue;
             };
-            let entry = counts.entry(name.into_owned()).or_insert((0, false));
+            let entry = counts.entry(key).or_insert((0, false));
             entry.0 += 1;
             entry.1 |= is_method;
         }
         counts
             .into_iter()
-            .filter_map(|(name, (count, has_method))| {
+            .filter_map(|(key, (count, has_method))| {
                 if count > 1 && has_method {
-                    Some(name)
+                    Some(key)
                 } else {
                     None
                 }
@@ -206,5 +292,70 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // subset → abort the enclosing annotation.
             None
         }
+    }
+}
+
+pub(in crate::check::checker) fn well_known_symbol_from_name(
+    name: &str,
+) -> Option<WellKnownSymbol> {
+    match name {
+        "iterator" => Some(WellKnownSymbol::Iterator),
+        "toStringTag" => Some(WellKnownSymbol::ToStringTag),
+        "asyncIterator" => Some(WellKnownSymbol::AsyncIterator),
+        "species" => Some(WellKnownSymbol::Species),
+        "toPrimitive" => Some(WellKnownSymbol::ToPrimitive),
+        "replace" => Some(WellKnownSymbol::Replace),
+        "unscopables" => Some(WellKnownSymbol::Unscopables),
+        "split" => Some(WellKnownSymbol::Split),
+        "search" => Some(WellKnownSymbol::Search),
+        "match" => Some(WellKnownSymbol::Match),
+        "matchAll" => Some(WellKnownSymbol::MatchAll),
+        "hasInstance" => Some(WellKnownSymbol::HasInstance),
+        _ => None,
+    }
+}
+
+fn well_known_symbol_from_key_expression(expression: &Expression<'_>) -> Option<WellKnownSymbol> {
+    match unparenthesized_expression(expression) {
+        Expression::StringLiteral(literal) => well_known_symbol_from_name(literal.value.as_str()),
+        _ => None,
+    }
+}
+
+fn unparenthesized_expression<'node, 'ast>(
+    expression: &'node Expression<'ast>,
+) -> &'node Expression<'ast> {
+    let mut expression = expression;
+    while let Expression::ParenthesizedExpression(parenthesized) = expression {
+        expression = &parenthesized.expression;
+    }
+    expression
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn well_known_symbol_name_mapping_is_exact() {
+        let expected = [
+            ("iterator", WellKnownSymbol::Iterator),
+            ("toStringTag", WellKnownSymbol::ToStringTag),
+            ("asyncIterator", WellKnownSymbol::AsyncIterator),
+            ("species", WellKnownSymbol::Species),
+            ("toPrimitive", WellKnownSymbol::ToPrimitive),
+            ("replace", WellKnownSymbol::Replace),
+            ("unscopables", WellKnownSymbol::Unscopables),
+            ("split", WellKnownSymbol::Split),
+            ("search", WellKnownSymbol::Search),
+            ("match", WellKnownSymbol::Match),
+            ("matchAll", WellKnownSymbol::MatchAll),
+            ("hasInstance", WellKnownSymbol::HasInstance),
+        ];
+        for (name, symbol) in expected {
+            assert_eq!(well_known_symbol_from_name(name), Some(symbol));
+        }
+        assert_eq!(well_known_symbol_from_name("Iterator"), None);
+        assert_eq!(well_known_symbol_from_name("local"), None);
     }
 }

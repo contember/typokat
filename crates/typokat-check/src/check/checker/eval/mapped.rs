@@ -453,14 +453,11 @@ impl<'a> ConditionalEvaluator<'a> {
                 return;
             };
             for prop in props {
-                let Some(name) = prop.key.as_string().map(str::to_owned) else {
-                    continue;
-                };
                 #[cfg(test)]
                 measure_mapped_property_context(mapped.value_template, prop.ty);
                 let value = self.replace_mapped_value(mapped.value_template, prop.ty);
                 meta.push(MappedProp {
-                    name,
+                    key: prop.key,
                     optional: mapped.optional_modifier.apply(prop.optional),
                     readonly: mapped.readonly_modifier.apply(prop.readonly),
                     // `-?` over an optional source member strips `undefined` from the
@@ -507,7 +504,7 @@ impl<'a> ConditionalEvaluator<'a> {
                         measure_mapped_property_context(mapped.value_template, prop.ty);
                         let value = self.replace_mapped_value(mapped.value_template, prop.ty);
                         meta.push(MappedProp {
-                            name,
+                            key: PropertyKey::String(name),
                             optional: mapped.optional_modifier.apply(prop.optional),
                             readonly: mapped.readonly_modifier.apply(prop.readonly),
                             // `-?` over an optional source member strips `undefined`,
@@ -522,7 +519,7 @@ impl<'a> ConditionalEvaluator<'a> {
                         measure_mapped_property_context(mapped.value_template, error);
                         let value = self.replace_mapped_value(mapped.value_template, error);
                         meta.push(MappedProp {
-                            name,
+                            key: PropertyKey::String(name),
                             optional: mapped.optional_modifier.apply(false),
                             readonly: mapped.readonly_modifier.apply(false),
                             strip_undefined: false,
@@ -779,7 +776,12 @@ impl<'a> ConditionalEvaluator<'a> {
             } else {
                 value
             };
-            let mut prop = PropertyType::public(m.name.clone(), ty);
+            let mut prop = match &m.key {
+                PropertyKey::String(name) => PropertyType::public(name.clone(), ty),
+                PropertyKey::WellKnownSymbol(symbol) => {
+                    PropertyType::well_known_symbol(*symbol, ty)
+                }
+            };
             prop.optional = m.optional;
             prop.readonly = m.readonly;
             object.properties.push(prop);

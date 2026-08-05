@@ -386,6 +386,10 @@ fn hash_literal(value: &LiteralValue, h: &mut impl Hasher) {
             2u8.hash(h);
             b.hash(h);
         }
+        LiteralValue::WellKnownSymbol(symbol) => {
+            3u8.hash(h);
+            symbol.hash(h);
+        }
     }
 }
 

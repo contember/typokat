@@ -66,7 +66,7 @@ fn class_member_name(key: &PropertyKey<'_>) -> Option<String> {
     }
 }
 
-fn class_instance_method_names(class: &Class<'_>) -> BTreeSet<String> {
+fn class_instance_method_names(class: &Class<'_>) -> BTreeSet<TypePropertyKey> {
     class
         .body
         .body
@@ -77,7 +77,7 @@ fn class_instance_method_names(class: &Class<'_>) -> BTreeSet<String> {
                     && !method.computed
                     && method.kind == MethodDefinitionKind::Method =>
             {
-                class_member_name(&method.key)
+                class_member_name(&method.key).map(TypePropertyKey::String)
             }
             _ => None,
         })
@@ -137,8 +137,8 @@ fn merge_class_owned_fragment(
     factory: &mut SurfaceTypeFactory<'_>,
     base: ObjectType,
     overlay: ObjectType,
-    first_method_members: &mut BTreeSet<String>,
-    overlay_methods: &BTreeSet<String>,
+    first_method_members: &mut BTreeSet<TypePropertyKey>,
+    overlay_methods: &BTreeSet<TypePropertyKey>,
 ) -> ObjectType {
     let mut properties = base.properties;
     for property in overlay.properties {
@@ -146,18 +146,14 @@ fn merge_class_owned_fragment(
             .iter_mut()
             .find(|existing| existing.key == property.key)
         else {
-            if let Some(name) = property.key.as_string() {
-                if overlay_methods.contains(name) {
-                    first_method_members.insert(name.to_owned());
-                }
+            if overlay_methods.contains(&property.key) {
+                first_method_members.insert(property.key.clone());
             }
             properties.push(property);
             continue;
         };
-        let Some(name) = property.key.as_string() else {
-            continue;
-        };
-        if !first_method_members.contains(name) || !overlay_methods.contains(name) {
+        if !first_method_members.contains(&property.key) || !overlay_methods.contains(&property.key)
+        {
             continue;
         }
         let mut overloads = match factory.store().tag(existing.ty) {

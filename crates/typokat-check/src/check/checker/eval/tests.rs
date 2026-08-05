@@ -1,8 +1,8 @@
 use super::*;
-use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object};
+use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object, keyof_of_type};
 use crate::types::repr::{
     ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
-    ObjectType, ParameterType, PropertyType, TemplateType,
+    ObjectType, ParameterType, PropertyKey, PropertyType, TemplateType, WellKnownSymbol,
 };
 use crate::types::ClassId;
 use rustc_hash::FxHashMap;
@@ -2239,6 +2239,111 @@ fn keyof_over_index_signatures_covers_number_for_string_index() {
         keyof_of_object(&mut interner, mixed).expect("keys"),
         expect_mixed,
         "keyof unions named keys with string | number"
+    );
+}
+
+#[test]
+fn keyof_symbol_only_object_preserves_symbol_domain() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::Iterator,
+            wk.string,
+        )],
+        ..Default::default()
+    });
+
+    let iterator =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    assert_eq!(keyof_of_object(&mut interner, source), Some(iterator));
+}
+
+#[test]
+fn keyof_mixed_string_and_symbol_object_keeps_both_domains() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("label", wk.string),
+            PropertyType::well_known_symbol(WellKnownSymbol::Iterator, wk.number),
+        ],
+        ..Default::default()
+    });
+    let label = interner.intern_literal(LiteralValue::String("label".to_owned()));
+    let iterator =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+    let expected = interner.union(vec![label, iterator]);
+
+    assert_eq!(keyof_of_object(&mut interner, source), Some(expected));
+}
+
+#[test]
+fn keyof_union_intersects_well_known_symbols_by_exact_key() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let iterator = PropertyType::well_known_symbol(WellKnownSymbol::Iterator, wk.number);
+    let async_iterator = PropertyType::well_known_symbol(WellKnownSymbol::AsyncIterator, wk.number);
+    let left = interner.intern_object(ObjectType {
+        properties: vec![iterator.clone(), async_iterator],
+        ..Default::default()
+    });
+    let right = interner.intern_object(ObjectType {
+        properties: vec![iterator],
+        ..Default::default()
+    });
+    let union = interner.union(vec![left, right]);
+    let iterator_key =
+        interner.intern_literal(LiteralValue::WellKnownSymbol(WellKnownSymbol::Iterator));
+
+    assert_eq!(keyof_of_type(&mut interner, union), Some(iterator_key));
+
+    let to_string_tag = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::well_known_symbol(
+            WellKnownSymbol::ToStringTag,
+            wk.string,
+        )],
+        ..Default::default()
+    });
+    let disjoint = interner.union(vec![left, to_string_tag]);
+    assert_eq!(keyof_of_type(&mut interner, disjoint), Some(wk.never));
+}
+
+#[test]
+fn homomorphic_mapped_type_preserves_symbol_key_for_lookup() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let symbol_key = PropertyKey::WellKnownSymbol(WellKnownSymbol::Iterator);
+    let source = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("label", wk.string),
+            PropertyType::well_known_symbol(WellKnownSymbol::Iterator, wk.number),
+        ],
+        ..Default::default()
+    });
+    let placeholder = interner.intern_mapped_value();
+    let mapped = interner.intern_mapped(MappedType {
+        homomorphic: true,
+        key_source: source,
+        value_template: placeholder,
+        modifiers_source: None,
+        optional_modifier: ModifierOp::Keep,
+        readonly_modifier: ModifierOp::Keep,
+    });
+    let mut next = 0u32;
+    let mut memo = FxHashMap::default();
+    let result = eval(&mut interner, &mut next, &mut memo, mapped);
+    let object = interner.store().object_type(result);
+
+    assert_eq!(
+        object.and_then(|object| object
+            .property_by_key(&symbol_key)
+            .map(|property| property.ty)),
+        Some(wk.number)
+    );
+    assert_eq!(
+        object.and_then(|object| object.property("label").map(|property| property.ty)),
+        Some(wk.string)
     );
 }
 

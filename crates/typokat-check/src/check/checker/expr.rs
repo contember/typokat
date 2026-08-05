@@ -18,6 +18,7 @@ use crate::types::repr::{
     TypeParamId, TypeTag, Visibility,
 };
 use crate::types::store::{Store, TypeId};
+use crate::types::{Interner, WellKnown};
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator, ChainElement,
     ComputedMemberExpression, ConditionalExpression, Expression, LogicalExpression,
@@ -37,6 +38,22 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub(in crate::check::checker) enum ContextualRewalk {
     Rewalked,
     KeptRaw,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum ElementAccessLookup {
+    Found(TypeId),
+    MissingObjectKey,
+    NullishReceiver,
+    UnsupportedReceiver,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum ExactSymbolReceiverGuard {
+    Continue,
+    Recovery(TypeId),
+    Unknown,
+    Nullish,
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
@@ -1437,9 +1454,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(member.span);
 
-        // Walk the index expression for its side effects (reference resolution, nested
-        // diagnostics), capturing its type for index-signature resolution (M19).
-        let key_ty = self.infer_expr(scope, &member.expression).map(|(ty, _)| ty);
+        // Authenticated well-known symbols are exact key literals. Certification
+        // resolves the `Symbol` binding itself, so the generic member walker must not
+        // reinterpret the trusted key as an ordinary static-property access.
+        let authenticated_symbol = self
+            .authenticated_well_known_symbol_expression_key(scope, &member.expression)
+            .and_then(|key| key.as_well_known_symbol());
+        // Other keys still walk normally for side effects, reference resolution, and
+        // nested diagnostics.
+        let key_ty = match authenticated_symbol {
+            Some(symbol) => Some(
+                self.interner
+                    .intern_literal(LiteralValue::WellKnownSymbol(symbol)),
+            ),
+            None => self.infer_expr(scope, &member.expression).map(|(ty, _)| ty),
+        };
 
         if base_ty == wk.any || base_ty == wk.error {
             return Some((wk.error, span));
@@ -1460,6 +1489,94 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .store()
             .readonly_operand(base_ty)
             .unwrap_or(base_ty);
+
+        if key_ty == Some(wk.symbol) {
+            let incomplete = if base_ty == wk.unknown {
+                Some((
+                    "expr-infer/element-access/unknown-receiver",
+                    "broad symbol index has an unknown receiver",
+                ))
+            } else if base_ty == wk.null || base_ty == wk.undefined {
+                Some((
+                    "expr-infer/element-access/nullish-receiver",
+                    "broad symbol index has a nullish receiver",
+                ))
+            } else if base_ty == wk.never {
+                None
+            } else {
+                Some((
+                    "expr-infer/element-access/implicit-any-index",
+                    "broad symbol index requires implicit-any index checking",
+                ))
+            };
+            if let Some((id, context)) = incomplete {
+                self.record_incomplete(id, span, context);
+                return None;
+            }
+        }
+
+        if authenticated_symbol.is_some() {
+            match exact_symbol_receiver_guard(base_ty, &wk) {
+                ExactSymbolReceiverGuard::Continue => {}
+                ExactSymbolReceiverGuard::Recovery(result) => return Some((result, span)),
+                ExactSymbolReceiverGuard::Unknown => {
+                    self.record_incomplete(
+                        "expr-infer/element-access/unknown-receiver",
+                        span,
+                        "exact well-known symbol index has an unknown receiver",
+                    );
+                    return None;
+                }
+                ExactSymbolReceiverGuard::Nullish => {
+                    self.record_incomplete(
+                        "expr-infer/element-access/nullish-receiver",
+                        span,
+                        "exact well-known symbol index has a nullish receiver",
+                    );
+                    return None;
+                }
+            }
+            let result = if self.interner.store().tag(base_ty) == TypeTag::Union {
+                match self.union_exact_symbol_element_access(base_ty, key_ty) {
+                    DemandOutcome::Ready(result) => result,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                        return None;
+                    }
+                }
+            } else if self.interner.store().tag(base_ty) == TypeTag::Object {
+                object_element_access(self.interner.store(), base_ty, key_ty)
+            } else {
+                ElementAccessLookup::UnsupportedReceiver
+            };
+            return match result {
+                ElementAccessLookup::Found(result) => Some((result, span)),
+                ElementAccessLookup::MissingObjectKey => {
+                    self.record_incomplete(
+                        "expr-infer/element-access/missing-symbol-key",
+                        span,
+                        "exact well-known symbol key is absent from the receiver",
+                    );
+                    None
+                }
+                ElementAccessLookup::NullishReceiver => {
+                    self.record_incomplete(
+                        "expr-infer/element-access/nullish-receiver",
+                        span,
+                        "exact well-known symbol index has a nullable union receiver",
+                    );
+                    None
+                }
+                ElementAccessLookup::UnsupportedReceiver => {
+                    self.record_incomplete(
+                        "expr-infer/element-access/unsupported-symbol-receiver",
+                        span,
+                        "exact well-known symbol lookup is unsupported for this receiver",
+                    );
+                    None
+                }
+            };
+        }
 
         if self.interner.store().tag(base_ty) == TypeTag::Union {
             let result = match self.union_element_access(base_ty, &member.expression, key_ty) {
@@ -1493,53 +1610,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Object base (M19): resolve `obj[key]` through named properties / index sigs.
         if self.interner.store().tag(base_ty) == TypeTag::Object {
-            return Some((
-                self.object_element_access(base_ty, &member.expression, key_ty),
-                span,
-            ));
+            let result = match object_element_access(self.interner.store(), base_ty, key_ty) {
+                ElementAccessLookup::Found(result) => result,
+                ElementAccessLookup::MissingObjectKey
+                | ElementAccessLookup::NullishReceiver
+                | ElementAccessLookup::UnsupportedReceiver => wk.error,
+            };
+            return Some((result, span));
         }
 
         // Non-array/non-tuple/non-object base: out of scope (no diagnostic, no crash) →
         // error type.
         Some((wk.error, span))
-    }
-
-    /// Resolve M19 object element access: named string-literal property, then number
-    /// index, then string index, else the error type without diagnostics.
-    fn object_element_access(
-        &mut self,
-        base_ty: TypeId,
-        key_expr: &Expression<'_>,
-        key_ty: Option<TypeId>,
-    ) -> TypeId {
-        let wk = self.interner.well_known();
-        let store = self.interner.store();
-        let Some(obj) = store.object_type(base_ty) else {
-            return wk.error;
-        };
-
-        // 1. A string-literal key naming a known property → that property's type.
-        if let Some(name) = string_literal_key(key_expr) {
-            if let Some(prop) = obj.property(&name) {
-                return prop.ty;
-            }
-        }
-
-        // 2. A number-typed key + a number index signature → the number value type.
-        let key_is_number = key_ty.is_some_and(|k| is_number_keyed(store, k));
-        if key_is_number {
-            if let Some(value) = obj.number_index {
-                return value;
-            }
-        }
-
-        // 3. Otherwise a string index signature accepts the key → the string value type.
-        if let Some(value) = obj.string_index {
-            return value;
-        }
-
-        // 4. Out of subset → error type (no diagnostic, no crash).
-        wk.error
     }
 
     /// Resolve an element access across every union constituent. Class and
@@ -1574,14 +1656,49 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             } else if let Some(tuple) = self.interner.store().tuple_type(member) {
                 literal_index(key_expr).and_then(|index| tuple.elements.get(index).copied())
             } else if self.interner.store().tag(member) == TypeTag::Object {
-                let result = self.object_element_access(member, key_expr, key_ty);
-                (result != self.interner.well_known().error).then_some(result)
+                match object_element_access(self.interner.store(), member, key_ty) {
+                    ElementAccessLookup::Found(result) => Some(result),
+                    ElementAccessLookup::MissingObjectKey
+                    | ElementAccessLookup::NullishReceiver
+                    | ElementAccessLookup::UnsupportedReceiver => None,
+                }
             } else {
                 None
             };
             results.push(result.unwrap_or(self.interner.well_known().unknown));
         }
         DemandOutcome::Ready(self.interner.union(results))
+    }
+
+    fn union_exact_symbol_element_access(
+        &mut self,
+        union_ty: TypeId,
+        key_ty: Option<TypeId>,
+    ) -> DemandOutcome<ElementAccessLookup> {
+        let Some(members) = self.interner.store().union_members(union_ty) else {
+            return DemandOutcome::Ready(ElementAccessLookup::UnsupportedReceiver);
+        };
+        let members = members.to_vec();
+        let mut apparent_members = Vec::with_capacity(members.len());
+        for member in members {
+            let member = match self.demand_apparent_type(member) {
+                DemandOutcome::Ready(member) => member,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    return DemandOutcome::Exhausted(exhaustion);
+                }
+            };
+            let member = self
+                .interner
+                .store()
+                .readonly_operand(member)
+                .unwrap_or(member);
+            apparent_members.push(member);
+        }
+        DemandOutcome::Ready(combine_exact_symbol_member_lookups(
+            self.interner,
+            &apparent_members,
+            key_ty,
+        ))
     }
 
     /// Resolve the M24 apparent type of constrained type parameters transitively.
@@ -2471,13 +2588,104 @@ fn is_const_assertion_type(ts_type: &TSType<'_>) -> bool {
     ident.name.as_str() == "const"
 }
 
-/// Read a **string-literal** key from an element-access index expression
-/// (`obj["a"]`), or `None` for any non-string-literal index. Used by object element
-/// access (M19) to resolve a literal key to a named property.
-fn string_literal_key(expr: &Expression<'_>) -> Option<String> {
-    match expr {
-        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
+fn property_key_from_type(store: &Store, ty: TypeId) -> Option<PropertyKey> {
+    match store.literal_value(ty) {
+        Some(LiteralValue::String(name)) => Some(PropertyKey::String(name.clone())),
+        Some(LiteralValue::WellKnownSymbol(symbol)) => Some(PropertyKey::WellKnownSymbol(*symbol)),
         _ => None,
+    }
+}
+
+/// Resolve object element access without using the recovery type as a missing-key sentinel.
+pub(in crate::check::checker) fn object_element_access(
+    store: &Store,
+    base_ty: TypeId,
+    key_ty: Option<TypeId>,
+) -> ElementAccessLookup {
+    let Some(obj) = store.object_type(base_ty) else {
+        return ElementAccessLookup::UnsupportedReceiver;
+    };
+
+    if let Some(key) = key_ty.and_then(|key| property_key_from_type(store, key)) {
+        if let Some(prop) = obj.property_by_key(&key) {
+            return ElementAccessLookup::Found(prop.ty);
+        }
+        if matches!(key, PropertyKey::WellKnownSymbol(_)) {
+            return ElementAccessLookup::MissingObjectKey;
+        }
+    }
+
+    if key_ty.is_some_and(|key| is_number_keyed(store, key)) {
+        if let Some(value) = obj.number_index {
+            return ElementAccessLookup::Found(value);
+        }
+    }
+
+    if let Some(value) = obj.string_index {
+        return ElementAccessLookup::Found(value);
+    }
+
+    ElementAccessLookup::MissingObjectKey
+}
+
+pub(in crate::check::checker) fn exact_symbol_receiver_guard(
+    base_ty: TypeId,
+    well_known: &WellKnown,
+) -> ExactSymbolReceiverGuard {
+    if base_ty == well_known.any || base_ty == well_known.error || base_ty == well_known.never {
+        ExactSymbolReceiverGuard::Recovery(well_known.error)
+    } else if base_ty == well_known.unknown {
+        ExactSymbolReceiverGuard::Unknown
+    } else if base_ty == well_known.null || base_ty == well_known.undefined {
+        ExactSymbolReceiverGuard::Nullish
+    } else {
+        ExactSymbolReceiverGuard::Continue
+    }
+}
+
+pub(in crate::check::checker) fn combine_exact_symbol_member_lookups(
+    interner: &mut Interner,
+    members: &[TypeId],
+    key_ty: Option<TypeId>,
+) -> ElementAccessLookup {
+    let mut results = Vec::with_capacity(members.len());
+    let mut missing_object_key = false;
+    let mut nullish_receiver = false;
+    let mut unsupported_receiver = false;
+    for member in members {
+        if *member == interner.well_known().never {
+            continue;
+        }
+        match exact_symbol_receiver_guard(*member, &interner.well_known()) {
+            ExactSymbolReceiverGuard::Recovery(result) => {
+                results.push(result);
+                continue;
+            }
+            ExactSymbolReceiverGuard::Nullish => {
+                nullish_receiver = true;
+                continue;
+            }
+            ExactSymbolReceiverGuard::Unknown => {
+                unsupported_receiver = true;
+                continue;
+            }
+            ExactSymbolReceiverGuard::Continue => {}
+        }
+        match object_element_access(interner.store(), *member, key_ty) {
+            ElementAccessLookup::Found(result) => results.push(result),
+            ElementAccessLookup::MissingObjectKey => missing_object_key = true,
+            ElementAccessLookup::NullishReceiver => nullish_receiver = true,
+            ElementAccessLookup::UnsupportedReceiver => unsupported_receiver = true,
+        }
+    }
+    if missing_object_key {
+        ElementAccessLookup::MissingObjectKey
+    } else if unsupported_receiver {
+        ElementAccessLookup::UnsupportedReceiver
+    } else if nullish_receiver {
+        ElementAccessLookup::NullishReceiver
+    } else {
+        ElementAccessLookup::Found(interner.union(results))
     }
 }
 

@@ -34,6 +34,7 @@ fn disjoint_domain(store: &Store, ty: TypeId) -> Option<DisjointDomain> {
                 LiteralValue::Boolean(_) => DisjointDomain::Boolean,
                 LiteralValue::Number(_) => DisjointDomain::Number,
                 LiteralValue::String(_) => DisjointDomain::String,
+                LiteralValue::WellKnownSymbol(_) => DisjointDomain::Symbol,
             });
         }
     };

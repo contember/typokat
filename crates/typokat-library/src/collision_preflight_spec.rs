@@ -699,7 +699,7 @@ fn project_inputs(directory: &Path) -> Vec<(String, String)> {
 }
 
 #[test]
-fn b14_routing_matrix_is_exactly_two_shared_and_thirteen_private() {
+fn b14_routing_matrix_is_exactly_two_shared_and_fifteen_private() {
     let root =
         crate::test_support::repository_root().join("tests/cases/b14_full_lib_loading_project");
     let mut observed = Vec::new();
@@ -739,6 +739,8 @@ fn b14_routing_matrix_is_exactly_two_shared_and_thirteen_private() {
     assert_eq!(
         private,
         [
+            "computed_symbol_publication_forward",
+            "computed_symbol_publication_reverse",
             "declare_global",
             "declare_global_value_deferred",
             "duplicate_global_deferred",

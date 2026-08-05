@@ -8,7 +8,7 @@ use crate::diagnostics::Diagnostic;
 use crate::span::Span;
 use crate::types::repr::{
     ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType,
-    PropertyType, TemplateType, TupleRestType, TupleType, TypeTag,
+    PropertyKey, PropertyType, TemplateType, TupleRestType, TupleType, TypeTag, WellKnownSymbol,
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{

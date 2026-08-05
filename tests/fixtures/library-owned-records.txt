@@ -2,7 +2,7 @@
 # Regenerate: TYPOKAT_BLESS_LIBRARY_RECORDS=1 cargo test --test library_owned_records
 # Columns are tab-separated: kind, name, file:line:column, detail.
 # profile: ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d
-# diagnostics: 265, incompletes: 433, records: 698
+# diagnostics: 267, incompletes: 292, records: 559
 incomplete	annotation-lower/type-reference/default-argument	lib.decorators.d.ts:31:7	type-parameter default unavailable at application
 diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
@@ -90,6 +90,7 @@ diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly 
 diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly extends interface 'WindowEventHandlers'.
 diagnostic	TK2430	lib.dom.d.ts:17256:11	Interface 'HTMLBodyElement' incorrectly extends interface 'WindowEventHandlers'.
 diagnostic	TK2344	lib.dom.d.ts:17345:33	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
+diagnostic	TK2430	lib.dom.d.ts:17509:11	Interface 'HTMLCollectionOf' incorrectly extends interface 'HTMLCollectionBase'.
 diagnostic	TK2344	lib.dom.d.ts:17573:40	Type '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...' does not satisfy the constraint '{ ATTRIBUTE_NODE: 2; CDATA_SECTION_NODE: 4; COMMENT_NODE: 8; DOCUMENT_FRAGMENT_NODE: 11; DOCUMENT_NODE: 9; DOCUMENT_POSITION_CONTAINED_BY: 16; DOCUMENT_POSITION_CONTAINS: 8; DOCUMENT_POSITION_DISCONNECTED: 1; DOCUMENT_POSITION_FOLLOWING: 4; DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: 32; DOCUMENT_POSITION_PRECEDING: ...'.
 diagnostic	TK2430	lib.dom.d.ts:17729:11	Interface 'HTMLElement' incorrectly extends interface 'Element'.
 diagnostic	TK2430	lib.dom.d.ts:17729:11	Interface 'HTMLElement' incorrectly extends interface 'Element'.
@@ -155,6 +156,7 @@ diagnostic	TK2430	lib.dom.d.ts:25424:11	Interface 'Navigation' incorrectly exten
 diagnostic	TK2430	lib.dom.d.ts:25424:11	Interface 'Navigation' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:25630:11	Interface 'NavigationHistoryEntry' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:25630:11	Interface 'NavigationHistoryEntry' incorrectly extends interface 'EventTarget'.
+diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
 diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
 diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
 diagnostic	TK2430	lib.dom.d.ts:26368:11	Interface 'NodeListOf' incorrectly extends interface 'NodeList'.
@@ -271,56 +273,6 @@ diagnostic	TK2344	lib.dom.d.ts:42093:30	Type '{ addEventListener: { <K extends k
 diagnostic	TK2430	lib.dom.d.ts:42101:11	Interface 'XMLHttpRequestEventTarget' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:42101:11	Interface 'XMLHttpRequestEventTarget' incorrectly extends interface 'EventTarget'.
 incomplete	annotation-lower/type-syntax/unsupported	lib.dom.d.ts:42546:17	namespace member type syntax could not be lowered
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44511:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44515:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44522:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44526:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44530:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44537:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44581:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44585:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44589:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44596:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44603:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44610:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44614:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44689:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44693:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44697:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44701:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44705:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44709:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44713:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44747:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44766:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44770:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44777:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44786:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44790:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44810:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44820:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44830:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44834:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44850:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44854:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44858:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44862:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44866:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44870:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44874:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44878:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44882:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44886:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44893:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44929:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44933:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44937:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44941:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:44945:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45108:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45112:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45119:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.dom.d.ts:45123:6	computed method signature key not visited
 incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:42:28	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:81:28	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2015.collection.d.ts:94:20	this type annotation not modeled
@@ -329,33 +281,8 @@ incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:27:73	type 
 incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:49:51	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:60:62	this type annotation not modeled
 incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:350:82	type predicate not lowered
-incomplete	signature/method-signature/computed-key	lib.es2015.generator.d.ts:24:6	computed method signature key not visited
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.iterable.d.ts:24:24	unique symbol operator not lowered
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:47:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:54:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:61:6	computed method signature key not visited
 incomplete	annotation-lower/intrinsic-keyword/self	lib.es2015.iterable.d.ts:68:30	intrinsic keyword type not modeled
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:71:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:76:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:112:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:132:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:136:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:141:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:161:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:191:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:196:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:216:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:265:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:270:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:274:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:311:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:348:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:385:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:421:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:458:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:495:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:532:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.iterable.d.ts:569:6	computed method signature key not visited
 incomplete	annotation-lower/type-syntax/unsupported	lib.es2015.reflect.d.ts:111:5	namespace member type syntax could not be lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:24:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:30:34	unique symbol operator not lowered
@@ -367,78 +294,16 @@ incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellk
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:66:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:72:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:78:27	unique symbol operator not lowered
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:85:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:87:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:95:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:105:15	computed property signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:114:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:118:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:122:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:131:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:135:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:139:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:143:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:147:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:151:15	computed property signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:162:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:166:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:170:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:174:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:178:15	computed property signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:187:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:196:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:204:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:212:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:226:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:230:15	computed property signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:239:23	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:246:29	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:253:29	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:259:25	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:266:24	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:270:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:274:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:278:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:282:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:286:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:290:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:294:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:298:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:302:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:306:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:310:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:314:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:317:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:320:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2015.symbol.wellknown.d.ts:323:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2017.sharedmemory.d.ts:30:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2017.sharedmemory.d.ts:36:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2017.sharedmemory.d.ts:130:15	computed property signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2018.asyncgenerator.d.ts:24:6	computed method signature key not visited
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2018.asynciterable.d.ts:25:29	unique symbol operator not lowered
-incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:36:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:43:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2018.asynciterable.d.ts:50:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:118:15	computed property signature key not visited
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:169:62	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:192:56	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:329:16	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:359:66	this type annotation not modeled
-incomplete	signature/method-signature/computed-key	lib.es2020.bigint.d.ts:381:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:383:15	computed property signature key not visited
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:460:62	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:483:56	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:620:16	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2020.bigint.d.ts:650:66	this type annotation not modeled
-incomplete	signature/method-signature/computed-key	lib.es2020.bigint.d.ts:672:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2020.bigint.d.ts:674:15	computed property signature key not visited
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2020.symbol.wellknown.d.ts:25:24	unique symbol operator not lowered
-incomplete	signature/method-signature/computed-key	lib.es2020.symbol.wellknown.d.ts:29:6	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2020.symbol.wellknown.d.ts:38:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2021.weakref.d.ts:20:15	computed property signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2021.weakref.d.ts:44:15	computed property signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2022.intl.d.ts:60:10	computed method signature key not visited
-incomplete	signature/method-signature/computed-key	lib.es2022.intl.d.ts:79:10	computed method signature key not visited
 incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:27:79	type predicate not lowered
 incomplete	annotation-lower/type-predicate/self	lib.es2023.array.d.ts:97:70	type predicate not lowered
 incomplete	annotation-lower/this-type/self	lib.es2023.array.d.ts:178:20	this type annotation not modeled
@@ -507,15 +372,11 @@ incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:264:16	this t
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:288:59	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:299:57	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es2025.float16.d.ts:337:16	this type annotation not modeled
-incomplete	signature/method-signature/computed-key	lib.es2025.float16.d.ts:350:6	computed method signature key not visited
-incomplete	signature/property-signature/computed-key	lib.es2025.float16.d.ts:367:15	computed property signature key not visited
 diagnostic	TK2503	lib.es2025.iterator.d.ts:31:47	Cannot find namespace 'globalThis'.
 incomplete	annotation-lower/type-query/typeof	lib.es2025.iterator.d.ts:34:34	typeof type query not lowered
 incomplete	decl/global-declaration/self	lib.es2025.iterator.d.ts:36:1	global augmentation value publication not modeled
-incomplete	signature/method-signature/computed-key	lib.es2025.iterator.d.ts:42:10	computed method signature key not visited
 incomplete	annotation-lower/type-predicate/self	lib.es2025.iterator.d.ts:54:69	type predicate not lowered
 incomplete	annotation-lower/type-predicate/self	lib.es2025.iterator.d.ts:129:67	type predicate not lowered
-incomplete	signature/property-signature/computed-key	lib.es2025.iterator.d.ts:132:19	computed property signature key not visited
 diagnostic	TK2304	lib.es2025.iterator.d.ts:136:43	Cannot find name 'IteratorObjectConstructor'
 diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
 diagnostic	TK2430	lib.es5.d.ts:329:11	Interface 'CallableFunction' incorrectly extends interface 'Function'.
@@ -536,7 +397,7 @@ incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1668:37	intrinsi
 incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1673:39	intrinsic keyword type not modeled
 incomplete	annotation-lower/intrinsic-keyword/self	lib.es5.d.ts:1678:19	intrinsic keyword type not modeled
 incomplete	annotation-lower/type-predicate/self	lib.es5.d.ts:1723:23	type predicate not lowered
-diagnostic	TK2344	lib.es5.d.ts:1873:155	Type 'TArrayBuffer' does not satisfy the constraint '{ byteLength: number; resize: (newByteLength?: number) => void; slice: (begin?: number, end?: number) => ...; transfer: (newByteLength?: number) => ...; transferToFixedLength: (newByteLength?: number) => ... } | { byteLength: number; grow: (newByteLength?: number) => void; slice: (begin?: number, end?: number) => ... }'.
+diagnostic	TK2344	lib.es5.d.ts:1873:155	Type 'TArrayBuffer' does not satisfy the constraint '{ byteLength: number; resize: (newByteLength?: number) => void; slice: (begin?: number, end?: number) => ...; transfer: (newByteLength?: number) => ...; transferToFixedLength: (newByteLength?: number) => ...; [Symbol.toStringTag]: "ArrayBuffer" } | { byteLength: number; grow: (newByteLength?: number) => void; slice:...'.
 incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1911:62	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1921:60	this type annotation not modeled
 incomplete	annotation-lower/this-type/self	lib.es5.d.ts:1931:56	this type annotation not modeled

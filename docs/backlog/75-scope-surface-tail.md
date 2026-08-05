@@ -51,6 +51,17 @@ canonical Omit/deferred-`keyof` constraint check whose completeness across every
 concretization path is not yet proved. They remain structured divergence entries until
 implemented or explicitly re-scoped.
 
+Certified well-known-symbol publication exposes one additional generic-interface heritage
+family in the full-library census. `HTMLCollectionOf<T>` now contributes one surplus `TK2430`,
+and `NodeListOf<T>` contributes four: its three pre-existing `forEach`/`entries`/`values` rows plus
+the newly represented `[Symbol.iterator]` row. All five fail at the same `ArrayIterator<T>`
+relation to `ArrayIterator<Element>` or `ArrayIterator<Node>` through the overloaded
+`IteratorObject.reduce` callback. Strict tsc 6.0.3 with the exact `es2025.full` library set is
+clean. This is general method-variance work, not a library-provenance special case; a fix must
+retain a negative computed-member heritage control. The associated same-site `TK2344` text change
+at `lib.es5.d.ts:1873:155` is truthful rendering of ArrayBuffer's published
+`[Symbol.toStringTag]`, not a removed diagnostic.
+
 Template-expression traversal, elisions, object/call spreads, tagged templates, and iteration
 targets are not duplicated here: their concrete silent-skip owner is [`71`](./71-expression-inference-fn-tail.md),
 and the shipped surface inventory enforces their accounting. Iterability belongs to `71`; optional
@@ -108,7 +119,9 @@ For the witnesses above, acceptance is exact: class-index and interface-topology
 non-permissive until implemented; tuple-label controls never regain a named-member incomplete;
 rest proof failures emit only their own stable identity; selected-key callbacks match strict tsc
 without duplicate `TK2345`; and both assertion forms emit `TK2352` without suppressing independent
-child diagnostics.
+child diagnostics. Closing the generic iterator heritage family removes the five surplus census
+rows through a general relation rule while an incompatible `[Symbol.iterator]` override still
+reports `TK2430`.
 
 **Census infrastructure shipped (2026-07-10 completeness-accounting sprint, WU6 — do not redo).**
 The one-time divergence census this item demanded is done and machine-enforced: every entry in

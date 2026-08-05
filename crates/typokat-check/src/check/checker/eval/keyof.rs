@@ -155,9 +155,10 @@ pub(in crate::check::checker) fn keyof_of_type(
 }
 
 /// Compute `keyof` over an **object** operand — shared by eager lowering and deferred
-/// evaluation. The result is the `union(...)` of property names as string-literal
-/// types, plus `string`/`number` for the respective index signatures (an empty object
-/// yields `never` via the union collapse). `None` when the operand is not an object.
+/// evaluation. The result is the `union(...)` of string property names and
+/// authenticated well-known-symbol keys as exact literal types, plus `string`/`number`
+/// for the respective index signatures (an empty object yields `never` via the union
+/// collapse). `None` when the operand is not an object.
 pub(in crate::check::checker) fn keyof_of_object(
     interner: &mut Interner,
     operand: TypeId,
@@ -166,19 +167,19 @@ pub(in crate::check::checker) fn keyof_of_object(
     let object = store.object_type(operand)?;
 
     // Snapshot the key components before the mutable interning borrow.
-    let names: Vec<String> = object
+    let property_keys: Vec<PropertyKey> = object
         .properties
         .iter()
         .filter(|property| property.visibility == Visibility::Public)
-        .filter_map(|property| property.key.as_string().map(str::to_owned))
+        .map(|property| property.key.clone())
         .collect();
     let has_string_index = object.string_index.is_some();
     let has_number_index = object.number_index.is_some();
 
     let wk = interner.well_known();
-    let mut members: Vec<TypeId> = Vec::with_capacity(names.len() + 2);
-    for name in names {
-        members.push(interner.intern_literal(LiteralValue::String(name)));
+    let mut members: Vec<TypeId> = Vec::with_capacity(property_keys.len() + 2);
+    for key in property_keys {
+        members.push(property_key_type(interner, key));
     }
     // A string index signature's key domain is `string | number`: tsc coerces numeric
     // keys to strings, so `keyof { [k: string]: T }` is `string | number`, not `string`.
@@ -193,8 +194,8 @@ pub(in crate::check::checker) fn keyof_of_object(
 }
 
 struct UnionKeyInfo {
-    names: Vec<String>,
-    name_set: FxHashSet<String>,
+    keys: Vec<PropertyKey>,
+    key_set: FxHashSet<PropertyKey>,
     has_string_index: bool,
     has_number_index: bool,
 }
@@ -205,16 +206,16 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
         let mut infos = Vec::with_capacity(members.len());
         for &member in members {
             let object = store.object_type(member)?;
-            let names: Vec<String> = object
+            let keys: Vec<PropertyKey> = object
                 .properties
                 .iter()
                 .filter(|property| property.visibility == Visibility::Public)
-                .filter_map(|property| property.key.as_string().map(str::to_owned))
+                .map(|property| property.key.clone())
                 .collect();
-            let name_set = names.iter().cloned().collect();
+            let key_set = keys.iter().cloned().collect();
             infos.push(UnionKeyInfo {
-                names,
-                name_set,
+                keys,
+                key_set,
                 has_string_index: object.string_index.is_some(),
                 has_number_index: object.number_index.is_some(),
             });
@@ -224,22 +225,23 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
 
     let wk = interner.well_known();
     let mut seen = FxHashSet::default();
-    let mut all_names = Vec::new();
+    let mut all_keys = Vec::new();
     for info in &infos {
-        for name in &info.names {
-            if seen.insert(name.clone()) {
-                all_names.push(name.clone());
+        for key in &info.keys {
+            if seen.insert(key.clone()) {
+                all_keys.push(key.clone());
             }
         }
     }
 
     let mut keys = Vec::new();
-    for name in all_names {
-        if infos
-            .iter()
-            .all(|info| info.name_set.contains(&name) || info.has_string_index)
-        {
-            keys.push(interner.intern_literal(LiteralValue::String(name)));
+    for key in all_keys {
+        let present_in_all = infos.iter().all(|info| {
+            info.key_set.contains(&key)
+                || (matches!(key, PropertyKey::String(_)) && info.has_string_index)
+        });
+        if present_in_all {
+            keys.push(property_key_type(interner, key));
         }
     }
     // `keyof (A | B)` is `keyof A & keyof B` (the intersection of key domains). `string`
@@ -255,6 +257,15 @@ fn keyof_of_union(interner: &mut Interner, members: &[TypeId]) -> Option<TypeId>
         keys.push(wk.number);
     }
     Some(interner.union(keys))
+}
+
+fn property_key_type(interner: &mut Interner, key: PropertyKey) -> TypeId {
+    match key {
+        PropertyKey::String(name) => interner.intern_literal(LiteralValue::String(name)),
+        PropertyKey::WellKnownSymbol(symbol) => {
+            interner.intern_literal(LiteralValue::WellKnownSymbol(symbol))
+        }
+    }
 }
 
 /// Whether `ty` transitively contains a genuinely deferred [`TypeTag::Keyof`] node

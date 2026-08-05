@@ -75,6 +75,7 @@ pub(super) fn segment_matches_hole(store: &Store, hole: TypeId, seg: &str) -> bo
             LiteralValue::String(s) => s.clone(),
             LiteralValue::Number(n) => crate::types::repr::number_to_string(*n),
             LiteralValue::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+            LiteralValue::WellKnownSymbol(_) => return false,
         };
         return text == seg;
     }

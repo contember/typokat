@@ -171,7 +171,10 @@ impl<'a> ConditionalEvaluator<'a> {
             return HolePart::Literals(vec!["false".to_string(), "true".to_string()]);
         }
         if let Some(lit) = store.literal_value(hole) {
-            return HolePart::Literals(vec![literal_to_string(lit)]);
+            return match literal_to_string(lit) {
+                Some(literal) => HolePart::Literals(vec![literal]),
+                None => HolePart::NonLiteral,
+            };
         }
         if let Some(members) = store.union_members(hole) {
             // Every member must itself be constructible (a `never` member cannot occur —
