@@ -1031,3 +1031,28 @@ mod escape_tests {
         assert_eq!(escape_string_literal("\u{7}"), "\\u{7}");
     }
 }
+
+#[cfg(test)]
+mod stable_union_tests {
+    use super::render_type;
+    use crate::types::intern::Interner;
+    use crate::types::repr::LiteralValue;
+
+    fn render_string_union(first: &str, second: &str) -> String {
+        let mut interner = Interner::with_intrinsics();
+        let first = interner.intern_literal(LiteralValue::String(first.to_owned()));
+        let second = interner.intern_literal(LiteralValue::String(second.to_owned()));
+        let union = interner.union(vec![first, second]);
+        render_type(interner.store(), union, false)
+    }
+
+    #[test]
+    fn string_literal_union_render_is_independent_of_intern_history() {
+        let a_then_b = render_string_union("a", "b");
+        let b_then_a = render_string_union("b", "a");
+
+        assert_eq!(a_then_b, "\"a\" | \"b\"");
+        assert_eq!(b_then_a, "\"a\" | \"b\"");
+        assert_eq!(a_then_b.as_bytes(), b_then_a.as_bytes());
+    }
+}
