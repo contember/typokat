@@ -905,6 +905,7 @@ name = "typokat-driver"
 version = "0.1.0"
 dependencies = [
  "rayon",
+ "sha2",
  "typokat-binder",
  "typokat-check",
  "typokat-core",

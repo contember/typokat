@@ -888,6 +888,12 @@ mod test_support {
 }
 
 #[cfg(test)]
+mod project_report_coverage_spec;
+
+#[cfg(test)]
+mod wu6_benchmark_route_spec;
+
+#[cfg(test)]
 mod wu7_provider_lifecycle_spec;
 
 #[cfg(test)]
