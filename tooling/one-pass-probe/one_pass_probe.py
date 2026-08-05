@@ -471,21 +471,60 @@ def _oracle(row: str, *, shifted: bool = False) -> dict[str, Any]:
     return {"exit": original["exit"], "diagnostics": diagnostics}
 
 
+def _strip_gnu_time_exit_status(
+    result: bench.ProcessResult, expected_returncode: int
+) -> bench.ProcessResult:
+    lines = result.stderr.splitlines(keepends=True)
+    time_owned_prefixes = (
+        "Command exited with non-zero status ",
+        "Command terminated by signal ",
+        "Command stopped by signal ",
+    )
+    owned = [
+        (ordinal, line)
+        for ordinal, line in enumerate(lines)
+        if line.startswith(time_owned_prefixes)
+    ]
+    if expected_returncode == 0 and not owned:
+        return result
+    expected_line = f"Command exited with non-zero status {expected_returncode}\n"
+    if (
+        expected_returncode <= 0
+        or result.returncode != expected_returncode
+        or owned != [(len(lines) - 1, expected_line)]
+    ):
+        raise ProbeError(
+            "GNU time status/signal line does not match the expected child exit"
+        )
+    return bench.ProcessResult(
+        result.argv,
+        result.returncode,
+        result.stdout,
+        "".join(lines[:-1]),
+        result.wall_seconds,
+        result.pid,
+        result.started_monotonic_ns,
+        result.ended_monotonic_ns,
+        result.group_clean,
+    )
+
+
 def _assert_oracle(
     record: dict[str, Any], row: str, descriptor: dict[str, Any], *,
     shifted: bool = False, memory: bool = False, path_map: dict[str, str] | None = None,
 ) -> None:
+    expected = _oracle(row, shifted=shifted)
     try:
         result = bench.result_from_record(record, descriptor)
         if memory:
             result, parsed_rss = bench.compiler_result_without_time(record, descriptor)
             if parsed_rss != record.get("rss_kib"):
                 raise ProbeError(f"{row} memory RSS differs from raw /usr/bin/time report")
+            result = _strip_gnu_time_exit_status(result, expected["exit"])
         tool = "tsgo" if record["route"] == "tsgo" else "typokat"
         diagnostics = bench.normalize_diagnostics(result, tool, row, path_map)
     except bench.ContractError as error:
         raise _fail(f"{row} semantic oracle/output", error) from error
-    expected = _oracle(row, shifted=shifted)
     if result.returncode != expected["exit"] or diagnostics != expected["diagnostics"]:
         raise ProbeError(f"{row} semantic oracle/output differs for {record['route']}")
 

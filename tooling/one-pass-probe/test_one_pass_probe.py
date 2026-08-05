@@ -252,6 +252,8 @@ class FakeExecutor:
             self.corrupted = True
         wall = self.wall(route, row)
         if memory:
+            if exit_code != 0:
+                stderr += f"Command exited with non-zero status {exit_code}\n"
             report = (
                 '\tCommand being timed: "probe"\n'
                 f"\tMaximum resident set size (kbytes): {self.rss(route, row)}\n"
@@ -1099,6 +1101,56 @@ class ProbeContractTests(unittest.TestCase):
         record = next(r for r in process_records(candidate) if r["sequence"] == target["sequence"])
         record["stderr"] = ""
         with self.assertRaisesRegex(probe.ProbeError, "RSS|rss|time"):
+            self.validate(candidate)
+        candidate = copy.deepcopy(self.evidence)
+        record = next(
+            r for r in process_records(candidate) if r["sequence"] == target["sequence"]
+        )
+        record["stderr"] = "unknown wrapper output\n" + record["stderr"]
+        with self.assertRaisesRegex(
+            probe.ProbeError, "channel|diagnostic|oracle|output"
+        ):
+            self.validate(candidate)
+
+        error_target = panel(self.evidence, "fast-errors", "OT", memory=True)[0][
+            "records"
+        ][0]
+        self.assertIn("Command exited with non-zero status 1\n", error_target["stderr"])
+        for label, replacement in (
+            ("missing", ""),
+            (
+                "moved",
+                "Command exited with non-zero status 1\nunknown wrapper output\n",
+            ),
+            ("missing-newline", "Command exited with non-zero status 1"),
+            ("mismatch", "Command exited with non-zero status 2\n"),
+            ("signal", "Command terminated by signal 9\n"),
+            ("stopped", "Command stopped by signal 9\n"),
+        ):
+            with self.subTest(time_status=label):
+                candidate = copy.deepcopy(self.evidence)
+                record = next(
+                    r
+                    for r in process_records(candidate)
+                    if r["sequence"] == error_target["sequence"]
+                )
+                record["stderr"] = record["stderr"].replace(
+                    "Command exited with non-zero status 1\n", replacement
+                )
+                with self.assertRaisesRegex(
+                    probe.ProbeError, "time|status|signal|oracle|output"
+                ):
+                    self.validate(candidate)
+
+        non_memory = self.evidence["timing"]["fast-errors"]["warmups"][0][0]
+        candidate = copy.deepcopy(self.evidence)
+        record = next(
+            r
+            for r in process_records(candidate)
+            if r["sequence"] == non_memory["sequence"]
+        )
+        record["stderr"] += "Command exited with non-zero status 1\n"
+        with self.assertRaisesRegex(probe.ProbeError, "diagnostic|oracle|output"):
             self.validate(candidate)
 
         candidate = copy.deepcopy(self.evidence)
