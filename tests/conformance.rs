@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use typokat::driver::{check_project, check_source};
+use typokat::driver::{check_project, check_project_once, CheckOutput, FileReport};
 use typokat::frontend::FileInput;
 use typokat::span::LineIndex;
 use typokat_check::check::test_support::on_raw_check_worker;
@@ -653,40 +653,48 @@ fn run_fixture(path: &Path) -> Result<(), Vec<String>> {
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", path.display()));
 
-    // A declaration file's context is filename-derived, so it runs through the one-file
-    // project path even when it is a flat fixture.
-    let declaration_file = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.contains(".d."));
     let one_file_project = || {
         vec![FileInput {
             name: path.display().to_string(),
             source: source.clone(),
         }]
     };
-    let output = if declaration_file {
-        match check_project(one_file_project()) {
-            Ok(mut reports) => {
-                reports
-                    .pop()
-                    .expect("one-file declaration project report")
-                    .output
-            }
-            Err(error) => return Err(vec![library_base_failure(path, &error)]),
-        }
-    } else {
-        match check_source(&source) {
-            Ok(output) => output,
-            Err(error) => return Err(vec![library_base_failure(path, &error)]),
-        }
+    let shared = match check_project(one_file_project()) {
+        Ok(reports) => reports,
+        Err(error) => return Err(vec![library_base_failure(path, &error)]),
     };
-    compare_fixture_output(path, &source, &output)
+    let cold = match check_project_once(one_file_project()) {
+        Ok(reports) => reports,
+        Err(error) => return Err(vec![complete_source_failure(path, &error)]),
+    };
+    let mut failures = compare_route_reports(path, &shared, &cold);
+    let Some(report) = cold.first() else {
+        failures.push(format!(
+            "{}: complete-source route omitted its one-file report",
+            display_path(path)
+        ));
+        return Err(failures);
+    };
+    if let Err(marker_failures) = compare_fixture_output(path, &source, &report.output) {
+        failures.extend(marker_failures);
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
+    }
 }
 
 fn library_base_failure(path: &Path, error: &impl std::fmt::Display) -> String {
     format!(
         "{}: the default-library base is unavailable: {error}",
+        display_path(path)
+    )
+}
+
+fn complete_source_failure(path: &Path, error: &impl std::fmt::Display) -> String {
+    format!(
+        "{}: the complete-source standalone route failed: {error}",
         display_path(path)
     )
 }
@@ -702,11 +710,22 @@ fn run_project_fixture(project: &Path, mut fixtures: Vec<PathBuf>) -> Result<(),
             source,
         });
     }
-    let reports = match check_project(inputs) {
+    let shared_inputs = inputs
+        .iter()
+        .map(|input| FileInput {
+            name: input.name.clone(),
+            source: input.source.clone(),
+        })
+        .collect();
+    let shared = match check_project(shared_inputs) {
         Ok(reports) => reports,
         Err(error) => return Err(vec![library_base_failure(project, &error)]),
     };
-    let mut failures = Vec::new();
+    let reports = match check_project_once(inputs) {
+        Ok(reports) => reports,
+        Err(error) => return Err(vec![complete_source_failure(project, &error)]),
+    };
+    let mut failures = compare_route_reports(project, &shared, &reports);
     for (fixture, report) in fixtures.iter().zip(&reports) {
         if let Err(file_failures) = compare_fixture_output(fixture, &report.source, &report.output)
         {
@@ -726,6 +745,51 @@ fn run_project_fixture(project: &Path, mut fixtures: Vec<PathBuf>) -> Result<(),
     } else {
         Err(failures)
     }
+}
+
+fn compare_route_reports(path: &Path, shared: &[FileReport], cold: &[FileReport]) -> Vec<String> {
+    if shared.len() != cold.len() {
+        return vec![format!(
+            "{}: shared/cold report count differs: {} != {}",
+            display_path(path),
+            shared.len(),
+            cold.len()
+        )];
+    }
+    shared
+        .iter()
+        .zip(cold)
+        .filter_map(|(shared, cold)| {
+            let same = shared.name == cold.name
+                && shared.source == cold.source
+                && exact_output(&shared.output) == exact_output(&cold.output);
+            (!same).then(|| {
+                format!(
+                    "{}: shared/cold output differs for {}\n    shared: {:?}\n    cold:   {:?}",
+                    display_path(path),
+                    cold.name,
+                    exact_output(&shared.output),
+                    exact_output(&cold.output)
+                )
+            })
+        })
+        .collect()
+}
+
+fn exact_output(output: &CheckOutput) -> (Vec<String>, Vec<String>, Vec<String>) {
+    (
+        output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| format!("{diagnostic:?}"))
+            .collect(),
+        output.parse_errors.clone(),
+        output
+            .incomplete
+            .iter()
+            .map(|record| format!("{record:?}"))
+            .collect(),
+    )
 }
 
 fn compare_fixture_output(

@@ -214,3 +214,103 @@ fn locked_wu6_collision_and_fanout_use_one_sparse_production_driver_route() {
     assert_clean_reports(&fanout.reports, 32);
     assert_sparse_production_route(&fanout);
 }
+
+fn complete_source_input(source: &str) -> Vec<FileInput> {
+    vec![FileInput {
+        name: "/wu6/standalone.ts".to_owned(),
+        source: source.to_owned(),
+    }]
+}
+
+#[test]
+fn standalone_route_never_acquires_or_initializes_the_shared_provider() {
+    use super::test_support::{
+        ProductionDriverFaultForTest, ProductionDriverFaultTraceScopeForTest,
+    };
+
+    let scope = ProductionDriverFaultTraceScopeForTest::install(
+        ProductionDriverFaultForTest::ProviderInitialization(
+            "the cold route must not observe this provider failure".to_owned(),
+        ),
+    );
+    let reports = check_project_once(complete_source_input("const value: number = 1;\n"))
+        .expect("standalone complete-source check bypasses the shared provider");
+    assert_eq!(reports.len(), 1);
+    assert!(!reports[0].output.has_errors());
+
+    let trace = scope.finish();
+    assert_eq!(trace.provider_initialization_attempts, 0);
+    assert_eq!(trace.provider_publications, 0);
+    assert_eq!(trace.provider_acquisitions, 0);
+    assert_eq!(trace.worker_starts, 1);
+    assert_eq!(trace.rayon_worker_starts, 0);
+    assert_eq!(trace.reports_exposed, 1);
+    assert_eq!(trace.worker_base_identities, [0]);
+}
+
+#[test]
+fn parser_rejection_stops_before_complete_source_library_work() {
+    let trace =
+        crate::check::checker::library_compiler::CompleteSourceRouteWorkScopeForTest::start();
+    let reports = check_project_once(complete_source_input(
+        "declare namespace Broken { export = Broken; }\nconst semanticLeak: string = 1;\n",
+    ))
+    .expect("parser rejection is an ordinary report");
+    let work = trace.finish();
+
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].output.parse_errors.len(), 1);
+    assert!(reports[0].output.diagnostics.is_empty());
+    assert!(reports[0].output.incomplete.is_empty());
+    assert_eq!(
+        work.profile_loads, 0,
+        "parse errors precede profile loading"
+    );
+    assert_eq!(work.library_parse_units, 0);
+    assert_eq!(work.library_bind_units, 0);
+    assert_eq!(work.semantic_publications, 0);
+}
+
+#[test]
+fn clean_standalone_route_compiles_once_without_replay_or_a_frozen_base() {
+    use crate::check::checker::library_compiler::{
+        canonical_library_evidence_for_test, run_injected_profile, InjectedLibrarySource,
+    };
+
+    let trace =
+        crate::check::checker::library_compiler::CompleteSourceRouteWorkScopeForTest::start();
+    let reports = check_project_once(complete_source_input("const value: number = 1;\n"))
+        .expect("standalone complete-source check");
+    let work = trace.finish();
+
+    assert_eq!(reports.len(), 1);
+    assert!(!reports[0].output.has_errors());
+    assert_eq!(work.profile_loads, 1);
+    assert_eq!(work.library_parse_units, 82);
+    assert_eq!(work.library_bind_units, 82);
+    assert_eq!(work.user_bind_units, 1);
+    assert_eq!(work.semantic_publications, 1);
+    assert_eq!(work.replay_trace_constructions, 0);
+    assert_eq!(work.replay_plan_constructions, 0);
+    assert_eq!(work.frozen_base_seals, 0);
+    assert_eq!(work.library_source_reparses, 0);
+
+    let sources = crate::library::packaged_library_source_inputs()
+        .expect("load the exact profile for the independent census oracle");
+    let injected = sources
+        .iter()
+        .map(|source| InjectedLibrarySource {
+            file_ordinal: crate::library::LibraryFileOrdinal::new(source.source_ordinal),
+            name: &source.name,
+            source: &source.source,
+        })
+        .collect::<Vec<_>>();
+    let baseline = run_injected_profile(&injected).expect("independent library census compile");
+    let expected = canonical_library_evidence_for_test(&injected, &baseline.library_records)
+        .expect("independent named-census evidence");
+    assert_eq!(
+        work.library_evidence,
+        Some(expected),
+        "the complete-source route must drain the same exact library-owned record set"
+    );
+}
