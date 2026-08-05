@@ -438,6 +438,61 @@ fn cold_route_preserves_direct_global_this_static_overlay() -> Result<(), String
 }
 
 #[test]
+fn cold_route_uses_native_array_identity_inside_published_user_types() -> Result<(), String> {
+    let reports = compare_routes(vec![FileInput {
+        name: "/wu6/native-array-published-types.ts".to_owned(),
+        source: concat!(
+            "export {};\n",
+            "declare const numbers: number[];\n",
+            "type NumberList = Array<number>;\n",
+            "const alias: NumberList = numbers;\n",
+            "interface Holder { values: Array<number>; frozen: ReadonlyArray<number>; }\n",
+            "declare const holder: Holder;\n",
+            "const values: number[] = holder.values;\n",
+            "const frozen: readonly number[] = holder.frozen;\n",
+            "class Box { values: Array<number> = [1]; }\n",
+            "const box = new Box();\n",
+            "const boxed: number[] = box.values;\n",
+        )
+        .to_owned(),
+    }])?;
+    let [report] = reports.as_slice() else {
+        return Err("native-array published-type project must return one report".to_owned());
+    };
+    if !report.output.diagnostics.is_empty() {
+        return Err(format!(
+            "library Array identities must exist before user type publication: {:?}",
+            shape(&report.output)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn cold_route_does_not_promote_module_local_array_interfaces() -> Result<(), String> {
+    let reports = compare_routes(vec![FileInput {
+        name: "/wu6/module-local-array.ts".to_owned(),
+        source: concat!(
+            "export {};\n",
+            "interface Array<T> { local: T; }\n",
+            "declare const local: Array<number>;\n",
+            "const native: number[] = local;\n",
+        )
+        .to_owned(),
+    }])?;
+    let [report] = reports.as_slice() else {
+        return Err("module-local Array project must return one report".to_owned());
+    };
+    if diagnostic_codes(&report.output) != ["TK2322"] {
+        return Err(format!(
+            "module-local Array must remain distinct from the native array role: {:?}",
+            shape(&report.output)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn cold_route_matches_shared_collision_semantics_in_both_orders() -> Result<(), String> {
     for reverse in [false, true] {
         let reports = compare_routes(collision_project(reverse))?;
