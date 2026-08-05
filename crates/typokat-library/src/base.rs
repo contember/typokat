@@ -1739,8 +1739,9 @@ impl FrozenLibraryBase {
         let shared_base_before = self.runtime.inner_base_allocation_identity_for_test();
         let hooks_before =
             crate::check::checker::library_compiler::private_replay_hook_invocations_for_test();
-        let epochs_before =
-            crate::check::checker::library_compiler::private_replay_epoch_count_for_test();
+        // Process-global epochs include acquisitions from unrelated test threads.
+        let permit_acquisition_scope = crate::check::checker::library_compiler::
+            PrivateReplayPermitAcquisitionScopeForTest::start();
         let permit =
             crate::check::checker::library_compiler::acquire_private_collision_replay_permit()
                 .map_err(|message| execution_error(message.to_owned()))?;
@@ -2040,10 +2041,7 @@ impl FrozenLibraryBase {
             crate::check::checker::library_compiler::private_replay_last_release_event_for_test();
         let hooks_after =
             crate::check::checker::library_compiler::private_replay_hook_invocations_for_test();
-        let epochs_after =
-            crate::check::checker::library_compiler::private_replay_epoch_count_for_test();
-        let private_permit_acquisitions =
-            u64::try_from(epochs_after.saturating_sub(epochs_before)).unwrap_or(u64::MAX);
+        let private_permit_acquisitions = permit_acquisition_scope.finish();
         let shared_base_mutations =
             u64::from(self.runtime.inner_base_allocation_identity_for_test() != shared_base_before);
         let production_route_failures = u64::from(route_trace.fault_observed);

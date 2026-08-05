@@ -1036,6 +1036,12 @@ impl PrivateCollisionReplayPermit {
         }
         *occupied = true;
         #[cfg(any(test, feature = "test-utils"))]
+        PRIVATE_COLLISION_REPLAY_THREAD_ACQUISITIONS.set(
+            PRIVATE_COLLISION_REPLAY_THREAD_ACQUISITIONS
+                .get()
+                .saturating_add(1),
+        );
+        #[cfg(any(test, feature = "test-utils"))]
         let epoch_id = PRIVATE_COLLISION_REPLAY_EPOCHS
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             .saturating_add(1);
@@ -1098,6 +1104,29 @@ static PRIVATE_COLLISION_REPLAY_LAST_RELEASE_EVENT: std::sync::atomic::AtomicU64
 #[cfg(any(test, feature = "test-utils"))]
 static PRIVATE_COLLISION_REPLAY_HOOK_INVOCATIONS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static PRIVATE_COLLISION_REPLAY_THREAD_ACQUISITIONS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+pub struct PrivateReplayPermitAcquisitionScopeForTest(u64);
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PrivateReplayPermitAcquisitionScopeForTest {
+    pub fn start() -> Self {
+        Self(PRIVATE_COLLISION_REPLAY_THREAD_ACQUISITIONS.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        PRIVATE_COLLISION_REPLAY_THREAD_ACQUISITIONS
+            .get()
+            .saturating_sub(self.0)
+    }
+}
 
 #[cfg(any(test, feature = "test-utils"))]
 impl PrivateCollisionReplayPermitToken {
