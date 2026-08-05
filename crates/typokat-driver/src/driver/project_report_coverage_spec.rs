@@ -128,27 +128,22 @@ fn complete_dependency_ordered_coverage_remains_valid() {
 
 #[test]
 fn shared_project_does_not_count_as_a_private_route() {
-    let base = library_base().expect("production default-library provider");
-    let worker_base = Arc::clone(&base);
+    let base = crate::library::LibraryBaseProvider::new()
+        .get()
+        .expect("source-backed default-library base");
     let scale_run = PrivateReplayScaleRunForTest::start();
-    let (reports, trace) = on_check_worker(&base, move || {
-        let route_scope =
-            PrivateReplayScaleRouteScopeForTest::start(&scale_run, false, false, false, false)
-                .expect("route witness starts inside the production worker");
-        let reports = check_project_inner(
-            &worker_base,
-            vec![FileInput {
-                name: "shared.ts".to_owned(),
-                source: "const shared: number[] = [1, 2].map(value => value + 1);\n".to_owned(),
-            }],
-        )
-        .expect("shared production project");
-        let trace = route_scope
-            .finish()
-            .expect("route witness finishes inside the production worker");
-        (reports, trace)
-    })
-    .expect("production check worker");
+    let route_scope =
+        PrivateReplayScaleRouteScopeForTest::start(&scale_run, false, false, false, false)
+            .expect("shared route witness");
+    let reports = check_project_against_library(
+        &base,
+        vec![FileInput {
+            name: "shared.ts".to_owned(),
+            source: "const shared: number[] = [1, 2].map(value => value + 1);\n".to_owned(),
+        }],
+    )
+    .expect("shared production route");
+    let trace = route_scope.finish().expect("shared route witness finishes");
 
     assert_eq!(reports.len(), 1);
     assert!(reports[0].output.diagnostics.is_empty());
