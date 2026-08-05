@@ -274,3 +274,20 @@ semantic, production-acceptance, official-suite, differential, package, and CI g
   warning-free release build, production acceptance, and strict ReasonChain/profile parser tests.
   The `.d.ts` exit correction from 0 to 3 records backlog 15's stale oracle: unsupported semantics
   fail closed rather than succeeding silently.
+- **2026-08-05 — WU5 official-suite ratchet audited.** The committed scoreboard had been stale
+  since `e3f622e`. The full 874-file run changed two aggregate headers and 175 test rows; the old
+  ratchet reported 48 regression events and 112 progress events, with three rows carrying both.
+  Three independent read-only audits assigned every changed test row to one exclusive cause family:
+  23 option-variant and 22 stable-variant oracle corrections (`c926873`), 9 parser-first routes
+  (`f2e5bc2`), 14 BOM line-fidelity rows (`02dc7bd`), 5 RegExp-oracle retirements (`bf1d0a7`),
+  33 full-library cutover/status rows, 1 mapped-binder unresolved row (backlog 63), 20 flow/type-guard
+  rows, 16 Object/type-relation rows, 5 union/callable rows, 23 other library/member-surface rows,
+  and 4 current-WU5 rows. The exact pre-WU5 report changed only those last four, all progress:
+  `intersectionTypeInference3.ts` became in-scope and clean, while three string-interface files each
+  lost one false positive. The 53 `IN`-to-`IN` rows are byte-identical to the pre-WU5 binary.
+  Two historical rows lose five matched tsc diagnostics, but neither is unowned: the pinned
+  `flow/unassigned-redundant-guard-cascade` under-report belongs to backlog 47 and
+  `narrowing/assigned-or-never-alternate` belongs to backlog 51. The retained-unsupported audit lost
+  no diagnostic or incomplete identity and found no error-type success channel. The scoreboard was
+  saved with ordinary `--save`, never `--rebaseline`; a fresh full `--check` then reported zero
+  regressions, zero progress, and complete corpus/scoreboard membership.
