@@ -1,12 +1,28 @@
 use super::*;
 use crate::types::repr::{
-    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
-    TypeParamId, WellKnownSymbol,
+    DeclaredRecipeNode, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType,
+    TupleRestType, TupleType, TypeParamId, WellKnownSymbol,
 };
 use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+#[derive(Default)]
+struct TestInferenceNormalization {
+    replacements: FxHashMap<TypeId, TypeId>,
+    demand: Option<TypeId>,
+}
+
+impl RelationNormalization for TestInferenceNormalization {
+    fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+        Ok(self.replacements.get(&ty).copied().unwrap_or(ty))
+    }
+
+    fn relation_demand(&self, _store: &Store, ty: TypeId) -> Option<RelationDemand> {
+        (self.demand == Some(ty)).then_some(RelationDemand::Evaluation(ty))
+    }
 }
 
 fn infer_type_arguments(
@@ -352,26 +368,23 @@ fn conditional_mode_keeps_literals_and_descends_union_targets() {
         "a union extends target must collect from its shape-matching member"
     );
 
-    // The CALL-site collection mode on the same union shape stays M10-conservative
-    // (non-union source vs union target infers nothing — no m10 behavior change).
+    // Call-site mode also descends structural union members, without enabling
+    // conditional-only template or callable-object behavior.
     struct IdentityNormalization;
     impl RelationNormalization for IdentityNormalization {
         fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
             Ok(ty)
         }
     }
-    let mut candidates = Candidates::default();
-    let outcome = infer_from_types_for_query(
-        &mut interner,
-        num_arr,
-        union_target,
-        &mut candidates,
-        &IdentityNormalization,
-    );
-    assert!(matches!(outcome, DemandOutcome::Ready(())));
-    assert!(
-        candidates.is_empty(),
-        "call-site mode must not descend into union targets (M10 unchanged)"
+    let outcome =
+        infer_from_types_for_query(&mut interner, num_arr, union_target, &IdentityNormalization);
+    let InferenceAttempt::Complete(candidates) = outcome else {
+        panic!("identity-normalized call-site inference must complete")
+    };
+    assert_eq!(
+        candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+        Some(&[wk.number][..]),
+        "call-site structural union members must contribute candidates"
     );
 }
 
@@ -405,6 +418,23 @@ fn naked_union_member_candidate_yields_to_structural() {
         "the naked member's whole-check candidate must be dropped"
     );
 
+    struct IdentityNormalization;
+    impl RelationNormalization for IdentityNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            Ok(ty)
+        }
+    }
+    let InferenceAttempt::Complete(candidates) =
+        infer_from_types_for_query(&mut interner, v_str, target, &IdentityNormalization)
+    else {
+        panic!("identity-normalized call-site inference must complete")
+    };
+    assert_eq!(
+        candidates.get(&TypeParamId(0)).map(|c| c.as_slice()),
+        Some(&[wk.string][..]),
+        "call-site structural candidates must precede naked union candidates"
+    );
+
     // `string | T` against `number` → naked-only: the whole check IS the candidate.
     let target = interner.union(vec![wk.string, t]);
     let mut candidates = Candidates::default();
@@ -433,6 +463,721 @@ fn naked_union_member_candidate_yields_to_structural() {
         candidates.get(&TypeParamId(1)).map(|c| c.as_slice()),
         Some(&[num_arr][..]),
         "A (different name) keeps its naked whole-check candidate"
+    );
+}
+
+#[test]
+fn query_retry_discards_partial_candidates_and_exhaustion_does_not_poison() {
+    struct DemandingNormalization {
+        frontier: TypeId,
+    }
+    impl RelationNormalization for DemandingNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            Ok(ty)
+        }
+
+        fn relation_demand(&self, _store: &Store, ty: TypeId) -> Option<RelationDemand> {
+            (ty == self.frontier).then_some(RelationDemand::Evaluation(ty))
+        }
+    }
+
+    struct ExhaustingNormalization {
+        frontier: TypeId,
+    }
+    impl RelationNormalization for ExhaustingNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            if ty == self.frontier {
+                Err(Exhaustion::EvaluationBudget)
+            } else {
+                Ok(ty)
+            }
+        }
+    }
+
+    struct IdentityNormalization;
+    impl RelationNormalization for IdentityNormalization {
+        fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion> {
+            Ok(ty)
+        }
+    }
+
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first_id = TypeParamId(90_401);
+    let second_id = TypeParamId(90_402);
+    let first = interner.intern_type_param(first_id, "First");
+    let second = interner.intern_type_param(second_id, "Second");
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("a", wk.string), prop("b", wk.number)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("a", first), prop("b", second)],
+        ..Default::default()
+    });
+
+    let mut retry = InferenceRetryState::default();
+    assert!(matches!(
+        retry.observe(infer_from_types_for_query(
+            &mut interner,
+            source,
+            target,
+            &DemandingNormalization {
+                frontier: wk.number,
+            },
+        )),
+        InferenceAttempt::Needs(RelationDemand::Evaluation(found)) if found == wk.number
+    ));
+    assert!(matches!(
+        retry.observe(infer_from_types_for_query(
+            &mut interner,
+            source,
+            target,
+            &DemandingNormalization {
+                frontier: wk.number,
+            },
+        )),
+        InferenceAttempt::Exhausted(Exhaustion::EvaluationCycle { ty }) if ty == wk.number
+    ));
+    assert!(matches!(
+        infer_from_types_for_query(
+            &mut interner,
+            source,
+            target,
+            &ExhaustingNormalization {
+                frontier: wk.number,
+            },
+        ),
+        InferenceAttempt::Exhausted(Exhaustion::EvaluationBudget)
+    ));
+
+    let InferenceAttempt::Complete(candidates) =
+        infer_from_types_for_query(&mut interner, source, target, &IdentityNormalization)
+    else {
+        panic!("a later clean retry must complete")
+    };
+    assert_eq!(
+        candidates.get(&first_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+    assert_eq!(
+        candidates.get(&second_id).map(|values| values.as_slice()),
+        Some(&[wk.number][..])
+    );
+}
+
+#[test]
+fn distinct_declared_application_recipes_infer_by_equal_head() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let head_id = TypeParamId(90_501);
+    let template = interner.intern_type_param(head_id, "H");
+    let source_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_id = TypeParamId(90_502);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let target_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![head_id],
+        arguments: vec![source_argument],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![head_id],
+        arguments: vec![target_argument],
+    });
+    assert_ne!(source_recipe, target_recipe);
+    let source = interner.intern_declared(source_recipe, []);
+    let target = interner.intern_declared(target_recipe, []);
+    let source_child = interner.intern_declared(source_argument, []);
+    let target_child = interner.intern_declared(target_argument, []);
+    let active = FxHashSet::from_iter([inferred_id]);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([
+            (source, wk.unknown),
+            (target, wk.unknown),
+            (source_child, wk.string),
+            (target_child, inferred),
+        ]),
+        demand: None,
+    };
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("equal application heads must infer before root normalization")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn nested_declared_application_heads_recurse_to_argument_candidates() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let inner_head_id = TypeParamId(90_601);
+    let inner_template = interner.intern_type_param(inner_head_id, "Inner");
+    let source_leaf = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_id = TypeParamId(90_602);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let target_leaf = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let source_inner = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: inner_template,
+        parameters: vec![inner_head_id],
+        arguments: vec![source_leaf],
+    });
+    let target_inner = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: inner_template,
+        parameters: vec![inner_head_id],
+        arguments: vec![target_leaf],
+    });
+    let outer_head_id = TypeParamId(90_603);
+    let outer_template = interner.intern_type_param(outer_head_id, "Outer");
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![outer_head_id],
+        arguments: vec![source_inner],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![outer_head_id],
+        arguments: vec![target_inner],
+    });
+    let source = interner.intern_declared(source_recipe, []);
+    let target = interner.intern_declared(target_recipe, []);
+    let source_leaf = interner.intern_declared(source_leaf, []);
+    let target_leaf = interner.intern_declared(target_leaf, []);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([(source_leaf, wk.string), (target_leaf, inferred)]),
+        demand: None,
+    };
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("nested application-head inference must complete")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn declared_application_projection_composes_root_mappers() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let head_id = TypeParamId(90_701);
+    let template = interner.intern_type_param(head_id, "H");
+    let source_slot_id = TypeParamId(90_702);
+    let source_slot = interner.intern_type_param(source_slot_id, "SourceSlot");
+    let target_slot_id = TypeParamId(90_703);
+    let target_slot = interner.intern_type_param(target_slot_id, "TargetSlot");
+    let source_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(source_slot));
+    let target_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(target_slot));
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![head_id],
+        arguments: vec![source_argument],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![head_id],
+        arguments: vec![target_argument],
+    });
+    let inferred_id = TypeParamId(90_704);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let source = interner.intern_declared(source_recipe, [(source_slot_id, wk.string)]);
+    let target = interner.intern_declared(target_recipe, [(target_slot_id, inferred)]);
+    let source_child = interner.intern_declared(source_argument, [(source_slot_id, wk.string)]);
+    let target_child = interner.intern_declared(target_argument, [(target_slot_id, inferred)]);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([(source_child, wk.string), (target_child, inferred)]),
+        demand: None,
+    };
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("application projection with root mappers must complete")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn materialized_nested_application_surface_can_reveal_active_binder() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let inferred_id = TypeParamId(90_751);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+
+    let nested_head_id = TypeParamId(90_752);
+    let nested_parameter = interner.intern_type_param(nested_head_id, "Nested");
+    let nested_template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", nested_parameter)],
+        ..Default::default()
+    });
+    let nested_source_argument =
+        interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let nested_target_argument =
+        interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let nested_source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: nested_template,
+        parameters: vec![nested_head_id],
+        arguments: vec![nested_source_argument],
+    });
+    let nested_target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: nested_template,
+        parameters: vec![nested_head_id],
+        arguments: vec![nested_target_argument],
+    });
+    let nested_source = interner.intern_declared(nested_source_recipe, []);
+    let nested_target = interner.intern_declared(nested_target_recipe, []);
+    let substitute::SubstitutionOutcome::CycleClean(source_surface) = interner
+        .materialize_declared(nested_source)
+        .expect("nested source application")
+    else {
+        panic!("acyclic nested source application must materialize cleanly")
+    };
+    let substitute::SubstitutionOutcome::CycleClean(target_surface) = interner
+        .materialize_declared(nested_target)
+        .expect("nested target application")
+    else {
+        panic!("acyclic nested target application must materialize cleanly")
+    };
+
+    let outer_head_id = TypeParamId(90_753);
+    let outer_template = interner.intern_type_param(outer_head_id, "Outer");
+    let outer_source_argument =
+        interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let outer_target_argument =
+        interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.unknown));
+    let outer_source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![outer_head_id],
+        arguments: vec![outer_source_argument],
+    });
+    let outer_target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![outer_head_id],
+        arguments: vec![outer_target_argument],
+    });
+    let source = interner.intern_declared(outer_source_recipe, []);
+    let target = interner.intern_declared(outer_target_recipe, []);
+    let source_child = interner.intern_declared(outer_source_argument, []);
+    let target_child = interner.intern_declared(outer_target_argument, []);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([
+            (source_child, source_surface),
+            (target_child, target_surface),
+        ]),
+        demand: None,
+    };
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("nested application surface inference must complete")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn mismatched_declared_application_heads_fall_through_to_normalization() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_head_id = TypeParamId(90_801);
+    let source_template = interner.intern_type_param(source_head_id, "SourceHead");
+    let target_head_id = TypeParamId(90_802);
+    let target_template = interner.intern_type_param(target_head_id, "TargetHead");
+    let source_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_id = TypeParamId(90_803);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let target_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: source_template,
+        parameters: vec![source_head_id],
+        arguments: vec![source_argument],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: target_template,
+        parameters: vec![target_head_id],
+        arguments: vec![target_argument],
+    });
+    let source = interner.intern_declared(source_recipe, []);
+    let target = interner.intern_declared(target_recipe, []);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([(source, wk.string), (target, inferred)]),
+        demand: None,
+    };
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("mismatched application heads must use normalized fallback")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn cyclic_declared_application_child_normalization_terminates() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let head_id = TypeParamId(90_901);
+    let template = interner.intern_type_param(head_id, "H");
+    let source_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_id = TypeParamId(90_902);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let target_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![head_id],
+        arguments: vec![source_argument],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![head_id],
+        arguments: vec![target_argument],
+    });
+    let source = interner.intern_declared(source_recipe, []);
+    let target = interner.intern_declared(target_recipe, []);
+    let source_child = interner.intern_declared(source_argument, []);
+    let target_child = interner.intern_declared(target_argument, []);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([(source_child, source), (target_child, target)]),
+        demand: None,
+    };
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("raw application recursion guard must terminate normalization cycles")
+    };
+    assert!(candidates.is_empty());
+}
+
+#[test]
+fn inactive_declared_application_children_do_not_trigger_demands() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first_head_id = TypeParamId(91_001);
+    let second_head_id = TypeParamId(91_002);
+    let first_head = interner.intern_type_param(first_head_id, "A");
+    let second_head = interner.intern_type_param(second_head_id, "B");
+    let template = interner.intern_tuple(vec![first_head, second_head]);
+    let source_foreign = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.number));
+    let source_active = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let foreign_id = TypeParamId(91_003);
+    let foreign = interner.intern_type_param(foreign_id, "Foreign");
+    let target_foreign = interner.intern_declared_recipe(DeclaredRecipeNode::Type(foreign));
+    let inferred_id = TypeParamId(91_004);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let target_active = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![first_head_id, second_head_id],
+        arguments: vec![source_foreign, source_active],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![first_head_id, second_head_id],
+        arguments: vec![target_foreign, target_active],
+    });
+    let source = interner.intern_declared(source_recipe, []);
+    let target = interner.intern_declared(target_recipe, []);
+    let source_foreign = interner.intern_declared(source_foreign, []);
+    let target_foreign = interner.intern_declared(target_foreign, []);
+    let source_active = interner.intern_declared(source_active, []);
+    let target_active = interner.intern_declared(target_active, []);
+    let normalization = TestInferenceNormalization {
+        replacements: FxHashMap::from_iter([
+            (source_foreign, wk.number),
+            (target_foreign, foreign),
+            (source_active, wk.string),
+            (target_active, inferred),
+        ]),
+        demand: Some(wk.number),
+    };
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &normalization,
+        Some(&active),
+    ) else {
+        panic!("inactive argument recipes must be skipped before normalization demand")
+    };
+    assert!(!candidates.contains_key(&foreign_id));
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn distinct_substitution_generations_terminate_and_keep_earlier_candidate() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_link_id = TypeParamId(91_101);
+    let target_link_id = TypeParamId(91_102);
+    let inferred_id = TypeParamId(91_103);
+    let source_link = interner.intern_type_param(source_link_id, "SourceLink");
+    let target_link = interner.intern_type_param(target_link_id, "TargetLink");
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let source_template = interner.intern_object(ObjectType {
+        properties: vec![prop("a_value", wk.string), prop("z_next", source_link)],
+        ..Default::default()
+    });
+    let target_template = interner.intern_object(ObjectType {
+        properties: vec![prop("a_value", inferred), prop("z_next", target_link)],
+        ..Default::default()
+    });
+    let source_leaf = interner.intern_object(ObjectType::default());
+    let target_leaf = interner.intern_object(ObjectType {
+        properties: vec![prop("end", wk.number)],
+        ..Default::default()
+    });
+    let source_child = substitute(
+        &mut interner,
+        source_template,
+        &FxHashMap::from_iter([(source_link_id, source_leaf)]),
+    );
+    let target_child = substitute(
+        &mut interner,
+        target_template,
+        &FxHashMap::from_iter([(target_link_id, target_leaf)]),
+    );
+    let source = substitute(
+        &mut interner,
+        source_template,
+        &FxHashMap::from_iter([(source_link_id, source_child)]),
+    );
+    let target = substitute(
+        &mut interner,
+        target_template,
+        &FxHashMap::from_iter([(target_link_id, target_child)]),
+    );
+    assert_ne!(source, source_child);
+    assert_ne!(target, target_child);
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &TestInferenceNormalization::default(),
+        Some(&active),
+    ) else {
+        panic!("stable recursion identity must terminate without exhaustion")
+    };
+    let inferred = candidates
+        .get(&inferred_id)
+        .expect("the sibling visited before the circular branch must survive");
+    assert!(!inferred.is_empty());
+    assert!(inferred.iter().all(|candidate| *candidate == wk.string));
+}
+
+#[test]
+fn two_nested_derived_applications_reach_the_inner_candidate() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_link_id = TypeParamId(91_105);
+    let target_link_id = TypeParamId(91_106);
+    let inferred_id = TypeParamId(91_107);
+    let source_link = interner.intern_type_param(source_link_id, "SourceLink");
+    let target_link = interner.intern_type_param(target_link_id, "TargetLink");
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let source_template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", source_link)],
+        ..Default::default()
+    });
+    let target_template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", target_link)],
+        ..Default::default()
+    });
+    let source_child = crate::types::substitute_derived(
+        &mut interner,
+        source_template,
+        &FxHashMap::from_iter([(source_link_id, DerivedType::plain(wk.string))]),
+    );
+    let target_child = crate::types::substitute_derived(
+        &mut interner,
+        target_template,
+        &FxHashMap::from_iter([(target_link_id, DerivedType::plain(inferred))]),
+    );
+    let source = crate::types::substitute_derived(
+        &mut interner,
+        source_template,
+        &FxHashMap::from_iter([(source_link_id, source_child)]),
+    );
+    let target = crate::types::substitute_derived(
+        &mut interner,
+        target_template,
+        &FxHashMap::from_iter([(target_link_id, target_child)]),
+    );
+
+    let InferenceAttempt::Complete(candidates) = infer_from_derived_types_for_query(
+        &mut interner,
+        source,
+        target,
+        &TestInferenceNormalization::default(),
+    ) else {
+        panic!("two nested applications must complete")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn one_sided_template_repeat_does_not_cut_structural_inference() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_link_id = TypeParamId(91_111);
+    let root_link_id = TypeParamId(91_112);
+    let child_link_id = TypeParamId(91_113);
+    let inferred_id = TypeParamId(91_114);
+    let source_link = interner.intern_type_param(source_link_id, "SourceLink");
+    let root_link = interner.intern_type_param(root_link_id, "RootLink");
+    let child_link = interner.intern_type_param(child_link_id, "ChildLink");
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let source_template = interner.intern_object(ObjectType {
+        properties: vec![prop("a_value", wk.string), prop("z_next", source_link)],
+        ..Default::default()
+    });
+    let target_root_template = interner.intern_object(ObjectType {
+        properties: vec![prop("m_root", wk.number), prop("z_next", root_link)],
+        ..Default::default()
+    });
+    let target_child_template = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("a_value", inferred),
+            prop("m_child", wk.string),
+            prop("z_next", child_link),
+        ],
+        ..Default::default()
+    });
+    let source_leaf = interner.intern_object(ObjectType::default());
+    let target_leaf = interner.intern_object(ObjectType {
+        properties: vec![prop("end", wk.boolean)],
+        ..Default::default()
+    });
+    let source_child = substitute(
+        &mut interner,
+        source_template,
+        &FxHashMap::from_iter([(source_link_id, source_leaf)]),
+    );
+    let source = substitute(
+        &mut interner,
+        source_template,
+        &FxHashMap::from_iter([(source_link_id, source_child)]),
+    );
+    let target_child = substitute(
+        &mut interner,
+        target_child_template,
+        &FxHashMap::from_iter([(child_link_id, target_leaf)]),
+    );
+    let target = substitute(
+        &mut interner,
+        target_root_template,
+        &FxHashMap::from_iter([(root_link_id, target_child)]),
+    );
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &TestInferenceNormalization::default(),
+        Some(&active),
+    ) else {
+        panic!("one-sided expansion must continue")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
+    );
+}
+
+#[test]
+fn unrelated_anonymous_structures_do_not_share_recursion_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let inferred_id = TypeParamId(91_121);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let source_inner = interner.intern_object(ObjectType {
+        properties: vec![prop("a_value", wk.string)],
+        ..Default::default()
+    });
+    let target_inner = interner.intern_object(ObjectType {
+        properties: vec![prop("a_value", inferred)],
+        ..Default::default()
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![prop("z_next", source_inner)],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![prop("z_next", target_inner)],
+        ..Default::default()
+    });
+    let active = FxHashSet::from_iter([inferred_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &TestInferenceNormalization::default(),
+        Some(&active),
+    ) else {
+        panic!("anonymous structural inference must complete")
+    };
+    assert_eq!(
+        candidates.get(&inferred_id).map(|values| values.as_slice()),
+        Some(&[wk.string][..])
     );
 }
 
@@ -590,6 +1335,42 @@ fn infers_through_function_parameter() {
         map.get(&TypeParamId(0)).copied(),
         Some(wk.number),
         "T = number"
+    );
+}
+
+#[test]
+fn call_site_recovery_return_does_not_override_a_signature_default() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let result_id = TypeParamId(90_320);
+    let result = interner.intern_type_param(result_id, "Result");
+    let source = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: wk.error,
+    });
+    let target = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: result,
+    });
+    let active = FxHashSet::from_iter([result_id]);
+
+    let InferenceAttempt::Complete(candidates) = infer_from_types_for_query_with_params(
+        &mut interner,
+        source,
+        target,
+        &TestInferenceNormalization::default(),
+        Some(&active),
+    ) else {
+        panic!("intrinsic recovery inference must complete")
+    };
+
+    assert!(
+        !candidates.contains_key(&result_id),
+        "the recovery type is not evidence for replacing a declared default"
     );
 }
 

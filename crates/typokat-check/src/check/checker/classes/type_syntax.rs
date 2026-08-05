@@ -76,6 +76,15 @@ pub(in crate::check::checker) struct LoweredCallableSyntax<Ticket> {
     pub failure: Option<SurfaceTypeFailure<Ticket>>,
 }
 
+/// Pre-lowered callable positions that must bypass the query-free surface lowerer.
+/// Missing entries retain the established surface-lowering route.
+#[derive(Clone, Debug, Default)]
+pub(in crate::check::checker) struct CallableAnnotationOverrides {
+    pub receiver: Option<TypeId>,
+    pub params: Vec<Option<TypeId>>,
+    pub ret: Option<TypeId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::check::checker) enum SurfaceNameResolution<Ticket> {
     Direct(TypeId),
@@ -225,17 +234,23 @@ where
 
     pub(in crate::check::checker) fn lower_callable_syntax_with_type_parameters(
         &mut self,
-        type_parameters: Option<&TSTypeParameterDeclaration<'_>>,
-        this_param: Option<&TSThisParameter<'_>>,
-        parameters: &FormalParameters<'_>,
-        return_type: Option<&TSType<'_>>,
-        span: Span,
+        function: &oxc_ast::ast::Function<'_>,
         outer_parameters: impl IntoIterator<Item = (String, TypeId)>,
+        overrides: CallableAnnotationOverrides,
     ) -> LoweredCallableSyntax<Ticket> {
         self.type_param_frames
             .push(outer_parameters.into_iter().collect());
-        let result =
-            self.lower_function_syntax(type_parameters, this_param, parameters, return_type, span);
+        let result = self.lower_function_syntax(
+            function.type_parameters.as_deref(),
+            function.this_param.as_deref(),
+            &function.params,
+            function
+                .return_type
+                .as_deref()
+                .map(|annotation| &annotation.type_annotation),
+            function.span,
+            &overrides,
+        );
         self.type_param_frames.pop();
         result
     }
@@ -1315,8 +1330,14 @@ where
         return_type: Option<&TSType<'_>>,
         span: Span,
     ) -> SurfaceTypeResult<Ticket> {
-        let syntax =
-            self.lower_function_syntax(type_parameters, this_param, parameters, return_type, span);
+        let syntax = self.lower_function_syntax(
+            type_parameters,
+            this_param,
+            parameters,
+            return_type,
+            span,
+            &CallableAnnotationOverrides::default(),
+        );
         if let Some(failure) = syntax.failure {
             return Err(failure);
         }
@@ -1343,6 +1364,7 @@ where
         parameters: &FormalParameters<'_>,
         return_type: Option<&TSType<'_>>,
         span: Span,
+        overrides: &CallableAnnotationOverrides,
     ) -> LoweredCallableSyntax<Ticket> {
         let mut frame = FxHashMap::default();
         let mut ids = Vec::new();
@@ -1382,8 +1404,14 @@ where
             }
         }
         self.type_param_frames.push(frame);
-        let mut result =
-            self.lower_function_inside(type_parameters, &ids, this_param, parameters, return_type);
+        let mut result = self.lower_function_inside(
+            type_parameters,
+            &ids,
+            this_param,
+            parameters,
+            return_type,
+            overrides,
+        );
         self.type_param_frames.pop();
         result.failure = binder_failure.or(result.failure);
         result
@@ -1396,6 +1424,7 @@ where
         this_param: Option<&TSThisParameter<'_>>,
         parameters: &FormalParameters<'_>,
         return_type: Option<&TSType<'_>>,
+        overrides: &CallableAnnotationOverrides,
     ) -> LoweredCallableSyntax<Ticket> {
         let mut generic = Vec::with_capacity(ids.len());
         let mut failure = None;
@@ -1419,8 +1448,13 @@ where
         let receiver = match this_param {
             Some(this_param) => {
                 if let Some(annotation) = this_param.type_annotation.as_ref() {
-                    let lowered = self.lower_type(&annotation.type_annotation);
-                    self.capture_child(lowered, &mut failure)
+                    match overrides.receiver {
+                        Some(ty) => Some(ty),
+                        None => {
+                            let lowered = self.lower_type(&annotation.type_annotation);
+                            self.capture_child(lowered, &mut failure)
+                        }
+                    }
                 } else {
                     let unsupported = self.unsupported(this_param.span);
                     self.capture_failure(unsupported, &mut failure);
@@ -1431,7 +1465,7 @@ where
         };
         let mut params =
             Vec::with_capacity(parameters.items.len() + usize::from(parameters.rest.is_some()));
-        for parameter in &parameters.items {
+        for (index, parameter) in parameters.items.iter().enumerate() {
             let name = match &parameter.pattern {
                 BindingPattern::BindingIdentifier(identifier) => Some(identifier.name.to_string()),
                 _ => {
@@ -1441,8 +1475,13 @@ where
                 }
             };
             let ty = if let Some(annotation) = parameter.type_annotation.as_ref() {
-                let lowered = self.lower_type(&annotation.type_annotation);
-                self.capture_child(lowered, &mut failure)
+                match overrides.params.get(index).copied().flatten() {
+                    Some(ty) => Some(ty),
+                    None => {
+                        let lowered = self.lower_type(&annotation.type_annotation);
+                        self.capture_child(lowered, &mut failure)
+                    }
+                }
             } else {
                 Some(self.factory.well_known().any)
             };
@@ -1467,8 +1506,18 @@ where
                 }
             };
             let ty = if let Some(annotation) = rest.type_annotation.as_ref() {
-                let lowered = self.lower_type(&annotation.type_annotation);
-                self.capture_child(lowered, &mut failure)
+                match overrides
+                    .params
+                    .get(parameters.items.len())
+                    .copied()
+                    .flatten()
+                {
+                    Some(ty) => Some(ty),
+                    None => {
+                        let lowered = self.lower_type(&annotation.type_annotation);
+                        self.capture_child(lowered, &mut failure)
+                    }
+                }
             } else {
                 Some(self.factory.well_known().any)
             };
@@ -1478,10 +1527,13 @@ where
             });
         }
         let ret = match return_type {
-            Some(return_type) => {
-                let lowered = self.lower_type(return_type);
-                self.capture_child(lowered, &mut failure)
-            }
+            Some(return_type) => match overrides.ret {
+                Some(ty) => Some(ty),
+                None => {
+                    let lowered = self.lower_type(return_type);
+                    self.capture_child(lowered, &mut failure)
+                }
+            },
             None => Some(self.factory.well_known().void),
         };
         LoweredCallableSyntax {
@@ -1676,15 +1728,9 @@ mod tests {
             let mut lowerer = TypeSyntaxLowerer::new(&mut factory, &mut resolver);
 
             let syntax = lowerer.lower_callable_syntax_with_type_parameters(
-                function.type_parameters.as_deref(),
-                function.this_param.as_deref(),
-                &function.params,
-                function
-                    .return_type
-                    .as_deref()
-                    .map(|annotation| &annotation.type_annotation),
-                function.span,
+                function,
                 std::iter::empty(),
+                CallableAnnotationOverrides::default(),
             );
 
             assert_eq!(syntax.failure, None);

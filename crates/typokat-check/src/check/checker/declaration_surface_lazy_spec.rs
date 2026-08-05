@@ -10,10 +10,11 @@ use super::eval::DEFAULT_STEP_BUDGET;
 use super::library_compiler::{compile_owned_injected_profile, InjectedLibrarySource};
 use super::reporting_record::CheckerRecord;
 use crate::check::test_support::CheckOutput;
-use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::{render_type, DiagnosticCode};
 use crate::source::LibraryFileOrdinal;
 use crate::types::repr::DeclaredRecipeNode;
 use crate::types::store::TypeId;
+use crate::types::substitute::SubstitutionOutcome;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -27,6 +28,15 @@ struct MeasuredRun {
     output: CheckOutput,
     measure: DeclarationSurfaceMeasure,
     recipes: RecipeArenaMeasure,
+    constrained_application_roots: usize,
+    application_root_summaries: Vec<ApplicationRootSummary>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ApplicationRootSummary {
+    constrained_parameters: usize,
+    materialized_properties: Vec<(&'static str, String)>,
+    cycle_tainted: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +111,80 @@ fn check_measured(source: String) -> MeasuredRun {
     let mut interner = crate::types::Interner::with_intrinsics();
     let checked = super::check_program(&mut interner, &parsed.program);
     let recipes = recipe_arena_measure(&interner);
+    let application_roots = (0..interner.store().len())
+        .filter_map(|index| {
+            let ty = TypeId(u32::try_from(index).expect("store index fits u32"));
+            let declared = interner.store().declared_type(ty)?;
+            matches!(
+                interner.store().declared_recipe(declared.recipe),
+                Some(recipe) if matches!(recipe.node, DeclaredRecipeNode::Application { .. })
+            )
+            .then_some(ty)
+        })
+        .collect::<Vec<_>>();
+    let constrained_application_roots = application_roots
+        .iter()
+        .filter(|&&ty| {
+            let declared = interner.store().declared_type(ty).expect("declared root");
+            let recipe = interner
+                .store()
+                .declared_recipe(declared.recipe)
+                .expect("declared recipe");
+            matches!(
+                &recipe.node,
+                DeclaredRecipeNode::Application { parameters, .. }
+                    if parameters.iter().any(|parameter| {
+                        interner.store().type_param_constraint(*parameter).is_some()
+                    })
+            )
+        })
+        .count();
+    let application_root_summaries = application_roots
+        .into_iter()
+        .map(|ty| {
+            let parameters = {
+                let declared = interner.store().declared_type(ty).expect("declared root");
+                let recipe = interner
+                    .store()
+                    .declared_recipe(declared.recipe)
+                    .expect("declared recipe");
+                let DeclaredRecipeNode::Application { parameters, .. } = &recipe.node else {
+                    unreachable!("application roots were prefiltered")
+                };
+                parameters.clone()
+            };
+            let outcome = interner
+                .materialize_declared(ty)
+                .expect("declared application materializes");
+            let (materialized, cycle_tainted) = match outcome {
+                SubstitutionOutcome::CycleClean(materialized) => (materialized, false),
+                SubstitutionOutcome::CycleTainted(materialized) => (materialized, true),
+            };
+            let materialized_properties = ["value", "first", "second"]
+                .into_iter()
+                .filter_map(|name| {
+                    interner
+                        .store()
+                        .object_type(materialized)
+                        .and_then(|object| object.property(name))
+                        .map(|property| (name, render_type(interner.store(), property.ty, false)))
+                })
+                .collect();
+            ApplicationRootSummary {
+                constrained_parameters: parameters
+                    .iter()
+                    .filter(|parameter| {
+                        interner
+                            .store()
+                            .type_param_constraint(**parameter)
+                            .is_some()
+                    })
+                    .count(),
+                materialized_properties,
+                cycle_tainted,
+            }
+        })
+        .collect();
     let output = CheckOutput {
         diagnostics: checked.diagnostics,
         parse_errors,
@@ -115,6 +199,8 @@ fn check_measured(source: String) -> MeasuredRun {
         output,
         measure,
         recipes,
+        constrained_application_roots,
+        application_root_summaries,
     }
 }
 
@@ -238,6 +324,248 @@ fn partial_recipe_failure_commits_no_rows_or_dependency_edges() {
         run.recipes,
         RecipeArenaMeasure::default(),
         "a failed root plan must publish neither partial rows nor dependency edges"
+    );
+}
+
+#[test]
+fn callable_root_applications_preserve_ordinary_and_namespace_binders() {
+    let source = r#"interface Box<T> { value: T }
+declare function ordinary<T>(this: Box<T>, value: Box<T>, ...rest: Box<T>): Box<T>;
+declare namespace Api {
+  function published<T>(this: Box<T>, value: Box<T>, ...rest: Box<T>): Box<T>;
+}
+"#;
+    let run = check_measured(source.to_string());
+    assert_clean(&run);
+    assert_eq!(
+        run.recipes,
+        RecipeArenaMeasure {
+            durable_rows: 4,
+            durable_edges: 2,
+            reachable_rows: 4,
+            reachable_edges: 2,
+        },
+        "each callable binder owns one shared type leaf and one shared application recipe"
+    );
+}
+
+#[test]
+fn callable_controls_except_constrained_applications_stay_on_the_established_lowering_route() {
+    let source = r#"interface Box<T> { value: T }
+interface Constrained<T extends string> { value: T }
+type Alias<T> = Box<T>;
+declare function controls<T extends string>(
+  bare: T,
+  array: Box<T>[],
+  concrete: Box<string>,
+  alias: Alias<T>,
+  constrained: Constrained<T>
+): readonly Box<T>[];
+"#;
+    let run = check_measured(source.to_string());
+    assert_clean(&run);
+    assert_eq!(
+        run.recipes,
+        RecipeArenaMeasure {
+            durable_rows: 2,
+            durable_edges: 1,
+            reachable_rows: 2,
+            reachable_edges: 1,
+        },
+        "only the constrained application that captures the callable binder must plan"
+    );
+    assert_eq!(run.constrained_application_roots, 1);
+}
+
+#[test]
+fn constrained_application_roots_validate_once_and_materialize_structurally() {
+    let source = r#"interface ConstrainedBox<T extends number> {
+  value: T;
+}
+interface DependentPair<A, B extends A> {
+  first: A;
+  second: B;
+}
+declare const valid: ConstrainedBox<number>;
+declare const firstInvalid: ConstrainedBox<string>;
+declare const secondInvalid: ConstrainedBox<string>;
+declare const dependentValid: DependentPair<number, number>;
+declare const dependentInvalid: DependentPair<string, number>;
+const structural: { value: number } = valid;
+const roundTrip: ConstrainedBox<number> = structural;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(
+        run.output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code,
+                &run.source[diagnostic.span.range()],
+                diagnostic.message.as_str(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                DiagnosticCode::TK2344,
+                "string",
+                "Type 'string' does not satisfy the constraint 'number'.",
+            ),
+            (
+                DiagnosticCode::TK2344,
+                "string",
+                "Type 'string' does not satisfy the constraint 'number'.",
+            ),
+            (
+                DiagnosticCode::TK2344,
+                "number",
+                "Type 'number' does not satisfy the constraint 'string'.",
+            ),
+        ]
+    );
+    assert_eq!(run.constrained_application_roots, 4);
+    assert_eq!(
+        run.application_root_summaries,
+        [
+            ApplicationRootSummary {
+                constrained_parameters: 1,
+                materialized_properties: vec![("value", "number".to_string())],
+                cycle_tainted: false,
+            },
+            ApplicationRootSummary {
+                constrained_parameters: 1,
+                materialized_properties: vec![("value", "string".to_string())],
+                cycle_tainted: false,
+            },
+            ApplicationRootSummary {
+                constrained_parameters: 1,
+                materialized_properties: vec![
+                    ("first", "number".to_string()),
+                    ("second", "number".to_string()),
+                ],
+                cycle_tainted: false,
+            },
+            ApplicationRootSummary {
+                constrained_parameters: 1,
+                materialized_properties: vec![
+                    ("first", "string".to_string()),
+                    ("second", "number".to_string()),
+                ],
+                cycle_tainted: false,
+            },
+        ],
+        "each constrained root must stay Declared/Application and materialize exactly"
+    );
+}
+
+#[test]
+fn declared_application_arguments_preserve_supported_literal_types() {
+    let source = r#"interface LiteralBox<T> { value: T }
+declare const zero: LiteralBox<0>;
+declare const negative: LiteralBox<-1>;
+declare const text: LiteralBox<"text">;
+declare const flag: LiteralBox<true>;
+const exactZero: 0 = zero.value;
+const exactNegative: -1 = negative.value;
+const exactText: "text" = text.value;
+const exactFlag: true = flag.value;
+"#;
+    let run = check_measured(source.to_string());
+    assert_clean(&run);
+    assert_eq!(
+        run.application_root_summaries,
+        [
+            ApplicationRootSummary {
+                constrained_parameters: 0,
+                materialized_properties: vec![("value", "0".to_string())],
+                cycle_tainted: false,
+            },
+            ApplicationRootSummary {
+                constrained_parameters: 0,
+                materialized_properties: vec![("value", "-1".to_string())],
+                cycle_tainted: false,
+            },
+            ApplicationRootSummary {
+                constrained_parameters: 0,
+                materialized_properties: vec![("value", "\"text\"".to_string())],
+                cycle_tainted: false,
+            },
+            ApplicationRootSummary {
+                constrained_parameters: 0,
+                materialized_properties: vec![("value", "true".to_string())],
+                cycle_tainted: false,
+            },
+        ]
+    );
+
+    let standalone = check_measured("interface Standalone { value: 1 }\n".to_string());
+    assert_clean(&standalone);
+    assert_eq!(standalone.recipes, RecipeArenaMeasure::default());
+    assert!(standalone.application_root_summaries.is_empty());
+}
+
+#[test]
+fn callable_planning_is_declaration_order_independent() {
+    let before = check_measured(
+        "interface Box<T> { value: T }\n\
+         declare function useBox<T>(value: Box<T>): Box<T>;\n"
+            .to_string(),
+    );
+    let after = check_measured(
+        "declare function useBox<T>(value: Box<T>): Box<T>;\n\
+         interface Box<T> { value: T }\n"
+            .to_string(),
+    );
+    assert_clean(&before);
+    assert_clean(&after);
+    let expected = RecipeArenaMeasure {
+        durable_rows: 2,
+        durable_edges: 1,
+        reachable_rows: 2,
+        reachable_edges: 1,
+    };
+    assert_eq!(before.recipes, expected);
+    assert_eq!(after.recipes, expected);
+}
+
+#[test]
+fn failed_callable_plan_commits_no_partial_recipe_lifecycle() {
+    let source = r#"interface Box<T> { value: T }
+declare function broken<T>(value: Box<Missing<T>>): void;
+"#;
+    let run = check_measured(source.to_string());
+    assert!(
+        run.output.parse_errors.is_empty(),
+        "{:?}",
+        run.output.parse_errors
+    );
+    assert!(
+        run.output.incomplete.is_empty(),
+        "{:?}",
+        run.output.incomplete
+    );
+    assert_eq!(
+        run.output
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.code, &run.source[diagnostic.span.range()]))
+            .collect::<Vec<_>>(),
+        [(DiagnosticCode::TK2304, "Missing")]
+    );
+    assert_eq!(
+        run.recipes,
+        RecipeArenaMeasure::default(),
+        "a failed callable root must fall back without publishing its successful prefix"
     );
 }
 

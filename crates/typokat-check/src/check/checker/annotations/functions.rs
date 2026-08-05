@@ -41,7 +41,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
             let params = pass.lower_strict_signature_parameters(scope, params, true);
             let ret = return_type.and_then(|return_type| {
-                pass.with_indirection(|p| p.lower_annotation(scope, &return_type.type_annotation))
+                pass.lower_callable_annotation(scope, &return_type.type_annotation, true)
             });
             let (Some(params), Some(ret)) = (params, ret) else {
                 return None;
@@ -74,9 +74,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 ParameterSyntax::Rest { parameter } => parameter.type_annotation.as_ref(),
             };
             let ty = match annotation {
-                Some(annotation) if with_indirection => self
-                    .with_indirection(|p| p.lower_annotation(scope, &annotation.type_annotation)),
-                Some(annotation) => self.lower_annotation(scope, &annotation.type_annotation),
+                Some(annotation) => self.lower_callable_annotation(
+                    scope,
+                    &annotation.type_annotation,
+                    with_indirection,
+                ),
                 None => None,
             };
             match ty {

@@ -21,10 +21,7 @@ fn nested_constraints_report_parent_before_child_in_source_order() {
         output
             .diagnostics
             .iter()
-            .map(|diagnostic| (
-                diagnostic.code.as_str(),
-                &SOURCE[diagnostic.span.range()],
-            ))
+            .map(|diagnostic| (diagnostic.code.as_str(), &SOURCE[diagnostic.span.range()],))
             .collect::<Vec<_>>(),
         [
             ("TK2344", "Base<string>"),

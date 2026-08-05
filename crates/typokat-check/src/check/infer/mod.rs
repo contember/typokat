@@ -16,20 +16,84 @@ mod tests;
 use context::InferenceContext;
 use helpers::widen;
 
-use crate::check::query::{SemanticQueryCoordinator, SemanticQueryState};
+use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, SemanticQueryState};
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClasses};
-use crate::relate::{RelationNormalization, RelationOutcome};
+use crate::relate::{RelationDemand, RelationNormalization, RelationOutcome};
 use crate::types::repr::{
     GenericTypeParam, IntrinsicKind, ParameterType, PropertyKey, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
-use crate::types::{substitute, Interner};
+use crate::types::{substitute, DerivedType, Interner};
 use rustc_hash::{FxHashMap, FxHashSet};
+
+#[cfg(test)]
+thread_local! {
+    static QUERY_INFERENCE_ATTEMPTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_query_inference_attempts() {
+    QUERY_INFERENCE_ATTEMPTS.with(|attempts| attempts.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn query_inference_attempts() -> u64 {
+    QUERY_INFERENCE_ATTEMPTS.with(std::cell::Cell::get)
+}
 
 /// The raw candidates per type parameter for conditional-`infer` mode. Call-site
 /// inference uses [`CallSiteCandidates`] so it can keep source provenance separate
 /// from conditional same-name union behavior.
 pub type Candidates = FxHashMap<crate::types::repr::TypeParamId, Vec<TypeId>>;
+
+pub(crate) enum InferenceAttempt {
+    Complete(Candidates),
+    Needs(RelationDemand),
+    NeedsBatch(Vec<RelationDemand>),
+    Exhausted(Exhaustion),
+}
+
+#[derive(Default)]
+pub(crate) struct InferenceRetryState {
+    demands: FxHashSet<RelationDemand>,
+}
+
+impl InferenceRetryState {
+    pub(crate) fn observe(&mut self, attempt: InferenceAttempt) -> InferenceAttempt {
+        let demands = match attempt {
+            InferenceAttempt::Needs(demand) => vec![demand],
+            InferenceAttempt::NeedsBatch(demands) => demands,
+            attempt => return attempt,
+        };
+        let mut pending = demands
+            .iter()
+            .copied()
+            .filter(|demand| self.demands.insert(*demand))
+            .collect::<Vec<_>>();
+        match pending.len() {
+            1 => {
+                if let Some(demand) = pending.pop() {
+                    return InferenceAttempt::Needs(demand);
+                }
+            }
+            2.. => return InferenceAttempt::NeedsBatch(std::mem::take(&mut pending)),
+            _ => {}
+        }
+        let Some(demand) = demands.first().copied() else {
+            return InferenceAttempt::Exhausted(Exhaustion::EvaluationBudget);
+        };
+        let exhaustion = match demand {
+            RelationDemand::Evaluation(ty) => Exhaustion::EvaluationCycle { ty },
+            RelationDemand::DerivedEvaluation(derived) => {
+                Exhaustion::EvaluationCycle { ty: derived.ty }
+            }
+            RelationDemand::ClassProjection(_)
+            | RelationDemand::DerivedClassProjection(_)
+            | RelationDemand::ApparentSurface(_) => Exhaustion::ClassProjectionBudget,
+        };
+        InferenceAttempt::Exhausted(exhaustion)
+    }
+}
 
 type CallSiteCandidates = FxHashMap<crate::types::repr::TypeParamId, Vec<CallSiteCandidate>>;
 
@@ -42,6 +106,7 @@ pub(crate) struct SignatureInferenceRequest<'a> {
 }
 
 struct CandidateCollectionRequest<'a> {
+    active_params: Option<&'a FxHashSet<TypeParamId>>,
     params: &'a [ParameterType],
     args: &'a [TypeId],
     fresh_args: &'a [bool],
@@ -119,25 +184,73 @@ pub fn infer_from_types_for_conditional(
 
 /// Query-local structural inference. Candidates are committed only when every
 /// demanded normalization succeeds; an exhausted attempt contributes nothing.
+#[cfg(test)]
 pub(crate) fn infer_from_types_for_query(
     interner: &mut Interner,
     source: TypeId,
     target: TypeId,
-    candidates: &mut Candidates,
     normalization: &dyn RelationNormalization,
-) -> DemandOutcome<()> {
+) -> InferenceAttempt {
+    infer_from_types_for_query_with_params(interner, source, target, normalization, None)
+}
+
+pub(crate) fn infer_from_derived_types_for_query_with_params(
+    interner: &mut Interner,
+    source: DerivedType,
+    target: DerivedType,
+    normalization: &dyn RelationNormalization,
+    active_params: Option<&FxHashSet<TypeParamId>>,
+) -> InferenceAttempt {
+    #[cfg(test)]
+    QUERY_INFERENCE_ATTEMPTS.with(|attempts| attempts.set(attempts.get().saturating_add(1)));
     let mut local = Candidates::default();
-    let mut context = InferenceContext::for_query(false, normalization);
-    context.infer(interner, source, target, &mut local);
-    match context.take_exhaustion() {
-        Some(reason) => DemandOutcome::Exhausted(reason),
-        None => {
-            for (parameter, inferred) in local {
-                candidates.entry(parameter).or_default().extend(inferred);
-            }
-            DemandOutcome::Ready(())
-        }
+    let mut context = InferenceContext::for_query(normalization, active_params);
+    context.infer_derived(interner, source, target, &mut local);
+    if let Some(reason) = context.take_exhaustion() {
+        return InferenceAttempt::Exhausted(reason);
     }
+    let demands = context.take_demands();
+    if let [demand] = demands.as_slice() {
+        return InferenceAttempt::Needs(*demand);
+    }
+    if !demands.is_empty() {
+        return InferenceAttempt::NeedsBatch(demands);
+    }
+    InferenceAttempt::Complete(local)
+}
+
+#[cfg(test)]
+fn infer_from_derived_types_for_query(
+    interner: &mut Interner,
+    source: DerivedType,
+    target: DerivedType,
+    normalization: &dyn RelationNormalization,
+) -> InferenceAttempt {
+    infer_from_derived_types_for_query_with_params(interner, source, target, normalization, None)
+}
+
+#[cfg(test)]
+pub(crate) fn infer_from_types_for_query_with_params(
+    interner: &mut Interner,
+    source: TypeId,
+    target: TypeId,
+    normalization: &dyn RelationNormalization,
+    active_params: Option<&FxHashSet<TypeParamId>>,
+) -> InferenceAttempt {
+    let mut local = Candidates::default();
+    let mut context = InferenceContext::for_query(normalization, active_params);
+    context.infer(interner, source, target, &mut local);
+    if let Some(reason) = context.take_exhaustion() {
+        return InferenceAttempt::Exhausted(reason);
+    }
+    let demands = context.take_demands();
+    if let [demand] = demands.as_slice() {
+        return InferenceAttempt::Needs(*demand);
+    }
+    if !demands.is_empty() {
+        return InferenceAttempt::NeedsBatch(demands);
+    }
+    InferenceAttempt::Complete(local)
 }
 
 /// Infer a generic function signature's arguments from the call arguments.
@@ -159,6 +272,7 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         fresh_args,
         receiver,
     } = request;
+    let active_params: FxHashSet<_> = type_params.iter().map(|param| param.id).collect();
     queries.savepoint();
     let collection = collect_call_site_candidates_query(
         interner,
@@ -166,6 +280,7 @@ pub(crate) fn infer_signature_type_arguments_from_params(
         published,
         queries,
         CandidateCollectionRequest {
+            active_params: Some(&active_params),
             params,
             args,
             fresh_args,
@@ -232,6 +347,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         fresh_args,
         receiver,
     } = request;
+    let active_params: FxHashSet<_> = type_params.iter().map(|param| param.id).collect();
     queries.savepoint();
     let collection = collect_call_site_candidates_query(
         interner,
@@ -239,6 +355,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         published,
         queries,
         CandidateCollectionRequest {
+            active_params: Some(&active_params),
             params,
             args,
             fresh_args,
@@ -297,6 +414,7 @@ fn collect_call_site_candidates_query(
     request: CandidateCollectionRequest<'_>,
 ) -> CandidateCollectionResult {
     let CandidateCollectionRequest {
+        active_params,
         params,
         args,
         fresh_args,
@@ -312,8 +430,13 @@ fn collect_call_site_candidates_query(
         let mut local: Candidates = FxHashMap::default();
         // Keep candidates raw here; primitive-constrained parameters decide literal
         // preservation at fix time.
-        let outcome = SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
-            .infer_types(arg, param, &mut local);
+        let outcome = infer_types_for_active_params(
+            SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
+            arg,
+            param,
+            &mut local,
+            active_params,
+        );
         if let DemandOutcome::Exhausted(exhaustion) = outcome {
             first_exhaustion.get_or_insert(exhaustion);
             continue;
@@ -330,9 +453,13 @@ fn collect_call_site_candidates_query(
         if rest_start <= args.len() {
             let tuple = interner.intern_tuple(args[rest_start..].to_vec());
             let mut local: Candidates = FxHashMap::default();
-            let outcome =
-                SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
-                    .infer_types(tuple, rest_ty, &mut local);
+            let outcome = infer_types_for_active_params(
+                SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
+                tuple,
+                rest_ty,
+                &mut local,
+                active_params,
+            );
             if let DemandOutcome::Exhausted(exhaustion) = outcome {
                 first_exhaustion.get_or_insert(exhaustion);
             } else {
@@ -352,8 +479,13 @@ fn collect_call_site_candidates_query(
     }
     if let Some((source, target)) = receiver {
         let mut local: Candidates = FxHashMap::default();
-        let outcome = SemanticQueryCoordinator::new(interner, published, queries, next_type_param)
-            .infer_types(source, target, &mut local);
+        let outcome = infer_types_for_active_params(
+            SemanticQueryCoordinator::new(interner, published, queries, next_type_param),
+            source,
+            target,
+            &mut local,
+            active_params,
+        );
         if let DemandOutcome::Exhausted(exhaustion) = outcome {
             first_exhaustion.get_or_insert(exhaustion);
         } else {
@@ -368,6 +500,21 @@ fn collect_call_site_candidates_query(
     CandidateCollectionResult {
         candidates,
         exhaustion: first_exhaustion,
+    }
+}
+
+fn infer_types_for_active_params<L: PublishedClassLookup + ?Sized>(
+    mut coordinator: SemanticQueryCoordinator<'_, L>,
+    source: TypeId,
+    target: TypeId,
+    candidates: &mut Candidates,
+    active_params: Option<&FxHashSet<TypeParamId>>,
+) -> DemandOutcome<()> {
+    match active_params {
+        Some(active_params) => {
+            coordinator.infer_types_for_params(source, target, candidates, active_params)
+        }
+        None => coordinator.infer_types(source, target, candidates),
     }
 }
 
@@ -388,6 +535,7 @@ fn collect_call_site_candidates(
         &published,
         &mut queries,
         CandidateCollectionRequest {
+            active_params: None,
             params,
             args,
             fresh_args,

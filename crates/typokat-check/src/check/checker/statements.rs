@@ -1238,7 +1238,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let annotation = match self.take_var_annotation_surface(kind, declarator) {
             Some(annotation) => annotation,
             None => match declarator.type_annotation.as_ref() {
-                Some(ann) => self.lower_annotation(scope, &ann.type_annotation),
+                Some(ann) => {
+                    self.lower_declared_annotation_or_fallback(scope, &ann.type_annotation, false)
+                }
                 None => None,
             },
         };
@@ -1522,7 +1524,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let annotation = pass.with_lexical_effects(
                         declarator.span.start,
                         LexicalOwnerPhase::Immediate,
-                        |pass| pass.lower_annotation(scope, &type_annotation.type_annotation),
+                        |pass| {
+                            pass.lower_declared_annotation_or_fallback(
+                                scope,
+                                &type_annotation.type_annotation,
+                                false,
+                            )
+                        },
                     );
                     if let Some(annotation) = annotation {
                         pass.reserve_variable_annotation_type(

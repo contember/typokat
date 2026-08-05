@@ -1,8 +1,9 @@
 use super::*;
 use crate::types::repr::{
-    ClassId, FunctionType, GenericTypeParam, ObjectType, ParameterType, PropertyType,
+    ClassId, FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
     TupleRestType, TupleType, WellKnownSymbol,
 };
+use crate::types::DerivationEdge;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
@@ -415,6 +416,165 @@ fn substitution_flows_through_nested_objects() {
     });
     assert_eq!(substitute(&mut interner, inner, &map), inner_subst);
     assert_eq!(substitute(&mut interner, outer, &map), outer_subst);
+}
+
+#[test]
+fn derived_substitution_retains_the_exact_nested_path() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(89_001);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let inner = interner.intern_object(ObjectType {
+        properties: vec![prop("value", parameter)],
+        ..Default::default()
+    });
+    let outer = interner.intern_object(ObjectType {
+        properties: vec![prop("nested", inner)],
+        ..Default::default()
+    });
+    let map = FxHashMap::from_iter([(parameter_id, DerivedType::plain(wk.string))]);
+
+    let result = substitute_derived(&mut interner, outer, &map);
+    let nested = interner
+        .store()
+        .object_type(result.ty)
+        .and_then(|object| object.properties.first())
+        .map(|property| property.ty)
+        .expect("substitution preserves the nested property");
+    assert_eq!(interner.derivation_identity(result), outer);
+    let nested = interner.derivation_child(result, DerivationEdge::ObjectProperty(0), nested);
+    assert_eq!(interner.derivation_identity(nested), inner);
+}
+
+#[test]
+fn hash_consed_results_keep_occurrence_specific_identities() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first_id = TypeParamId(89_011);
+    let second_id = TypeParamId(89_012);
+    let first_parameter = interner.intern_type_param(first_id, "A");
+    let second_parameter = interner.intern_type_param(second_id, "B");
+    let first = interner.intern_object(ObjectType {
+        properties: vec![prop("value", first_parameter)],
+        ..Default::default()
+    });
+    let second = interner.intern_object(ObjectType {
+        properties: vec![prop("value", second_parameter)],
+        ..Default::default()
+    });
+
+    let first_result = substitute_derived(
+        &mut interner,
+        first,
+        &FxHashMap::from_iter([(first_id, DerivedType::plain(wk.string))]),
+    );
+    let second_result = substitute_derived(
+        &mut interner,
+        second,
+        &FxHashMap::from_iter([(second_id, DerivedType::plain(wk.string))]),
+    );
+
+    assert_eq!(first_result.ty, second_result.ty);
+    assert_eq!(interner.derivation_identity(first_result), first);
+    assert_eq!(interner.derivation_identity(second_result), second);
+}
+
+#[test]
+fn freeze_discards_derivations_and_rejects_sibling_local_tokens() {
+    let mut base = Interner::with_intrinsics();
+    let wk = base.well_known();
+    let parameter_id = TypeParamId(89_021);
+    let parameter = base.intern_type_param(parameter_id, "T");
+    let inner = base.intern_object(ObjectType {
+        properties: vec![prop("value", parameter)],
+        ..Default::default()
+    });
+    let outer = base.intern_object(ObjectType {
+        properties: vec![prop("nested", inner)],
+        ..Default::default()
+    });
+    let base_result = substitute_derived(
+        &mut base,
+        outer,
+        &FxHashMap::from_iter([(parameter_id, DerivedType::plain(wk.number))]),
+    );
+    base.freeze_as_base().expect("complete graph freezes");
+
+    let mut first = base.fork_delta().expect("first sealed graph forks");
+    let mut second = base.fork_delta().expect("second sealed graph forks");
+    for fork in [&first, &second] {
+        assert_eq!(fork.derivation_identity(base_result), base_result.ty);
+        let nested_ty = fork
+            .store()
+            .object_type(base_result.ty)
+            .and_then(|object| object.properties.first())
+            .map(|property| property.ty)
+            .expect("base result retains nested object");
+        let nested =
+            fork.derivation_child(base_result, DerivationEdge::ObjectProperty(0), nested_ty);
+        assert_eq!(nested, DerivedType::plain(nested_ty));
+    }
+
+    let first_literal = first.intern_literal(LiteralValue::String("first".to_owned()));
+    let first_local = substitute_derived(
+        &mut first,
+        inner,
+        &FxHashMap::from_iter([(parameter_id, DerivedType::plain(first_literal))]),
+    );
+    let second_literal = second.intern_literal(LiteralValue::String("second".to_owned()));
+    let second_local = substitute_derived(
+        &mut second,
+        inner,
+        &FxHashMap::from_iter([(parameter_id, DerivedType::plain(second_literal))]),
+    );
+    assert_eq!(
+        first_local.ty, second_local.ty,
+        "dense sibling suffixes intentionally reuse numeric TypeIds"
+    );
+    assert_eq!(first.derivation_identity(first_local), inner);
+    assert_eq!(second.derivation_identity(second_local), inner);
+    assert_eq!(
+        second.derivation_identity(first_local),
+        first_local.ty,
+        "a foreign sibling token must fall back to its semantic TypeId"
+    );
+}
+
+#[test]
+fn derivation_graph_retains_a_recursive_structural_edge() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter_id = TypeParamId(89_031);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let template = interner.reserve_object();
+    interner.fill_object(
+        template,
+        ObjectType {
+            properties: vec![prop("next", template), prop("value", parameter)],
+            ..Default::default()
+        },
+    );
+    let result = interner.reserve_object();
+    interner.fill_object(
+        result,
+        ObjectType {
+            properties: vec![prop("next", result), prop("value", wk.string)],
+            ..Default::default()
+        },
+    );
+    let derived = super::derivation::derive_substitution(
+        &mut interner,
+        template,
+        result,
+        &FxHashMap::from_iter([(parameter_id, DerivedType::plain(wk.string))]),
+    );
+
+    assert_eq!(interner.derivation_identity(derived), template);
+    assert_eq!(
+        interner.derivation_child(derived, DerivationEdge::ObjectProperty(0), result),
+        derived,
+        "the recursive child keeps the reserved root token"
+    );
 }
 
 /// Two distinct instantiations are distinct interned types, and the same

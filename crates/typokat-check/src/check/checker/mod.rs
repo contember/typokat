@@ -4330,6 +4330,18 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                                 ),
                             );
                         }
+                        RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode {
+                            ..
+                        }) => {
+                            pass.append_effect_incomplete(
+                                &mut effects,
+                                IncompleteSurface::new(
+                                    "semantic-query/invalid-evaluation-node",
+                                    obligation.src_span,
+                                    "semantic evaluation reached an invalid type node",
+                                ),
+                            );
+                        }
                         RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
                         | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
                         | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison {

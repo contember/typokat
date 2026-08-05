@@ -4,7 +4,7 @@
 //! returns the original id on self-referential nominal types; recursive generic
 //! instantiation remains out of scope.
 
-use crate::types::intern::{ApplicationKeyMode, CleanApplicationKey};
+use crate::types::intern::{ApplicationKeyMode, CleanApplicationKey, DerivedType};
 use crate::types::repr::{FunctionType, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
@@ -216,6 +216,7 @@ mod apply;
 mod completed_memo_spec;
 #[cfg(test)]
 mod cycle_scoped_memo_spec;
+mod derivation;
 #[cfg(test)]
 mod durable_application_result_spec;
 #[cfg(test)]
@@ -234,6 +235,12 @@ mod tests;
 pub enum SubstitutionOutcome {
     CycleClean(TypeId),
     CycleTainted(TypeId),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DerivedSubstitutionOutcome {
+    CycleClean(DerivedType),
+    CycleTainted(DerivedType),
 }
 
 /// A cycle-tainted result plus the stack cut it depends on: reusable only while
@@ -1010,6 +1017,51 @@ pub fn substitute_with_outcome(
     } else {
         SubstitutionOutcome::CycleTainted(result)
     }
+}
+
+/// Substitute while preserving the exact provenance of mapper arguments.
+pub fn substitute_derived_with_outcome(
+    interner: &mut Interner,
+    ty: TypeId,
+    map: &FxHashMap<TypeParamId, DerivedType>,
+) -> DerivedSubstitutionOutcome {
+    let raw_map = map
+        .iter()
+        .map(|(&parameter, derived)| (parameter, derived.ty))
+        .collect();
+    match substitute_with_outcome(interner, ty, &raw_map) {
+        SubstitutionOutcome::CycleClean(result) => {
+            let derived = derivation::derive_substitution(interner, ty, result, map);
+            DerivedSubstitutionOutcome::CycleClean(derived)
+        }
+        // A tainted result depends on a live raw-id stack cut. Do not publish a
+        // context-free derivation for it; inference safely falls back to TypeId.
+        SubstitutionOutcome::CycleTainted(result) => {
+            DerivedSubstitutionOutcome::CycleTainted(DerivedType::plain(result))
+        }
+    }
+}
+
+pub fn substitute_derived(
+    interner: &mut Interner,
+    ty: TypeId,
+    map: &FxHashMap<TypeParamId, DerivedType>,
+) -> DerivedType {
+    match substitute_derived_with_outcome(interner, ty, map) {
+        DerivedSubstitutionOutcome::CycleClean(result)
+        | DerivedSubstitutionOutcome::CycleTainted(result) => result,
+    }
+}
+
+/// Reconstruct query-local substitution provenance for an already memoized
+/// semantic result without repeating the substitution itself.
+pub fn derive_substitution_result(
+    interner: &mut Interner,
+    template: TypeId,
+    result: TypeId,
+    map: &FxHashMap<TypeParamId, DerivedType>,
+) -> DerivedType {
+    derivation::derive_substitution(interner, template, result, map)
 }
 
 /// Instantiate a generic function's own binders for one call candidate.

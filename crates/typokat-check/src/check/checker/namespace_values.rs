@@ -2088,17 +2088,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         function: &Function<'_>,
     ) -> FunctionReservation<Ticket> {
-        let callable = self
+        let parameter_count =
+            function.params.items.len() + usize::from(function.params.rest.is_some());
+        let unavailable = |tickets| {
+            FunctionReservation::Unavailable(RetainedFunctionBodySurface {
+                type_param_frame: FxHashMap::default(),
+                receiver: None,
+                params: std::iter::repeat_n(None, parameter_count).collect(),
+                declared_return: None,
+                tickets,
+            })
+        };
+        let Some(callable) = self
             .lexical_events
             .callable_at(source_ordinal(self.current_source), function.span.start)
             .and_then(|site| self.lexical_events.callable(site))
-            .expect("namespace function has preallocated callable tickets");
+        else {
+            return unavailable(None);
+        };
         let tickets = callable.tickets;
+        let _callable_source = callable.source;
+        let Some(binding) = callable.binding.as_ref() else {
+            return unavailable(Some(tickets));
+        };
+        let type_params = binding.type_params.clone();
         #[cfg(any(test, feature = "test-utils"))]
         self.namespace_values.record_namespace_function_reservation(
             declaration.expect("namespace function declaration"),
-            callable.source,
+            _callable_source,
         );
+        let type_param_frame =
+            self.build_type_param_frame(function.type_parameters.as_deref(), &type_params);
         let storage = declaration.and_then(|declaration| {
             self.binder
                 .declarations
@@ -2107,8 +2127,52 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         });
         let reserve = |pass: &mut Self| {
             pass.with_ticket_effects(tickets.signature, |pass| {
-                let (mut lowered, child_failures) =
-                    pass.lower_namespace_callable_surface(scope, function, tickets.signature);
+                let overrides = pass.with_type_params(type_param_frame.clone(), |pass| {
+                    let receiver = function
+                        .this_param
+                        .as_ref()
+                        .and_then(|this_param| this_param.type_annotation.as_ref())
+                        .and_then(|annotation| {
+                            pass.try_plan_declared_callable_annotation(
+                                scope,
+                                &annotation.type_annotation,
+                            )
+                        });
+                    let mut params = Vec::with_capacity(
+                        function.params.items.len() + usize::from(function.params.rest.is_some()),
+                    );
+                    params.extend(function.params.items.iter().map(|parameter| {
+                        parameter.type_annotation.as_ref().and_then(|annotation| {
+                            pass.try_plan_declared_callable_annotation(
+                                scope,
+                                &annotation.type_annotation,
+                            )
+                        })
+                    }));
+                    if let Some(rest) = &function.params.rest {
+                        params.push(rest.type_annotation.as_ref().and_then(|annotation| {
+                            pass.try_plan_declared_callable_annotation(
+                                scope,
+                                &annotation.type_annotation,
+                            )
+                        }));
+                    }
+                    let ret = function.return_type.as_ref().and_then(|annotation| {
+                        pass.try_plan_declared_callable_annotation(
+                            scope,
+                            &annotation.type_annotation,
+                        )
+                    });
+                    (receiver, params, ret)
+                });
+                let (mut lowered, child_failures) = pass.lower_namespace_callable_surface(
+                    scope,
+                    function,
+                    tickets.signature,
+                    overrides.0,
+                    overrides.1,
+                    overrides.2,
+                );
                 let mut failures = lowered.failure.take().into_iter().collect::<Vec<_>>();
                 failures.extend(child_failures);
                 let unavailable =
@@ -2123,23 +2187,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 if function.return_type.is_none() {
                     lowered.declared_return = None;
                 }
-                let type_param_frame = function
-                    .type_parameters
-                    .as_deref()
-                    .into_iter()
-                    .flat_map(|declaration| declaration.params.iter())
-                    .zip(&lowered.type_params)
-                    .map(|(parameter, generic)| {
-                        (
-                            parameter.name.name.to_string(),
-                            pass.interner
-                                .intern_type_param(generic.id, parameter.name.name.as_str()),
-                        )
-                    })
-                    .collect();
                 if unavailable {
                     return FunctionReservation::Unavailable(RetainedFunctionBodySurface {
-                        type_param_frame,
+                        type_param_frame: type_param_frame.clone(),
                         receiver: lowered.receiver,
                         params: lowered.params,
                         declared_return: lowered.declared_return,
@@ -2169,7 +2219,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     receiver: lowered.receiver,
                     params,
                     generic_params: lowered.type_params,
-                    type_param_frame,
+                    type_param_frame: type_param_frame.clone(),
                     declared_return: lowered.declared_return,
                     function_ty,
                     tickets: Some(tickets),

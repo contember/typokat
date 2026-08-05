@@ -98,7 +98,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let receiver = pass.lower_this_parameter(scope, this_param);
             let params = pass.lower_strict_signature_parameters(scope, params, false);
             let ret = match return_type {
-                Some(ann) => pass.lower_annotation(scope, &ann.type_annotation),
+                Some(ann) => pass.lower_callable_annotation(scope, &ann.type_annotation, false),
                 None => Some(pass.interner.well_known().void),
             };
             let (Some(receiver), Some(params), Some(ret)) = (receiver, params, ret) else {
@@ -126,9 +126,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(None);
         };
         let annotation = this_param.type_annotation.as_ref()?;
-        Some(Some(
-            self.lower_annotation(scope, &annotation.type_annotation)?,
-        ))
+        Some(Some(self.lower_callable_annotation(
+            scope,
+            &annotation.type_annotation,
+            false,
+        )?))
     }
 
     pub(in crate::check::checker) fn overloaded_method_names(

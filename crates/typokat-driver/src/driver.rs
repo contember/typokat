@@ -912,6 +912,67 @@ mod tests {
         format!("{:?}", output.diagnostics)
     }
 
+    #[test]
+    fn production_library_nested_set_inference_keeps_string_candidate() {
+        let output = check_source(
+            "declare const values: Set<Set<string>>;\n\
+             declare function take<T>(values: Iterable<Set<T>>): T[];\n\
+             const result: string[] = take(values);\n",
+        );
+
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn production_library_warm_set_inference_keeps_both_string_candidates() {
+        let output = check_source(
+            "declare const values: Set<string>;\n\
+             declare const nested: Set<Set<string>>;\n\
+             declare function take<T>(values: Iterable<T>): T[];\n\
+             declare function takeNested<T>(values: Iterable<Set<T>>): T[];\n\
+             const firstClean: string[] = take(values);\n\
+             const firstWrong: number[] = take(values);\n\
+             const nestedClean: string[] = takeNested(nested);\n\
+             const nestedWrong: number[] = takeNested(nested);\n",
+        );
+
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TK2322", "TK2322"],
+            "warm inference must not replace either string candidate with unknown"
+        );
+    }
+
+    #[test]
+    fn production_library_promise_then_keeps_callback_result() {
+        let output = check_source(
+            "const directWrong: Promise<string> = Promise.resolve(1);\n\
+             const incremented = Promise.resolve(1).then((value) => value + 1);\n\
+             const correct: Promise<number> = incremented;\n\
+             const thenWrong: Promise<string> = incremented;\n",
+        );
+
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            vec!["TK2322", "TK2322"],
+            "Promise.then must preserve the callback TResult candidate"
+        );
+    }
+
     /// Pins the contract that parallel multi-file checking is per-file-independent
     /// and order-preserving.
     #[test]

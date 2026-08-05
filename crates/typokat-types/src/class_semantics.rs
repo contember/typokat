@@ -40,6 +40,9 @@ pub enum Exhaustion {
     EvaluationCycle {
         ty: TypeId,
     },
+    EvaluationInvalidNode {
+        ty: TypeId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

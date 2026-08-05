@@ -12,7 +12,7 @@ use crate::class_semantics::Exhaustion;
 use crate::relate::cache::{RelationCache, RelationKey};
 use crate::types::repr::{GenericTypeParam, IntrinsicKind, PropertyKey, TypeParamId, TypeTag};
 use crate::types::store::{Store, TypeId};
-use crate::types::WellKnown;
+use crate::types::{DerivedType, WellKnown};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
@@ -281,6 +281,8 @@ pub enum RelationOutcome {
 pub enum RelationDemand {
     ClassProjection(TypeId),
     Evaluation(TypeId),
+    DerivedClassProjection(DerivedType),
+    DerivedEvaluation(DerivedType),
     ApparentSurface(TypeId),
 }
 
@@ -310,6 +312,16 @@ pub enum RelationAttempt {
 pub trait RelationNormalization {
     fn normalize(&self, ty: TypeId) -> Result<TypeId, Exhaustion>;
 
+    /// Normalize one inference occurrence while retaining provider-specific,
+    /// non-semantic provenance when available.
+    fn normalize_derived(
+        &self,
+        _store: &Store,
+        derived: DerivedType,
+    ) -> Result<DerivedType, Exhaustion> {
+        self.normalize(derived.ty).map(DerivedType::plain)
+    }
+
     /// Whether the active semantic universe proves that `ty` lacks a callable member.
     /// The default stays conservative for normalization providers without library data.
     fn definitely_lacks_callable_member(&self, _store: &Store, _ty: TypeId, _name: &str) -> bool {
@@ -325,11 +337,18 @@ pub trait RelationNormalization {
         ApparentSurface::NotApplicable
     }
 
-    /// Return the next unresolved semantic operation for lazy relation planning.
-    /// Evaluator/inference queries use `normalize` directly and therefore never
-    /// observe this relation-only protocol.
+    /// Return the next unresolved semantic operation for lazy relation or inference
+    /// planning. The mutable coordinator expands it and retries the read-only attempt.
     fn relation_demand(&self, _store: &Store, _ty: TypeId) -> Option<RelationDemand> {
         None
+    }
+
+    fn relation_demand_derived(
+        &self,
+        store: &Store,
+        derived: DerivedType,
+    ) -> Option<RelationDemand> {
+        self.relation_demand(store, derived.ty)
     }
 }
 

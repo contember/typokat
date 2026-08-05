@@ -8,7 +8,10 @@ use crate::check::checker::eval::demand::{
     resolve_keyof_outer_layer,
 };
 use crate::check::checker::eval::{ConditionalEvaluator, DEFAULT_STEP_BUDGET};
-use crate::check::infer::{infer_from_types_for_query, Candidates};
+use crate::check::infer::{
+    infer_from_derived_types_for_query_with_params, Candidates, InferenceAttempt,
+    InferenceRetryState,
+};
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
 use crate::relate::cache::RelationCache;
 use crate::relate::relation::ApparentSurface;
@@ -17,8 +20,11 @@ use crate::relate::{
 };
 use crate::types::repr::{ClassId, IntrinsicKind, LiteralValue, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
-use crate::types::substitute::SubstitutionOutcome;
-use crate::types::{substitute, substitute_with_outcome, Interner};
+use crate::types::substitute::{DerivedSubstitutionOutcome, SubstitutionOutcome};
+use crate::types::{
+    derive_substitution_result, substitute_derived_with_outcome, substitute_with_outcome,
+    DerivationEdge, DerivedType, Interner,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
@@ -912,6 +918,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         next_type_param: &'a mut u32,
     ) -> Self {
         refresh_semantic_context(interner.store(), published, state);
+        interner.begin_occurrence_query();
         SemanticQueryCoordinator {
             interner,
             published,
@@ -1064,7 +1071,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             );
         }
         if let DemandOutcome::Ready(identical) = &outcome {
-            let cache_tainted = transaction.cache_tainted;
+            let cache_tainted = transaction.cycle_taint_reason.is_some();
             self.commit_plan(transaction.into_commit());
             if !cache_tainted {
                 #[cfg(any(test, feature = "test-utils"))]
@@ -1911,7 +1918,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     attempt,
                     RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
                 ) && !planner.planning_tainted
-                    && !planner.cache_tainted;
+                    && planner.cycle_taint_reason.is_none();
                 let cache = relater.finish_planned(commit_cache);
                 (attempt, cache)
             };
@@ -1938,7 +1945,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         }
         let commit_plan =
             !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
-        let cache_tainted = transaction.cache_tainted;
+        let cache_tainted = transaction.cycle_taint_reason.is_some();
         self.state.relation_cache = relation_cache;
         if commit_plan {
             self.commit_plan(transaction.into_commit());
@@ -2010,7 +2017,27 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         target: TypeId,
         candidates: &mut Candidates,
     ) -> DemandOutcome<()> {
-        let transaction = ProjectionPlanner::new(
+        self.infer_types_with_params(source, target, candidates, None)
+    }
+
+    pub(crate) fn infer_types_for_params(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+        active_params: &FxHashSet<TypeParamId>,
+    ) -> DemandOutcome<()> {
+        self.infer_types_with_params(source, target, candidates, Some(active_params))
+    }
+
+    fn infer_types_with_params(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        candidates: &mut Candidates,
+        active_params: Option<&FxHashSet<TypeParamId>>,
+    ) -> DemandOutcome<()> {
+        let mut planner = ProjectionPlanner::new(
             self.interner,
             self.published,
             &self.state.projection_memo,
@@ -2018,9 +2045,41 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             *self.next_type_param,
             self.state.array_definitely_lacks_then,
             self.state.library_object_context,
-        )
-        .plan(&[source, target]);
+        );
+        let mut retry = InferenceRetryState::default();
+        let source_root = DerivedType::plain(source);
+        let target_root = DerivedType::plain(target);
+        let attempt = loop {
+            let attempt = infer_from_derived_types_for_query_with_params(
+                planner.interner,
+                source_root,
+                target_root,
+                &planner.plan,
+                active_params,
+            );
+            match retry.observe(attempt) {
+                InferenceAttempt::Needs(demand) => planner.expand_relation_demand(demand),
+                InferenceAttempt::NeedsBatch(demands) => {
+                    for demand in demands {
+                        planner.expand_relation_demand(demand);
+                    }
+                }
+                InferenceAttempt::Complete(local) => break Ok(local),
+                InferenceAttempt::Exhausted(exhaustion) => break Err(exhaustion),
+            }
+        };
+        if attempt.is_ok() {
+            for root in [source, target] {
+                if planner.interner.store().tag(root) == TypeTag::Union {
+                    planner.visit(root);
+                }
+            }
+        }
+        let transaction = planner.finish();
         *self.next_type_param = transaction.next_type_param;
+        if let Some(exhaustion) = transaction.cycle_taint_reason.clone() {
+            return DemandOutcome::Exhausted(exhaustion);
+        }
         if transaction.planning_tainted {
             return DemandOutcome::Exhausted(
                 transaction
@@ -2029,25 +2088,16 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     .unwrap_or(Exhaustion::ClassProjectionBudget),
             );
         }
-        let outcome = infer_from_types_for_query(
-            self.interner,
-            source,
-            target,
-            candidates,
-            &transaction.plan,
-        );
-        if matches!(outcome, DemandOutcome::Ready(())) {
-            if transaction.planning_tainted {
-                return DemandOutcome::Exhausted(
-                    transaction
-                        .first_exhaustion
-                        .clone()
-                        .unwrap_or(Exhaustion::ClassProjectionBudget),
-                );
+        match attempt {
+            Ok(local) => {
+                self.commit_plan(transaction.into_commit());
+                for (parameter, inferred) in local {
+                    candidates.entry(parameter).or_default().extend(inferred);
+                }
+                DemandOutcome::Ready(())
             }
-            self.commit_plan(transaction.into_commit());
+            Err(exhaustion) => DemandOutcome::Exhausted(exhaustion),
         }
-        outcome
     }
 
     /// Check one overload signature against its implementation through the same
@@ -2093,7 +2143,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     attempt,
                     RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
                 ) && !planner.planning_tainted
-                    && !planner.cache_tainted;
+                    && planner.cycle_taint_reason.is_none();
                 let cache = relater.finish_planned(commit_cache);
                 (attempt, cache)
             };
@@ -2167,12 +2217,19 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     }
 }
 
+impl<L: PublishedClassLookup + ?Sized> Drop for SemanticQueryCoordinator<'_, L> {
+    fn drop(&mut self) {
+        self.interner.end_occurrence_query();
+    }
+}
+
 /// Immutable overlays consumed by relation before identity/cache/cycle logic.
 #[derive(Default)]
 pub struct ProjectionPlan<'a> {
     class_projection_overlay: FxHashMap<TypeId, TypeId>,
     resolved_class_projections: FxHashSet<TypeId>,
     evaluation_overlay: FxHashMap<TypeId, TypeId>,
+    derived_overlay: FxHashMap<DerivedType, DerivedType>,
     resolved_evaluations: FxHashSet<TypeId>,
     frontier: FxHashMap<TypeId, Exhaustion>,
     durable_evaluation_memo: Option<&'a FxHashMap<TypeId, TypeId>>,
@@ -2204,6 +2261,60 @@ impl RelationNormalization for ProjectionPlan<'_> {
                 .copied();
             match next {
                 Some(next) if next != current => current = next,
+                _ => return Ok(current),
+            }
+        }
+    }
+
+    fn normalize_derived(
+        &self,
+        store: &Store,
+        derived: DerivedType,
+    ) -> Result<DerivedType, Exhaustion> {
+        let mut current = derived;
+        let mut seen = FxHashSet::default();
+        loop {
+            if let Some(reason) = self.frontier.get(&current.ty) {
+                return Err(reason.clone());
+            }
+            if !seen.insert(current) {
+                return Ok(current);
+            }
+
+            if let Some(next) = self.derived_overlay.get(&current).copied() {
+                if next == current {
+                    return Ok(current);
+                }
+                current = next;
+                continue;
+            }
+
+            let local_evaluation = self.evaluation_overlay.get(&current.ty).copied();
+            let durable_evaluation = self
+                .durable_evaluation_memo
+                .and_then(|memo| memo.get(&current.ty))
+                .copied();
+            if local_evaluation.is_none()
+                && durable_evaluation.is_some()
+                && matches!(
+                    store.tag(current.ty),
+                    TypeTag::Declared | TypeTag::Instantiation
+                )
+            {
+                // Semantic memo entries carry no occurrence provenance. Leave the
+                // node visible so the coordinator reconstructs a query-local token.
+                return Ok(current);
+            }
+            let next = local_evaluation
+                .or(durable_evaluation)
+                .or_else(|| self.class_projection_overlay.get(&current.ty).copied());
+            match next {
+                Some(next) if next != current.ty => {
+                    current = DerivedType {
+                        ty: next,
+                        derivation: None,
+                    };
+                }
                 _ => return Ok(current),
             }
         }
@@ -2262,13 +2373,17 @@ impl RelationNormalization for ProjectionPlan<'_> {
             TypeTag::ClassInstance if !self.resolved_class_projections.contains(&ty) => {
                 Some(RelationDemand::ClassProjection(ty))
             }
+            TypeTag::Declared if !self.resolved_evaluations.contains(&ty) => {
+                Some(RelationDemand::Evaluation(ty))
+            }
+            TypeTag::Instantiation if !self.resolved_evaluations.contains(&ty) => {
+                Some(RelationDemand::Evaluation(ty))
+            }
             TypeTag::DeferredIndexedAccess
             | TypeTag::Keyof
             | TypeTag::Conditional
-            | TypeTag::Instantiation
             | TypeTag::Mapped
             | TypeTag::Template
-            | TypeTag::Declared
                 if !self.resolved_evaluations.contains(&ty)
                     && self
                         .durable_evaluation_memo
@@ -2279,6 +2394,23 @@ impl RelationNormalization for ProjectionPlan<'_> {
             _ => None,
         }
     }
+
+    fn relation_demand_derived(
+        &self,
+        store: &Store,
+        derived: DerivedType,
+    ) -> Option<RelationDemand> {
+        if self.derived_overlay.contains_key(&derived) {
+            return None;
+        }
+        match store.tag(derived.ty) {
+            TypeTag::ClassInstance => Some(RelationDemand::DerivedClassProjection(derived)),
+            TypeTag::Declared | TypeTag::Instantiation => {
+                Some(RelationDemand::DerivedEvaluation(derived))
+            }
+            _ => self.relation_demand(store, derived.ty),
+        }
+    }
 }
 
 struct PlannedQuery<'a> {
@@ -2287,7 +2419,7 @@ struct PlannedQuery<'a> {
     pending_evaluator_writes: FxHashMap<TypeId, TypeId>,
     next_type_param: u32,
     planning_tainted: bool,
-    cache_tainted: bool,
+    cycle_taint_reason: Option<Exhaustion>,
     first_exhaustion: Option<Exhaustion>,
 }
 
@@ -2299,14 +2431,15 @@ struct PendingQueryCommit {
 
 impl PlannedQuery<'_> {
     fn into_commit(self) -> PendingQueryCommit {
-        let (pending_projection_writes, pending_evaluator_writes) = if self.cache_tainted {
-            (FxHashMap::default(), FxHashMap::default())
-        } else {
-            (
-                self.pending_projection_writes,
-                self.pending_evaluator_writes,
-            )
-        };
+        let (pending_projection_writes, pending_evaluator_writes) =
+            if self.cycle_taint_reason.is_some() {
+                (FxHashMap::default(), FxHashMap::default())
+            } else {
+                (
+                    self.pending_projection_writes,
+                    self.pending_evaluator_writes,
+                )
+            };
         PendingQueryCommit {
             pending_projection_writes,
             pending_evaluator_writes,
@@ -2328,7 +2461,7 @@ struct ProjectionPlanner<'work, 'memo, L: PublishedClassLookup + ?Sized> {
     visiting: FxHashSet<TypeId>,
     visited: FxHashSet<TypeId>,
     planning_tainted: bool,
-    cache_tainted: bool,
+    cycle_taint_reason: Option<Exhaustion>,
     first_exhaustion: Option<Exhaustion>,
     evaluation_expansions: u32,
 }
@@ -2385,15 +2518,38 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             visiting: FxHashSet::default(),
             visited: FxHashSet::default(),
             planning_tainted: false,
-            cache_tainted: false,
+            cycle_taint_reason: None,
             first_exhaustion: None,
             evaluation_expansions: 0,
         }
     }
 
+    #[cfg(test)]
     fn plan(mut self, roots: &[TypeId]) -> PlannedQuery<'memo> {
         for &root in roots {
             self.visit(root);
+        }
+        self.finish()
+    }
+
+    #[cfg(test)]
+    fn plan_derived(mut self, roots: &[DerivedType]) -> PlannedQuery<'memo> {
+        for &root in roots {
+            match self.interner.store().tag(root.ty) {
+                TypeTag::ClassInstance => {
+                    let projection = self.project_class_outer_derived(root);
+                    self.visit(projection.ty);
+                }
+                TypeTag::Declared => {
+                    self.evaluate_declared_derived(root, SemanticVisitPolicy::Recursive);
+                }
+                TypeTag::Instantiation => {
+                    self.evaluate_existing_derived(root, SemanticVisitPolicy::Recursive);
+                }
+                _ => {
+                    self.visit(root.ty);
+                }
+            }
         }
         self.finish()
     }
@@ -2465,7 +2621,29 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 self.project_class_outer(application);
             }
             RelationDemand::Evaluation(ty) => {
-                self.visit_relation_root(ty);
+                if self.interner.store().tag(ty) == TypeTag::Declared {
+                    self.evaluate_declared(ty, SemanticVisitPolicy::RelationRootOuterOnly);
+                } else {
+                    self.visit_relation_root(ty);
+                }
+            }
+            RelationDemand::DerivedClassProjection(application) => {
+                self.project_class_outer_derived(application);
+            }
+            RelationDemand::DerivedEvaluation(derived) => {
+                if self.interner.store().tag(derived.ty) == TypeTag::Declared {
+                    self.evaluate_declared_derived(
+                        derived,
+                        SemanticVisitPolicy::RelationRootOuterOnly,
+                    );
+                } else if self.interner.store().tag(derived.ty) == TypeTag::Instantiation {
+                    self.evaluate_existing_derived(
+                        derived,
+                        SemanticVisitPolicy::RelationRootOuterOnly,
+                    );
+                } else {
+                    self.visit_relation_root(derived.ty);
+                }
             }
             RelationDemand::ApparentSurface(ty) => {
                 self.project_apparent_surface(ty);
@@ -2506,7 +2684,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 ) {
                     SubstitutionOutcome::CycleClean(surface) => surface,
                     SubstitutionOutcome::CycleTainted(surface) => {
-                        self.cache_tainted = true;
+                        self.mark_cycle_tainted(source);
                         surface
                     }
                 };
@@ -2566,7 +2744,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             pending_evaluator_writes,
             next_type_param: self.next_type_param,
             planning_tainted: self.planning_tainted,
-            cache_tainted: self.cache_tainted,
+            cycle_taint_reason: self.cycle_taint_reason,
             first_exhaustion: self.first_exhaustion,
         }
     }
@@ -2589,12 +2767,20 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             measure_query_demand(|measure| measure.planner_visits += 1);
             measure_query_source_cold(|measure| measure.planner_visits += 1);
         }
-        if let Ok(normalized) = self.plan.normalize(ty) {
-            if normalized != ty {
-                #[cfg(any(test, feature = "test-utils"))]
-                measure_query_demand(|measure| measure.overlay_hits += 1);
-                self.visit_demand_result(normalized, policy);
-                return self.plan.normalize(ty).unwrap_or(normalized);
+        let reconstructs_instantiation = self.interner.store().tag(ty) == TypeTag::Instantiation
+            && self.durable_evaluation_memo.contains_key(&ty)
+            && !self
+                .plan
+                .derived_overlay
+                .contains_key(&DerivedType::plain(ty));
+        if !reconstructs_instantiation {
+            if let Ok(normalized) = self.plan.normalize(ty) {
+                if normalized != ty {
+                    #[cfg(any(test, feature = "test-utils"))]
+                    measure_query_demand(|measure| measure.overlay_hits += 1);
+                    self.visit_demand_result(normalized, policy);
+                    return self.plan.normalize(ty).unwrap_or(normalized);
+                }
             }
         }
         if self.visited.contains(&ty) {
@@ -2642,18 +2828,24 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn project_class_outer(&mut self, application: TypeId) -> TypeId {
-        if !self.admitted_applications.contains(&application) {
+        self.project_class_outer_derived(DerivedType::plain(application))
+            .ty
+    }
+
+    fn project_class_outer_derived(&mut self, application: DerivedType) -> DerivedType {
+        let application_ty = application.ty;
+        if !self.admitted_applications.contains(&application_ty) {
             if self.admitted_applications.len() >= MAX_CLASS_PROJECTION_EXPANSIONS {
-                self.mark_frontier(application, Exhaustion::ClassProjectionBudget);
+                self.mark_frontier(application_ty, Exhaustion::ClassProjectionBudget);
                 return application;
             }
-            self.admitted_applications.insert(application);
+            self.admitted_applications.insert(application_ty);
         }
 
         let Some(instance) = self
             .interner
             .store()
-            .class_instance_type(application)
+            .class_instance_type(application_ty)
             .cloned()
         else {
             return application;
@@ -2661,7 +2853,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         let surface = match self.published.published_class(instance.class) {
             DemandOutcome::Ready(surface) => surface,
             DemandOutcome::Exhausted(reason) => {
-                self.mark_frontier(application, reason);
+                self.mark_frontier(application_ty, reason);
                 return application;
             }
         };
@@ -2670,30 +2862,66 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             instance.args.len(),
             "complete ClassInstance vectors must match the published declaration arity"
         );
-        self.plan.resolved_class_projections.insert(application);
-
-        let projection = self
-            .durable_projection_memo
-            .get(&application)
+        let occurrence = if application.derivation.is_some() {
+            application
+        } else if let Some(occurrence) = self
+            .interner
+            .class_instance_occurrence_derived(application_ty)
+        {
+            occurrence
+        } else {
+            return application;
+        };
+        self.plan.resolved_class_projections.insert(application_ty);
+        let map = surface
+            .type_params()
+            .iter()
             .copied()
-            .unwrap_or_else(|| {
-                let map = surface
-                    .type_params()
+            .zip(
+                instance
+                    .args
                     .iter()
                     .copied()
-                    .zip(instance.args.iter().copied())
-                    .collect();
-                let projection = substitute(self.interner, surface.instance_template(), &map);
-                self.pending_projection_writes
-                    .insert(application, projection);
-                projection
-            });
-        if projection != application {
+                    .enumerate()
+                    .map(|(index, argument)| {
+                        self.interner.derivation_child(
+                            occurrence,
+                            DerivationEdge::ClassArgument(index),
+                            argument,
+                        )
+                    }),
+            )
+            .collect();
+        let derived_projection = if let Some(&projection) =
+            self.durable_projection_memo.get(&application_ty)
+        {
+            derive_substitution_result(self.interner, surface.instance_template(), projection, &map)
+        } else {
+            match substitute_derived_with_outcome(self.interner, surface.instance_template(), &map)
+            {
+                DerivedSubstitutionOutcome::CycleClean(derived) => {
+                    self.pending_projection_writes
+                        .insert(application_ty, derived.ty);
+                    derived
+                }
+                DerivedSubstitutionOutcome::CycleTainted(derived) => {
+                    self.mark_cycle_tainted(application_ty);
+                    derived
+                }
+            }
+        };
+        let projection = derived_projection.ty;
+        if projection != application_ty {
             self.plan
                 .class_projection_overlay
-                .insert(application, projection);
+                .insert(application_ty, projection);
         }
-        projection
+        if derived_projection != application {
+            self.plan
+                .derived_overlay
+                .insert(application, derived_projection);
+        }
+        derived_projection
     }
 
     fn evaluate_deferred_indexed(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
@@ -2791,7 +3019,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             if durable.is_some() {
                 measure_query_demand(|measure| measure.durable_evaluation_hits += 1);
             }
-            self.record_evaluation(ty, result);
+            self.record_existing_evaluation(DerivedType::plain(ty), result);
             self.visit_demand_result(result, policy);
             return result;
         }
@@ -2843,42 +3071,72 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
                 measure.evaluation_changed_returns += 1;
             }
         });
-        self.record_evaluation(ty, result);
+        self.record_existing_evaluation(DerivedType::plain(ty), result);
         self.visit_demand_result(result, policy);
         result
     }
 
+    fn evaluate_existing_derived(
+        &mut self,
+        source: DerivedType,
+        policy: SemanticVisitPolicy,
+    ) -> DerivedType {
+        let result = self.evaluate_existing(source.ty, policy);
+        self.record_existing_evaluation(source, result);
+        match self.plan.normalize_derived(self.interner.store(), source) {
+            Ok(derived) => derived,
+            Err(_) => DerivedType::plain(result),
+        }
+    }
+
     fn evaluate_declared(&mut self, ty: TypeId, policy: SemanticVisitPolicy) -> TypeId {
-        if let Some(result) = self
+        self.evaluate_declared_derived(DerivedType::plain(ty), policy)
+            .ty
+    }
+
+    fn evaluate_declared_derived(
+        &mut self,
+        source: DerivedType,
+        policy: SemanticVisitPolicy,
+    ) -> DerivedType {
+        let ty = source.ty;
+        let memoized = self
             .working_evaluation_memo
             .get(&ty)
             .or_else(|| self.durable_evaluation_memo.get(&ty))
-            .copied()
-        {
+            .copied();
+        if memoized.is_some() {
             #[cfg(test)]
             crate::check::checker::declaration_surface_measure::record_materialization_memo_hit();
-            self.record_evaluation(ty, result);
-            self.visit_demand_result(result, policy);
-            return result;
         }
         #[cfg(test)]
-        crate::check::checker::declaration_surface_measure::record_demand_materialization_root();
-        let outcome = self
-            .interner
-            .materialize_declared(ty)
-            .expect("declared tag has one valid application payload");
-        let result = match outcome {
-            SubstitutionOutcome::CycleClean(result) => result,
-            SubstitutionOutcome::CycleTainted(result) => {
-                self.cache_tainted = true;
+        if memoized.is_none() {
+            crate::check::checker::declaration_surface_measure::record_demand_materialization_root(
+            );
+        }
+        let outcome = match self.interner.materialize_declared_derived(ty) {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                self.mark_frontier(ty, Exhaustion::EvaluationInvalidNode { ty });
+                return source;
+            }
+        };
+        let derived = match outcome {
+            DerivedSubstitutionOutcome::CycleClean(result) => result,
+            DerivedSubstitutionOutcome::CycleTainted(result) => {
+                self.mark_cycle_tainted(ty);
                 result
             }
         };
+        debug_assert!(memoized.is_none_or(|memoized| memoized == derived.ty));
         #[cfg(test)]
-        crate::check::checker::declaration_surface_measure::record_materialization_memo_insert();
-        self.record_evaluation(ty, result);
-        self.visit_demand_result(result, policy);
-        result
+        if memoized.is_none() {
+            crate::check::checker::declaration_surface_measure::record_materialization_memo_insert(
+            );
+        }
+        self.record_derived_evaluation(source, derived);
+        self.visit_demand_result(derived.ty, policy);
+        derived
     }
 
     fn evaluation_prerequisites(&self, ty: TypeId, policy: SemanticVisitPolicy) -> Vec<TypeId> {
@@ -2924,6 +3182,51 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
         if source != result {
             self.plan.evaluation_overlay.insert(source, result);
         }
+    }
+
+    fn record_existing_evaluation(&mut self, source: DerivedType, result: TypeId) {
+        let Some(instantiation) = self.interner.store().instantiation_type(source.ty).cloned()
+        else {
+            self.record_evaluation(source.ty, result);
+            return;
+        };
+        let occurrence = if source.derivation.is_some() {
+            source
+        } else if let Some(occurrence) = self.interner.instantiation_occurrence_derived(source.ty) {
+            occurrence
+        } else {
+            self.record_evaluation(source.ty, result);
+            return;
+        };
+        let map = instantiation
+            .args
+            .iter()
+            .enumerate()
+            .map(|(index, (parameter, argument))| {
+                (
+                    *parameter,
+                    self.interner.derivation_child(
+                        occurrence,
+                        DerivationEdge::InstantiationArgument(index),
+                        *argument,
+                    ),
+                )
+            })
+            .collect();
+        let derived = derive_substitution_result(self.interner, instantiation.base, result, &map);
+        self.record_derived_evaluation(source, derived);
+    }
+
+    fn record_derived_evaluation(&mut self, source: DerivedType, result: DerivedType) {
+        self.record_evaluation(source.ty, result.ty);
+        if source != result {
+            self.plan.derived_overlay.insert(source, result);
+        }
+    }
+
+    fn mark_cycle_tainted(&mut self, ty: TypeId) {
+        self.cycle_taint_reason
+            .get_or_insert(Exhaustion::EvaluationCycle { ty });
     }
 
     fn mark_frontier(&mut self, ty: TypeId, reason: Exhaustion) {

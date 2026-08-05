@@ -1,4 +1,6 @@
-use super::super::check_program_with_publication_inspector;
+use super::super::{
+    check_program_with_namespace_value_inspector, check_program_with_publication_inspector,
+};
 use crate::binder::declaration::{DeclId, TypeFragmentKind};
 use crate::check::checker::context::{CheckerEffects, DeclTypes, HeaderFragmentBinding, TypeDecl};
 use crate::check::checker::reporting_record::CheckerRecord;
@@ -160,6 +162,21 @@ fn published_group<'a>(
         panic!("{name} must publish a ready type group")
     };
     group
+}
+
+fn published_value_type(
+    binder: &crate::binder::Binder,
+    decl_types: &DeclTypes,
+    name: &str,
+) -> TypeId {
+    let storage = binder
+        .graph
+        .get(binder.module)
+        .and_then(|scope| scope.lookup_local(name))
+        .and_then(|symbol| binder.symbols.get(symbol))
+        .and_then(|symbol| symbol.value)
+        .expect("named value storage");
+    decl_types.get(storage).expect("published value type")
 }
 
 fn free_type_params(store: &Store, root: TypeId) -> FxHashSet<TypeParamId> {
@@ -675,6 +692,222 @@ interface Independent<Only = number> { value: Only }
         },
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn non_generic_interface_method_preserves_outer_binder_on_every_callable_edge() {
+    let source = "\
+interface Box<T> { value: T }
+interface Outer<T> {
+  edge(this: Box<T>, fixed: Box<T>, ...rest: Box<T>): Box<T>;
+}
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_publication_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, environment, interner| {
+            let outer = published_group(binder, environment, "Outer");
+            let PublishedTypeGroupSurface::Template(root) = outer.surface else {
+                panic!("Outer is an interface template")
+            };
+            let method = interner
+                .store()
+                .object_type(root)
+                .and_then(|object| object.property("edge"))
+                .expect("edge method")
+                .ty;
+            let function = interner
+                .store()
+                .function_type(method)
+                .expect("edge function");
+            assert!(function.type_params.is_empty());
+            assert_eq!(function.params.len(), 2);
+            assert!(!function.params[0].rest);
+            assert!(function.params[1].rest);
+            let callable_edges = [
+                function.receiver.expect("explicit receiver"),
+                function.params[0].ty,
+                function.params[1].ty,
+                function.ret,
+            ];
+            assert!(callable_edges.windows(2).all(|pair| pair[0] == pair[1]));
+            for edge in callable_edges {
+                assert_eq!(interner.store().tag(edge), TypeTag::Declared);
+                let declared = interner
+                    .store()
+                    .declared_type(edge)
+                    .expect("declared callable edge");
+                let recipe = interner
+                    .store()
+                    .declared_recipe(declared.recipe)
+                    .expect("callable recipe");
+                let crate::types::repr::DeclaredRecipeNode::Application { arguments, .. } =
+                    &recipe.node
+                else {
+                    panic!("callable edge root is an application")
+                };
+                let argument = interner
+                    .store()
+                    .declared_recipe(arguments[0])
+                    .expect("application argument");
+                let crate::types::repr::DeclaredRecipeNode::Type(argument) = &argument.node else {
+                    panic!("Box argument is the outer binder leaf")
+                };
+                assert_eq!(
+                    interner
+                        .store()
+                        .type_param(*argument)
+                        .expect("outer binder")
+                        .id,
+                    outer.parameters[0]
+                );
+            }
+            assert_published_types_are_owner_closed(interner.store(), outer);
+        },
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+}
+
+#[test]
+fn ordinary_variable_annotations_preserve_concrete_and_nested_application_heads() {
+    let source = "\
+interface Recursive<T> { next: Recursive<T> }
+declare const concrete: Recursive<string>;
+declare const nested: Recursive<Recursive<string>>;
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_namespace_value_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, _, decl_types, interner| {
+            let concrete = published_value_type(binder, decl_types, "concrete");
+            let nested = published_value_type(binder, decl_types, "nested");
+            for ty in [concrete, nested] {
+                assert_eq!(interner.store().tag(ty), TypeTag::Declared);
+                let declared = interner
+                    .store()
+                    .declared_type(ty)
+                    .expect("declared variable application");
+                let recipe = interner
+                    .store()
+                    .declared_recipe(declared.recipe)
+                    .expect("variable application recipe");
+                assert!(matches!(
+                    recipe.node,
+                    crate::types::repr::DeclaredRecipeNode::Application { .. }
+                ));
+            }
+            let nested_declared = interner.store().declared_type(nested).unwrap();
+            let nested_recipe = interner
+                .store()
+                .declared_recipe(nested_declared.recipe)
+                .unwrap();
+            let crate::types::repr::DeclaredRecipeNode::Application { arguments, .. } =
+                &nested_recipe.node
+            else {
+                unreachable!()
+            };
+            assert!(matches!(
+                interner
+                    .store()
+                    .declared_recipe(arguments[0])
+                    .expect("nested application argument")
+                    .node,
+                crate::types::repr::DeclaredRecipeNode::Application { .. }
+            ));
+        },
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+}
+
+#[test]
+fn ordinary_variable_controls_outside_lazy_interfaces_keep_their_previous_representation() {
+    let source = "\
+interface Recursive<T> { next: Recursive<T> }
+type Alias<T> = Recursive<T>;
+class Nominal<T> {}
+declare namespace Names { interface Wrapped<T> { value: T } }
+declare const alias: Alias<string>;
+declare const nominal: Nominal<string>;
+declare const qualified: Names.Wrapped<string>;
+declare const array: Recursive<string>[];
+declare const readonlyArray: readonly Recursive<string>[];
+declare const tuple: [Recursive<string>];
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_namespace_value_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, _, decl_types, interner| {
+            for name in [
+                "alias",
+                "nominal",
+                "qualified",
+                "array",
+                "readonlyArray",
+                "tuple",
+            ] {
+                let ty = published_value_type(binder, decl_types, name);
+                assert_ne!(
+                    interner.store().tag(ty),
+                    TypeTag::Declared,
+                    "{name} must remain on the established lowering route"
+                );
+            }
+        },
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+}
+
+#[test]
+fn ordinary_variable_constrained_interface_application_stays_declared() {
+    let source = "\
+interface Constrained<T extends string> { value: T }
+declare const constrained: Constrained<\"ok\">;
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_namespace_value_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, _, decl_types, interner| {
+            let ty = published_value_type(binder, decl_types, "constrained");
+            assert_eq!(interner.store().tag(ty), TypeTag::Declared);
+            let declared = interner
+                .store()
+                .declared_type(ty)
+                .expect("constrained interface application");
+            let recipe = interner
+                .store()
+                .declared_recipe(declared.recipe)
+                .expect("constrained interface recipe");
+            assert!(matches!(
+                recipe.node,
+                crate::types::repr::DeclaredRecipeNode::Application { .. }
+            ));
+        },
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
 }
 
 #[test]
@@ -1235,6 +1468,7 @@ interface Mixed<U> { added: U }
         left_projection, right_projection,
         "different nominal applications project independently"
     );
+    drop(coordinator);
     let left_object = interner
         .store()
         .object_type(left_projection)

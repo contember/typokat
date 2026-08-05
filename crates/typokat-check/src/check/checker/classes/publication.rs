@@ -21,8 +21,8 @@ use super::retained::{
 };
 use super::surface_types::SurfaceTypeFactory;
 use super::type_syntax::{
-    LoweredCallableSyntax, SurfaceNameResolution, SurfaceTypeFailure, SurfaceTypeResolver,
-    TypeSyntaxLowerer,
+    CallableAnnotationOverrides, LoweredCallableSyntax, SurfaceNameResolution, SurfaceTypeFailure,
+    SurfaceTypeResolver, TypeSyntaxLowerer,
 };
 use super::visibility::{has_public_constructor, lower_visibility};
 use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
@@ -750,6 +750,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         function: &oxc_ast::ast::Function<'_>,
         owner: Ticket,
+        receiver_override: Option<TypeId>,
+        parameter_overrides: Vec<Option<TypeId>>,
+        return_override: Option<TypeId>,
     ) -> (
         LoweredCallableSyntax<Ticket>,
         Vec<SurfaceTypeFailure<Ticket>>,
@@ -778,8 +781,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 replay_trace,
             };
             let mut factory = SurfaceTypeFactory::new(self.interner);
-            let (result, child_failures) =
-                lower_callable(&mut factory, &mut resolver, function, &[]);
+            let (result, child_failures) = lower_callable(
+                &mut factory,
+                &mut resolver,
+                function,
+                &[],
+                CallableAnnotationOverrides {
+                    receiver: receiver_override,
+                    params: parameter_overrides,
+                    ret: return_override,
+                },
+            );
             (result, child_failures, resolver.application_checks)
         };
         self.stage_namespace_surface_application_checks(application_checks);
@@ -2375,7 +2387,13 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                 }
                 resolver.fallback = immediate_owner;
                 resolver.qualified_outer_type_parameters_visible = !method.r#static;
-                let (syntax, failures) = lower_callable(factory, resolver, &method.value, frame);
+                let (syntax, failures) = lower_callable(
+                    factory,
+                    resolver,
+                    &method.value,
+                    frame,
+                    CallableAnnotationOverrides::default(),
+                );
                 for failure in syntax.failure.iter().cloned().chain(failures) {
                     let recovered_topology =
                         matches!(&failure, SurfaceTypeFailure::QualifiedTopology { .. });
@@ -3398,21 +3416,16 @@ fn lower_callable<Ticket: Copy + PartialEq>(
     resolver: &mut Resolver<'_, '_, Ticket>,
     function: &oxc_ast::ast::Function<'_>,
     frame: &[(String, TypeId)],
+    overrides: CallableAnnotationOverrides,
 ) -> (
     LoweredCallableSyntax<Ticket>,
     Vec<SurfaceTypeFailure<Ticket>>,
 ) {
     let mut lowerer = TypeSyntaxLowerer::new(factory, resolver);
     let result = lowerer.lower_callable_syntax_with_type_parameters(
-        function.type_parameters.as_deref(),
-        function.this_param.as_deref(),
-        &function.params,
-        function
-            .return_type
-            .as_deref()
-            .map(|annotation| &annotation.type_annotation),
-        function.span,
+        function,
         frame.iter().cloned(),
+        overrides,
     );
     (result, lowerer.take_child_failures())
 }

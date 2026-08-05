@@ -101,8 +101,9 @@ fn assignable_in_state(
     target: TypeId,
 ) -> RelationOutcome {
     let published = PublishedClasses::empty();
-    SemanticQueryCoordinator::new(interner, &published, state, next_type_param)
-        .is_assignable(source, target)
+    let outcome = SemanticQueryCoordinator::new(interner, &published, state, next_type_param)
+        .is_assignable(source, target);
+    outcome
 }
 
 fn measure_irrelevant_tail(width: usize) -> Work {

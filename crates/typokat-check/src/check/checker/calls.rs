@@ -3731,6 +3731,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 return None;
             }
+            DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { .. }) => {
+                self.record_incomplete(
+                    "semantic-query/invalid-evaluation-node",
+                    Span::from_oxc(new_expr.span),
+                    "semantic evaluation reached an invalid type node",
+                );
+                return None;
+            }
             DemandOutcome::Exhausted(Exhaustion::ClassApplicationArguments(
                 ClassApplicationArguments::UnavailableExplicitArgument { .. }
                 | ClassApplicationArguments::TargetPoisoned { .. },
@@ -3801,7 +3809,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .type_annotation
                         .as_ref()
                         .and_then(|annotation| {
-                            pass.lower_annotation(enclosing, &annotation.type_annotation)
+                            pass.lower_callable_annotation(
+                                enclosing,
+                                &annotation.type_annotation,
+                                false,
+                            )
                         })
                         .map(Some),
                     None => Some(None),
@@ -3811,7 +3823,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 // while declared type parameters resolve through the pushed frame.
                 let declared_return = match func.return_type.as_ref() {
                     Some(annotation) => pass
-                        .lower_annotation(enclosing, &annotation.type_annotation)
+                        .lower_callable_annotation(enclosing, &annotation.type_annotation, false)
                         .map(Some),
                     None => Some(None),
                 };
@@ -4036,10 +4048,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .get(&(pass.current_module, arrow.span.start))
                     .copied();
                 let params = pass.lower_parameters(enclosing, fn_scope, &arrow.params, false);
-                let declared_ret = arrow
-                    .return_type
-                    .as_ref()
-                    .and_then(|ann| pass.lower_annotation(enclosing, &ann.type_annotation));
+                let declared_ret = arrow.return_type.as_ref().and_then(|ann| {
+                    pass.lower_callable_annotation(enclosing, &ann.type_annotation, false)
+                });
                 (fn_scope, params, declared_ret)
             })
         };
@@ -4288,10 +4299,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 ParameterSyntax::Fixed { parameter, .. } => {
                     // Annotated type, or the error type for an un-annotated parameter. Type
                     // references in the annotation resolve from the enclosing scope.
-                    let annotation_ty = parameter
-                        .type_annotation
-                        .as_ref()
-                        .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
+                    let annotation_ty = parameter.type_annotation.as_ref().and_then(|ann| {
+                        self.lower_callable_annotation(enclosing, &ann.type_annotation, false)
+                    });
                     let ty = if parameter.type_annotation.is_some() {
                         annotation_ty
                     } else {
@@ -4332,7 +4342,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     ty
                 }
                 ParameterSyntax::Rest { parameter } => match parameter.type_annotation.as_ref() {
-                    Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
+                    Some(ann) => {
+                        self.lower_callable_annotation(enclosing, &ann.type_annotation, false)
+                    }
                     None => Some(error_ty),
                 },
             };

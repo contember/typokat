@@ -544,7 +544,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let type_params = pass.lower_signature_type_params(scope, type_parameter_decl, &ids);
             let receiver = pass.lower_this_parameter(scope, this_param);
             let params = pass.lower_strict_signature_parameters(scope, params, true);
-            let ret = pass.with_indirection(|p| p.lower_annotation(scope, return_type));
+            let ret = pass.lower_callable_annotation(scope, return_type, true);
             let (Some(receiver), Some(params), Some(ret)) = (receiver, params, ret) else {
                 return None;
             };

@@ -872,7 +872,7 @@ mod tests {
         let expected_array = interner.intern_array(string);
         assert_eq!(
             interner.materialize_declared(declared),
-            Some(SubstitutionOutcome::CycleClean(expected_array))
+            Ok(SubstitutionOutcome::CycleClean(expected_array))
         );
 
         interner.freeze_as_base().expect("recipe base freezes");

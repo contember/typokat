@@ -248,8 +248,10 @@ fn check_identity(interner: &mut Interner, left: TypeId, right: TypeId) -> Deman
     let published = PublishedClasses::empty();
     let mut state = SemanticQueryState::default();
     let mut next_type_param = 0;
-    SemanticQueryCoordinator::new(interner, &published, &mut state, &mut next_type_param)
-        .is_identical(left, right)
+    let outcome =
+        SemanticQueryCoordinator::new(interner, &published, &mut state, &mut next_type_param)
+            .is_identical(left, right);
+    outcome
 }
 
 fn bounded_identity_attempts(

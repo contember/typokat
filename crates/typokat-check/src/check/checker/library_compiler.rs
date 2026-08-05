@@ -2095,6 +2095,7 @@ impl OwnedLibraryRuntimeState {
             type_groups: self.binder.type_groups.len(),
             namespaces: self.binder.namespaces.len(),
             value_storages: self.decl_types.len(),
+            source_units: self.binder.checkpoint_ends().next_source,
         }
     }
 
@@ -2739,6 +2740,7 @@ pub struct OwnedBaseFinalIdentityEnds {
     pub type_groups: usize,
     pub namespaces: usize,
     pub value_storages: usize,
+    pub source_units: usize,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -2807,7 +2809,7 @@ struct FinalIdentityInspection<'a> {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<usize> {
+fn common_base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<usize> {
     match domain {
         1 => Some(ends.store),
         2 => Some(ends.type_params),
@@ -2818,8 +2820,29 @@ fn base_domain_limit(ends: &OwnedBaseFinalIdentityEnds, domain: u8) -> Option<us
         7 => Some(ends.type_groups),
         8 => Some(ends.namespaces),
         9 => Some(ends.value_storages),
-        10 => Some(ends.declared_recipes),
         _ => None,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn classify_live_reference_with_limits(
+    summary: &mut OwnedBaseReferenceSummary,
+    owner_limit: Option<usize>,
+    owner: u32,
+    target_limit: Option<usize>,
+    target: u32,
+) {
+    let Some(target_limit) = target_limit else {
+        return;
+    };
+    let owner_is_base = owner_limit
+        .is_some_and(|owner_limit| usize::try_from(owner).is_ok_and(|owner| owner < owner_limit));
+    let target_is_base = usize::try_from(target).is_ok_and(|target| target < target_limit);
+    match (owner_is_base, target_is_base) {
+        (true, false) => summary.base_to_delta += 1,
+        (false, true) => summary.delta_to_base += 1,
+        (false, false) => summary.delta_to_delta += 1,
+        (true, true) => {}
     }
 }
 
@@ -2832,18 +2855,61 @@ fn classify_live_reference(
     target_domain: u8,
     target: u32,
 ) {
-    let Some(target_limit) = base_domain_limit(base, target_domain) else {
-        return;
+    classify_live_reference_with_limits(
+        summary,
+        common_base_domain_limit(base, owner_domain),
+        owner,
+        common_base_domain_limit(base, target_domain),
+        target,
+    );
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn classify_interner_live_reference(
+    summary: &mut OwnedBaseReferenceSummary,
+    base: &OwnedBaseFinalIdentityEnds,
+    owner_domain: u8,
+    owner: u32,
+    target_domain: u8,
+    target: u32,
+) {
+    const DECLARED_RECIPE_DOMAIN: u8 = 10;
+    let limit = |domain| {
+        (domain == DECLARED_RECIPE_DOMAIN)
+            .then_some(base.declared_recipes)
+            .or_else(|| common_base_domain_limit(base, domain))
     };
-    let owner_is_base = base_domain_limit(base, owner_domain)
-        .is_some_and(|owner_limit| usize::try_from(owner).is_ok_and(|owner| owner < owner_limit));
-    let target_is_base = usize::try_from(target).is_ok_and(|target| target < target_limit);
-    match (owner_is_base, target_is_base) {
-        (true, false) => summary.base_to_delta += 1,
-        (false, true) => summary.delta_to_base += 1,
-        (false, false) => summary.delta_to_delta += 1,
-        (true, true) => {}
-    }
+    classify_live_reference_with_limits(
+        summary,
+        limit(owner_domain),
+        owner,
+        limit(target_domain),
+        target,
+    );
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn classify_binder_live_reference(
+    summary: &mut OwnedBaseReferenceSummary,
+    base: &OwnedBaseFinalIdentityEnds,
+    owner_domain: u8,
+    owner: u32,
+    target_domain: u8,
+    target: u32,
+) {
+    const SOURCE_UNIT_DOMAIN: u8 = 10;
+    let limit = |domain| {
+        (domain == SOURCE_UNIT_DOMAIN)
+            .then_some(base.source_units)
+            .or_else(|| common_base_domain_limit(base, domain))
+    };
+    classify_live_reference_with_limits(
+        summary,
+        limit(owner_domain),
+        owner,
+        limit(target_domain),
+        target,
+    );
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -2855,7 +2921,7 @@ fn final_reference_summary<Ticket: Copy + PartialEq>(
     for (owner_domain, target_domain, _, owner, target) in
         pass.interner.local_type_reference_records_for_test()
     {
-        classify_live_reference(
+        classify_interner_live_reference(
             &mut summary,
             base,
             owner_domain,
@@ -2868,7 +2934,7 @@ fn final_reference_summary<Ticket: Copy + PartialEq>(
     for (owner_domain, owner, target_domain, target) in
         pass.binder.local_reference_records_for_test()
     {
-        classify_live_reference(
+        classify_binder_live_reference(
             &mut summary,
             base,
             owner_domain,
@@ -2997,7 +3063,7 @@ fn final_reference_summary<Ticket: Copy + PartialEq>(
                 .chain(std::iter::once((1, identity.template.0)))
                 .chain(identity.parameters.iter().map(|parameter| (2, parameter.0)))
             {
-                let Some(limit) = base_domain_limit(base, domain) else {
+                let Some(limit) = common_base_domain_limit(base, domain) else {
                     continue;
                 };
                 if usize::try_from(target).is_ok_and(|target| target >= limit) {
@@ -3129,6 +3195,7 @@ fn final_identity_witness(inputs: FinalIdentityInspection<'_>) -> OwnedBaseFinal
             type_groups: binder.type_groups.len(),
             namespaces: binder.namespaces.len(),
             value_storages: decl_types.len(),
+            source_units: binder.checkpoint_ends().next_source,
         },
         actual_ids: OwnedBaseActualIds {
             types: interner
@@ -7325,6 +7392,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         type_groups: base_type_group_count,
         namespaces: base_namespace_count,
         value_storages: usize::try_from(base_decl_count).expect("base storage end fits usize"),
+        source_units: binder.checkpoint_ends().next_source,
     };
     let base_max_source_key = binder.max_source_key().0;
     assert_eq!(
@@ -9573,7 +9641,7 @@ mod tests {
         assert!(recipe_end > 0, "fixture must plan declaration recipes");
 
         let mut summary = OwnedBaseReferenceSummary::default();
-        classify_live_reference(
+        classify_interner_live_reference(
             &mut summary,
             &base,
             DECLARED_RECIPE_DOMAIN,
@@ -9581,7 +9649,7 @@ mod tests {
             TYPE_DOMAIN,
             u32::try_from(base.store).expect("store end fits u32"),
         );
-        classify_live_reference(
+        classify_interner_live_reference(
             &mut summary,
             &base,
             DECLARED_RECIPE_DOMAIN,
@@ -9598,6 +9666,64 @@ mod tests {
                 delta_to_delta: 0,
             },
             "recipe rows must be classified against their own frozen prefix"
+        );
+    }
+
+    #[test]
+    fn binder_source_unit_domain_cannot_alias_the_declared_recipe_domain() {
+        const SOURCE_UNIT_DOMAIN: u8 = 10;
+        const SCOPE_DOMAIN: u8 = 4;
+
+        let state = compile_reservation_fixture(
+            "source-unit-domain-origin.d.ts",
+            "interface RecipeOwner { values: string[]; }",
+        );
+        let mut base = owned_state_identity_ends(&state);
+        assert!(base.source_units > 0);
+        assert!(base.scopes > 0);
+        base.declared_recipes = base.source_units.saturating_add(100);
+
+        let first_delta_source =
+            u32::try_from(base.source_units).expect("source-unit end fits u32");
+        let last_base_source = first_delta_source
+            .checked_sub(1)
+            .expect("fixture retains a base source unit");
+        let first_delta_scope = u32::try_from(base.scopes).expect("scope end fits u32");
+
+        let mut summary = OwnedBaseReferenceSummary::default();
+        classify_binder_live_reference(
+            &mut summary,
+            &base,
+            SOURCE_UNIT_DOMAIN,
+            first_delta_source,
+            SCOPE_DOMAIN,
+            first_delta_scope,
+        );
+        classify_binder_live_reference(
+            &mut summary,
+            &base,
+            SOURCE_UNIT_DOMAIN,
+            last_base_source,
+            SCOPE_DOMAIN,
+            first_delta_scope,
+        );
+        classify_binder_live_reference(
+            &mut summary,
+            &base,
+            SOURCE_UNIT_DOMAIN,
+            first_delta_source,
+            SCOPE_DOMAIN,
+            0,
+        );
+
+        assert_eq!(
+            summary,
+            OwnedBaseReferenceSummary {
+                base_to_delta: 1,
+                delta_to_base: 1,
+                delta_to_delta: 1,
+            },
+            "binder source units use their source prefix even when recipe ids overlap"
         );
     }
 
@@ -10916,6 +11042,7 @@ mod tests {
             type_groups: state.binder.type_groups.len(),
             namespaces: state.binder.namespaces.len(),
             value_storages: state.decl_types.len(),
+            source_units: state.binder.checkpoint_ends().next_source,
         }
     }
 

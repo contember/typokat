@@ -71,6 +71,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 None
             }
+            DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { .. }) => {
+                self.record_incomplete(
+                    "semantic-query/invalid-evaluation-node",
+                    span,
+                    "semantic evaluation reached an invalid type node",
+                );
+                None
+            }
             DemandOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
             | DemandOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })

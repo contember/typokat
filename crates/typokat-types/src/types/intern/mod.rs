@@ -10,6 +10,8 @@ mod references;
 #[cfg(test)]
 mod tests;
 
+pub use declared::DeclaredMaterializationError;
+
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
     ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, IntrinsicKind, LiteralValue, MappedType,
@@ -20,7 +22,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::hash::Hash;
 #[cfg(any(test, feature = "test-utils"))]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -80,6 +83,152 @@ struct DerivedGraphCache<K, V> {
     graph_identity: Arc<()>,
     base: Arc<FxHashMap<K, V>>,
     local: FxHashMap<K, V>,
+}
+
+/// Run-local identity of one concrete substitution occurrence.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DerivationId(u64);
+
+/// A semantic type plus optional non-semantic substitution provenance.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DerivedType {
+    pub ty: TypeId,
+    pub derivation: Option<DerivationId>,
+}
+
+impl DerivedType {
+    pub const fn plain(ty: TypeId) -> Self {
+        Self {
+            ty,
+            derivation: None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DerivationEdge {
+    ObjectProperty(usize),
+    ObjectWriteProperty(usize),
+    ObjectStringIndex,
+    ObjectNumberIndex,
+    ObjectCallSignature(usize),
+    ObjectConstructSignature(usize),
+    FunctionConstraint(usize),
+    FunctionDefault(usize),
+    FunctionParameter(usize),
+    FunctionReceiver,
+    FunctionReturn,
+    UnionMember(usize),
+    IntersectionMember(usize),
+    ArrayElement,
+    TupleElement(usize),
+    TupleRest,
+    ReadonlyOperand,
+    ConditionalCheck,
+    ConditionalExtends,
+    ConditionalTrue,
+    ConditionalFalse,
+    InstantiationArgument(usize),
+    ClassArgument(usize),
+    MappedKeySource,
+    MappedValueTemplate,
+    MappedModifiersSource,
+    TemplateHole(usize),
+    KeyofOperand,
+    DeferredObject,
+    DeferredIndex,
+    DeclaredArgument(usize),
+    DeclaredMapper(usize),
+}
+
+#[derive(Clone, Debug)]
+struct DerivationNode {
+    result: TypeId,
+    identity: TypeId,
+    children: Arc<[(DerivationEdge, DerivationId)]>,
+}
+
+struct DerivationStore {
+    graph_identity: Arc<()>,
+    local: FxHashMap<DerivationId, DerivationNode>,
+    epoch_depth: usize,
+}
+
+impl DerivationStore {
+    fn new(graph_identity: Arc<()>) -> Self {
+        Self {
+            graph_identity,
+            local: FxHashMap::default(),
+            epoch_depth: 0,
+        }
+    }
+
+    fn align_with(&mut self, graph_identity: &Arc<()>) {
+        if Arc::ptr_eq(&self.graph_identity, graph_identity) {
+            return;
+        }
+        self.graph_identity = Arc::clone(graph_identity);
+        self.local.clear();
+        self.epoch_depth = 0;
+    }
+
+    fn get(&self, id: DerivationId) -> Option<&DerivationNode> {
+        self.local.get(&id)
+    }
+
+    fn push(&mut self, node: DerivationNode) -> DerivationId {
+        let id = next_derivation_id();
+        self.local.insert(id, node);
+        id
+    }
+
+    fn complete(
+        &mut self,
+        id: DerivationId,
+        result: TypeId,
+        identity: TypeId,
+        children: Arc<[(DerivationEdge, DerivationId)]>,
+    ) -> bool {
+        let Some(node) = self.local.get_mut(&id) else {
+            return false;
+        };
+        if node.result != result || node.identity != identity {
+            return false;
+        }
+        node.children = children;
+        true
+    }
+
+    fn begin_epoch(&mut self) {
+        if self.epoch_depth == 0 {
+            self.local.clear();
+        }
+        self.epoch_depth += 1;
+    }
+
+    fn end_epoch(&mut self) {
+        if self.epoch_depth == 0 {
+            return;
+        }
+        self.epoch_depth -= 1;
+        if self.epoch_depth == 0 {
+            self.local.clear();
+        }
+    }
+
+    fn discard(&mut self) {
+        self.local.clear();
+        self.epoch_depth = 0;
+    }
+
+    fn fork_delta(&self, graph_identity: Arc<()>) -> Self {
+        Self::new(graph_identity)
+    }
+}
+
+fn next_derivation_id() -> DerivationId {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    DerivationId(NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 impl<K, V> DerivedGraphCache<K, V>
@@ -317,6 +466,8 @@ pub struct Interner {
     deferred_keyof_results: DerivedGraphCache<TypeId, bool>,
     /// Completed root substitutions that did not observe a recursive stack cut.
     clean_application_results: DerivedGraphCache<CleanApplicationKey, TypeId>,
+    /// Occurrence-specific, non-semantic substitution provenance.
+    derivations: DerivationStore,
     /// Immutable structural buckets owned by the sealed prefix.
     dedup_base: Arc<FxHashMap<u64, SmallVec<[TypeId; 2]>>>,
     /// Structural hash → interned candidates sharing that hash (architecture
@@ -346,7 +497,8 @@ impl Interner {
             free_param_summaries: FreeParamSummaryCache::new(Arc::clone(&graph_identity)),
             application_key_modes: DerivedGraphCache::new(Arc::clone(&graph_identity)),
             deferred_keyof_results: DerivedGraphCache::new(Arc::clone(&graph_identity)),
-            clean_application_results: DerivedGraphCache::new(graph_identity),
+            clean_application_results: DerivedGraphCache::new(Arc::clone(&graph_identity)),
+            derivations: DerivationStore::new(graph_identity),
             dedup_base: Arc::new(FxHashMap::default()),
             dedup: FxHashMap::default(),
             declared_recipe_base: Arc::new(FxHashMap::default()),
@@ -478,6 +630,149 @@ impl Interner {
         self.clean_application_results.insert(key, result);
     }
 
+    pub(crate) fn intern_derivation(
+        &mut self,
+        result: TypeId,
+        identity: TypeId,
+        children: Vec<(DerivationEdge, DerivationId)>,
+    ) -> DerivationId {
+        self.derivations
+            .align_with(self.store.semantic_graph_identity());
+        self.derivations.push(DerivationNode {
+            result,
+            identity,
+            children: children.into(),
+        })
+    }
+
+    pub(crate) fn complete_derivation(
+        &mut self,
+        id: DerivationId,
+        result: TypeId,
+        identity: TypeId,
+        children: Vec<(DerivationEdge, DerivationId)>,
+    ) -> bool {
+        self.derivations
+            .align_with(self.store.semantic_graph_identity());
+        self.derivations
+            .complete(id, result, identity, children.into())
+    }
+
+    pub fn derivation_identity(&self, derived: DerivedType) -> TypeId {
+        derived
+            .derivation
+            .and_then(|id| self.derivations.get(id))
+            .filter(|node| node.result == derived.ty)
+            .map_or(derived.ty, |node| node.identity)
+    }
+
+    pub fn derivation_child(
+        &self,
+        derived: DerivedType,
+        edge: DerivationEdge,
+        fallback: TypeId,
+    ) -> DerivedType {
+        let derivation = derived
+            .derivation
+            .and_then(|id| self.derivations.get(id))
+            .filter(|node| node.result == derived.ty)
+            .and_then(|node| {
+                node.children
+                    .iter()
+                    .find_map(|(candidate, child)| (*candidate == edge).then_some(*child))
+            });
+        let ty = derivation
+            .and_then(|id| self.derivations.get(id))
+            .map_or(fallback, |node| node.result);
+        DerivedType { ty, derivation }
+    }
+
+    /// Bound occurrence-only provenance to the outermost semantic query.
+    pub fn begin_occurrence_query(&mut self) {
+        self.derivations
+            .align_with(self.store.semantic_graph_identity());
+        self.derivations.begin_epoch();
+    }
+
+    /// Nested query scopes share their outer query's live occurrence graph.
+    pub fn end_occurrence_query(&mut self) {
+        self.derivations.end_epoch();
+    }
+
+    /// Intern a semantic tuple plus a query-local occurrence graph for its elements.
+    pub fn intern_derived_tuple(&mut self, elements: &[DerivedType]) -> DerivedType {
+        let ty = self.intern_tuple(elements.iter().map(|element| element.ty).collect());
+        let children = elements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, element)| {
+                element
+                    .derivation
+                    .map(|derivation| (DerivationEdge::TupleElement(index), derivation))
+            })
+            .collect::<Vec<_>>();
+        if children.is_empty() {
+            return DerivedType::plain(ty);
+        }
+        let derivation = self.intern_derivation(ty, ty, children);
+        DerivedType {
+            ty,
+            derivation: Some(derivation),
+        }
+    }
+
+    /// Build a query-local occurrence graph for one class application and its
+    /// syntactically nested class arguments without projecting any class surface.
+    pub fn class_instance_occurrence_derived(&mut self, ty: TypeId) -> Option<DerivedType> {
+        self.store.class_instance_type(ty)?;
+        Some(self.application_occurrence_node(ty))
+    }
+
+    pub fn instantiation_occurrence_derived(&mut self, ty: TypeId) -> Option<DerivedType> {
+        self.store.instantiation_type(ty)?;
+        Some(self.application_occurrence_node(ty))
+    }
+
+    fn application_occurrence_node(&mut self, ty: TypeId) -> DerivedType {
+        let (edge, arguments): (fn(usize) -> DerivationEdge, Vec<TypeId>) = match self.store.tag(ty)
+        {
+            TypeTag::ClassInstance => (
+                DerivationEdge::ClassArgument,
+                self.store
+                    .class_instance_type(ty)
+                    .map(|instance| instance.args.clone())
+                    .unwrap_or_default(),
+            ),
+            TypeTag::Instantiation => (
+                DerivationEdge::InstantiationArgument,
+                self.store
+                    .instantiation_type(ty)
+                    .map(|instantiation| instantiation.args.iter().map(|(_, ty)| *ty).collect())
+                    .unwrap_or_default(),
+            ),
+            _ => {
+                let derivation = self.intern_derivation(ty, ty, Vec::new());
+                return DerivedType {
+                    ty,
+                    derivation: Some(derivation),
+                };
+            }
+        };
+        let children = arguments
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                let child = self.application_occurrence_node(argument);
+                child.derivation.map(|derivation| (edge(index), derivation))
+            })
+            .collect();
+        let derivation = self.intern_derivation(ty, ty, children);
+        DerivedType {
+            ty,
+            derivation: Some(derivation),
+        }
+    }
+
     /// Seal a complete standalone interner as the immutable shared prefix.
     pub fn freeze_as_base(&mut self) -> Result<(), &'static str> {
         if !self.dedup_base.is_empty()
@@ -501,11 +796,14 @@ impl Interner {
             .align_with(self.store.semantic_graph_identity());
         self.clean_application_results
             .align_with(self.store.semantic_graph_identity());
+        self.derivations
+            .align_with(self.store.semantic_graph_identity());
         self.store.freeze_as_base()?;
         self.free_param_summaries.freeze_as_base();
         self.application_key_modes.freeze_as_base();
         self.deferred_keyof_results.freeze_as_base();
         self.clean_application_results.freeze_as_base();
+        self.derivations.discard();
         self.dedup_base = Arc::new(std::mem::take(&mut self.dedup));
         self.declared_recipe_base = Arc::new(std::mem::take(&mut self.declared_recipe_local));
         self.reserved_types_base = Arc::new(std::mem::take(&mut self.reserved_types));
@@ -533,7 +831,10 @@ impl Interner {
             deferred_keyof_results: self
                 .deferred_keyof_results
                 .fork_delta(Arc::clone(&graph_identity)),
-            clean_application_results: self.clean_application_results.fork_delta(graph_identity),
+            clean_application_results: self
+                .clean_application_results
+                .fork_delta(Arc::clone(&graph_identity)),
+            derivations: self.derivations.fork_delta(graph_identity),
             dedup_base: Arc::clone(&self.dedup_base),
             dedup: FxHashMap::default(),
             declared_recipe_base: Arc::clone(&self.declared_recipe_base),
@@ -881,7 +1182,7 @@ impl Interner {
 
     #[cfg(any(test, feature = "test-utils"))]
     pub fn derivation_storage_counts_for_test(&self) -> (usize, usize) {
-        (self.derivations.base.len(), self.derivations.local.len())
+        (0, self.derivations.local.len())
     }
 }
 

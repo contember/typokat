@@ -5,6 +5,7 @@ use crate::types::repr::{
     MappedType, ModifierOp, ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType,
     TupleType, TypeParamId, Visibility,
 };
+use crate::types::DerivationEdge;
 
 fn published(
     class: ClassId,
@@ -1581,26 +1582,23 @@ fn invalid_declared_evaluation_records_a_typed_frontier_instead_of_panicking() {
     let projection_memo = FxHashMap::default();
     let evaluation_memo = FxHashMap::default();
 
-    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut planner = ProjectionPlanner::new(
-            &mut interner,
-            &published,
-            &projection_memo,
-            &evaluation_memo,
-            0,
-            false,
-            None,
-        );
-        planner.evaluate_declared(wk.number, SemanticVisitPolicy::DemandOuterOnly);
-        planner.finish()
-    }));
-    let transaction = match attempt {
-        Ok(transaction) => transaction,
-        Err(_) => panic!("an invalid declared evaluator input must become a typed frontier"),
-    };
+    let mut planner = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluation_memo,
+        0,
+        false,
+        None,
+    );
+    planner.evaluate_declared(wk.number, SemanticVisitPolicy::DemandOuterOnly);
+    let transaction = planner.finish();
 
     assert!(transaction.planning_tainted);
-    assert!(transaction.plan.normalize(wk.number).is_err());
+    assert_eq!(
+        transaction.plan.normalize(wk.number),
+        Err(Exhaustion::EvaluationInvalidNode { ty: wk.number })
+    );
 }
 
 #[test]
@@ -1750,12 +1748,7 @@ fn cycle_tainted_class_projection_inference_exhausts_without_mutating_caller_sta
         SubstitutionOutcome::CycleTainted(_)
     ));
 
-    let published = published(
-        class,
-        vec![source_parameter],
-        instance_template,
-        wk.error,
-    );
+    let published = published(class, vec![source_parameter], instance_template, wk.error);
     let source = interner.intern_class_instance(class, vec![wk.string]);
     let inferred_parameter = TypeParamId(80_310);
     let target = interner.intern_type_param(inferred_parameter, "Inferred");
@@ -2565,6 +2558,802 @@ fn cycle_tainted_declared_roots_recompute_per_context_without_durable_promotion(
         "the second root must recompute in its own live-stack context"
     );
     assert_ne!(expected_a, expected_b);
+}
+
+#[test]
+fn warm_declared_memo_reconstructs_occurrence_identity_for_inference() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_inner_parameter = TypeParamId(99_261);
+    let source_outer_parameter = TypeParamId(99_262);
+    let target_inner_parameter = TypeParamId(99_263);
+    let target_outer_parameter = TypeParamId(99_264);
+    let inferred_parameter = TypeParamId(99_265);
+
+    let source_inner_param = interner.intern_type_param(source_inner_parameter, "P");
+    let source_outer_param = interner.intern_type_param(source_outer_parameter, "Q");
+    let target_inner_param = interner.intern_type_param(target_inner_parameter, "R");
+    let target_outer_param = interner.intern_type_param(target_outer_parameter, "S");
+    let inferred = interner.intern_type_param(inferred_parameter, "T");
+    let source_inner_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", source_inner_param)],
+        ..Default::default()
+    });
+    let source_outer_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", source_outer_param)],
+        ..Default::default()
+    });
+    let target_inner_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", target_inner_param)],
+        ..Default::default()
+    });
+    let target_outer_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", target_outer_param)],
+        ..Default::default()
+    });
+
+    let string = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let source_inner_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: source_inner_template,
+        parameters: vec![source_inner_parameter],
+        arguments: vec![string],
+    });
+    let source_outer_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: source_outer_template,
+        parameters: vec![source_outer_parameter],
+        arguments: vec![source_inner_recipe],
+    });
+    let target_inner_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: target_inner_template,
+        parameters: vec![target_inner_parameter],
+        arguments: vec![inferred_recipe],
+    });
+    let target_outer_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: target_outer_template,
+        parameters: vec![target_outer_parameter],
+        arguments: vec![target_inner_recipe],
+    });
+    let source_inner = interner.intern_declared(source_inner_recipe, []);
+    let source = interner.intern_declared(source_outer_recipe, []);
+    let target_inner = interner.intern_declared(target_inner_recipe, []);
+    let target = interner.intern_declared(target_outer_recipe, []);
+
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    for root in [source_inner, source, target_inner, target] {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .demand(root),
+            DemandOutcome::Ready(_)
+        ));
+    }
+    assert_eq!(state.evaluation_memo.len(), 4, "all roots are warm");
+
+    let mut candidates = Candidates::default();
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .infer_types(source, target, &mut candidates),
+        DemandOutcome::Ready(())
+    );
+    assert_eq!(candidates.get(&inferred_parameter), Some(&vec![wk.string]));
+}
+
+fn equal_semantic_occurrences(interner: &mut Interner) -> (DerivedType, DerivedType) {
+    let wk = interner.well_known();
+    let first_parameter = TypeParamId(99_266);
+    let second_parameter = TypeParamId(99_267);
+    let first_parameter_ty = interner.intern_type_param(first_parameter, "First");
+    let second_parameter_ty = interner.intern_type_param(second_parameter, "Second");
+    let first_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", first_parameter_ty)],
+        ..Default::default()
+    });
+    let second_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", second_parameter_ty)],
+        ..Default::default()
+    });
+    let first = crate::types::substitute_derived(
+        interner,
+        first_template,
+        &FxHashMap::from_iter([(first_parameter, DerivedType::plain(wk.string))]),
+    );
+    let second = crate::types::substitute_derived(
+        interner,
+        second_template,
+        &FxHashMap::from_iter([(second_parameter, DerivedType::plain(wk.string))]),
+    );
+    assert_eq!(first.ty, second.ty, "the two occurrences must hash-cons");
+    assert_ne!(
+        first.derivation, second.derivation,
+        "the two producers must retain distinct occurrence identities"
+    );
+    (first, second)
+}
+
+#[test]
+fn identity_evaluation_replaces_provenance_without_changing_type_id() {
+    let mut interner = Interner::with_intrinsics();
+    let (occurrence, _) = equal_semantic_occurrences(&mut interner);
+    let published = PublishedClasses::empty();
+    let projection_memo = FxHashMap::default();
+    let evaluator_memo = FxHashMap::default();
+    let mut planner = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluator_memo,
+        0,
+        false,
+        None,
+    );
+
+    planner.record_derived_evaluation(DerivedType::plain(occurrence.ty), occurrence);
+    let normalized = planner
+        .plan
+        .normalize_derived(planner.interner.store(), DerivedType::plain(occurrence.ty))
+        .expect("identity evaluation is finite");
+
+    assert_eq!(normalized.ty, occurrence.ty);
+    assert_eq!(
+        normalized.derivation, occurrence.derivation,
+        "an identity semantic result must still publish its occurrence provenance"
+    );
+}
+
+fn assert_equal_type_id_occurrences_normalize_independently(reverse: bool) {
+    let mut interner = Interner::with_intrinsics();
+    let (first, second) = equal_semantic_occurrences(&mut interner);
+    let result_parameter = TypeParamId(99_268);
+    let result_parameter_ty = interner.intern_type_param(result_parameter, "Result");
+    let result_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("result", result_parameter_ty)],
+        ..Default::default()
+    });
+    let first_result = crate::types::substitute_derived(
+        &mut interner,
+        result_template,
+        &FxHashMap::from_iter([(result_parameter, first)]),
+    );
+    let second_result = crate::types::substitute_derived(
+        &mut interner,
+        result_template,
+        &FxHashMap::from_iter([(result_parameter, second)]),
+    );
+    assert_eq!(first_result.ty, second_result.ty);
+    assert_ne!(first_result.derivation, second_result.derivation);
+    let published = PublishedClasses::empty();
+    let projection_memo = FxHashMap::default();
+    let evaluator_memo = FxHashMap::default();
+    let mut planner = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluator_memo,
+        0,
+        false,
+        None,
+    );
+
+    let evaluations = if reverse {
+        [(second, second_result), (first, first_result)]
+    } else {
+        [(first, first_result), (second, second_result)]
+    };
+    for (source, result) in evaluations {
+        planner.record_derived_evaluation(source, result);
+    }
+
+    for (source, expected) in [(first, first_result), (second, second_result)] {
+        let normalized = planner
+            .plan
+            .normalize_derived(planner.interner.store(), source)
+            .expect("occurrence evaluation is finite");
+        assert_eq!(normalized.ty, first_result.ty);
+        assert_eq!(
+            normalized.derivation, expected.derivation,
+            "equal semantic roots must retain their own evaluation occurrence"
+        );
+    }
+}
+
+#[test]
+fn equal_type_ids_keep_distinct_occurrence_normalizations_in_both_orders() {
+    assert_equal_type_id_occurrences_normalize_independently(false);
+    assert_equal_type_id_occurrences_normalize_independently(true);
+}
+
+#[test]
+fn warm_class_projection_reconstructs_nested_argument_occurrence() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let inner_class = ClassId(82_271);
+    let outer_class = ClassId(82_272);
+    let inner_parameter = TypeParamId(99_271);
+    let outer_parameter = TypeParamId(99_272);
+    let inner_parameter_ty = interner.intern_type_param(inner_parameter, "Inner");
+    let outer_parameter_ty = interner.intern_type_param(outer_parameter, "Outer");
+    let inner_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", inner_parameter_ty)],
+        ..Default::default()
+    });
+    let outer_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("nested", outer_parameter_ty)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::from_publication(
+        FxHashMap::from_iter([
+            (inner_class, ClassConstructionState::Published),
+            (outer_class, ClassConstructionState::Published),
+        ]),
+        FxHashMap::from_iter([
+            (
+                inner_class,
+                PublishedClassSurface::new(
+                    inner_class,
+                    vec![inner_parameter],
+                    inner_template,
+                    wk.error,
+                    None,
+                ),
+            ),
+            (
+                outer_class,
+                PublishedClassSurface::new(
+                    outer_class,
+                    vec![outer_parameter],
+                    outer_template,
+                    wk.error,
+                    None,
+                ),
+            ),
+        ]),
+        FxHashMap::default(),
+    )
+    .expect("test publication is complete");
+    let inner_application = interner.intern_class_instance(inner_class, vec![wk.string]);
+    let outer_application = interner.intern_class_instance(outer_class, vec![inner_application]);
+    let evaluator_memo = FxHashMap::default();
+
+    let cold = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &FxHashMap::default(),
+        &evaluator_memo,
+        0,
+        false,
+        None,
+    )
+    .plan(&[outer_application]);
+    let projection_memo = cold.pending_projection_writes;
+    assert!(projection_memo.contains_key(&outer_application));
+    assert!(projection_memo.contains_key(&inner_application));
+
+    let mut warm_planner = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluator_memo,
+        0,
+        false,
+        None,
+    );
+    warm_planner.visit(outer_application);
+    let warm_outer = warm_planner
+        .plan
+        .normalize_derived(
+            warm_planner.interner.store(),
+            DerivedType::plain(outer_application),
+        )
+        .expect("warm outer projection resolves");
+    let warm_nested_fallback = warm_planner
+        .interner
+        .store()
+        .object_type(warm_outer.ty)
+        .and_then(|object| object.property("nested"))
+        .expect("outer projection exposes nested class")
+        .ty;
+    let warm_nested = warm_planner.interner.derivation_child(
+        warm_outer,
+        DerivationEdge::ObjectProperty(0),
+        warm_nested_fallback,
+    );
+    warm_planner.expand_relation_demand(RelationDemand::DerivedClassProjection(warm_nested));
+    let warm = warm_planner.finish();
+    let outer_projection = warm
+        .plan
+        .normalize_derived(interner.store(), DerivedType::plain(outer_application))
+        .expect("warm outer projection resolves");
+    assert!(
+        outer_projection.derivation.is_some(),
+        "a warm projection must reconstruct occurrence provenance"
+    );
+    let nested_fallback = interner
+        .store()
+        .object_type(outer_projection.ty)
+        .and_then(|object| object.property("nested"))
+        .expect("outer projection exposes nested class")
+        .ty;
+    let nested = interner.derivation_child(
+        outer_projection,
+        DerivationEdge::ObjectProperty(0),
+        nested_fallback,
+    );
+    assert_eq!(nested.ty, inner_application);
+    assert!(
+        nested.derivation.is_some(),
+        "the outer substitution must retain its exact class argument occurrence"
+    );
+    let inner_projection = warm
+        .plan
+        .normalize_derived(interner.store(), nested)
+        .expect("warm inner projection resolves");
+    let value_fallback = interner
+        .store()
+        .object_type(inner_projection.ty)
+        .and_then(|object| object.property("value"))
+        .expect("inner projection exposes its value")
+        .ty;
+    let value = interner.derivation_child(
+        inner_projection,
+        DerivationEdge::ObjectProperty(0),
+        value_fallback,
+    );
+    assert_eq!(value.ty, wk.string);
+    assert!(
+        value.derivation.is_some(),
+        "ClassArgument(0) provenance must reach the primitive argument"
+    );
+}
+
+#[test]
+fn cold_and_warm_instantiation_evaluation_retain_argument_occurrence() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let alias_parameter = TypeParamId(99_281);
+    let alias_parameter_ty = interner.intern_type_param(alias_parameter, "Alias");
+    let alias_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", alias_parameter_ty)],
+        ..Default::default()
+    });
+    let instantiation =
+        interner.intern_instantiation(alias_template, vec![(alias_parameter, wk.string)]);
+    let wrapper = interner.intern_class_instance(ClassId(82_281), vec![instantiation]);
+    let wrapper_occurrence = interner
+        .class_instance_occurrence_derived(wrapper)
+        .expect("wrapper is one class application");
+    let instantiation_occurrence = interner.derivation_child(
+        wrapper_occurrence,
+        DerivationEdge::ClassArgument(0),
+        instantiation,
+    );
+    let inferred_parameter = TypeParamId(99_282);
+    let inferred = interner.intern_type_param(inferred_parameter, "T");
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", inferred)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let projection_memo = FxHashMap::default();
+    let evaluator_memo = FxHashMap::default();
+
+    let cold = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluator_memo,
+        0,
+        false,
+        None,
+    )
+    .plan_derived(&[instantiation_occurrence]);
+    let cold_result = cold
+        .plan
+        .normalize_derived(interner.store(), instantiation_occurrence)
+        .expect("cold instantiation resolves");
+    assert!(
+        cold_result.derivation.is_some(),
+        "cold evaluation must retain the instantiation occurrence"
+    );
+    let cold_value_fallback = interner
+        .store()
+        .object_type(cold_result.ty)
+        .and_then(|object| object.property("value"))
+        .expect("evaluated alias exposes value")
+        .ty;
+    let cold_value = interner.derivation_child(
+        cold_result,
+        DerivationEdge::ObjectProperty(0),
+        cold_value_fallback,
+    );
+    assert_eq!(cold_value.ty, wk.string);
+    assert!(
+        cold_value.derivation.is_some(),
+        "InstantiationArgument(0) provenance must reach the cold result"
+    );
+    let active = FxHashSet::from_iter([inferred_parameter]);
+    let InferenceAttempt::Complete(cold_candidates) =
+        crate::check::infer::infer_from_derived_types_for_query_with_params(
+            &mut interner,
+            instantiation_occurrence,
+            DerivedType::plain(target),
+            &cold.plan,
+            Some(&active),
+        )
+    else {
+        panic!("cold instantiation inference must complete")
+    };
+    assert_eq!(
+        cold_candidates.get(&inferred_parameter),
+        Some(&vec![wk.string])
+    );
+
+    let evaluator_memo = cold.pending_evaluator_writes;
+    assert_eq!(evaluator_memo.get(&instantiation), Some(&cold_result.ty));
+    let warm = ProjectionPlanner::new(
+        &mut interner,
+        &published,
+        &projection_memo,
+        &evaluator_memo,
+        0,
+        false,
+        None,
+    )
+    .plan_derived(&[instantiation_occurrence]);
+    let warm_result = warm
+        .plan
+        .normalize_derived(interner.store(), instantiation_occurrence)
+        .expect("warm instantiation resolves");
+    assert_eq!(warm_result.ty, cold_result.ty);
+    assert!(
+        warm_result.derivation.is_some(),
+        "warm evaluation must reconstruct occurrence provenance"
+    );
+    let InferenceAttempt::Complete(warm_candidates) =
+        crate::check::infer::infer_from_derived_types_for_query_with_params(
+            &mut interner,
+            instantiation_occurrence,
+            DerivedType::plain(target),
+            &warm.plan,
+            Some(&active),
+        )
+    else {
+        panic!("warm instantiation inference must complete")
+    };
+    assert_eq!(
+        warm_candidates.get(&inferred_parameter),
+        Some(&vec![wk.string])
+    );
+}
+
+#[test]
+fn fresh_coordinator_reconstructs_warm_instantiation_candidate() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let alias_parameter = TypeParamId(99_283);
+    let alias_parameter_ty = interner.intern_type_param(alias_parameter, "Alias");
+    let alias_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", alias_parameter_ty)],
+        ..Default::default()
+    });
+    let source = interner.intern_instantiation(alias_template, vec![(alias_parameter, wk.string)]);
+    let inferred_parameter = TypeParamId(99_284);
+    let inferred = interner.intern_type_param(inferred_parameter, "T");
+    let target = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", inferred)],
+        ..Default::default()
+    });
+    let active = FxHashSet::from_iter([inferred_parameter]);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for attempt in 0..64 {
+        let mut candidates = Candidates::default();
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .infer_types_for_params(source, target, &mut candidates, &active),
+            DemandOutcome::Ready(()),
+            "attempt {attempt} inference must complete"
+        );
+        assert_eq!(
+            candidates.get(&inferred_parameter),
+            Some(&vec![wk.string]),
+            "attempt {attempt} must infer through the exact instantiation occurrence"
+        );
+        assert_eq!(
+            interner.derivation_storage_counts_for_test(),
+            (0, 0),
+            "attempt {attempt} must reclaim its query-local occurrence provenance"
+        );
+    }
+}
+
+#[test]
+fn cold_outer_structural_hop_preserves_nested_application_candidate() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let nested_parameter_id = TypeParamId(99_266);
+    let source_outer_parameter_id = TypeParamId(99_267);
+    let target_outer_parameter_id = TypeParamId(99_268);
+    let inferred_id = TypeParamId(99_269);
+    let nested_parameter = interner.intern_type_param(nested_parameter_id, "Nested");
+    let source_outer_parameter =
+        interner.intern_type_param(source_outer_parameter_id, "SourceOuter");
+    let target_outer_parameter =
+        interner.intern_type_param(target_outer_parameter_id, "TargetOuter");
+    let inferred = interner.intern_type_param(inferred_id, "T");
+
+    let nested_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("item", nested_parameter)],
+        ..Default::default()
+    });
+    let source_outer_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("next", source_outer_parameter)],
+        ..Default::default()
+    });
+    let target_outer_template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("next", target_outer_parameter)],
+        ..Default::default()
+    });
+    let string_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let nested_source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: nested_template,
+        parameters: vec![nested_parameter_id],
+        arguments: vec![string_recipe],
+    });
+    let nested_target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: nested_template,
+        parameters: vec![nested_parameter_id],
+        arguments: vec![inferred_recipe],
+    });
+    let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: source_outer_template,
+        parameters: vec![source_outer_parameter_id],
+        arguments: vec![nested_source_recipe],
+    });
+    let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: target_outer_template,
+        parameters: vec![target_outer_parameter_id],
+        arguments: vec![nested_target_recipe],
+    });
+    let source = interner.intern_declared(source_recipe, []);
+    let target = interner.intern_declared(target_recipe, []);
+
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let mut candidates = Candidates::default();
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .infer_types_for_params(
+                source,
+                target,
+                &mut candidates,
+                &FxHashSet::from_iter([inferred_id]),
+            ),
+        DemandOutcome::Ready(())
+    );
+    assert_eq!(
+        candidates.get(&inferred_id),
+        Some(&vec![wk.string]),
+        "the outer structural hop must retain the exact nested application occurrence"
+    );
+}
+
+#[test]
+fn repeated_declared_application_heads_cut_off_before_nested_candidate() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_value_id = TypeParamId(99_370);
+    let source_next_id = TypeParamId(99_371);
+    let target_value_id = TypeParamId(99_372);
+    let target_next_id = TypeParamId(99_373);
+    let inferred_id = TypeParamId(99_374);
+    let source_value = interner.intern_type_param(source_value_id, "SourceValue");
+    let source_next = interner.intern_type_param(source_next_id, "SourceNext");
+    let target_value = interner.intern_type_param(target_value_id, "TargetValue");
+    let target_next = interner.intern_type_param(target_next_id, "TargetNext");
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let source_template = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("next", source_next),
+            PropertyType::public("value", source_value),
+        ],
+        ..Default::default()
+    });
+    let target_template = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("next", target_next),
+            PropertyType::public("value", target_value),
+        ],
+        ..Default::default()
+    });
+    let leaf = interner.intern_object(ObjectType::default());
+    let leaf_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(leaf));
+    let string_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let number_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.number));
+    let inferred_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let nested_source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: source_template,
+        parameters: vec![source_value_id, source_next_id],
+        arguments: vec![string_recipe, leaf_recipe],
+    });
+    let nested_target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: target_template,
+        parameters: vec![target_value_id, target_next_id],
+        arguments: vec![inferred_recipe, leaf_recipe],
+    });
+    let outer_source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: source_template,
+        parameters: vec![source_value_id, source_next_id],
+        arguments: vec![number_recipe, nested_source_recipe],
+    });
+    let outer_target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: target_template,
+        parameters: vec![target_value_id, target_next_id],
+        arguments: vec![number_recipe, nested_target_recipe],
+    });
+    let source = interner.intern_declared(outer_source_recipe, []);
+    let target = interner.intern_declared(outer_target_recipe, []);
+    let active = FxHashSet::from_iter([inferred_id]);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    for attempt in ["cold", "warm"] {
+        let mut candidates = Candidates::default();
+        assert_eq!(
+            SemanticQueryCoordinator::new(
+                &mut interner,
+                &published,
+                &mut state,
+                &mut next_type_param,
+            )
+            .infer_types_for_params(source, target, &mut candidates, &active),
+            DemandOutcome::Ready(()),
+            "{attempt} inference must complete"
+        );
+        assert!(
+            !candidates.contains_key(&inferred_id),
+            "{attempt} inference must cut off before the nested string candidate"
+        );
+    }
+}
+
+#[test]
+fn nested_same_head_type_wrappers_complete_in_one_inference_attempt() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let head_id = TypeParamId(99_271);
+    let inferred_id = TypeParamId(99_272);
+    let head = interner.intern_type_param(head_id, "Head");
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", head)],
+        ..Default::default()
+    });
+    let mut source_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let mut target_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let mut source = wk.string;
+    let mut target = inferred;
+    for _ in 0..128 {
+        let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![head_id],
+            arguments: vec![source_argument],
+        });
+        let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![head_id],
+            arguments: vec![target_argument],
+        });
+        source = interner.intern_declared(source_recipe, []);
+        target = interner.intern_declared(target_recipe, []);
+        source_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(source));
+        target_argument = interner.intern_declared_recipe(DeclaredRecipeNode::Type(target));
+    }
+
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let mut candidates = Candidates::default();
+    crate::check::infer::reset_query_inference_attempts();
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .infer_types(source, target, &mut candidates),
+        DemandOutcome::Ready(())
+    );
+    assert_eq!(
+        crate::check::infer::query_inference_attempts(),
+        1,
+        "synthetic Type recipe wrappers must not replay the root"
+    );
+    assert_eq!(candidates.get(&inferred_id), Some(&vec![wk.string]));
+}
+
+#[test]
+fn wide_declared_frontier_batches_without_root_replay_per_child() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let inferred_id = TypeParamId(99_281);
+    let inferred = interner.intern_type_param(inferred_id, "T");
+    let string_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let inferred_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(inferred));
+    let mut source_properties = Vec::new();
+    let mut target_properties = Vec::new();
+    for index in 0..64 {
+        let source_parameter_id = TypeParamId(99_300 + index * 2);
+        let target_parameter_id = TypeParamId(99_301 + index * 2);
+        let source_parameter =
+            interner.intern_type_param(source_parameter_id, format!("Source{index}"));
+        let target_parameter =
+            interner.intern_type_param(target_parameter_id, format!("Target{index}"));
+        let source_template = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", source_parameter)],
+            ..Default::default()
+        });
+        let target_template = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", target_parameter)],
+            ..Default::default()
+        });
+        let source_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template: source_template,
+            parameters: vec![source_parameter_id],
+            arguments: vec![string_recipe],
+        });
+        let target_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template: target_template,
+            parameters: vec![target_parameter_id],
+            arguments: vec![inferred_recipe],
+        });
+        let source = interner.intern_declared(source_recipe, []);
+        let target = interner.intern_declared(target_recipe, []);
+        let name = format!("p{index:02}");
+        source_properties.push(PropertyType::public(name.clone(), source));
+        target_properties.push(PropertyType::public(name, target));
+    }
+    let source = interner.intern_object(ObjectType {
+        properties: source_properties,
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: target_properties,
+        ..Default::default()
+    });
+
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let mut candidates = Candidates::default();
+    crate::check::infer::reset_query_inference_attempts();
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .infer_types(source, target, &mut candidates),
+        DemandOutcome::Ready(())
+    );
+    assert_eq!(
+        crate::check::infer::query_inference_attempts(),
+        2,
+        "one frontier expansion and one completed retry must suffice"
+    );
+    assert_eq!(
+        candidates.get(&inferred_id).map(Vec::len),
+        Some(64),
+        "every matched property contributes after the batch expands"
+    );
 }
 
 #[test]

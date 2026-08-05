@@ -1,9 +1,182 @@
 use super::*;
 use crate::types::repr::{
-    ClassId, ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
-    ObjectType, ParameterType, PropertyKey, PropertyType, TemplateType, TupleRestType, TupleType,
-    TypeParamId, TypeTag, WellKnownSymbol,
+    ClassId, ConditionalType, DeclaredRecipeId, DeclaredRecipeNode, FunctionType, GenericTypeParam,
+    LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType, PropertyKey, PropertyType,
+    TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag, WellKnownSymbol,
 };
+use crate::types::{DerivedSubstitutionOutcome, SubstitutionOutcome};
+
+#[test]
+fn declared_application_nested_child_materializes_shallowly_and_composes_mapper() {
+    let mut interner = Interner::with_intrinsics();
+    let string = interner.well_known().string;
+    let outer_parameter = TypeParamId(80_001);
+    let inner_parameter = TypeParamId(80_002);
+    let source_parameter = TypeParamId(80_003);
+    let outer_parameter_ty = interner.intern_type_param(outer_parameter, "Outer");
+    let inner_parameter_ty = interner.intern_type_param(inner_parameter, "Inner");
+    let source_parameter_ty = interner.intern_type_param(source_parameter, "Source");
+    let outer_template = interner.intern_object(ObjectType {
+        properties: vec![prop("nested", outer_parameter_ty)],
+        ..Default::default()
+    });
+    let inner_template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", inner_parameter_ty)],
+        ..Default::default()
+    });
+
+    let source = interner.intern_declared_recipe(DeclaredRecipeNode::Type(source_parameter_ty));
+    let inner = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: inner_template,
+        parameters: vec![inner_parameter],
+        arguments: vec![source],
+    });
+    let outer = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![outer_parameter],
+        arguments: vec![inner],
+    });
+    let declared = interner.intern_declared(outer, [(source_parameter, string)]);
+
+    let SubstitutionOutcome::CycleClean(materialized) = interner
+        .materialize_declared(declared)
+        .expect("declared root")
+    else {
+        panic!("acyclic nested application materializes cleanly")
+    };
+    let nested = interner
+        .store()
+        .object_type(materialized)
+        .and_then(|object| object.property("nested"))
+        .expect("outer nested property")
+        .ty;
+    assert_eq!(interner.store().tag(nested), TypeTag::Declared);
+    let nested_declared = interner.store().declared_type(nested).unwrap();
+    assert_eq!(nested_declared.recipe, inner);
+    assert_eq!(nested_declared.mapper, [(source_parameter, string)]);
+
+    let SubstitutionOutcome::CycleClean(inner_materialized) = interner
+        .materialize_declared(nested)
+        .expect("nested declared application")
+    else {
+        panic!("nested application materializes cleanly on its own demand")
+    };
+    assert_eq!(
+        interner
+            .store()
+            .object_type(inner_materialized)
+            .and_then(|object| object.property("value"))
+            .map(|property| property.ty),
+        Some(string)
+    );
+}
+
+#[test]
+fn shallow_nested_application_retains_its_occurrence_derivation() {
+    let mut interner = Interner::with_intrinsics();
+    let string = interner.well_known().string;
+    let outer_parameter = TypeParamId(80_004);
+    let inner_parameter = TypeParamId(80_005);
+    let outer_parameter_ty = interner.intern_type_param(outer_parameter, "Outer");
+    let inner_parameter_ty = interner.intern_type_param(inner_parameter, "Inner");
+    let outer_template = interner.intern_object(ObjectType {
+        properties: vec![prop("nested", outer_parameter_ty)],
+        ..Default::default()
+    });
+    let inner_template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", inner_parameter_ty)],
+        ..Default::default()
+    });
+    let string_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Type(string));
+    let inner_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: inner_template,
+        parameters: vec![inner_parameter],
+        arguments: vec![string_recipe],
+    });
+    let outer_recipe = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![outer_parameter],
+        arguments: vec![inner_recipe],
+    });
+    let declared = interner.intern_declared(outer_recipe, []);
+
+    let DerivedSubstitutionOutcome::CycleClean(materialized) = interner
+        .materialize_declared_derived(declared)
+        .expect("declared root")
+    else {
+        panic!("acyclic nested application materializes cleanly")
+    };
+    let nested = interner
+        .store()
+        .object_type(materialized.ty)
+        .and_then(|object| object.property("nested"))
+        .expect("outer nested property")
+        .ty;
+    let nested = interner.derivation_child(materialized, DerivationEdge::ObjectProperty(0), nested);
+    assert_eq!(interner.store().tag(nested.ty), TypeTag::Declared);
+    assert!(
+        nested.derivation.is_some(),
+        "the shallow declared child needs an occurrence token"
+    );
+    assert_eq!(interner.derivation_identity(nested), inner_template);
+}
+
+#[test]
+fn declared_application_non_application_arguments_keep_eager_materialization() {
+    let mut interner = Interner::with_intrinsics();
+    let string = interner.well_known().string;
+    let source_parameter = TypeParamId(80_010);
+    let source_parameter_ty = interner.intern_type_param(source_parameter, "Source");
+    let application_parameters = [
+        TypeParamId(80_011),
+        TypeParamId(80_012),
+        TypeParamId(80_013),
+        TypeParamId(80_014),
+    ];
+    let application_parameter_types = application_parameters
+        .map(|parameter| interner.intern_type_param(parameter, format!("P{}", parameter.0)));
+    let template = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("direct", application_parameter_types[0]),
+            prop("array", application_parameter_types[1]),
+            prop("tuple", application_parameter_types[2]),
+            prop("readonly", application_parameter_types[3]),
+        ],
+        ..Default::default()
+    });
+    let direct = interner.intern_declared_recipe(DeclaredRecipeNode::Type(source_parameter_ty));
+    let array = interner.intern_declared_recipe(DeclaredRecipeNode::Array(direct));
+    let tuple = interner.intern_declared_recipe(DeclaredRecipeNode::Tuple {
+        elements: vec![direct, array],
+        rest: None,
+    });
+    let readonly = interner.intern_declared_recipe(DeclaredRecipeNode::Readonly(array));
+    let application = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: application_parameters.to_vec(),
+        arguments: vec![direct, array, tuple, readonly],
+    });
+    let declared = interner.intern_declared(application, [(source_parameter, string)]);
+
+    let SubstitutionOutcome::CycleClean(materialized) = interner
+        .materialize_declared(declared)
+        .expect("declared root")
+    else {
+        panic!("non-application controls materialize cleanly")
+    };
+    let expected_array = interner.intern_array(string);
+    let expected_tuple = interner.intern_tuple(vec![string, expected_array]);
+    let expected_readonly = interner.intern_readonly(expected_array);
+    let object = interner.store().object_type(materialized).unwrap();
+    assert_eq!(object.property("direct").unwrap().ty, string);
+    assert_eq!(object.property("array").unwrap().ty, expected_array);
+    assert_eq!(object.property("tuple").unwrap().ty, expected_tuple);
+    assert_eq!(object.property("readonly").unwrap().ty, expected_readonly);
+    assert!(object
+        .properties
+        .iter()
+        .all(|property| interner.store().tag(property.ty) != TypeTag::Declared));
+}
 
 /// Build a required public property `name: ty`.
 fn prop(name: &str, ty: TypeId) -> PropertyType {
@@ -2023,7 +2196,10 @@ fn freeze_does_not_publish_transient_occurrence_derivations() {
     assert!(occurrence.derivation.is_some());
     let (base_before, local_before) = interner.derivation_storage_counts_for_test();
     assert_eq!(base_before, 0);
-    assert!(local_before > 0, "negative control must allocate provenance");
+    assert!(
+        local_before > 0,
+        "negative control must allocate provenance"
+    );
 
     interner.freeze_as_base().expect("complete interner seals");
     assert_eq!(
@@ -2033,4 +2209,162 @@ fn freeze_does_not_publish_transient_occurrence_derivations() {
     );
     let delta = interner.fork_delta().expect("sealed interner forks");
     assert_eq!(delta.derivation_storage_counts_for_test(), (0, 0));
+}
+
+#[test]
+fn all_nested_declared_shapes_propagate_missing_recipe() {
+    let mut interner = Interner::with_intrinsics();
+    let missing = DeclaredRecipeId(u32::MAX);
+    let parameter_id = TypeParamId(80_100);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", parameter)],
+        ..Default::default()
+    });
+    let nested_application = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template,
+        parameters: vec![parameter_id],
+        arguments: vec![missing],
+    });
+    let malformed_array = interner.intern_declared_recipe(DeclaredRecipeNode::Array(missing));
+    let nested_composite_application =
+        interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![parameter_id],
+            arguments: vec![malformed_array],
+        });
+    let shapes = [
+        DeclaredRecipeNode::Array(missing),
+        DeclaredRecipeNode::Tuple {
+            elements: vec![missing],
+            rest: None,
+        },
+        DeclaredRecipeNode::Tuple {
+            elements: Vec::new(),
+            rest: Some((0, missing)),
+        },
+        DeclaredRecipeNode::Readonly(missing),
+        DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![parameter_id],
+            arguments: vec![missing],
+        },
+        DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![parameter_id],
+            arguments: vec![nested_application],
+        },
+        DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![parameter_id],
+            arguments: vec![nested_composite_application],
+        },
+    ];
+
+    for shape in shapes {
+        let recipe = interner.intern_declared_recipe(shape);
+        let root = interner.intern_declared(recipe, []);
+        assert_eq!(
+            interner.materialize_declared(root),
+            Err(DeclaredMaterializationError::MissingRecipe(missing))
+        );
+        assert_eq!(
+            interner.materialize_declared_derived(root),
+            Err(DeclaredMaterializationError::MissingRecipe(missing))
+        );
+    }
+}
+
+#[test]
+fn cyclic_declared_applications_fail_during_shallow_validation() {
+    let mut interner = Interner::with_intrinsics();
+    let parameter_id = TypeParamId(80_101);
+    let template = interner.intern_type_param(parameter_id, "T");
+    let first = DeclaredRecipeId(
+        u32::try_from(interner.store().all_declared_recipes().count())
+            .expect("recipe count fits u32"),
+    );
+    let second = DeclaredRecipeId(first.0.checked_add(1).expect("second recipe id fits u32"));
+    assert_eq!(
+        interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![parameter_id],
+            arguments: vec![second],
+        }),
+        first
+    );
+    assert_eq!(
+        interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+            template,
+            parameters: vec![parameter_id],
+            arguments: vec![first],
+        }),
+        second
+    );
+
+    for (recipe, reentry) in [(first, first), (second, second)] {
+        let root = interner.intern_declared(recipe, []);
+        assert_eq!(
+            interner.materialize_declared(root),
+            Err(DeclaredMaterializationError::CyclicRecipe(reentry))
+        );
+        assert_eq!(
+            interner.materialize_declared_derived(root),
+            Err(DeclaredMaterializationError::CyclicRecipe(reentry))
+        );
+    }
+}
+
+#[test]
+fn shared_acyclic_declared_application_recipe_is_not_a_cycle() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let inner_parameter = TypeParamId(80_102);
+    let left_parameter = TypeParamId(80_103);
+    let right_parameter = TypeParamId(80_104);
+    let inner_parameter_ty = interner.intern_type_param(inner_parameter, "Inner");
+    let left_parameter_ty = interner.intern_type_param(left_parameter, "Left");
+    let right_parameter_ty = interner.intern_type_param(right_parameter, "Right");
+    let inner_template = interner.intern_object(ObjectType {
+        properties: vec![prop("value", inner_parameter_ty)],
+        ..Default::default()
+    });
+    let outer_template = interner.intern_object(ObjectType {
+        properties: vec![
+            prop("left", left_parameter_ty),
+            prop("right", right_parameter_ty),
+        ],
+        ..Default::default()
+    });
+    let string = interner.intern_declared_recipe(DeclaredRecipeNode::Type(wk.string));
+    let shared = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: inner_template,
+        parameters: vec![inner_parameter],
+        arguments: vec![string],
+    });
+    let outer = interner.intern_declared_recipe(DeclaredRecipeNode::Application {
+        template: outer_template,
+        parameters: vec![left_parameter, right_parameter],
+        arguments: vec![shared, shared],
+    });
+    let root = interner.intern_declared(outer, []);
+
+    let SubstitutionOutcome::CycleClean(raw) = interner
+        .materialize_declared(root)
+        .expect("shared DAG materializes")
+    else {
+        panic!("shared DAG stays cycle-clean")
+    };
+    let DerivedSubstitutionOutcome::CycleClean(derived) = interner
+        .materialize_declared_derived(root)
+        .expect("shared derived DAG materializes")
+    else {
+        panic!("shared derived DAG stays cycle-clean")
+    };
+    assert_eq!(derived.ty, raw);
+    let object = interner.store().object_type(raw).expect("outer object");
+    assert_eq!(
+        object.property("left").map(|property| property.ty),
+        object.property("right").map(|property| property.ty)
+    );
 }
