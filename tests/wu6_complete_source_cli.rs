@@ -469,6 +469,36 @@ fn cold_route_uses_native_array_identity_inside_published_user_types() -> Result
 }
 
 #[test]
+fn cold_route_uses_native_array_identity_in_library_interface_augmentations() -> Result<(), String>
+{
+    let reports = compare_routes(vec![FileInput {
+        name: "/wu6/native-array-library-augmentation.ts".to_owned(),
+        source: concat!(
+            "interface Window {\n",
+            "  wu6NativeValues: Array<number>;\n",
+            "  wu6NativeFrozen: ReadonlyArray<number>;\n",
+            "}\n",
+            "declare const view: Window;\n",
+            "const values: number[] = view.wu6NativeValues;\n",
+            "const frozen: readonly number[] = view.wu6NativeFrozen;\n",
+            "const wrongValues: string[] = view.wu6NativeValues;\n",
+            "const wrongFrozen: readonly string[] = view.wu6NativeFrozen;\n",
+        )
+        .to_owned(),
+    }])?;
+    let [report] = reports.as_slice() else {
+        return Err("native-array augmentation must return one report".to_owned());
+    };
+    let codes = diagnostic_codes(&report.output);
+    if codes != ["TK2322", "TK2322"] {
+        return Err(format!(
+            "native array identities in a library interface augmentation must retain both wrong-type controls: {codes:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn cold_route_does_not_promote_module_local_array_interfaces() -> Result<(), String> {
     let reports = compare_routes(vec![FileInput {
         name: "/wu6/module-local-array.ts".to_owned(),
