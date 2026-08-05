@@ -394,10 +394,20 @@ class ProbeContractTests(unittest.TestCase):
         cls.prereader = FakePrereader(cls.executor)
         cls.comparator_verifier = FakeComparatorVerifier()
         cls.execution_conditions = copy.deepcopy(bench.execution_conditions())
-        with mock.patch.object(
-            bench,
-            "execution_conditions",
-            return_value=copy.deepcopy(cls.execution_conditions),
+        cls.invocation_descriptor_spy = mock.Mock(
+            wraps=bench.invocation_descriptor
+        )
+        with (
+            mock.patch.object(
+                bench,
+                "execution_conditions",
+                return_value=copy.deepcopy(cls.execution_conditions),
+            ),
+            mock.patch.object(
+                bench,
+                "invocation_descriptor",
+                cls.invocation_descriptor_spy,
+            ),
         ):
             cls.evidence = probe.run_probe(
                 production=cls.production,
@@ -506,6 +516,13 @@ class ProbeContractTests(unittest.TestCase):
         binary, contract = self.comparator_verifier.calls[0]
         self.assertEqual(binary, self.tsgo.resolve())
         self.assertEqual(contract, bench.verify_contract())
+        self.assertEqual(
+            self.invocation_descriptor_spy.call_count,
+            len(self.executor.calls),
+        )
+        for descriptor_call in self.invocation_descriptor_spy.call_args_list:
+            self.assertEqual(descriptor_call.args[1], bench.sanitized_environment())
+            self.assertEqual(Path(descriptor_call.args[2]).resolve(), REPO.resolve())
 
     def test_python_cli_wires_exact_paths_status_and_fail_closed_usage(self) -> None:
         self.assertIs(inspect.signature(probe.main).parameters["runner"].default, probe.run_probe)
@@ -585,6 +602,26 @@ class ProbeContractTests(unittest.TestCase):
         probe.validate_live_cli_paths(CANONICAL_PRODUCTION, CANONICAL_ONE_PASS)
         with self.assertRaisesRegex(probe.ProbeError, "canonical|production|one-pass|release"):
             probe.validate_live_cli_paths(self.production, self.one_pass)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            canonical_production = root / "target/release/typokat"
+            canonical_one_pass = root / "target/release/examples/one_pass_probe"
+            canonical_one_pass.parent.mkdir(parents=True)
+            canonical_production.write_bytes(b"canonical production")
+            canonical_one_pass.write_bytes(b"canonical one-pass")
+            with mock.patch.object(probe, "ROOT", root):
+                probe.validate_live_cli_paths(canonical_production, canonical_one_pass)
+                wrapper = root / "wrapper"
+                wrapper.write_bytes(b"wrapper")
+                canonical_production.unlink()
+                canonical_production.symlink_to(wrapper)
+                with self.assertRaisesRegex(
+                    probe.ProbeError, "canonical|symlink|production|release"
+                ):
+                    probe.validate_live_cli_paths(
+                        canonical_production, canonical_one_pass
+                    )
 
         canonical_argv = [
             "run",
