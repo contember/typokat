@@ -523,6 +523,34 @@ fn cold_route_uses_native_array_identity_in_user_interface_defaults() -> Result<
 }
 
 #[test]
+fn cold_route_uses_native_array_identity_in_namespace_declaration_surfaces() -> Result<(), String> {
+    let reports = compare_routes(vec![FileInput {
+        name: "/wu6/native-array-namespace-surfaces.ts".to_owned(),
+        source: concat!(
+            "declare namespace WU6NamespaceSurfaces {\n",
+            "  const values: Array<number>;\n",
+            "  function frozen(): ReadonlyArray<number>;\n",
+            "}\n",
+            "const namespaceValues: number[] = WU6NamespaceSurfaces.values;\n",
+            "const namespaceFrozen: readonly number[] = WU6NamespaceSurfaces.frozen();\n",
+            "const wrongNamespaceValues: string[] = WU6NamespaceSurfaces.values;\n",
+            "const wrongNamespaceFrozen: readonly string[] = WU6NamespaceSurfaces.frozen();\n",
+        )
+        .to_owned(),
+    }])?;
+    let [report] = reports.as_slice() else {
+        return Err("native-array namespace surfaces must return one report".to_owned());
+    };
+    let codes = diagnostic_codes(&report.output);
+    if codes != ["TK2322", "TK2322"] {
+        return Err(format!(
+            "native array identities in namespace declaration surfaces must retain both wrong-type controls: {codes:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn cold_route_does_not_promote_module_local_array_interfaces() -> Result<(), String> {
     let reports = compare_routes(vec![FileInput {
         name: "/wu6/module-local-array.ts".to_owned(),
