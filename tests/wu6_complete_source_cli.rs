@@ -499,6 +499,30 @@ fn cold_route_uses_native_array_identity_in_library_interface_augmentations() ->
 }
 
 #[test]
+fn cold_route_uses_native_array_identity_in_user_interface_defaults() -> Result<(), String> {
+    let reports = compare_routes(vec![FileInput {
+        name: "/wu6/native-array-interface-default.ts".to_owned(),
+        source: concat!(
+            "interface WU6InterfaceDefault<T = Array<number>> { value: T; }\n",
+            "declare const interfaceDefault: WU6InterfaceDefault;\n",
+            "const interfaceValues: number[] = interfaceDefault.value;\n",
+            "const wrongInterfaceValues: string[] = interfaceDefault.value;\n",
+        )
+        .to_owned(),
+    }])?;
+    let [report] = reports.as_slice() else {
+        return Err("native-array interface default must return one report".to_owned());
+    };
+    let codes = diagnostic_codes(&report.output);
+    if codes != ["TK2322"] {
+        return Err(format!(
+            "native array identity in a user interface default must retain its wrong-type control: {codes:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn cold_route_does_not_promote_module_local_array_interfaces() -> Result<(), String> {
     let reports = compare_routes(vec![FileInput {
         name: "/wu6/module-local-array.ts".to_owned(),
