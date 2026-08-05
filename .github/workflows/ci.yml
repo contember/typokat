@@ -113,18 +113,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Corpus is fully determined by PINNED_SHA + DEFAULT_DIRS in tsofficial.py, so
-      # keying the cache on that file's hash is sound: any change re-fetches.
+      # The corpus and its pinned full-blob repository are both fetched inputs.
+      # Keying them on tsofficial.py invalidates either when the contract changes.
       - name: Cache fetched corpus
-        id: corpus-cache
         uses: actions/cache@v4
         with:
-          path: tooling/official-suite/corpus
-          key: ts-corpus-${{ hashFiles('tooling/official-suite/tsofficial.py') }}
+          path: |
+            tooling/official-suite/corpus
+            tooling/official-suite/.tools/typescript.git
+          key: ts-official-full-v2-${{ hashFiles('tooling/official-suite/tsofficial.py') }}
       - name: Build release binary
         run: cargo build --release
       - name: Fetch corpus (pinned TS SHA)
-        if: steps.corpus-cache.outputs.cache-hit != 'true'
         working-directory: tooling/official-suite
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
