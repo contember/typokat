@@ -1,6 +1,8 @@
 //! Type rendering for diagnostic messages (the corpus display format).
 
-use crate::types::repr::{DeclaredRecipeId, DeclaredRecipeNode, TypeParamId, TypeTag};
+use crate::types::repr::{
+    DeclaredRecipeId, DeclaredRecipeNode, LiteralValue, TypeParamId, TypeTag,
+};
 use crate::types::store::{Store, TypeId};
 use rustc_hash::FxHashMap;
 
@@ -227,27 +229,26 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
             None => context.append("<unsupported>"),
         },
         // Union: `number | string` — members in stored (canonical, TypeId-sorted)
-        // order, ` | `-separated (README "Type display format"). That order is
-        // intern-order dependent, so union-typed targets are asserted code-only.
+        // order, except string-literal-only unions use payload order for stable display.
         TypeTag::Union => match store.union_members(id) {
             Some(members) => {
-                for (index, &member) in members.iter().enumerate() {
-                    if context.truncated {
-                        break;
-                    }
-                    if index > 0 {
-                        context.append(" | ");
-                    }
-                    // tsc parenthesizes an intersection element inside a union
-                    // (`(A & B) | C`), so the `&`/`|` precedence reads correctly.
-                    let parenthesized = render_tag(store, member, context) == TypeTag::Intersection;
-                    if parenthesized {
-                        context.append("(");
-                    }
-                    render_type_inner(store, member, false, context);
-                    if parenthesized {
-                        context.append(")");
-                    }
+                let string_members = members
+                    .iter()
+                    .copied()
+                    .map(|member| match store.literal_value(member) {
+                        Some(LiteralValue::String(value)) => Some((value.as_str(), member)),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(mut string_members) = string_members {
+                    string_members.sort_by(|left, right| left.0.cmp(right.0));
+                    render_union_members(
+                        store,
+                        string_members.into_iter().map(|(_, member)| member),
+                        context,
+                    );
+                } else {
+                    render_union_members(store, members.iter().copied(), context);
                 }
             }
             // Defensive fallback; a union always has a side-table entry.
@@ -535,6 +536,30 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
             }
             None => context.append("<unsupported>"),
         },
+    }
+}
+
+fn render_union_members(
+    store: &Store,
+    members: impl IntoIterator<Item = TypeId>,
+    context: &mut RenderContext,
+) {
+    for (index, member) in members.into_iter().enumerate() {
+        if context.truncated {
+            break;
+        }
+        if index > 0 {
+            context.append(" | ");
+        }
+        // tsc parenthesizes an intersection element inside a union (`(A & B) | C`).
+        let parenthesized = render_tag(store, member, context) == TypeTag::Intersection;
+        if parenthesized {
+            context.append("(");
+        }
+        render_type_inner(store, member, false, context);
+        if parenthesized {
+            context.append(")");
+        }
     }
 }
 
