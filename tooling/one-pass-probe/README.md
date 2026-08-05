@@ -12,6 +12,10 @@ process compiles the committed TypeScript 6.0.3 profile from source through
 corroborated by the measured one-pass binary SHA-256 and independent code review; a self-reported
 route string alone is not evidence.
 
+The candidate is a complete-source fallback probe for the current production design. It is not
+the phase-boundary design known as variant (b), and a promising result does not approve that
+design. The authoritative WU6 run remains required after any production change.
+
 ## Frozen references and authoritative primitives
 
 The probe owns no workload, profile, oracle, process supervisor, diagnostic parser, or RSS parser.
@@ -68,6 +72,10 @@ One-pass JSON has exactly these keys:
 Both JSON responses are retained as raw process records. All three measured binaries have exact
 path, byte length, and SHA-256 identities. Every invocation records the guarded executable identity
 before and after and rejects any change.
+
+The collector captures one `{affinity,nice,rlimits}` tuple before the first invocation. Every
+invocation descriptor must use that exact tuple. Validation rejects a coherently re-keyed
+descriptor whose affinity or resource limits differ from the captured collection conditions.
 
 ## Raw process and invocation contract
 
@@ -151,8 +159,10 @@ Evidence output is forbidden anywhere under `tooling/full-lib-bench`, including 
 symlink. That directory is reserved for authoritative attempts. Example:
 
 ```sh
-cargo build --release --bin typokat
-cargo build --release --example one_pass_probe
+flock -w 3600 /tmp/typokat-perf.lock -c \
+  'cpu-lease run -n 2 -- cargo build --release --bin typokat'
+flock -w 3600 /tmp/typokat-perf.lock -c \
+  'cpu-lease run -n 2 -- cargo build --release --example one_pass_probe'
 
 target/release/examples/one_pass_probe probe-info --format json
 target/release/examples/one_pass_probe check --format compact \
@@ -160,16 +170,25 @@ target/release/examples/one_pass_probe check --format compact \
 target/release/examples/one_pass_probe check --format compact \
   tooling/full-lib-bench/workloads/fast-errors/main.ts
 
-python3 tooling/one-pass-probe/one_pass_probe.py run \
-  --production target/release/typokat \
-  --one-pass target/release/examples/one_pass_probe \
-  --tsgo tooling/full-lib-bench/.stage/tsgo-7.0.2/lib/tsc \
-  --output /tmp/typokat-one-pass-probe.json
+flock -w 3600 /tmp/typokat-perf.lock -c \
+  'cpu-lease run -n 4 --no-smt -- python3 tooling/one-pass-probe/one_pass_probe.py run \
+    --production target/release/typokat \
+    --one-pass target/release/examples/one_pass_probe \
+    --tsgo tooling/full-lib-bench/.stage/tsgo-7.0.2/lib/tsc \
+    --output /tmp/typokat-one-pass-probe.json'
 ```
 
 The production binary and test-only example must always be built by those two separate Cargo
 invocations. Never combine them in one Cargo command: the example's `test-utils` dependency feature
 would otherwise be unified into the production binary and invalidate the route comparison.
+The leader must witness both builds immediately before collection from committed, independently
+reviewed build-relevant sources. The run log records the exact HEAD, both separate builds, and the
+leased collector command. These are run-log obligations, not a new self-contained build-record
+schema, and they do not make this probe authoritative.
+
+The live CLI binds P and O to `target/release/typokat` and
+`target/release/examples/one_pass_probe` under the repository root. Arbitrary P/O paths are allowed
+only through the explicitly injected runner seam used by acceptance tests.
 
 The direct release acceptance is binding before measurement can be interpreted:
 

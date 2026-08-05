@@ -44,6 +44,8 @@ MEMORY_PANELS = (
 PROFILE_SHA256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
 TSGO_SHA256 = "4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4"
 COMMENT = b"// one-pass probe perturbation; semantics unchanged\n"
+CANONICAL_PRODUCTION = REPO / "target/release/typokat"
+CANONICAL_ONE_PASS = REPO / "target/release/examples/one_pass_probe"
 
 
 def load_implementation():
@@ -391,16 +393,22 @@ class ProbeContractTests(unittest.TestCase):
         cls.executor = FakeExecutor(cls.production, cls.one_pass, cls.tsgo)
         cls.prereader = FakePrereader(cls.executor)
         cls.comparator_verifier = FakeComparatorVerifier()
-        cls.evidence = probe.run_probe(
-            production=cls.production,
-            one_pass=cls.one_pass,
-            tsgo=cls.tsgo,
-            output=cls.output,
-            executor=cls.executor,
-            identity_reader=cls.executor.identity,
-            prereader=cls.prereader,
-            comparator_verifier=cls.comparator_verifier,
-        )
+        cls.execution_conditions = copy.deepcopy(bench.execution_conditions())
+        with mock.patch.object(
+            bench,
+            "execution_conditions",
+            return_value=copy.deepcopy(cls.execution_conditions),
+        ):
+            cls.evidence = probe.run_probe(
+                production=cls.production,
+                one_pass=cls.one_pass,
+                tsgo=cls.tsgo,
+                output=cls.output,
+                executor=cls.executor,
+                identity_reader=cls.executor.identity,
+                prereader=cls.prereader,
+                comparator_verifier=cls.comparator_verifier,
+            )
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -573,6 +581,42 @@ class ProbeContractTests(unittest.TestCase):
             status = probe.main(forbidden, runner=forbidden_runner)
         self.assertEqual(status, 2)
         self.assertEqual(called, [])
+
+        probe.validate_live_cli_paths(CANONICAL_PRODUCTION, CANONICAL_ONE_PASS)
+        with self.assertRaisesRegex(probe.ProbeError, "canonical|production|one-pass|release"):
+            probe.validate_live_cli_paths(self.production, self.one_pass)
+
+        canonical_argv = [
+            "run",
+            "--production",
+            str(CANONICAL_PRODUCTION),
+            "--one-pass",
+            str(CANONICAL_ONE_PASS),
+            "--tsgo",
+            str(self.tsgo),
+            "--output",
+            str(self.root / "canonical-cli-evidence.json"),
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                probe,
+                "validate_live_cli_paths",
+                side_effect=probe.ProbeError("live path sentinel"),
+            ),
+            mock.patch.object(
+                probe,
+                "verify_references",
+                side_effect=AssertionError("collection started before live path validation"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            status = probe.main(canonical_argv)
+        self.assertEqual(status, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertRegex(stderr.getvalue(), "live path sentinel")
 
     def test_references_parse_exact_locks_and_verify_all_profile_bytes(self) -> None:
         self.assertEqual(tuple(probe.ROUTES), ROUTES)
@@ -926,9 +970,21 @@ class ProbeContractTests(unittest.TestCase):
             self.validate(candidate)
 
     def test_invocation_descriptor_and_global_pid_sequence_are_exact(self) -> None:
+        self.assertEqual(
+            self.evidence["execution_conditions"],
+            self.execution_conditions,
+        )
         for descriptor in self.evidence["invocations"].values():
             self.assertEqual(descriptor["cwd"], str(REPO.resolve()))
             self.assertEqual(descriptor["env"], bench.sanitized_environment())
+            self.assertEqual(
+                {
+                    "affinity": descriptor["affinity"],
+                    "nice": descriptor["nice"],
+                    "rlimits": descriptor["rlimits"],
+                },
+                self.execution_conditions,
+            )
         candidate = copy.deepcopy(self.evidence)
         first = process_records(candidate)[0]
         descriptor = candidate["invocations"][first["invocation"]]
@@ -952,6 +1008,27 @@ class ProbeContractTests(unittest.TestCase):
             probe.ProbeError, "canonical|command|flag|invocation|skipLibCheck"
         ):
             self.validate(candidate)
+
+        for condition in ("affinity", "rlimits"):
+            with self.subTest(condition=condition):
+                candidate = copy.deepcopy(self.evidence)
+                record = panel(candidate, "fast-clean", "OT")[0]["records"][0]
+                forged = copy.deepcopy(candidate["invocations"][record["invocation"]])
+                if condition == "affinity":
+                    forged["affinity"] = [*forged["affinity"], max(forged["affinity"]) + 1]
+                else:
+                    current = forged["rlimits"]["RLIMIT_CORE"]
+                    forged["rlimits"]["RLIMIT_CORE"] = (
+                        [0, 0] if current != [0, 0] else [1, 1]
+                    )
+                forged_key = bench.sha256_bytes(bench.canonical_json(forged))
+                candidate["invocations"][forged_key] = forged
+                record["invocation"] = forged_key
+                with self.assertRaisesRegex(
+                    probe.ProbeError,
+                    "execution condition|affinity|rlimit|snapshot|invocation",
+                ):
+                    self.validate(candidate)
 
         candidate = copy.deepcopy(self.evidence)
         records = process_records(candidate)
