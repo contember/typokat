@@ -3442,6 +3442,8 @@ pub struct InjectedProfileRun {
     pub library_records: Vec<(LibraryEventKey, CheckerRecord)>,
     user_results: Vec<super::CheckResult>,
     #[cfg(any(test, feature = "test-utils"))]
+    ordered_user_records: Vec<(LibraryFileOrdinal, CheckerRecord)>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub pass_source_units: Vec<ExactUnit>,
     #[cfg(any(test, feature = "test-utils"))]
     pub lexical_source_units: Vec<ExactUnit>,
@@ -6249,7 +6251,7 @@ pub fn compile_complete_combined_oracle_for_test(
                 .to_owned(),
         ));
     }
-    let normalized_records = run
+    let mut normalized_records = run
         .library_records
         .into_iter()
         .map(|(key, record)| {
@@ -6261,7 +6263,16 @@ pub fn compile_complete_combined_oracle_for_test(
             };
             (key.file_ordinal, normalized)
         })
-        .collect();
+        .collect::<Vec<_>>();
+    for (file_ordinal, record) in run.ordered_user_records {
+        let normalized = match record {
+            CheckerRecord::Diagnostic(diagnostic) => {
+                format!("{} {}", diagnostic.code.as_str(), diagnostic.message)
+            }
+            CheckerRecord::Incomplete(incomplete) => format!("incomplete {incomplete:?}"),
+        };
+        normalized_records.push((file_ordinal, normalized));
+    }
     Ok(CompleteCombinedOracleForTest {
         normalized_records,
         normalized_root_projection: runtime.normalized_root_projection_for_test(root_names),
@@ -6399,6 +6410,29 @@ fn with_canonical_frontend<'source, Output>(
             )
         })
         .collect::<Vec<_>>();
+    let (user_units, user_events, combined_lexical_events) = if let Some(user_start) = user_start {
+        let mut user_units = Vec::with_capacity(units.len().saturating_sub(user_start));
+        let mut user_events = EventStore::default();
+        let mut reservations: LexicalReservations<PrivateCombinedRecordTicket> =
+            LexicalReservations::default();
+        for (user_index, (program, unit)) in units.iter().skip(user_start).enumerate() {
+            let module_ordinal = ModuleOrdinal::new(user_index);
+            let unit_slot = UnitSlot::new(user_index);
+            reservations
+                .reserve_private_continuation_program(
+                    module_ordinal,
+                    unit_slot,
+                    program,
+                    unit.binding,
+                    &mut user_events,
+                )
+                .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
+            user_units.push((module_ordinal, unit_slot));
+        }
+        (user_units, user_events, Some(reservations))
+    } else {
+        (Vec::new(), EventStore::default(), None)
+    };
     let prelude_allocator = Allocator::default();
     let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
     let mut builder = ProjectBinderBuilder::new(&prelude.program);
@@ -6427,11 +6461,13 @@ fn with_canonical_frontend<'source, Output>(
     let checkpoint = build_library_binder_checkpoint(library_binder, library_units);
     let (mut builder, _) = checkpoint.into_continuation();
     let mut appended_module = None;
+    let mut module_placeholders = Vec::with_capacity(units.len().saturating_sub(library_count));
     if library_count < units.len() {
         builder.reserve_script_namespace_roots(units[library_count..].iter().copied());
         for (program, unit) in &units[library_count..] {
-            let (module, _) = builder.add_module(program, &[], *unit);
+            let (module, placeholders) = builder.add_module(program, &[], *unit);
             module_scopes.push(module);
+            module_placeholders.push(placeholders);
             appended_module = Some(module);
         }
     }
@@ -6475,11 +6511,11 @@ fn with_canonical_frontend<'source, Output>(
         module_scopes,
         semantic_scopes,
         user_start,
-        user_units: Vec::new(),
-        user_events: EventStore::default(),
-        combined_lexical_events: None,
+        user_units,
+        user_events,
+        combined_lexical_events,
         external_effects: BTreeMap::new(),
-        module_placeholders: Vec::new(),
+        module_placeholders,
         collision_root_provenance,
         #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
@@ -7063,6 +7099,79 @@ fn validate_complete_source_user_units(
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+fn complete_source_user_file_ordinals_for_test(
+    canonical: &[CanonicalInput<'_>],
+    user_start: Option<usize>,
+    user_units: &[(ModuleOrdinal, UnitSlot)],
+) -> Result<BTreeMap<ModuleOrdinal, LibraryFileOrdinal>, InjectedProfileError> {
+    let Some(user_start) = user_start else {
+        if user_units.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete-source user file ordinal mapping omits the suffix".to_owned(),
+        ));
+    };
+    let suffix = canonical.get(user_start..).ok_or_else(|| {
+        InjectedProfileError::CanonicalProjection(
+            "complete-source user file ordinal mapping starts outside the canonical inputs"
+                .to_owned(),
+        )
+    })?;
+    if suffix.len() != user_units.len() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete-source user file ordinal mapping is incomplete".to_owned(),
+        ));
+    }
+    let mut expected_modules = BTreeSet::new();
+    for (module_ordinal, _) in user_units {
+        if !expected_modules.insert(*module_ordinal) {
+            return Err(InjectedProfileError::CanonicalProjection(format!(
+                "complete-source user file ordinal mapping duplicates module ordinal {}",
+                module_ordinal.index()
+            )));
+        }
+    }
+    let mut file_ordinals = BTreeMap::new();
+    let mut seen_file_ordinals = BTreeSet::new();
+    for input in suffix {
+        let CompilationOrigin::User(original_module_ordinal) = input.origin else {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "complete-source user file ordinal mapping contains a library origin".to_owned(),
+            ));
+        };
+        let module_ordinal = ModuleOrdinal::new(original_module_ordinal.index());
+        if !expected_modules.contains(&module_ordinal) {
+            return Err(InjectedProfileError::CanonicalProjection(format!(
+                "complete-source user file ordinal mapping contains unexpected module ordinal {}",
+                module_ordinal.index()
+            )));
+        }
+        if file_ordinals
+            .insert(module_ordinal, input.file_ordinal)
+            .is_some()
+        {
+            return Err(InjectedProfileError::CanonicalProjection(format!(
+                "complete-source user file ordinal mapping duplicates module ordinal {}",
+                module_ordinal.index()
+            )));
+        }
+        if !seen_file_ordinals.insert(input.file_ordinal) {
+            return Err(InjectedProfileError::CanonicalProjection(format!(
+                "complete-source user file ordinal mapping duplicates file ordinal {}",
+                input.file_ordinal.index()
+            )));
+        }
+    }
+    if file_ordinals.len() != expected_modules.len() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete-source user file ordinal mapping omits a module ordinal".to_owned(),
+        ));
+    }
+    Ok(file_ordinals)
+}
+
 fn assemble_complete_source_user_results(
     user_units: &[(ModuleOrdinal, UnitSlot)],
     mut user_records: BTreeMap<ModuleOrdinal, Vec<CheckerRecord>>,
@@ -7129,6 +7238,9 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         bind_elapsed,
     } = frontend;
     validate_complete_source_user_units(canonical.len(), user_start, &user_units)?;
+    #[cfg(any(test, feature = "test-utils"))]
+    let user_file_ordinals =
+        complete_source_user_file_ordinals_for_test(&canonical, user_start, &user_units)?;
     let source_unit_for_index = |index: usize, input: &CanonicalInput<'_>| {
         user_start
             .and_then(|start| index.checked_sub(start))
@@ -7683,17 +7795,32 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             .map_err(InjectedProfileError::Reporting)?
     };
     let library_records = ledger_output.records;
-    let user_records = user_events
+    let ordered_user_records = user_events
         .finish()
-        .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?
-        .into_iter()
-        .fold(
-            BTreeMap::<ModuleOrdinal, Vec<_>>::new(),
-            |mut records, (key, record)| {
-                records.entry(key.module_ordinal).or_default().push(record);
-                records
-            },
-        );
+        .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
+    #[cfg(any(test, feature = "test-utils"))]
+    let ordered_user_record_evidence = ordered_user_records
+        .iter()
+        .map(|(key, record)| {
+            let file_ordinal = user_file_ordinals
+                .get(&key.module_ordinal)
+                .copied()
+                .ok_or_else(|| {
+                    InjectedProfileError::CanonicalProjection(format!(
+                        "complete-source user file ordinal mapping omits module ordinal {}",
+                        key.module_ordinal.index()
+                    ))
+                })?;
+            Ok((file_ordinal, record.clone()))
+        })
+        .collect::<Result<Vec<_>, InjectedProfileError>>()?;
+    let user_records = ordered_user_records.into_iter().fold(
+        BTreeMap::<ModuleOrdinal, Vec<_>>::new(),
+        |mut records, (key, record)| {
+            records.entry(key.module_ordinal).or_default().push(record);
+            records
+        },
+    );
     let user_results = assemble_complete_source_user_results(&user_units, user_records)?;
     #[cfg(any(test, feature = "test-utils"))]
     if let Some(library_count) = user_start {
@@ -7966,6 +8093,8 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             LibraryRecordRetention::Collect => library_records,
         },
         user_results,
+        #[cfg(any(test, feature = "test-utils"))]
+        ordered_user_records: ordered_user_record_evidence,
         #[cfg(any(test, feature = "test-utils"))]
         pass_source_units,
         #[cfg(any(test, feature = "test-utils"))]
