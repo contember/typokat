@@ -5995,6 +5995,7 @@ pub fn compile_complete_combined_profile_for_test(
             frontend,
             ReplayIndexPlan::None,
             LibraryRecordRetention::Collect,
+            CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Flat,
         )
         .map(|(run, runtime, _)| (run, runtime))
@@ -6012,6 +6013,7 @@ pub fn compile_complete_source_project_programs<'ast>(
         frontend,
         ReplayIndexPlan::None,
         LibraryRecordRetention::Collect,
+        CanonicalLibraryEvidenceCapture::Capture,
         OwnerSiteStorageMode::Flat,
     )?;
     if replay_plan.is_some() {
@@ -6557,6 +6559,12 @@ pub enum LibraryRecordRetention {
     Collect,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CanonicalLibraryEvidenceCapture {
+    Skip,
+    Capture,
+}
+
 /// Compile a profile into its complete runtime product, collision replay index included.
 pub fn compile_owned_injected_profile(
     sources: &[InjectedLibrarySource<'_>],
@@ -6566,6 +6574,7 @@ pub fn compile_owned_injected_profile(
             frontend,
             ReplayIndexPlan::Assemble,
             LibraryRecordRetention::Collect,
+            CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Flat,
         )
         .map(|(run, runtime, _)| (run, runtime))
@@ -6631,6 +6640,7 @@ pub fn compile_owned_injected_base_profile_with_plan(
             frontend,
             ReplayIndexPlan::Deferred,
             LibraryRecordRetention::Drop,
+            CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Flat,
         )
         .and_then(|(run, runtime, plan)| {
@@ -6659,6 +6669,7 @@ pub fn compile_owned_injected_base_profile_with_ordered_owner_sites_for_test(
             frontend,
             ReplayIndexPlan::Deferred,
             LibraryRecordRetention::Drop,
+            CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Ordered,
         )
         .and_then(|(run, runtime, plan)| {
@@ -6687,6 +6698,7 @@ pub fn compile_owned_injected_base_profile_with_nested_owner_sites_for_test(
             frontend,
             ReplayIndexPlan::Deferred,
             LibraryRecordRetention::Drop,
+            CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Nested,
         )
         .and_then(|(run, runtime, plan)| {
@@ -6760,6 +6772,7 @@ pub fn compile_owned_injected_records(
             frontend,
             ReplayIndexPlan::Deferred,
             LibraryRecordRetention::Collect,
+            CanonicalLibraryEvidenceCapture::Skip,
             OwnerSiteStorageMode::Flat,
         )
     })
@@ -7055,6 +7068,7 @@ fn compile_owned_injected_frontend(
     frontend: CanonicalLibraryFrontend<'_, '_>,
     replay_index_plan: ReplayIndexPlan,
     record_retention: LibraryRecordRetention,
+    evidence_capture: CanonicalLibraryEvidenceCapture,
     owner_site_storage_mode: OwnerSiteStorageMode,
 ) -> Result<
     (
@@ -7069,6 +7083,7 @@ fn compile_owned_injected_frontend(
             frontend,
             replay_index_plan,
             record_retention,
+            evidence_capture,
             owner_site_storage_mode,
         )
     } else {
@@ -7076,6 +7091,7 @@ fn compile_owned_injected_frontend(
             frontend,
             replay_index_plan,
             record_retention,
+            evidence_capture,
             owner_site_storage_mode,
         )
     }
@@ -7211,6 +7227,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     frontend: CanonicalLibraryFrontend<'_, '_>,
     replay_index_plan: ReplayIndexPlan,
     record_retention: LibraryRecordRetention,
+    evidence_capture: CanonicalLibraryEvidenceCapture,
     owner_site_storage_mode: OwnerSiteStorageMode,
 ) -> Result<
     (
@@ -7828,7 +7845,9 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     );
     let user_results = assemble_complete_source_user_results(&user_units, user_records)?;
     #[cfg(any(test, feature = "test-utils"))]
-    if let Some(library_count) = user_start {
+    if let (CanonicalLibraryEvidenceCapture::Capture, Some(library_count)) =
+        (evidence_capture, user_start)
+    {
         let evidence_sources = canonical[..library_count]
             .iter()
             .map(|input| InjectedLibrarySource {
@@ -7840,6 +7859,8 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         let evidence = canonical_library_evidence_for_test(&evidence_sources, &library_records)?;
         record_complete_source_evidence_for_test(evidence);
     }
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let _ = evidence_capture;
     let replay_baselines = ledger_output
         .fingerprints
         .into_iter()
