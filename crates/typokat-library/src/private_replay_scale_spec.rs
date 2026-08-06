@@ -307,6 +307,53 @@ fn dom_listener_map_replays_the_exact_reverse_closure_in_linear_physical_work() 
 }
 
 #[test]
+fn complete_combined_oracle_preserves_interleaved_user_record_order() {
+    let sources = [
+        crate::check::checker::library_compiler::InjectedLibrarySource {
+            file_ordinal: crate::source::LibraryFileOrdinal::new(0),
+            name: "order-lib.d.ts",
+            source: "",
+        },
+        crate::check::checker::library_compiler::InjectedLibrarySource {
+            file_ordinal: crate::source::LibraryFileOrdinal::new(1),
+            name: "order-user.ts",
+            source: concat!(
+                "const before: string = 1;\n",
+                "1n;\n",
+                "const after: boolean = \"after\";\n",
+            ),
+        },
+    ];
+    let oracle =
+        crate::check::checker::library_compiler::compile_complete_combined_oracle_for_test(
+            &sources,
+            1,
+            &[],
+        )
+        .expect("combined oracle retains exact user records");
+    let rows = oracle
+        .normalized_records
+        .iter()
+        .filter(|(ordinal, _)| *ordinal == crate::source::LibraryFileOrdinal::new(1))
+        .map(|(_, row)| row.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(rows.len(), 3, "{rows:#?}");
+    assert_eq!(
+        rows[0],
+        "TK2322 Type 'number' is not assignable to type 'string'"
+    );
+    assert!(
+        rows[1].starts_with("incomplete ") && rows[1].contains("expr-infer/bigint-literal/self"),
+        "{rows:#?}"
+    );
+    assert_eq!(
+        rows[2],
+        "TK2322 Type 'string' is not assignable to type 'boolean'"
+    );
+}
+
+#[test]
 fn exact_locked_production_collision_uses_replay_without_source_fallback() {
     let root =
         crate::test_support::repository_root().join("tooling/full-lib-bench/workloads/collision");
