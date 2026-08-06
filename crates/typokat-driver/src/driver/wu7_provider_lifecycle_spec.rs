@@ -64,15 +64,19 @@ fn deterministic_initialization_failure_is_one_cached_arc_through_real_public_fu
     assert!(Arc::ptr_eq(&first, &second));
     assert!(Arc::ptr_eq(&first, &route));
 
+    let trace_context = scope.context();
     let errors = std::thread::scope(|threads| {
         (0..32)
             .map(|index| {
+                let trace_context = trace_context.clone();
                 threads.spawn(move || {
-                    if index % 2 == 0 {
-                        super::check_source("export const value = 1;\n").map(|_| ())
-                    } else {
-                        super::check_files(inputs(2)).map(|_| ())
-                    }
+                    trace_context.run(|| {
+                        if index % 2 == 0 {
+                            super::check_source("export const value = 1;\n").map(|_| ())
+                        } else {
+                            super::check_files(inputs(2)).map(|_| ())
+                        }
+                    })
                 })
             })
             .map(|worker| {
@@ -149,17 +153,21 @@ fn fault_trace_scope_excludes_a_preexisting_foreign_standalone_invocation() {
 #[test]
 fn thirty_two_real_public_callers_share_one_published_provider_and_base() {
     let scope = ProductionDriverFaultTraceScopeForTest::install(ProductionDriverFaultForTest::None);
+    let trace_context = scope.context();
     std::thread::scope(|threads| {
         let workers = (0..32)
             .map(|index| {
+                let trace_context = trace_context.clone();
                 threads.spawn(move || {
-                    if index % 3 == 0 {
-                        super::check_source("export const value = 1;\n").map(|_| ())
-                    } else if index % 3 == 1 {
-                        super::check_files(inputs(1)).map(|_| ())
-                    } else {
-                        super::check_project(inputs(1)).map(|_| ())
-                    }
+                    trace_context.run(|| {
+                        if index % 3 == 0 {
+                            super::check_source("export const value = 1;\n").map(|_| ())
+                        } else if index % 3 == 1 {
+                            super::check_files(inputs(1)).map(|_| ())
+                        } else {
+                            super::check_project(inputs(1)).map(|_| ())
+                        }
+                    })
                 })
             })
             .collect::<Vec<_>>();

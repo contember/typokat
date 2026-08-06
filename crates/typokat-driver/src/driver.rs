@@ -172,9 +172,15 @@ pub fn check_files(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverErro
     let base = library_base()?;
     #[cfg(test)]
     test_support::record_provider_acquired_before_rayon_for_test();
+    #[cfg(test)]
+    let trace_context = test_support::current_trace_context_for_test();
     let reports = inputs
         .into_par_iter()
         .map(|input| -> Result<FileReport, DriverError> {
+            #[cfg(test)]
+            let _trace_enrollment = trace_context
+                .as_ref()
+                .map(test_support::ProductionDriverFaultTraceContextForTest::enroll);
             #[cfg(test)]
             test_support::record_rayon_worker_start_for_test();
             let worker_base = base.clone();
@@ -379,6 +385,16 @@ where
     }
     #[cfg(test)]
     test_support::record_worker_start_for_test(_base_identity.unwrap_or_default());
+    #[cfg(test)]
+    let work = {
+        let trace_context = test_support::current_trace_context_for_test();
+        move || {
+            let _trace_enrollment = trace_context
+                .as_ref()
+                .map(test_support::ProductionDriverFaultTraceContextForTest::enroll);
+            work()
+        }
+    };
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .stack_size(CHECK_STACK_SIZE)
@@ -895,6 +911,7 @@ fn assemble_project_reports(
 #[cfg(test)]
 mod test_support {
     use super::*;
+    use std::cell::RefCell;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -940,10 +957,42 @@ mod test_support {
     }
 
     static SCOPE_GATE: Mutex<()> = Mutex::new(());
-    static ACTIVE_SCOPE: Mutex<Option<Arc<ActiveScope>>> = Mutex::new(None);
+    thread_local! {
+        static ENROLLED_SCOPE: RefCell<Option<Arc<ActiveScope>>> = const { RefCell::new(None) };
+    }
+
+    #[derive(Clone)]
+    pub(super) struct ProductionDriverFaultTraceContextForTest {
+        active: Arc<ActiveScope>,
+    }
+
+    pub(super) struct ProductionDriverFaultTraceEnrollmentForTest {
+        previous: Option<Arc<ActiveScope>>,
+    }
+
+    impl ProductionDriverFaultTraceContextForTest {
+        pub(super) fn enroll(&self) -> ProductionDriverFaultTraceEnrollmentForTest {
+            let previous = ENROLLED_SCOPE.with(|scope| scope.replace(Some(self.active.clone())));
+            ProductionDriverFaultTraceEnrollmentForTest { previous }
+        }
+
+        pub(super) fn run<Output>(&self, work: impl FnOnce() -> Output) -> Output {
+            let _enrollment = self.enroll();
+            work()
+        }
+    }
+
+    impl Drop for ProductionDriverFaultTraceEnrollmentForTest {
+        fn drop(&mut self) {
+            ENROLLED_SCOPE.with(|scope| {
+                scope.replace(self.previous.take());
+            });
+        }
+    }
 
     pub(super) struct ProductionDriverFaultTraceScopeForTest {
         active: Arc<ActiveScope>,
+        _owner_enrollment: ProductionDriverFaultTraceEnrollmentForTest,
         _gate: MutexGuard<'static, ()>,
     }
 
@@ -955,17 +1004,32 @@ mod test_support {
                 provider_result: OnceLock::new(),
                 trace: Mutex::new(ProductionDriverTraceForTest::default()),
             });
-            *lock(&ACTIVE_SCOPE) = Some(active.clone());
+            let owner_context = ProductionDriverFaultTraceContextForTest {
+                active: active.clone(),
+            };
             Self {
                 active,
+                _owner_enrollment: owner_context.enroll(),
                 _gate: gate,
             }
         }
 
         pub(super) fn finish(self) -> ProductionDriverTraceForTest {
-            *lock(&ACTIVE_SCOPE) = None;
-            lock(&self.active.trace).clone()
+            let trace = lock(&self.active.trace).clone();
+            drop(self);
+            trace
         }
+
+        pub(super) fn context(&self) -> ProductionDriverFaultTraceContextForTest {
+            ProductionDriverFaultTraceContextForTest {
+                active: self.active.clone(),
+            }
+        }
+    }
+
+    pub(super) fn current_trace_context_for_test(
+    ) -> Option<ProductionDriverFaultTraceContextForTest> {
+        active_scope().map(|active| ProductionDriverFaultTraceContextForTest { active })
     }
 
     pub(super) fn acquire_provider_for_test(
@@ -1079,7 +1143,7 @@ mod test_support {
     }
 
     fn active_scope() -> Option<Arc<ActiveScope>> {
-        lock(&ACTIVE_SCOPE).clone()
+        ENROLLED_SCOPE.with(|scope| scope.borrow().clone())
     }
 
     fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
