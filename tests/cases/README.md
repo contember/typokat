@@ -256,9 +256,8 @@ introducing a second checker route. Keep every referenced directory registered i
 `MILESTONE_DIRS`; the harness rejects an unregistered selected fixture. Mixed corpora stay
 registered `false` until the whole directory is ready.
 
-The enabled backlog-14 slice follows the usual per-fixture convention. The remaining fixtures
-await WU6 isolated verification and expectation reconciliation, with residual model gaps kept
-disabled.
+The backlog-14 flat and project corpora are enabled as whole directories and run through the same
+public production driver. Residual model gaps remain explicit outcomes with independent owners.
 
 `native_array_annotation_identity.ts` pins the annotation side of the native-array bridge:
 `Array<T>` and `ReadonlyArray<T>` name the intrinsic array types themselves, so an annotation
@@ -326,12 +325,12 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
-| `b14_full_lib_loading/` | backlog `14` (whole corpus enabled) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
-| `b14_full_lib_loading_project/` | backlog `14` (whole corpus enabled) | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
-| `b102_frozen_prefix_writes/` | backlog `102`/`103` regression net (enabled) | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
-| `b102_frozen_prefix_writes_project/` | backlog `102` (enabled, project-shaped) | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
-| `b103_library_merge_correctness/` | backlog `103` correctness tier (enabled) | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
-| `b103_library_merge_correctness_project/` | backlog `103` correctness tier (enabled, project-shaped) | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
+| `b14_full_lib_loading/` | shipped backlog `14` production corpus (final lifecycle closure pending) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | shipped backlog `14` production corpus (final lifecycle closure pending) | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b102_frozen_prefix_writes/` | shipped backlogs `102`/`103` regression net | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
+| `b102_frozen_prefix_writes_project/` | shipped backlog `102` project regression net | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
+| `b103_library_merge_correctness/` | shipped backlog `103` correctness tier | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
+| `b103_library_merge_correctness_project/` | shipped backlog `103` project correctness tier | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
@@ -350,7 +349,7 @@ to inference. Deliberately unpinned: a mixed-element literal against `[T, T]` (`
 — tsc reports a per-element contextual error whose code/position rides on subtle
 inference-priority choices.
 
-`b102_frozen_prefix_writes/` and `b102_frozen_prefix_writes_project/` are the backlog-`102`
+`b102_frozen_prefix_writes/` and `b102_frozen_prefix_writes_project/` are the shipped backlog-`102`
 corpora. The **publication** half is project-shaped: an ordinary `globals.d.ts`-shaped script file
 declaring an interface, `declare var`, `declare function`, `declare namespace`, `class`, and a
 `type` alias, consumed from a second file — once in declaration order and once with the consumer
@@ -361,7 +360,7 @@ controls are the shapes that must NOT publish: an external module's `interface A
 module-local `Date`/`class` shadow inside their own file and stay invisible to a sibling script
 file, whose `Array`/`Date` surfaces must remain the library ones.
 
-The flat library-collision fixtures now route through backlog `103`'s sparse private epoch. Legal
+The flat library-collision fixtures route through the sparse private epoch shipped by backlog `103`. Legal
 merges and overloads expose the user fragment alongside the library surface; illegal `var`,
 lexical, type-alias, and class collisions preserve the library winner and the remaining missing
 duplicate-declaration diagnostics stay ledgered in
@@ -683,8 +682,9 @@ explicit incomplete outcomes: 173 owned by `75` and eight type predicates owned 
 namespace owner remains.
 `deep.Intl.value` now contributes the same `TK2322` as tsc, so the synthetic suffix is exactly 66
 `TK2322` diagnostics with no `TK2304` and no added incomplete. These counts are exact accounting,
-not a broad allowlist. The namespace lifecycle is closed, so GO permits loader work now; it does
-not claim that standard-library loading, owners `50`/`75`, or checker 1.0 are complete.
+not a broad allowlist. The namespace lifecycle closed that historical start gate. Production
+standard-library loading subsequently shipped under the active closure sprint; this proof does
+not by itself claim that owners `50`/`75` or checker 1.0 are complete.
 
 The WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Five enabled
 `wu6a_*.ts` flat fixtures pin ordinary and ambient/reopened roots as first-class aliases,

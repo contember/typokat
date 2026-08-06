@@ -4,8 +4,11 @@ The pinned-standard-library construct audit required by the 1.0 manifest
 ([`completion-1.0.toml`](completion-1.0.toml), `[meta].lib_audit_artifact`). It records,
 reproducibly, **which TypeScript constructs the standard-library surface uses** and
 classifies each against typokat's shipped model and the remaining owners. It is an **audit and
-explicit-input readiness proof**, not `lib.d.ts` loading (backlog `14`). The machine-enforced result
-is [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
+explicit-input readiness proof**, not the production `lib.d.ts` loader. It established backlog
+`14`'s historical start gate; the production cutover subsequently shipped and now awaits exact
+`d1aa6d4` remote CI and documentation closure after WU7's **CONDITIONAL PASS** with zero
+HIGH/MEDIUM findings. The machine-enforced result is
+[`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 
 ## Pin (reproducible inputs)
 
@@ -43,27 +46,27 @@ of loader work.
 | `readonly` members / arrays | `readonly ` | 130 | ✓ shipped (M14 / b64) |
 | Optional params & members (`?:`) | `\?\s*:` | 349 | ✓ shipped (M21 members, M32 params) |
 | Method / function overloads (non-generic) | `concat`×2, `reduce`×2/3, `replace`… | many | ✓ shipped (M33) |
-| **Generic methods (method-level `<T>`/`<U>`)** | `^\s+\w+<[A-Z][^>]*>\(` | pervasive | **✓ shipped (B41)** — persistent generic method/call/construct signatures; member projection and lib loading remain `14` |
+| **Generic methods (method-level `<T>`/`<U>`)** | `^\s+\w+<[A-Z][^>]*>\(` | pervasive | **✓ shipped (B41)** — persistent generic method/call/construct signatures; production member projection and loading shipped through the active closure sprint |
 | **Declaration merging** (interface+`var` same name; repeated `interface` blocks) | committed semantic witnesses | 28 pairs + `Date`/`Number`/`String` | **✓ shipped** — pair type/value witnesses and repeated-interface deep members reject the wrong types |
 | **`namespace` type side** | `declare namespace Intl` | 1 | **✓ shipped** — `Intl.CollatorOptions` resolves and checks |
 | **Standalone namespace value** | `Intl.Collator()` | 1 | **✓ shipped (WU6A / ADR-0010)** — `deep.Intl.value` rejects with `TK2322`, matching tsc, without an incomplete |
 | **Type predicates** | annotation lowering | 8 | **1.0 owner → `50`**; explicit incompletes, independent of loader start |
 | **Polymorphic `this` / intrinsic / symbol / bigint annotations** | annotation lowering | 173 | **1.0 owner → `75`** (164/5/3/1); explicit incompletes, independent of loader start; `object` is shipped |
-| **Callable heritage compatibility** | `CallableFunction`/`NewableFunction extends Function` | 2 canonical + 2 surplus `TK2430` | canonical compatibility → `14`; surplus cardinality → parity-only `63` |
-| **`this`-parameter typing + `ThisType<T>`** | `\(this:`; `ThisType\|ThisParameterType\|OmitThisParameter` | 16 + 7 | **✓ shipped (B70)** — explicit receiver slots, `ThisType<T>`, and `ThisParameterType`/`OmitThisParameter`; member projection/loading remain `14` |
+| **Callable heritage compatibility** | `CallableFunction`/`NewableFunction extends Function` | 2 canonical + 2 surplus `TK2430` | canonical compatibility and surplus cardinality → parity-only `63`; neither blocks the shipped loader route |
+| **`this`-parameter typing + `ThisType<T>`** | `\(this:`; `ThisType\|ThisParameterType\|OmitThisParameter` | 16 + 7 | **✓ shipped (B70)** — explicit receiver slots, `ThisType<T>`, and `ThisParameterType`/`OmitThisParameter`; production projection and loading shipped through the active closure sprint |
 | `enum` | `\benum\b` | **0** | ✓ not used by es5 core (needed for full model completeness → `42`, not for `14`) |
 | `satisfies` / `as const` | `\bsatisfies\b`, `as const` | **0** | ✓ not used by es5 core (full model completeness → `44`, not for `14`) |
 | Symbol / computed keys (`[Symbol.x]`) | `\[Symbol\.` | **0** in es5 | out of es5 (arrives with `es2015.iterable`; Tier B) |
 
-## Headline — GO for starting backlog 14
+## Headline — historical GO for starting backlog 14
 
 The type-side namespace and declaration-merging work is real: all 28 constructor pairs,
 `Date`/`Number`/`String` reopenings, `Intl` type and value access, and local `Array<T>` heritage are
 proven. The current raw pinned artifact produces exactly 4 diagnostics and 181
 incompletes:
 
-- `14`: 2 canonical `TK2430` diagnostics for apparent `Function` compatibility;
-- `63`: 2 surplus `TK2430` diagnostics at those same sites (parity-only);
+- `63`: 4 `TK2430` diagnostics at the two canonical sites: 2 compatibility diagnostics plus 2
+  surplus diagnostics (parity-only);
 - `50`: 8 type-predicate incompletes (independent 1.0 blocker);
 - `75`: 173 annotation incompletes: `this` 164, `intrinsic` 5, `symbol` 3, `bigint` 1
   (independent 1.0 blockers).
@@ -71,8 +74,10 @@ incompletes:
 The machine verdict is **GO for starting backlog 14**: no raw or semantic witness retains a
 namespace owner, and `deep.Intl.value` is one of exactly 66 synthetic `TK2322` diagnostics with no `TK2304` or
 added incomplete. The namespace/declaration-merging lifecycle is closed, so loader work may start;
-this does not mean the standard library is loaded, that canonical backlog-14 compatibility is complete,
-or that the checker is 1.0-ready. Owners `50` and `75` remain mandatory model work; `42` and `44`
+this verdict alone did not mean that the standard library was loaded. The production loader has
+since shipped under the active closure sprint, while backlog `63` owns canonical heritage
+compatibility and surplus cardinality as separate parity work. Owners `50` and `75` remain
+mandatory model work; `42` and `44`
 remain 1.0 model blockers but are absent from ES5 core.
 
 ## Reproduce

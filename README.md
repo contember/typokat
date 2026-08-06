@@ -58,7 +58,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Foundation** | primitives & intrinsics (`any`/`unknown`/`never`/`void`, strict null), objects (structural, excess/missing/depth, **optional members `a?: T`**), functions (arity, optional/default/rest params, ordered overload resolution, contravariant params, void-return rule), unions (canonicalized), **intersections (`A & B`)** (canonicalized, merged relation + member access + excess), recursive & mutually-recursive named types, literal types |
 | **Narrowing** | `typeof`, truthiness, `null`/`undefined` equality, **discriminated unions**, `in`, `switch`; **unstructured flow** via the flow-node CFG — early `return`/`throw`, `&&`/`\|\|`/ternary, assignment narrowing, `while` loop edges (back edge / exit / `break` / `continue`) |
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
-| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, **the ten standard utility types as built-ins** plus a bounded `console`/numeric-`Math` ambient prelude + the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
+| **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, the pinned TypeScript 6.0.3 ES2025 full-host default library, and the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
@@ -167,11 +167,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   namespaces, reopenings, qualified lookup, declaration merging, standalone instantiated namespace
   values, and local `Array` heritage are modeled. Generic methods, explicit `this`
   parameters, contextual `ThisType<T>`, and object call/construct signatures are modeled
-  persistently, but generic/
-  deferred indexed access (`T[K]`), optional methods, member-path narrowing, and library loading
-  remain separate gaps. The remaining model-completeness track is in
-  [`docs/backlog/`](./docs/backlog/README.md); the namespace model prerequisite for full `lib.d.ts`
-  loading is complete. (Intersections `A & B` landed in M31; signature shape landed in M32;
+  persistently, but generic/deferred indexed access (`T[K]`), optional methods, and member-path
+  narrowing remain separate gaps. The remaining model-completeness track is in
+  [`docs/backlog/`](./docs/backlog/README.md). The pinned TypeScript 6.0.3 ES2025 full-host default
+  library is loaded from source on every production route. (Intersections `A & B` landed in M31;
+  signature shape landed in M32;
   overloads landed in M33; `&` distribution over unions,
   `keyof`/indexed-access over an intersection, and overload-signature intersection remain
   deferred — see [`docs/reference/divergences.md`](./docs/reference/divergences.md).)
@@ -180,17 +180,18 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   deferred: optional **methods**/accessors (`go?(): T`), the dedicated *possibly-undefined*
   diagnostics (tsc `TS2532`/`TS18048`/`TS2722`), and narrowing an optional through a member-access
   guard (over-reports `T | undefined`, the safe direction). (Backlog `49`.)
-- **No full `lib.d.ts`** (only the bounded built-in `console`/numeric-`Math` prelude is present;
-  array methods, `Promise`, and the rest of the standard library are absent). Modules/imports are
-  implemented only for local relative `.ts` files with named imports/exports in one serial project
-  check. Still deferred: packages / `node_modules`, `tsconfig` resolver options, `.d.ts`, default /
+- **Default-library and module profile.** Production checks use the exact pinned TypeScript 6.0.3
+  ES2025 full-host library, compiled from its 82 vendored source files in each fresh process.
+  Modules/imports are implemented only for local relative `.ts` files with named imports/exports
+  in one serial project check. Still deferred: packages / `node_modules`, `tsconfig` resolver
+  options, `.d.ts`, default /
   namespace / star imports, re-exports from another module, CommonJS, ambient modules, cyclic module
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`) and a wrong type-argument count such as bare `Array`
   (`TS2314`). Qualified namespace types `A.B` and standalone instantiated namespace values are
   modeled. Ambient external modules remain with `15`; diagnosed ambient export-alias cascade parity
-  remains with `63`. (Backlog `14`, `15`, `52`, `63`.)
+  remains with `63`. (Backlogs `15`, `52`, `63`.)
 - **Incomplete checking is a first-class outcome (2026-07-10 accounting sprint).** The consumed
   OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
   unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
@@ -200,12 +201,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   such as elisions, spreads, and tagged templates remain `71`; the other deferred surface tail is
   `75`. The pinned real-project preview gate (`72`) remains required but **paused**: no screened
   public project met its multi-file, minimal-graph, zero-threshold witness contract. Do not resume
-  `72`, add a project-specific shim, or expand the prelude merely to manufacture that witness; the
-  immediate model/lib step is the now-unblocked full `lib.d.ts` loader (`14`), backed by the current
-  **GO** [`lib.es5.d.ts` readiness manifest](./tests/fixtures/lib-es5-6.0.3/readiness.toml).
-  Bundler module resolution (`15`)
-  follows on the scale ladder. A clean result on an arbitrary
-  npm/Bun/Node project is not yet a completeness claim.
+  `72`, add a project-specific shim, or add a project-specific ambient shim merely to manufacture
+  that witness. The full default-library production cutover is shipped; its WU7 independent review
+  is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, pending exact `d1aa6d4` remote CI and
+  lifecycle closure. Bundler module resolution (`15`) is the next step on the scale ladder. A clean
+  result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
   block 1.0 through manifest Track C; documented over-report/cosmetic tails are non-blocking only

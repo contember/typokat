@@ -1,9 +1,9 @@
 # Architecture: A SOTA TypeScript Type Checker in Rust
 
-> A from-the-ground-up type checker design. Goal: architecturally state-of-the-art,
-> performance beyond tsgo — order-of-magnitude on type-level code, constant-factor on
-> ordinary code. Not 100% parity with tsc; the goal is to preserve the **type model**,
-> not runtime and emit.
+> A from-the-ground-up type checker design. Goal: architecturally state-of-the-art, with
+> performance beyond tsgo as a measured workload-by-workload target rather than a universal
+> premise. Not 100% parity with tsc; the goal is to preserve the **type model**, not runtime and
+> emit.
 
 ---
 
@@ -232,12 +232,15 @@ so it doesn't get silently folded into either neighbor.
 The implementation keeps type construction and semantic queries separated because the interner
 requires `&mut Interner` while the relation engine borrows the store immutably:
 
-1. **Default-library base.** The production driver acquires one process-wide
+1. **Default-library base.** Persistent API and official-batch consumers acquire one process-wide
    `LibraryBaseProvider`. Its first caller compiles the pinned 82-file TypeScript 6.0.3 profile
-   from source and freezes an AST-free type store plus immutable binder prefix. Each user project
-   continues from that base through either the shared delta or the sparse private collision epoch;
-   user value/type declarations retain ordinary slot-aware shadowing and merge rules. The small
-   `test_support_prelude.ts` universe exists only behind the checker crate's test-support feature.
+   from source and freezes an AST-free type store plus immutable binder prefix; each project then
+   uses either the shared delta or the sparse private collision epoch. Ordinary standalone CLI
+   checks instead use ADR-0021's project-correct complete-source-once lifecycle behind the same
+   frontend, so the library and user project publish once while preserving imports and source
+   order. User value/type declarations retain ordinary slot-aware shadowing and merge rules on
+   both routes. The small `test_support_prelude.ts` universe exists only behind the checker crate's
+   test-support feature.
 2. **Reservation and class publication.** The checker reserves class, alias, and interface
    identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
    before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction
@@ -421,7 +424,7 @@ Type-level TypeScript is a purely functional language (no loops, only recursion)
 evaluated by a **tree-walked evaluator** (built with the conditional/mapped/template/utility
 milestones, backlog `09`–`12`). Its performance comes from four *algorithmic* properties folded
 into the tree-walker — **memoization, accumulator reuse, an explicit work-stack, and arithmetic
-intrinsics (§7.2)** — which carry the order-of-magnitude wins and are *required*, not optional.
+intrinsics (§7.2)** — which target the largest evaluator gains and are *required*, not optional.
 
 A **bytecode VM** (IR → bytecode → stack VM, §7.1) is a **potential later refactor**, not a planned
 pillar — undertaken only if profiling on real type-level-heavy code shows the *interpreter dispatch
@@ -449,7 +452,7 @@ easier. Cross-run validity relies on the stable structural hash (§3.2), not on 
 ### 7.2 The four algorithmic wins — these belong in the *tree-walker*, not a VM
 
 Iteration = recursion, so a naive recursive evaluator never leaves toy examples. The four required
-minima below carry the order-of-magnitude wins — and **three of the four are pure tree-walker work,
+minima below target the largest evaluator gains — and **three of the four are pure tree-walker work,
 orthogonal to bytecode** (ADR-0001). Build them into the evaluator as items `09`–`12` land:
 
 1. **Memoization for non-tail (tree) recursion**: `(subroutine, args) → result`, keyed on hash-
@@ -491,7 +494,7 @@ Arithmetic, which type-level TS "hacks" via tuple lengths and template strings (
 expensive), is computed natively (`Add`, `Sub`, `Lte`…) — the `tyvm` lesson: the cheapest recursion
 is the one you replace with a constant-time op. These are **intrinsic type functions** the evaluator
 intercepts; they need no bytecode, only pattern recognition. As VM opcodes they're marginally
-faster, but the order-of-magnitude is in *not recursing at all*, which the tree-walker captures.
+faster, but the intended gain is in *not recursing at all*, which the tree-walker captures.
 
 ### 7.4 Instantiation limits
 
@@ -531,12 +534,10 @@ fully owned, so the parse+bind sub-phase touches no shared state whatsoever.)
 Per-file isolation is free only while files share no types. They eventually will.
 Stage the shared substrate so each step keeps as much parallelism as possible:
 
-- **Stage 0 — per-file own interner (the baseline, in place today).** Each file is a
+- **Stage 0 — per-file own interner (the original baseline, retained below production routing).** Each file is a
   self-contained universe = intrinsics + its own declarations. Sound and *lossless*
-  exactly while there is no cross-file resolution (no `lib.d.ts`; the M29 project
-  checker deliberately leaves this API untouched). Maximal parallelism, zero sharing
-  — the correct floor, not a stopgap.
-  Implemented as `driver::check_files` (rayon over a `check_source`-per-file).
+  exactly while there is no cross-file resolution. Maximal parallelism and zero sharing make it
+  the architectural floor, while public production routes add the Stage-1 library lifecycle.
 - **Stage 0.5 — correctness-first serial project checker (M29).** Local relative
   `.ts` modules, named imports/exports, and simple export lists are checked in a
   single serial `Interner`, so cross-file `TypeId` identity is ordinary run-local
@@ -553,19 +554,19 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   workers, with an identity-preserving private type/binder delta for each non-colliding run.
   Conservative preflight selects either that shared delta or ADR-0020's source-native sparse
   private epoch for library-global merges; the immutable base is never mutated. The implementation
-  and pinned profile live in `crates/typokat-library/src/`, and every public driver/CLI route now
-  acquires that provider. The active
-  [cutover-closure sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) owns the
-  remaining cross-tool, package, CI, and authoritative timing gates for backlog
-  [14](../backlog/14-libdts-loading.md). A shipped semantic snapshot was built and then
+  and pinned profile live in `crates/typokat-library/src/`. Persistent consumers acquire that
+  provider directly; the standalone CLI uses ADR-0021's complete-source-once route. A shipped
+  semantic snapshot was built and then
   retired by [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md): the library is
-  compiled from its 82 vendored sources in every process, because the checking pipeline was already
-  at parity with pinned native TypeScript 7 and precomputing one fixed profile does nothing for
-  arbitrary user code. The 277 ms-against-289 ms figure that decision cited is **retracted as a
-  comparison** — it measured the in-process pipeline, not a fresh process. The production-shaped CLI
-  reads **260 ms against the comparator's 289.6 ms, 1.12–1.14×** across two trials; WU8 is the
-  authoritative gate. The sprint still owns that result without weakening the base/delta or
-  collision semantics.
+  compiled from its 82 vendored sources in every process. Production and the authoritative timing
+  gate are shipped. WU7 independent review is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings;
+  only exact `d1aa6d4` remote CI and lifecycle closure remain under the active
+  [cutover-closure sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md).
+  The authoritative evidence measures commit `d1aa6d4` and is retained by `f70e587` at
+  `tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`. It reports GO only for the four approved
+  rows — `fast-clean`, `fast-errors`, `collision`, and `fanout` — with median, p95 ratio, and
+  bootstrap lower bound above 1.25 in every recorded window. It does not establish general
+  multi-file, generic-heavy, flow-heavy, or whole-repository performance.
 - **Stage 2 — cross-file *mutable* exports.** `export interface Foo` in A consumed by
   B: A must emit its **public type surface** (`export name → type`), and B must give
   those types identity in *its* world. A run-local `TypeId` (§3.2) is meaningless
@@ -581,8 +582,9 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
 User parse + mutable binding remains per-file/project owned and interner-free: user ASTs, allocators,
 mutable binder rows, and private deltas are never shared across runs. Stage 1's accepted narrow
 exception is the already-consumed, AST-free immutable library binder prefix frozen with its type
-base; a colliding project instead owns one complete private library-plus-project binder and type
-universe. Only immutable library products cross threads. Stage 2 still owns mutable cross-file
+base. Persistent consumers route collisions through a sparse private epoch; a standalone CLI
+project uses one complete-source publication. Only immutable library products cross threads.
+Stage 2 still owns mutable cross-file
 export identity; the reserved `stable_hash` column in the type store (§3.2) exists precisely for
 that later stage and incrementality (Phase 5). See
 [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md) for the boundary and failure
@@ -618,32 +620,23 @@ don't even *get* to sacrifice — `lib.d.ts` and `@types` require them.
 
 ---
 
-## 10. Honest performance expectations
+## 10. Measured performance boundary
 
-Existing rewrites' benchmarks (TypeRunner ~400×) **cannot be extrapolated** to a fight with
-tsgo: they measure a toy (missing subtyping/narrowing/lib.d.ts), a warm cache (skipping
-work), and *old tsc* (the JS tax tsgo already paid). The more of the type system you
-implement, the more your profile converges to tsgo's, because the expensive work — the
-relation engine — is the same work in Go or Rust.
+Performance claims are workload contracts, not architectural extrapolations. Existing rewrite
+benchmarks cannot be projected onto typokat: they often omit subtyping, narrowing, or `lib.d.ts`,
+use warm caches, and compare against old JavaScript `tsc` rather than native TypeScript.
 
-Realistic estimate vs **tsgo**:
+The current authoritative evidence measures commit `d1aa6d4` and is retained by `f70e587` at
+`tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`. Against pinned native TypeScript 7.0.2,
+typokat cleared the 1.25 engineering target for median, p95 ratio, and bootstrap lower bound in
+every recorded window on exactly four approved full-library rows: `fast-clean`, `fast-errors`,
+`collision`, and `fanout`.
 
-| Code class | Expected speedup over tsgo | Source of the win |
-|---|---|---|
-| Type-level heavy (conditional/mapped DSL, arithmetic) | **order of magnitude** | memoization + accumulator reuse + arith intrinsics (§7.2) — a different algorithmic class, *in the tree-walker*; a bytecode VM adds only a constant factor on top (ADR-0001) |
-| Ordinary app code (subtyping + narrowing dominate) | **~1.5–3×** | layout: SoA, pointer-free arenas, no GC pauses, relation cache |
-| Whole large repo | weighted average, pulled down by the type-level share | — |
-
-Caveat on the first row: the order-of-magnitude applies to a *narrow* slice — type-level
-*programs* (parsers, tuple arithmetic, deep recursive transforms). Instantiation-heavy code that
-merely *looks* type-level (Zod-class validators: `.extend`/`.omit` chains) is dominated by
-instantiation count + structural relation checks, which the relation engine (§6) and lean
-instantiation address — **not** the evaluator. See ADR-0001.
-
-That is a defensible **SOTA architecture** — measurably faster than tsgo, dramatically so
-on type-level code. But "faster tsc" is SOTA in *engineering*; SOTA in *type systems*
-(soundness, effect tracking — the `ezno` direction) is a different, more distant goal. This
-design targets the former.
+That result proves the production default-library cutover contract only. It does not prove a
+speedup for arbitrary repositories, generic-heavy code, flow-heavy code, broad module graphs, or
+type-level programs. The layout, relation-cache, evaluator, and arithmetic-intrinsic advantages
+described elsewhere in this document remain design hypotheses until their own frozen contracts are
+measured.
 
 ---
 
@@ -668,24 +661,24 @@ design targets the former.
 
 1. **Phase 0 — Type store + binder.** Arena, hash-consing, run-local `TypeId`, multi-slot
    scope graph, and enough `.d.ts`-shaped binding machinery to keep declaration spaces honest.
-   The full stable structural hash and full `lib.d.ts` are staged later; the type store is already
-   shaped for them, but they are not prerequisites for the single-file checker.
+   The full stable structural hash and full `lib.d.ts` were staged later; the default library is
+   now shipped, while the stable hash remains future Stage-2/incrementality work.
 2. **Phase 1 — Structural interpreter + relation engine, narrow scope.** Subtyping +
    generics + **full narrowing** + the **relation cache and cycle handling** (§6). Inference
    engine (§5.1). Type-level eval still in the interpreter for now (slow but correct). Goal:
    a usable checker on a real repo as early as possible. Completability is decided here.
 3. **Phase 2 — Scope hardening.** Variance, declaration merging (multi-slot), contextual
    typing, overload-bearing signatures, reporting mode (§6.4), and a minimal ambient/prelude loading slice when it
-   buys real-world feedback before the full standard library is viable. Catching up on model
+   bought real-world feedback before the full standard library was viable. Catching up on model
    coverage is the §11.1 wall.
 4. **Phase 3 — Type-level evaluator (tree-walked).** Once the core stands, build conditional/
    mapped/template/utility evaluation with the four algorithmic wins folded in (§7.2: memoization,
-   accumulator reuse, explicit work-stack, arith intrinsics). This is where the order-of-magnitude
-   type-level speedup arrives — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
+   accumulator reuse, explicit work-stack, arith intrinsics). This is where the design targets its
+   largest type-level gains — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
    profiling-gated refactor**, not part of this phase (ADR-0001).
-5. **Phase 4 — Real-project scale.** Full `lib.d.ts` as a shared read-only prelude (parallelism
-   Stage 1), then modules/imports as an explicit staged rollout: first the shipped
-   correctness-first whole-repo slice; then the 1.0 Bundler profile with physical resolution
+5. **Phase 4 — Real-project scale.** Full `lib.d.ts` and parallelism Stage 1 are shipped. The
+   remaining modules/imports rollout starts from the shipped correctness-first whole-repo slice,
+   then adds the 1.0 Bundler profile with physical resolution
    delegated to `oxc_resolver` and module semantics retained locally; then the cross-file
    type-identity strategy (stable structural hash or a shared growing interner) needed for parallel
    Stage 2. NodeNext and alternate host profiles are outside the required 1.0 ladder (ADR-0007).
@@ -697,6 +690,6 @@ design targets the former.
 Plan rule: **the relation engine and narrowing come before the type-level evaluator, and the
 evaluator's speed lives in its algorithms, not in a VM.** The bytecode VM is the sexiest piece but
 the smallest share of real-world cost and the least-mapped risk (§11.2); it stays a
-profiling-gated option. If time runs out, it is the first thing cut. Full `lib.d.ts`, modules,
-parallel cross-file identity, and incrementality are staged separately so real-project feedback can
-arrive before every scale feature is solved at once.
+profiling-gated option. If time runs out, it is the first thing cut. The shipped full default
+library, modules, parallel cross-file identity, and incrementality remain separate stages so
+real-project feedback can arrive before every scale feature is solved at once.

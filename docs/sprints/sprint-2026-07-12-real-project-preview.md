@@ -3,15 +3,15 @@
 **Goal.** Close backlog `72`: `typokat` can be pointed at one pinned, genuinely small strict
 TypeScript project and produce a deterministic, honest differential result through its public CLI.
 
-**Theme.** The serial cross-file checker, bounded source-backed prelude, and exhaustive incomplete
-channel are already shipped. This sprint connects those pieces to a narrow project workflow:
+**Theme.** The serial cross-file checker, pinned full default library, and exhaustive incomplete
+channel are shipped. This sprint connects those pieces to a narrow project workflow:
 select and freeze a witness that fits the implemented model, discover its configured roots, resolve
 its imports through `oxc_resolver` under the 1.0 Bundler profile, account for every selected file and
 result channel, and ratchet a clean baseline plus seeded errors in CI. It is an early preview slice,
-not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownership follows
+not the broad module-semantics milestone. Physical resolver ownership follows
 [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md).
 
-## Refs re-verified at HEAD (2026-07-12)
+## Refs re-verified at HEAD (2026-07-12; production-library premise refreshed 2026-08-06)
 
 `✔` = confirmed live · `⚠` = drift/nuance caught.
 
@@ -29,10 +29,9 @@ not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownersh
 - ✔ Project-shaped conformance fixtures already exercise the serial driver, so synthetic config and
   Bundler resolver witnesses can extend an established test seam —
   `tests/conformance.rs:143-154`, `tests/cases/m29_modules/`.
-- ✔ The prelude is one checked source unit in the same type universe and currently exposes only the
-  admitted utility aliases plus bounded `console` and numeric `Math` values; no project-only ambient
-  shim is needed or allowed — `crates/typokat-check/src/check/checker/mod.rs:42-43`,
-  `crates/typokat-check/src/check/checker/mod.rs:80-126`, `crates/typokat-check/src/prelude.ts:1-41`.
+- ✔ Production routes use the exact pinned TypeScript 6.0.3 ES2025 full-host default library. The
+  old production prelude is gone; its small replacement exists only behind checker test support.
+  No project-only ambient shim is needed or allowed.
 - ✔ Incomplete surfaces are a separate deterministic, deduplicated channel and aggregate per project
   file, while exit `3` outranks ordinary diagnostics — `crates/typokat-diagnostics/src/diagnostics/incomplete.rs:59-103`,
   `tests/incomplete_outcome.rs:127-178`, `src/main.rs:170-195`.
@@ -207,8 +206,10 @@ not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownersh
 
 ## Out of scope (explicit)
 
-- Full `lib.d.ts`, lib discovery/loading, or a broader ambient prelude — backlog
-  [`14`](../backlog/14-libdts-loading.md).
+- Default-library changes or project-specific ambient shims. Backlog
+  [`14`](../backlog/14-libdts-loading.md) has shipped its production work and remains active only
+  for exact `d1aa6d4` remote CI and documentation closure after WU7's **CONDITIONAL PASS** with
+  zero HIGH/MEDIUM findings; this preview consumes that fixed profile.
 - General Bundler package/`node_modules`/`@types` coverage, package conditions/layouts,
   declaration packages, project enumeration, and broad import/export semantics — backlog
   [`15`](../backlog/15-modules-imports.md).
@@ -218,7 +219,8 @@ not the full `lib.d.ts` or module-semantics milestone. Physical resolver ownersh
 - Cross-file parallel type identity or incrementality — backlogs
   [`16`](../backlog/16-parallelism-type-universe.md) and
   [`17`](../backlog/17-incrementality.md).
-- The later full-stack witness. Deptective remains only a candidate: it is gated on `14` + `15`,
+- The later full-stack witness. Deptective remains only a candidate: it depends on the shipped
+  default-library profile plus the resolver breadth in `15`,
   must use a meaning-preserving Bundler witness config, and is not evidence for this bounded preview.
 - Fixing unrelated checker semantics discovered while screening candidates. Reject/rescope the
   candidate or link the mismatch to an existing backlog; do not add a witness-only shim, permissive

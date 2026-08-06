@@ -29,9 +29,12 @@ evaluator memoization + `TK2589`, sprint-2026-07-12), and `77` (callable-object
 contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12), and `13` (the ADR-0001
 profiling gate, strict DEFER/no-VM, WU5 of
 [`sprint-2026-07-12-pre-lib-hardening.md`](../archive/sprint-2026-07-12-pre-lib-hardening.md),
-closed 2026-07-13), and `43` (namespace/declaration-space completion,
+closed 2026-07-13), `43` (namespace/declaration-space completion,
 [`sprint-2026-07-15-namespaces-declaration-merging.md`](../archive/sprint-2026-07-15-namespaces-declaration-merging.md)). The earlier shipped items are in
 [`../archive/`](../archive/README.md), including the completed WU6 official-suite ratchet.
+The implementation for `102` (visible frozen-prefix writes) and `103` (source-native sparse
+collision epochs and routing) shipped through the active backlog-`14` closure sprint; both shipped
+backlog files have been removed.
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -54,17 +57,20 @@ known silent-FN family; every remaining divergence deliberate, safe-direction, a
 in [`divergences.md`](../reference/divergences.md)), **D** scale + IDE (the §12 phase ladder:
 `lib.d.ts` → modules → parallelism → incrementality, plus the `13` profiling gate decided).
 
-The pinned TS 6.0.3 `lib.d.ts` surface audit — what actually blocks `14` — is
+The pinned TS 6.0.3 `lib.d.ts` surface audit — the historical start gate for `14` — is
 [`lib-audit-6.0.3.md`](lib-audit-6.0.3.md) (generic method/call/construct signatures shipped with
 `41`, receiver typing shipped with `70`, and namespace/merging work shipped in the archived
 2026-07-15 sprint). The committed proof is GO for starting `14`. Backlogs `50` and `75`
-independently block 1.0; `63` owns parity-only surplus
-diagnostics. `42`/`44` are not used by ES5 core. The official-suite scoreboard is the ratchet on the
-way there — its syntax gates flip OOS→IN as features land — not a numeric pass/fail gate.
+independently block 1.0; `63` owns both canonical Callable/Newable compatibility and its surplus
+diagnostic cardinality as parity work. `42`/`44` are not used by ES5 core. The official-suite
+scoreboard is the ratchet on the way there — its syntax gates flip OOS→IN as features land — not a
+numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The active backlog has **50 items**. The release classification comes from
+The roadmap has **48 remaining items**, including backlog `14` while exact `d1aa6d4` remote CI and
+lifecycle closure are pending after WU7's **CONDITIONAL PASS** with zero HIGH/MEDIUM findings. The
+release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -73,7 +79,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 29 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
+| **C — soundness/parity tail** | 27 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -137,7 +143,8 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **M** · [`68`](68-contravariant-infer-intersection.md) — intersect same-name contravariant `infer` candidates instead of collapsing to `never`.
 - **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest inference, callable-union rest-shape synthesis, and variadic source tuples.
 - **M** · [`83`](83-contextual-generic-signature-relation.md) — contextual generic-signature instantiation under a cache-safe query-local relation environment.
-- **L** · [`63`](63-review-parity-tail.md) — batched evaluator/relation/checker FPs, messages, and residual parser-depth guard.
+- **L** · [`63`](63-review-parity-tail.md) — Callable/Newable canonical compatibility and surplus
+  cardinality, batched evaluator/relation/checker FPs, messages, and the residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space
   publication for variables, functions, complete class type/constructor pairs, and cross-file
   class/function+namespace payloads; not required by `lib.es5.d.ts` loading.
@@ -150,8 +157,6 @@ Reporting + robustness:
 
 Default-library base + method (fell out of the ADR-0017 snapshot removal):
 
-- **M** · [`102`](102-frozen-prefix-writes-vanish-silently.md) — binder writes into the frozen library prefix vanish silently; an ordinary cross-file `globals.d.ts` yields a spurious `TK2304`. **Not a collision problem** — schedule ahead of `103`.
-- **XL** · [`103`](103-library-merge-panics-and-routing.md) — a merge into a library-owned name is refused rather than performed (`declare global`, `interface Window`, `namespace Intl`); no collision route exists. The guard tier shipped; this is the correctness tier. Blocks the WU7 CLI cutover.
 - **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits. Its forward half shipped with ADR-0018; only the backwards attribution is open.
 
 Checker scaling (from sprint-2026-07-25):
@@ -165,7 +170,9 @@ Checker scaling (from sprint-2026-07-25):
 **D. Scale + IDE — the §12 phase ladder.**
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
-- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1; its namespace model gate is GO.
+- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1;
+  production and the authoritative four-row benchmark are shipped, WU7 is **CONDITIONAL PASS**
+  with zero HIGH/MEDIUM findings, and only exact `d1aa6d4` remote CI plus lifecycle closure remain.
 - **XL** · [`15`](15-modules-imports.md) — Bundler resolution via `oxc_resolver` plus typokat-owned
   module semantics; the local-relative slice shipped as M29.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
@@ -192,20 +199,22 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Execute the active full-library performance-cutover sprint (`14`).** The pinned ES5 proof is
-   GO after immutable standalone namespace values shipped under ADR-0010. The
-   [active sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) owns the bounded
-   freeze-boundary decision, production cutover, and fail-closed cross-tool gate against native
-   TypeScript 7. The shipped semantic
+2. **Close the active full-library sprint (`14`).** Production, cross-tool gates, and the
+   authoritative benchmark are shipped. The
+   [active sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) has WU7 at
+   **CONDITIONAL PASS** with zero HIGH/MEDIUM findings and now owns only exact `d1aa6d4` remote CI
+   plus documentation lifecycle closure. Its performance claim is limited to the four approved
+   full-library rows. The shipped semantic
    snapshot it once carried was retired by
    [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md); `98` is its
    remaining fallout.
-   Backlogs `50`/`75` remain independent 1.0 work; `63` is parity-only. The `13` profiling gate
+   Backlogs `50`/`75` remain independent 1.0 work; `63` owns Callable/Newable canonical and surplus
+   parity. The `13` profiling gate
    closed DEFER/no-VM under ADR-0001.
-3. **Climb the full-project/scale ladder** (`14` → `15` → `16` → `17`), finishing the A/B/C
-   remainder along the way. `14` + `15` must graduate a pinned Bundler-compatible full-stack
-   witness (deptective only if it qualifies); the small `72` preview is not evidence for full
-   resolver/lib fidelity. Per
+3. **Climb the remaining full-project/scale ladder** (`15` → `16` → `17`), finishing the A/B/C
+   remainder along the way. After `15` ships, it and the shipped production work of `14` must
+   graduate a pinned Bundler-compatible full-stack witness (deptective only if it qualifies); the
+   small `72` preview is not evidence for full resolver/lib fidelity. Per
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.

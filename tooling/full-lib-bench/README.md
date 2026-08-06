@@ -8,8 +8,9 @@ this gate measures normal default-library loading and rejects either flag.
 WU0A supplies the sole collector and structural evidence inspector. It stages and attests
 the native comparator, verifies the semantic oracles, asserts the production route,
 executes the frozen semantic/control/timing/memory commands, and rejects incomplete or
-ineligible evidence. WU8 runs this collector on the final
-production binary without replacing its schema, commands, rows, or statistics.
+ineligible evidence. The authoritative run measured commit `d1aa6d4`; commit `f70e587` retains
+`evidence/candidate-d1aa6d4.json` with verdict `GO`. Its claim is limited to the four approved rows
+in this contract and does not generalize to other checker workloads.
 
 ## Frozen inputs
 

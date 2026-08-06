@@ -2,9 +2,12 @@
 
 This fixture proves the current type model against one exact `lib.es5.d.ts`; it does not load a
 standard library into other source files. `readiness.toml` is the machine contract and records the
-current **GO for starting backlog 14** result. The namespace/declaration-merging lifecycle is
-closed, so that GO permits loader work now; it is not proof of full library support or checker 1.0
-readiness. The explicit owner-50 and owner-75 incompletes remain release work.
+historical **GO for starting backlog 14** result. The namespace/declaration-merging lifecycle
+closed that start gate; the full production default-library cutover subsequently shipped and now
+awaits only exact `d1aa6d4` remote CI and documentation closure after WU7's **CONDITIONAL PASS**
+with zero HIGH/MEDIUM findings. This fixture remains an explicit-input model proof, not the
+production-loader witness or checker 1.0 readiness. The owner-50 and owner-75 incompletes remain
+release work; backlog `63` owns canonical Callable/Newable compatibility and surplus cardinality.
 
 The authoritative artifact is the npm package output `lib/lib.es5.d.ts`, not the distinct upstream
 source input `src/lib/es5.d.ts`. Verify a local TypeScript 6.0.3 installation against the pin with:
@@ -26,8 +29,8 @@ tsc --strict --noEmit --pretty false --noLib \
   "$FIX/lib.es5.d.ts" "$FIX/semantic-witnesses.ts"
 ```
 
-The authoritative typokat model check uses one synthetic source because shared standard-library
-storage and cross-file loading belong to backlog 14. The separator is one extra LF after the
+The authoritative historical model check uses one synthetic source because it predates the shipped
+shared standard-library storage and cross-file loading routes. The separator is one extra LF after the
 byte-validated artifact; the artifact itself already ends in LF, so the synthetic source contains
 one blank boundary line. A multi-file typokat invocation is non-authoritative loader evidence and
 must not be used to judge these model witnesses.

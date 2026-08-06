@@ -25,11 +25,11 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   none in the type model; the batch removes them and adds the local-layer scan guard that would have
   caught them. Runs alongside the full-lib sprint — different files.
 - [`sprint-2026-08-02-default-library-cutover-closure.md`](sprint-2026-08-02-default-library-cutover-closure.md) —
-  active backlog `14` closure sprint: starts from 9 conformance differences across 574 files,
-  decides the library-vs-project freeze boundary through a bounded evidence gate, then completes
-  the atomic production cutover, cross-tool gates, and narrowly stated performance claim.
+  active backlog `14` closure sprint: production and the authoritative four-row performance gate
+  are shipped; WU7 independent review is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, and
+  only exact `d1aa6d4` remote CI plus documentation lifecycle closure remain.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, not started; refs re-verified 2026-07-22 and now gated on
-  the full-lib performance sprint closing (it rewrites the same three files).
+  planned behavior-preserving cleanup, not started; gated on the default-library closure sprint's
+  lifecycle close, then requires a fresh HEAD re-verification before work starts.

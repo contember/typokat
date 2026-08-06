@@ -11,7 +11,11 @@ sprint is a pure refactor: no semantics, no diagnostics, no new capability. Succ
 `cargo test` + focused conformance + official-suite `run --check` all green with zero
 scoreboard movement, and the duplication findings below gone.
 
-**Status: planned, not started.** No WU has landed. The plan was written on 2026-07-16 and the
+**Status: planned, not started.** No WU has landed. Production work in the full-library closure
+sprint is shipped and WU7 is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, but exact
+`d1aa6d4` remote CI and documentation lifecycle closure remain. This refactor still waits for that
+lifecycle close and must re-verify every load-bearing code and measurement fact at current HEAD
+before WU1. The plan was written on 2026-07-16 and the
 file has since absorbed the full-library/snapshot work (`+1 040` lines in
 `crates/typokat-binder/src/binder/namespace.rs`, `+1 467` in
 `crates/typokat-binder/src/binder/bind.rs`, `+757` in
@@ -249,12 +253,14 @@ all stale; the values below supersede them.)
 
 - **Dormant substrate removal.** The 17 externally-unconsumed metadata types
   (`MergeClassification`/`MergeSlot*` internals, `AliasContext`, `Declaration*Facts`,
-  `Import*`, `Deferred*Kind`, …) are reserved by the 2026-07-15 sprint for backlog `15`/`82`/`14`
+  `Import*`, `Deferred*Kind`, …) were reserved by the 2026-07-15 sprint for backlogs `15`/`82`
+  and the now-shipped production work of `14`,
   and are pinned by direct tests. Deleting or trimming them is a scope decision for those
   backlogs, not a refactor.
-- **The snapshot round-trip layer.** It lands in its own file under WU5 and is otherwise
-  untouched — no re-encoding, no schema change, no ordering change. It belongs to the active
-  full-library sprint; this refactor only moves it.
+- **The historical snapshot round-trip premise must be re-verified.** ADR-0017 retired the shipped
+  semantic snapshot. Before preserving or moving any remaining snapshot-named code under WU5,
+  establish from current HEAD whether it is still live infrastructure or removable historical
+  substrate; do not infer that from this 2026-07-22 plan.
 - **Perf cleanups** (linear scans in `standalone_merge_record` at
   `crates/typokat-binder/src/binder/namespace.rs:1666` and `root_merge_record` at `:2320`, and the linear `.find`
   cluster at `:1585`/`:1678`/`:1779`/`:1896`/`:1994`): O(n²) patterns that are harmless at
@@ -284,15 +290,17 @@ all stale; the values below supersede them.)
 
 1. **Gate satisfied:** the namespace sprint's WU7 adversarial review and closure landed before
    this refactor starts.
-2. ⚠ **New blocking gate:** do not start while
+2. ⚠ **Blocking lifecycle gate:** do not start while
    [`sprint-2026-08-02-default-library-cutover-closure.md`](sprint-2026-08-02-default-library-cutover-closure.md)
-   is active. It is rewriting the exact three files this refactor touches
+   is active. Its production changes to the exact three files this refactor touches are shipped,
+   and WU7 is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, but exact `d1aa6d4` remote CI
+   and documentation lifecycle closure remain. Those files changed
    (`crates/typokat-binder/src/binder/namespace.rs`,
    `crates/typokat-binder/src/binder/bind.rs`, and
    `crates/typokat-check/src/check/checker/namespace_values.rs` took `+2 852/-412` lines between
-   the plan and HEAD), and a
-   whole-file split landing mid-flight turns every one of its edits into a conflict. This sprint
-   waits for that one to close, then re-verifies the ref block again before WU1.
+   the plan and the 2026-07-22 snapshot). This sprint waits for final closure, then re-verifies the
+   entire ref block at current HEAD before WU1; the old line and clone counts are not acceptance
+   evidence.
 3. WU1 → WU2 → WU3 → WU4 (independent of each other after WU1; may be one subagent run,
    separate commits) → WU5 last.
 4. Per dev-method: implementation via a subagent; the leader verifies gates and commits.

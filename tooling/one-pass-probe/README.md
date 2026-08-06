@@ -8,9 +8,10 @@ adopted `production-complete-source-once`, the O/P comparison stopped answering 
 it now compares the discarded test example with the production implementation of the same
 lifecycle. A post-promotion `NOT-PROMISING` result must remain visible and must not be relabelled.
 
-The WU6A stop condition uses only the all-row O/T gate to falsify the complete-source lifecycle.
-The authoritative WU6 production benchmark remains the only performance release gate. Do not use
-this collector for a new post-promotion decision without a separately specified contract.
+The WU6A stop condition used only the all-row O/T gate to falsify the complete-source lifecycle.
+The authoritative production benchmark has since been satisfied by the four-row GO artifact that
+measured `d1aa6d4` and was retained by `f70e587`. Do not use this collector for a new
+post-promotion decision without a separately specified contract.
 
 This directory defines a disposable, non-authoritative probe for the test-only
 complete-combined checker path. It answers one question before a production design change:
@@ -24,9 +25,9 @@ process compiles the committed TypeScript 6.0.3 profile from source through
 corroborated by the measured one-pass binary SHA-256 and independent code review; a self-reported
 route string alone is not evidence.
 
-The candidate is a complete-source fallback probe for the current production design. It is not
+The candidate was a complete-source fallback probe for the pre-promotion production design. It is not
 the phase-boundary design known as variant (b), and a promising result does not approve that
-design. The authoritative WU6 run remains required after any production change.
+design. The required authoritative rerun subsequently passed on the promoted production route.
 
 ## Frozen references and authoritative primitives
 

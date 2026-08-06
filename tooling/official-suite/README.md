@@ -7,7 +7,8 @@ baselines. It is the project's "cross-check vs real `tsc --strict`" step
 **false negatives** (dropped errors, the project's #1 fear).
 
 It is a **triage dashboard, not a pass/fail gate**: typokat is a deliberate
-subset of tsc (no full `lib.d.ts`, narrow local-relative modules, no emit), so a
+subset of tsc (the pinned full default library is present, but modules remain narrow and emit is
+out of scope), so a
 1:1 match across the whole suite is neither expected nor the goal. The number that
 matters is the in-scope **matched %** rising as milestones land, and the
 **false-negative list** shrinking.
@@ -115,8 +116,9 @@ redirects make the cache incompatible.
      regression inside a now-unsupported test must still be visible.
    - `parse-error` — typokat's own parser rejected it.
    - `unresolved` — typokat raised a `TK2304 (cannot find name)` the baseline does
-     **not** have: a name tsc resolved via `lib.d.ts`/imports but typokat can't.
-     This self-gates out lib/module dependence without maintaining a denylist.
+     **not** have: normally an import/module or unsupported-name dependency outside typokat's
+     current profile. The production worker already carries the pinned TypeScript 6.0.3 full-host
+     default library, so this bucket no longer means that the default library is absent.
    - otherwise **in-scope** → diffed.
 
 4. **Diff.** Codes map by number (typokat mirrors tsc: `TS2322` == `TK2322`).

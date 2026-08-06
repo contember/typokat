@@ -78,8 +78,9 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
-recommended order — next: the model-completeness track that unblocks full `lib.d.ts`, then the
-scale ladder; the bytecode VM stays a deferred, profiling-gated refactor, ADR-0001).
+recommended order — next: Bundler module breadth and the remaining model-completeness track, then
+parallel cross-file identity and incrementality; the bytecode VM stays a deferred,
+profiling-gated refactor, ADR-0001).
 
 ## Testing
 
