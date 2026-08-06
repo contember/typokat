@@ -342,7 +342,7 @@ mod tests {
     }
 
     fn assert_fast_errors(stderr: &str) {
-        assert_eq!(stderr.matches("error[TK2322]").count(), 6, "{stderr}");
+        assert_eq!(stderr.matches("error TK2322:").count(), 6, "{stderr}");
         for line in 4..=9 {
             assert!(
                 stderr.contains(&format!("{FAST_ERRORS}({line},")),
