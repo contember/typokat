@@ -7644,6 +7644,9 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                 &mut reserved,
             );
         }
+        if matches!(pass.current_source, SourceUnit::User { .. }) {
+            super::emit_test_incomplete(&mut pass);
+        }
     }
     let batches = finish_semantic_effects(&mut pass);
     let semantic_identities = mixed_semantic_identities.unwrap_or_else(|| {
