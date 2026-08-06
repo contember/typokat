@@ -3653,6 +3653,11 @@ impl CompleteSourceRouteWorkScopeForTest {
 
 impl InjectedProfileRun {
     #[cfg(any(test, feature = "test-utils"))]
+    pub fn into_complete_source_user_results_for_test(self) -> Vec<super::CheckResult> {
+        self.user_results
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) fn semantic_identities(&self) -> &LibrarySemanticIdentities {
         &self.semantic_identities
     }

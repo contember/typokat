@@ -6,7 +6,6 @@ use std::process::ExitCode;
 use typokat_check::check::checker::library_compiler::{
     compile_complete_combined_profile_for_test, InjectedLibrarySource, InjectedProfileError,
 };
-use typokat_check::check::checker::reporting_record::CheckerRecord;
 use typokat_diagnostics::diagnostics::{self, Diagnostic, DiagnosticFormat, IncompleteSurface};
 use typokat_frontend::frontend::{run_project_parse_only, FileInput};
 use typokat_library::profile::ExactLibraryProfile;
@@ -209,27 +208,31 @@ fn check_sources(
         Err(error) => return Err(format!("one-pass compilation failed: {error:?}")),
     };
 
-    let mut records = (0..user_count)
-        .map(|_| UserRecords::default())
-        .collect::<Vec<_>>();
-    for (key, record) in run.library_records {
-        if key.file_ordinal.index() < LIBRARY_COUNT {
-            continue;
+    let results = run.into_complete_source_user_results_for_test();
+    if results.len() != user_count {
+        return Err(format!(
+            "one-pass compilation returned {} user results; expected {user_count}",
+            results.len()
+        ));
+    }
+    let mut records = Vec::with_capacity(user_count);
+    for (index, result) in results.into_iter().enumerate() {
+        if result.module_ordinal.index() != index {
+            return Err(format!(
+                "one-pass compilation returned module ordinal {} at input index {index}",
+                result.module_ordinal.index()
+            ));
         }
-        let index = user_index(key.file_ordinal, user_count).ok_or_else(|| {
-            format!(
-                "one-pass compilation returned unknown user ordinal {}",
-                key.file_ordinal.index()
-            )
-        })?;
-        match record {
-            CheckerRecord::Diagnostic(diagnostic) => {
-                records[index].diagnostics.push(diagnostic);
-            }
-            CheckerRecord::Incomplete(incomplete) => {
-                records[index].incomplete.push(incomplete);
-            }
+        if result.unit_slot.index() != index {
+            return Err(format!(
+                "one-pass compilation returned unit slot {} at input index {index}",
+                result.unit_slot.index()
+            ));
         }
+        records.push(UserRecords {
+            diagnostics: result.diagnostics,
+            incomplete: result.incomplete,
+        });
     }
 
     Ok(CheckWorkerOutput::Checked {
