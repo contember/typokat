@@ -11,7 +11,8 @@ use super::test_support::{
 use super::DriverError;
 use crate::frontend::FileInput;
 use crate::library::LibraryInitError;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 fn inputs(count: usize) -> Vec<FileInput> {
     (0..count)
@@ -96,6 +97,53 @@ fn deterministic_initialization_failure_is_one_cached_arc_through_real_public_fu
     assert_eq!(trace.worker_starts, 0);
     assert_eq!(trace.rayon_worker_starts, 0);
     assert_eq!(trace.reports_exposed, 0);
+}
+
+#[test]
+fn fault_trace_scope_excludes_a_preexisting_foreign_standalone_invocation() {
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let (owned_reports, foreign_reports, trace) = std::thread::scope(|threads| {
+        let foreign = threads.spawn(move || {
+            ready_sender.send(()).expect("foreign thread reports ready");
+            release_receiver
+                .recv_timeout(Duration::from_secs(10))
+                .expect("foreign thread is released while the owned scope is active");
+            super::check_project_once(inputs(1))
+        });
+        ready_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("foreign thread starts before scope installation");
+
+        let scope = ProductionDriverFaultTraceScopeForTest::install(
+            ProductionDriverFaultForTest::ProviderInitialization(
+                "standalone invocations must bypass the provider".to_owned(),
+            ),
+        );
+        release_sender
+            .send(())
+            .expect("foreign invocation is released");
+        let owned_reports = super::check_project_once(inputs(1))
+            .expect("owned standalone invocation bypasses the provider");
+        let foreign_reports = foreign
+            .join()
+            .expect("foreign standalone caller does not panic")
+            .expect("foreign standalone invocation bypasses the provider");
+        let trace = scope.finish();
+        (owned_reports, foreign_reports, trace)
+    });
+
+    assert_eq!(owned_reports.len(), 1);
+    assert_eq!(foreign_reports.len(), 1);
+    assert_eq!(trace.provider_initialization_attempts, 0);
+    assert_eq!(trace.provider_publications, 0);
+    assert_eq!(trace.provider_acquisitions, 0);
+    assert_eq!(
+        (trace.worker_starts, trace.reports_exposed),
+        (1, 1),
+        "{trace:#?}"
+    );
+    assert_eq!(trace.worker_base_identities, [0]);
 }
 
 #[test]
