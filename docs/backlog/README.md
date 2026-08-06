@@ -68,7 +68,7 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **48 remaining items**, including backlog `14` while exact `d1aa6d4` remote CI and
+The roadmap has **50 remaining items**, including backlog `14` while exact `d1aa6d4` remote CI and
 lifecycle closure are pending after WU7's **CONDITIONAL PASS** with zero HIGH/MEDIUM findings. The
 release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
@@ -79,7 +79,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 27 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
+| **C — soundness/parity tail** | 28 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
 | **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -113,10 +113,12 @@ fillers.
 - **L** · [`45`](45-operator-comparison-typing.md) — arithmetic, unary, comparison-overlap, `in`, and `instanceof` typing.
 - **M** · [`46`](46-return-path-analysis.md) — CFG return coverage, accessors, and bare-return inference.
 - **L** · [`47`](47-definite-assignment.md) — use-before-assignment, TDZ, and constructor property initialization.
-- **M** · [`48`](48-no-implicit-any.md) — implicit-any declarations, binding elements, and element access.
+- **M** · [`48`](48-no-implicit-any.md) — implicit-any declarations, binding elements, element
+  access, and `globalThis` property code fidelity.
 - **L** · [`49`](49-possibly-undefined-family.md) — nullable receivers, optional members/calls, optional chaining, and non-null assertions.
 - **L** · [`50`](50-type-predicates-assertions.md) — predicate/assertion signatures wired into flow narrowing.
-- **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, and closure narrowing.
+- **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, closure
+  narrowing, and assignment-target evaluation order.
 - **M** · [`52`](52-type-reference-tail.md) — value/type-space misuse, generic arity, and explicit call-site type args.
 - **XL** · [`75`](75-scope-surface-tail.md) — family-by-family disposition of the remaining Tier S/A/B semantic surface.
 
@@ -143,6 +145,10 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 - **M** · [`68`](68-contravariant-infer-intersection.md) — intersect same-name contravariant `infer` candidates instead of collapsing to `never`.
 - **M** · [`69`](69-signature-rest-parity-tail.md) — embedded tuple-rest inference, callable-union rest-shape synthesis, and variadic source tuples.
 - **M** · [`83`](83-contextual-generic-signature-relation.md) — contextual generic-signature instantiation under a cache-safe query-local relation environment.
+- **M** · [`107`](107-apparent-built-in-surfaces.md) — apparent `Function` members on callable
+  objects and apparent `Object` members on ordinary object sources.
+- **M** · [`108`](108-generic-arrow-signature-descriptors.md) — retain generic arrow descriptors
+  through contextual object-method assignment.
 - **L** · [`63`](63-review-parity-tail.md) — Callable/Newable canonical compatibility and surplus
   cardinality, batched evaluator/relation/checker FPs, messages, and the residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space

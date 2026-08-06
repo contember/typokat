@@ -164,7 +164,8 @@ operators, returns, generic constraints, implicit `any`.
 <!-- scope-family: a-implicit-any-declarations -->
 - `TK7006` parameter · `TK7005` variable · `TK7008` member · `TK7031` binding element implicitly has an '{1}' type.
 <!-- scope-family: a-implicit-any-index -->
-- `TK7053` Element implicitly has an 'any' type because expression of type '{0}' can't be used to index type '{1}'.
+- `TK7017` absent property on `typeof globalThis` · `TK7053` Element implicitly has an 'any' type
+  because expression of type '{0}' can't be used to index type '{1}'.
 
 ### Tier B — broader semantic surface
 

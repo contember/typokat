@@ -167,11 +167,12 @@ and validated the same way.
   `IteratorObjectConstructor` is correctly absent from the global type space. TypeScript 6.0.3
   reports suggestion-bearing `TS2552`; typokat reports the ordinary unresolved-name `TK2304`.
   Both reject. This pins name visibility only and does not claim terminal iterator semantics.
-  <!-- div: id=lib/iterator-object-constructor-name-code dir=cosmetic scope=s-value-type-space owner=../backlog/14-libdts-loading.md witness=../../tests/cases/b14_full_lib_loading/iterator_library_local_nonleak.ts -->
+  <!-- div: id=lib/iterator-object-constructor-name-code dir=cosmetic scope=s-name-resolution owner=design-oos witness=../../tests/cases/b14_full_lib_loading/iterator_library_local_nonleak.ts -->
 - **Absent `globalThis` property code is normalized (cosmetic).** In the cross-project isolation
   witness, TypeScript 6.0.3 reports `TS7017` for each unknown property on `typeof globalThis`;
-  typokat uses its ordinary missing-member `TK2339`. Both reject the same leaked-property demand.
-  <!-- div: id=lib/global-this-missing-property-code dir=cosmetic scope=s-value-type-space owner=../backlog/14-libdts-loading.md witness=../../tests/cases/b14_full_lib_loading_project/zz_shared_base_isolation/00_check.ts -->
+  typokat uses its ordinary missing-member `TK2339`. Both reject the same leaked-property demand;
+  backlog `48` owns `noImplicitAny` code fidelity independently of library routing.
+  <!-- div: id=lib/global-this-missing-property-code dir=cosmetic scope=a-implicit-any-index owner=../backlog/48-no-implicit-any.md witness=../../tests/cases/b14_full_lib_loading_project/zz_shared_base_isolation/00_check.ts -->
 - **Qualified enum endpoints remain unavailable (under-report).** Until enum types
   land, `E.Member` records
   `annotation-lower/type-name/qualified-enum` instead of guessing a type. Withholding
@@ -399,6 +400,11 @@ flow-node CFG (M23), the single narrowing model.
   nothing, composed or not. Same owner (`51`) as the deferred forms above; pinned
   separately because the composed-condition corpus carries the fixture that fails on it.
   <!-- div: id=narrowing/unmodeled-loop-condition-flow dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b100_logical_condition_narrowing/unmodeled_loop_flow_deferred.ts -->
+- **Unimplemented loop-form flow over-reports in the current official scoreboard.** Missing
+  `do…while` and `for` flow edges leave narrowed primitives at their declared type, producing
+  surplus `TK2339` at `controlFlowDoWhileStatement.ts` line 34 and
+  `controlFlowForStatement.ts` lines 10 and 17.
+  <!-- div: id=narrowing/unimplemented-loop-form-flow-official dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **A redundant guard over an unassigned variable loses tsc's member-error cascade
   (under-report).** tsc reports the owned `TS2454` definite-assignment errors and keeps the
   alternate wide enough to reject `x.toFixed`; typokat does not yet model definite assignment,
@@ -410,19 +416,23 @@ flow-node CFG (M23), the single narrowing model.
   its member access; typokat retains the assigned boolean path and stays silent. Backlog `51`
   owns the missing assignment-sensitive flow composition.
   <!-- div: id=narrowing/assigned-or-never-alternate dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/b100_logical_condition_narrowing/official_guard_parity_deferred.ts -->
-- **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard;
-  independently audited — matched never drops, fn never rises): walking `while` bodies / ternary
-  arms / logical RHS surfaces lib-shaped `TK2339` (`.length`/`.toString`/… on correctly-narrowed
-  primitives — no `lib.d.ts`) in `controlFlowIteration*`, `typeGuardsIn{If,ConditionalExpression}`,
-  `typeGuardsOnClassProperty`, and `…RightOperandOfAndAndOperator`; plus `TK2345`
-  in `controlFlowIterationErrors` from the complex-RHS reset-to-declared rule on a loop back edge
-  (tsc narrows `x = fn(x)` to the return type; typokat resets — wider, sound). Since the
-  2026-07-10 statement-checking sprint (WU1) the same lib-shaped `TK2339` also surfaces in
-  `for`/`do` **loop bodies** and in **assignments embedded in expressions** (comma / nested /
-  initializer / `return` operands) — e.g. no-lib `Array.push` in
-  `privateNameClassExpressionLoop.ts` and `typeInferenceWithTupleType.ts`, and
-  `.length`/`.toString` on narrowed primitives in `controlFlowAssignmentExpression.ts`.
-  <!-- div: id=narrowing/lib-shaped-member-access dir=over scope=b-type-level-tail owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Member paths are not flow-narrowed (over-report).** The flow environment is symbol-keyed, so
+  `typeGuardsOnClassProperty.ts` reports `TK2339` on members of a discriminated property that strict
+  TypeScript accepts. Backlog `51` owns access-path keys and invalidation.
+  <!-- div: id=narrowing/member-path-flow dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Complex assignment RHS values reset flow to the declared type (over-report).** This is the
+  deliberate sound boundary in the narrowing invariant: `controlFlowIterationErrors.ts` retains
+  three surplus `TK2345` records where TypeScript narrows the assignment to a computed return type.
+  <!-- div: id=narrowing/complex-rhs-reset dir=over scope=a-narrowing-tail owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
+- **Assignment-target evaluation order also over-reports in the current official scoreboard.** At
+  `controlFlowAssignmentExpression.ts` stripped line 9, a target-side assignment narrows the value
+  before the RHS in JavaScript and TypeScript. typokat checks the RHS first and emits surplus
+  `TK2339` from the stale pre-target type.
+  <!-- div: id=narrowing/assignment-target-evaluation-order-over dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Assignment-target side effects are applied after the RHS (under-report).** JavaScript evaluates
+  an assignment target before its right-hand side. typokat currently checks the RHS first, so a
+  target-side assignment can leave a stale narrow type and drop TypeScript's `TS2339`.
+  <!-- div: id=narrowing/assignment-target-evaluation-order dir=under scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tests/cases/sr_deferred_ledger/b51_assignment_target_evaluation_order.ts -->
 
 ## Generics & constraints (M9 / M10 / M24)
 
@@ -905,35 +915,32 @@ method signature whose return annotation is omitted; typokat is silent — a dro
   `69` owns exact tuple-rest call reporting independently of label lowering.
   <!-- div: id=signatures/variadic-call-diagnostic-cardinality dir=over scope=s-call-arguments owner=../backlog/69-signature-rest-parity-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 
-- **Accepted official-suite over-reports** (safe direction, recorded in the scoreboard rather than
-  dropped errors):
-  <!-- div: id=signatures/official-overreports dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
-  - `objectTypeWithCallSignatureAppearsToBeFunctionType.ts` /
-    `objectTypeWithConstructSignatureAppearsToBeFunctionType.ts` — `TK2339` on
-    `.apply`/`.call`/`.bind`: typokat does not model `Function.prototype` members on callable /
-    construct-signature objects.
-  - `assignFromNumberInterface2.ts` — `TK2322`/`TK2741`: typokat does not model
-    primitive-to/from-boxed interface assignability (`number` to/from `Number`).
-  - `assignmentCompatWithCallSignatures2.ts` — `TK2322`: typokat does not model
-    generic-function-to-specific-signature assignability.
-  - M33 overload preservation moves several official overload files from "skipped shape" to
-    conservative checking:
-    `interfaceWithOverloadedCallAndConstructSignatures.ts`,
-    `interfaceWithSpecializedCallAndConstructSignatures.ts`,
-    `constructSignaturesWithIdenticalOverloads.ts`,
-    `constructSignaturesWithOverloads.ts`, and `methodSignaturesWithOverloads2.ts` keep their
-    pre-existing missing `TK2454` definite-assignment baseline errors, but now also report
-    safe-direction `TK2554`/`TK2345`/`TK2769`/`TK2322` on represented overload calls or
-    assignments.
-    <!-- div: id=signatures/m33-overload-conservative dir=over scope=s-overload-resolution owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
-  - `typesWithSpecializedCallSignatures.ts` and
-    `stringLiteralTypesInImplementationSignatures2.ts` — `TK2394`: tsc accepts specialized
-    string-literal overload signatures against a broader implementation signature in these
-    non-strict files; typokat conservatively checks them through the ordinary overload
-    compatibility path and over-reports. The latter still has the pre-existing missing `TK2300`
-    duplicate-name diagnostic.
-    <!-- div: id=signatures/specialized-overload-overreport dir=over scope=s-overload-resolution owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
-    <!-- div: id=signatures/missing-tk2300-duplicate dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Callable objects lack the apparent `Function` surface (over-report).** Official
+  `objectTypeWithCallSignatureAppearsToBeFunctionType.ts` and
+  `objectTypeWithConstructSignatureAppearsToBeFunctionType.ts` accept `.apply` on represented call
+  and construct signatures. typokat reports `TK2339` because it checks only explicit object members.
+  <!-- div: id=signatures/callable-object-apparent-function dir=over scope=s-member-access owner=../backlog/107-apparent-built-in-surfaces.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **An ordinary object source lacks the apparent `Object` surface (over-report).** In official
+  `assignFromNumberInterface2.ts`, strict TypeScript accepts `a = b` after supplying
+  `Object.prototype` members such as `toLocaleString` to the ordinary `NotNumber` source. typokat
+  reports the sole surplus `TK2741` at stripped scoreboard line 19. The former aggregate
+  primitive/boxed description is stale; explicit primitive overlap is already represented.
+  <!-- div: id=signatures/ordinary-object-apparent-object dir=over scope=s-assignability owner=../backlog/107-apparent-built-in-surfaces.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Generic arrow descriptors conservatively fail object-method assignment (over-report).** In
+  official `assignmentCompatWithCallSignatures2.ts`, typokat reports `TK2322` at stripped scoreboard
+  lines 23 and 27 for generic arrows that strict TypeScript accepts under specific method targets.
+  <!-- div: id=signatures/generic-arrow-descriptor dir=over scope=s-assignability owner=../backlog/108-generic-arrow-signature-descriptors.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Calling a construct-only signature uses the ordinary non-callable code (cosmetic).** In official
+  `objectTypeWithConstructSignatureAppearsToBeFunctionType.ts`, TypeScript reports suggestion-bearing
+  `TS2348`; typokat reports `TK2349`. Both reject the two calls and still allow `new`.
+  <!-- div: id=signatures/construct-call-diagnostic-code dir=cosmetic scope=a-call-construct-parity owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
+- `typesWithSpecializedCallSignatures.ts` and
+  `stringLiteralTypesInImplementationSignatures2.ts` over-report `TK2394`: tsc accepts specialized
+  string-literal overload signatures against a broader implementation signature in these
+  non-strict files; typokat conservatively checks them through the ordinary overload compatibility
+  path. The latter still has the pre-existing missing `TK2300` duplicate-name diagnostic.
+  <!-- div: id=signatures/specialized-overload-overreport dir=over scope=s-overload-resolution owner=design-oos witness=../../tooling/official-suite/scoreboard.txt -->
+  <!-- div: id=signatures/missing-tk2300-duplicate dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tooling/official-suite/scoreboard.txt -->
 - Construct signatures: ordinary function values are deliberately out of scope — `tsc --strict`
   6.0.3 does not treat a plain `(x: number) => Box` value as satisfying a construct signature, and
   `new makeBox(1)` reports `TS7009`. typokat does not model JavaScript runtime constructability.

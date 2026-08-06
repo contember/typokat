@@ -41,6 +41,13 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **The backlog-14 closure audit graduated independent semantic tails** — `globalThis` diagnostic
+  fidelity is owned by [`48`](backlog/48-no-implicit-any.md), flow evaluation order by
+  [`51`](backlog/51-narrowing-tail.md), construct-only call code parity by
+  [`75`](backlog/75-scope-surface-tail.md), apparent built-in object surfaces by
+  [`107`](backlog/107-apparent-built-in-surfaces.md), and generic arrow descriptors by
+  [`108`](backlog/108-generic-arrow-signature-descriptors.md). None is a default-library routing
+  condition.
 - **Full default-library production cutover is shipped; closure is active** —
   [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md) accepts an exact embedded
   TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,

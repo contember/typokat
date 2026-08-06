@@ -898,7 +898,7 @@ sprint (its findings are open backlog items). Every fixture header records the
 | `sr_wu2_scope_overloads/` | WU2 | switch-local lexical scope (a case-clause `let`/`const` must not resolve after the switch — `TK2304`) and local (in-function) function overloads (no spurious `TK2391`; calls select declared overloads) |
 | `sr_wu2_export_space/` | WU2 | **project-shaped** (registered in `PROJECT_DIRS`): `export type { x }` / `export { type x }` specifier forms must not leak the value slot; a non-type-only import using such a name as a value gets `TK2304` (the M29 stand-in for tsc's `TS1362`) |
 | `sr_wu3_types_recursion/` | WU3 | `any & never` → `never` (assigning into it errors); source-intersection nominal origin (private member rejects); `keyof { [k: string]: T }` = `string \| number`; recursive mapped-value recursion guard; deep type-literal annotation depth guard (backlog 63k) |
-| `sr_deferred_ledger/` | — (stays disabled) | known unfixtured under-reports: backlog `56` (silent instantiation cycles), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), `76` (unannotated forward `var` value type), `77` (`ReturnType` call-signature infer); plus the backlog `35` aliased-keyof mapped key-source **over**-report (`b35_aliased_keyof_mapped.ts`) |
+| `sr_deferred_ledger/` | — (stays disabled) | pinned deferred under-reports: backlog `18` (duplicate function implementation recovery), `48` (implicit-any return), `51` (assignment-target evaluation order), `60` (fresh literals vs union targets), `62` (index-signature source parity), `66` (protected↔protected override compat), and `76` (unannotated forward `var` value type); plus the backlog `35` aliased-keyof mapped key-source and backlog `75` generic indexed-access **over**-reports |
 
 Construction notes:
 
@@ -924,7 +924,9 @@ Construction notes:
 - **Deferred ledger (`sr_deferred_ledger/`).** Each fixture is a minimal pin of
   tsc's verdict for one dropped-error family plus a passing control; the dir stays
   disabled until its backlog item ships. See the deferred-check note in
-  [`divergences.md`](../../docs/reference/divergences.md).
+  [`divergences.md`](../../docs/reference/divergences.md). The backlog-51 fixture additionally pins
+  JavaScript assignment evaluation order: target-side flow effects precede the RHS, so strict tsc
+  reports `TS2339` where typokat is currently silent.
 
 ## Rewrite-hotpath hardening corpus (sprint 2026-07-13)
 

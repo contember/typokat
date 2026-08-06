@@ -26,7 +26,8 @@ The currently unowned tail includes:
   fidelity (`TK2739`/`TK2740`, `TK2551`), value/type-space misuse (`TK2693`), static-side extends
   (`TK2417`), and implements compatibility (`TK2420`);
 - Tier A: unknown receivers (`TK2571`) and non-callable-vs-non-constructable parity
-  (`TK2348`/`TK2351`; `TK2349` stays owned by `19`);
+  (`TK2348`/`TK2351`; `TK2349` stays owned by `19`), including `TK2348` code fidelity when a
+  construct-only object is called;
 - Tier B: indexed access/index-signature compatibility (`TK2536`/`TK2411`), implicit `this`
   (`TK2683`), accessor compatibility (`TK2379`/`TK2380`), reachability
   (`TK7027`), delete-operand checking (`TK2790`), decorators, and computed/symbol properties;
@@ -119,9 +120,10 @@ For the witnesses above, acceptance is exact: class-index and interface-topology
 non-permissive until implemented; tuple-label controls never regain a named-member incomplete;
 rest proof failures emit only their own stable identity; selected-key callbacks match strict tsc
 without duplicate `TK2345`; and both assertion forms emit `TK2352` without suppressing independent
-child diagnostics. Closing the generic iterator heritage family removes the five surplus census
-rows through a general relation rule while an incompatible `[Symbol.iterator]` override still
-reports `TK2430`.
+child diagnostics. Calling a construct-only object reports `TK2348`, not the generic `TK2349`, while
+`new` remains accepted. Closing the generic iterator heritage family removes the five surplus
+census rows through a general relation rule while an incompatible `[Symbol.iterator]` override
+still reports `TK2430`.
 
 **Census infrastructure shipped (2026-07-10 completeness-accounting sprint, WU6 — do not redo).**
 The one-time divergence census this item demanded is done and machine-enforced: every entry in

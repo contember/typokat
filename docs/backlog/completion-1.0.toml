@@ -209,12 +209,12 @@ scope = ["a-definite-assignment"]
 [[criterion]]
 id = "B-no-implicit-any"
 track = "B"
-title = "noImplicitAny family (TK7005/7006/7008/7031/7053)"
+title = "noImplicitAny family (TK7005/7006/7008/7017/7031/7053)"
 state = "incomplete"
 blocks_release = "true"
 owner = "./48-no-implicit-any.md"
-witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
-links = []
+witness = "spec-first corpus plus the globalThis cross-project isolation code-fidelity witness; cross-check tsc 6.0.3 --strict"
+links = ["../../tests/cases/b14_full_lib_loading_project/zz_shared_base_isolation/00_check.ts"]
 deps = []
 scope = ["a-implicit-any-declarations", "a-implicit-any-index"]
 
@@ -245,12 +245,12 @@ scope = ["a-type-predicates"]
 [[criterion]]
 id = "B-narrowing-tail"
 track = "B"
-title = "Narrowing tail: remaining loop forms, member paths, closures"
+title = "Narrowing tail: remaining loop forms, member paths, closures, evaluation order"
 state = "incomplete"
 blocks_release = "true"
 owner = "./51-narrowing-tail.md"
-witness = "spec-first corpus; cross-check tsc 6.0.3 --strict"
-links = []
+witness = "spec-first corpus including disabled assignment-target evaluation-order acceptance; cross-check tsc 6.0.3 --strict"
+links = ["../../tests/cases/sr_deferred_ledger/b51_assignment_target_evaluation_order.ts"]
 deps = []
 scope = ["a-narrowing-tail"]
 
@@ -504,6 +504,28 @@ blocks_release = "false"
 owner = "./69-signature-rest-parity-tail.md"
 witness = "documented safe-direction over-report; conditional inference fixtures, union-call review probes, and official variadicTuples2 harness lines 66/71"
 links = ["../reference/divergences.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-apparent-built-in-surfaces"
+track = "C"
+title = "Apparent Function and Object surfaces — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./107-apparent-built-in-surfaces.md"
+witness = "official callable/constructable object .apply rows and assignFromNumberInterface2 stripped line 19; explicit-overlap negative control"
+links = ["../reference/divergences.md", "../../tooling/official-suite/scoreboard.txt", "../../tests/cases/b14_full_lib_loading/object_explicit_overlap.ts"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-generic-arrow-descriptors"
+track = "C"
+title = "Generic arrow signature descriptors — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./108-generic-arrow-signature-descriptors.md"
+witness = "official assignmentCompatWithCallSignatures2 stripped lines 23 and 27; randomized differential gate against the pre-change binary"
+links = ["../reference/divergences.md", "../../tooling/official-suite/scoreboard.txt", "../../tooling/differential/README.md"]
 deps = []
 
 [[criterion]]
