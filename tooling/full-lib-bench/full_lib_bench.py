@@ -1222,10 +1222,14 @@ def host_identity() -> dict[str, Any]:
 def compiler_result_without_time(record: dict[str, Any], descriptor: dict[str, Any]) -> tuple[ProcessResult, int]:
     result = result_from_record(record, descriptor)
     marker = "\tCommand being timed:"
+    if result.stderr.count(marker) != 1:
+        raise ContractError("memory sample must have exactly one /usr/bin/time -v report")
     position = result.stderr.find(marker)
-    if position < 0:
-        raise ContractError("memory sample has no /usr/bin/time -v report")
     compiler_stderr = result.stderr[:position]
+    if result.returncode > 0:
+        compiler_stderr = compiler_stderr.removesuffix(
+            f"Command exited with non-zero status {result.returncode}\n"
+        )
     report = result.stderr[position:]
     matches = RSS_RE.findall(report)
     if len(matches) != 1:
