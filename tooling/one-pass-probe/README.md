@@ -1,5 +1,17 @@
 # One-pass full-library probe
 
+## Lifecycle status
+
+This is a retained pre-promotion decision probe, not a current product gate. Its `PROMISING`
+contract remains unchanged so historical evidence stays reproducible. After the production CLI
+adopted `production-complete-source-once`, the O/P comparison stopped answering a release decision:
+it now compares the discarded test example with the production implementation of the same
+lifecycle. A post-promotion `NOT-PROMISING` result must remain visible and must not be relabelled.
+
+The WU6A stop condition uses only the all-row O/T gate to falsify the complete-source lifecycle.
+The authoritative WU6 production benchmark remains the only performance release gate. Do not use
+this collector for a new post-promotion decision without a separately specified contract.
+
 This directory defines a disposable, non-authoritative probe for the test-only
 complete-combined checker path. It answers one question before a production design change:
 

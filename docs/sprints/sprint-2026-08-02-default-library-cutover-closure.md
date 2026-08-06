@@ -160,8 +160,9 @@ assumption.
   binary, committed repro ratchet, and the live negative control. With user authorization, publish
   the exact committed branch to CI and require all current jobs green.
 - **Acceptance / witness.** Zero unexplained semantic regression; the negative control fires; every
-  current CI job executes and passes. Any scoreboard movement is cause-classified and separately
-  specified, never smoothed by rebaseline.
+  CI job applicable to the pushed branch or its pull request executes and passes. The scheduled-only
+  tsc truth-mode remains scheduled evidence and is never reported as executed by a push. Any
+  scoreboard movement is cause-classified and separately specified, never smoothed by rebaseline.
 - **Touch points.** Test/tooling outputs and only the source changes their failures justify.
 
 ### WU6 — authoritative performance claim (effort L)
@@ -343,3 +344,25 @@ after a WU6 NO-GO, but it cannot support a product claim.
   false `TK2304` diagnostics. The accepted direction is therefore the lifecycle measured by the
   probe behind the real production frontend, never promotion of the example. →
   [`ADR-0021`](../decisions/0021-use-complete-source-compilation-for-standalone-cli-checks.md).
+- **2026-08-06 — post-promotion WU6A falsifier passed.** Commits `e086f59` and `2b373cf` pin and
+  remove only an unrequested test-only serialization of the complete 559-record product census;
+  the semantic compile and the production census witness remain intact. A controlled direct run
+  fell from about 0.75 s to 0.29 s. The retained collector then ran from exact HEAD `2b373cf` after
+  separate `cpu-lease run -n 2 -- cargo build --release --bin typokat` and
+  `cpu-lease run -n 2 -- cargo build --release --example one_pass_probe` builds, each serialized by
+  `/tmp/typokat-perf.lock`. The exact collector was `cpu-lease run -n 4 --no-smt -- python3
+  tooling/one-pass-probe/one_pass_probe.py run --production target/release/typokat --one-pass
+  target/release/examples/one_pass_probe --tsgo tooling/full-lib-bench/.stage/tsgo-7.0.2/lib/tsc
+  --output /tmp/typokat-one-pass-probe-2b373cf.json`, under the same lock. Raw evidence has SHA-256
+  `d6132774fcd81edb3d8d07b2fe1df4f348ec69b00cc67668c0418f58636bc078`; production, one-pass,
+  and tsgo binary SHA-256 identities are respectively `cc756f26ff4dac30eaed0d66865b2447f2608db901d98e38434fb8074b9b262e`,
+  `aaf2a0010b368b375bf712befdaa735f295fb46fdbc1413f7a6c330f6d3f4bce`, and
+  `4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4`. Every all-row O/T
+  median, p95 ratio, and bootstrap lower bound passed: fast-clean `1.2475/1.1770/1.2277`,
+  fast-errors `1.2326/1.2895/1.2150`, collision `1.2286/1.2959/1.2073`, and fanout
+  `1.2674/1.3430/1.2543`. Production/tsgo was also above 1.00 throughout, but remains
+  non-authoritative evidence. The unchanged historical collector correctly stored
+  `NOT-PROMISING` because post-promotion production is 3–5% faster than its discarded test
+  example, so O/P no longer answers a release decision. The probe is retired unchanged; its raw
+  verdict was not relabelled, while WU6A's all-row falsifier is PASS. Authoritative WU6 remains
+  mandatory.
