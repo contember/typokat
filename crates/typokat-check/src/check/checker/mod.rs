@@ -118,6 +118,20 @@ struct UserReportingAdapter {
     event_store: EventStore,
 }
 
+fn seed_module_placeholder_errors(
+    decl_types: &mut DeclTypes,
+    module_placeholders: &[Vec<ImportPlaceholder>],
+    error: TypeId,
+) {
+    for placeholders in module_placeholders {
+        for placeholder in placeholders {
+            if let Some(decl_id) = placeholder.value {
+                decl_types.set(decl_id, error);
+            }
+        }
+    }
+}
+
 fn direct_global_this_modeled_value_storage(
     binder: &Binder,
     module: ScopeId,
@@ -2012,13 +2026,7 @@ where
     )?;
     enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects)?;
     enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)?;
-    for placeholders in &module_placeholders {
-        for placeholder in placeholders {
-            if let Some(decl_id) = placeholder.value {
-                decl_types.set(decl_id, error);
-            }
-        }
-    }
+    seed_module_placeholder_errors(&mut decl_types, &module_placeholders, error);
 
     let pending_tickets = lexical_events.tickets();
     let mut pass = build_pass_with_tickets(
@@ -3376,13 +3384,7 @@ where
         &mut external_effects,
     ));
 
-    for placeholders in &module_placeholders {
-        for placeholder in placeholders {
-            if let Some(decl_id) = placeholder.value {
-                decl_types.set(decl_id, error);
-            }
-        }
-    }
+    seed_module_placeholder_errors(&mut decl_types, &module_placeholders, error);
     let mut pass = build_pass_with_reporting(
         interner,
         &binder,

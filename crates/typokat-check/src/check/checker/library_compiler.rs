@@ -7333,13 +7333,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     }
     let mut decl_types = DeclTypes::new(binder.decl_count);
     let error = interner.well_known().error;
-    for placeholders in &module_placeholders {
-        for placeholder in placeholders {
-            if let Some(decl_id) = placeholder.value {
-                decl_types.set(decl_id, error);
-            }
-        }
-    }
+    super::seed_module_placeholder_errors(&mut decl_types, &module_placeholders, error);
     let user_declaration_contributors = binder
         .declarations
         .iter()
