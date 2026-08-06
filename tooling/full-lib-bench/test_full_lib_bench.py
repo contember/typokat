@@ -221,6 +221,76 @@ class ContractTests(unittest.TestCase):
                         {"/tmp/input.ts": "fast-errors/main.ts"},
                     )
 
+    def test_time_nonzero_status_is_stripped_before_parsing_fast_errors(self) -> None:
+        diagnostic = "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+        record, descriptor = memory_sample(
+            diagnostic + "Command exited with non-zero status 1\n",
+            returncode=1,
+        )
+
+        compiler, rss_kib = bench.compiler_result_without_time(record, descriptor)
+
+        self.assertEqual(compiler.stderr, diagnostic)
+        self.assertEqual(rss_kib, 76_128)
+        self.assertEqual(
+            bench.normalize_diagnostics(
+                compiler,
+                "typokat",
+                "fast-errors",
+                {"/tmp/input.ts": "fast-errors/main.ts"},
+            ),
+            ["fast-errors/main.ts:2:7:2322"],
+        )
+
+    def test_time_status_must_equal_a_positive_compiler_exit(self) -> None:
+        diagnostic = "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+        for status, returncode in ((2, 1), (0, 0)):
+            with self.subTest(status=status, returncode=returncode):
+                self.assert_memory_stderr_fails_closed(
+                    diagnostic + f"Command exited with non-zero status {status}\n",
+                    returncode=returncode,
+                )
+
+    def test_time_status_cannot_hide_duplicate_or_forged_compiler_stderr(self) -> None:
+        diagnostic = "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+        for compiler_stderr in (
+            diagnostic
+            + "Command exited with non-zero status 1\n"
+            + "Command exited with non-zero status 1\n",
+            diagnostic
+            + "forged compiler stderr\n"
+            + "Command exited with non-zero status 1\n",
+        ):
+            with self.subTest(compiler_stderr=compiler_stderr):
+                self.assert_memory_stderr_fails_closed(compiler_stderr, returncode=1)
+
+    def test_time_status_must_immediately_precede_the_time_report(self) -> None:
+        diagnostic = "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+        self.assert_memory_stderr_fails_closed(
+            "Command exited with non-zero status 1\n" + diagnostic,
+            returncode=1,
+        )
+
+    def test_time_status_does_not_hide_unknown_compiler_stderr(self) -> None:
+        diagnostic = "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+        self.assert_memory_stderr_fails_closed(
+            diagnostic
+            + "internal compiler warning\n"
+            + "Command exited with non-zero status 1\n",
+            returncode=1,
+        )
+
+    def assert_memory_stderr_fails_closed(self, compiler_stderr: str, *, returncode: int) -> None:
+        record, descriptor = memory_sample(compiler_stderr, returncode=returncode)
+        with self.assertRaises(bench.ContractError):
+            compiler, _ = bench.compiler_result_without_time(record, descriptor)
+            bench.normalize_diagnostics(
+                compiler,
+                "typokat",
+                "fast-errors",
+                {"/tmp/input.ts": "fast-errors/main.ts"},
+            )
+
     def test_typokat_reason_chain_rejects_unsupported_primary_code(self) -> None:
         result = bench.ProcessResult(
             ("typokat",),
@@ -778,6 +848,27 @@ def raw_record(
             "path": str(executable), "before": identity, "after": identity,
         },
     }
+
+
+def memory_sample(
+    compiler_stderr: str, *, returncode: int
+) -> tuple[dict[str, object], dict[str, object]]:
+    descriptor: dict[str, object] = {
+        "argv": ["/usr/bin/time", "-v", "/bin/typokat"],
+    }
+    record: dict[str, object] = {
+        "returncode": returncode,
+        "stdout": "",
+        "stderr": compiler_stderr
+        + '\tCommand being timed: "/bin/typokat"\n'
+        + "\tMaximum resident set size (kbytes): 76128\n",
+        "wall_seconds": 0.25,
+        "pid": 10,
+        "started_monotonic_ns": 1_000_000_000,
+        "ended_monotonic_ns": 1_250_000_000,
+        "group_clean": True,
+    }
+    return record, descriptor
 
 
 if __name__ == "__main__":
