@@ -205,7 +205,7 @@ id = "callable-heritage-canonical"
 outcome = "diagnostic"
 code = "TK2430"
 count = 2
-owner = "../../../docs/backlog/14-libdts-loading.md"
+owner = "../../../docs/backlog/63-review-parity-tail.md"
 witnesses = ["lib.es5.d.ts:329:11", "lib.es5.d.ts:366:11"]
 actual_cause = "Apparent Function compatibility rejects the canonical CallableFunction and NewableFunction generic overload surfaces."
 

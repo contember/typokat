@@ -434,7 +434,7 @@ fn validate_decision_and_owners(root: &toml::Table, repo_root: &Path, manifest_p
         ("annotation-intrinsic-keyword", OWNER_75),
         ("annotation-this-type", OWNER_75),
         ("annotation-type-predicate", OWNER_50),
-        ("callable-heritage-canonical", OWNER_14),
+        ("callable-heritage-canonical", OWNER_63),
         ("callable-heritage-cardinality", OWNER_63),
     ]);
 

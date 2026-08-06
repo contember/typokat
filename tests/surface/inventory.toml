@@ -725,9 +725,9 @@ role = "expr-infer"
 surface = "regexp-literal"
 slot = "self"
 oxc_variant = "Expression::RegExpLiteral"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/14-libdts-loading.md"
-witness = "../cases/b73_expression_shape_tail/regexp_literal.ts"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b14_full_lib_loading/regexp_literals.ts"
 
 [[surface]]
 id = "expr-infer/satisfies-expression/self"

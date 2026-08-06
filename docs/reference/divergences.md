@@ -141,8 +141,8 @@ and validated the same way.
 - **The pinned ES5 `CallableFunction` and `NewableFunction` heritage edges
   over-report.** typokat emits one canonical `TK2430` for each interface where tsc is
   clean because apparent `Function` compatibility does not yet admit their generic
-  overload surfaces. Backlog `14` owns the two compatibility results.
-  <!-- div: id=lib-es5/callable-heritage-compatibility dir=over scope=s-assignability owner=../backlog/14-libdts-loading.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
+  overload surfaces. Backlog `63` owns the two compatibility results.
+  <!-- div: id=lib-es5/callable-heritage-compatibility dir=over scope=s-assignability owner=../backlog/63-review-parity-tail.md witness=../../tests/fixtures/lib-es5-6.0.3/readiness.toml -->
 - **The same two ES5 heritage edges each emit one surplus `TK2430`
   (over-report).** The extra diagnostic per interface is a cardinality/parity issue
   distinct from the canonical compatibility result and remains backlog `63` work.
@@ -163,12 +163,6 @@ and validated the same way.
   truthfully includes the published `[Symbol.toStringTag]: "ArrayBuffer"` member. Its code and site
   are unchanged.
   <!-- div: id=lib/generic-iterator-heritage-variance dir=over scope=s-assignability owner=../backlog/75-scope-surface-tail.md witness=../../tests/fixtures/library-owned-records.txt -->
-- **Newly traversed official surfaces expose missing standard-library globals
-  (over-report / OOS movement).** Tuple-label and generic-heritage review now reaches
-  `Error`, `Promise`, `Generator`, `AsyncGenerator`, `CloseEvent`, `Number`, `String`, `Object`,
-  `Date`, and `Iterable` in files that tsc checks with a library. Typokat reports `TK2304` or an
-  honest host-heritage incomplete; backlog `14` owns loading those declarations.
-  <!-- div: id=lib/official-newly-reached-globals dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **Library-local iterator constructor name is normalized (cosmetic).** In an external module,
   `IteratorObjectConstructor` is correctly absent from the global type space. TypeScript 6.0.3
   reports suggestion-bearing `TS2552`; typokat reports the ordinary unresolved-name `TK2304`.
@@ -318,12 +312,13 @@ and validated the same way.
   and stays release-owned by backlog `18`.
   <!-- div: id=binder/duplicate-function-implementation-call dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/sr_deferred_ledger/b18_duplicate_function_implementations.ts -->
 
-### Frozen default-library prefix (backlog `102` / `103`)
+### Frozen default-library prefix
 
 On the `Library` base the library's binder tables are a sealed prefix a user delta may never
-mutate ([ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)). Backlog `102` made
-every attempted write visible to routing; backlog `103` now rebuilds the affected closure in a
-private epoch. Fresh script-scope globals still publish through the ordinary delta. The remaining
+mutate ([ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)). Every attempted write
+is visible to routing, and [ADR-0020](../decisions/0020-build-source-native-sparse-collision-epochs.md)
+rebuilds the affected closure in a private epoch. Fresh script-scope globals still publish through
+the ordinary delta. The remaining
 rows below are duplicate-declaration diagnostics typokat does not yet emit, pinned by the
 `b102_frozen_prefix_writes/` corpus and cross-checked against
 `tsc 6.0.3 --strict --target es2025 --noEmit`.
@@ -331,13 +326,13 @@ rows below are duplicate-declaration diagnostics typokat does not yet emit, pinn
 - `TK2403` *subsequent variable declarations must have the same type* is not emitted when a
   script `var` redeclares a library global with a different type; the library declaration wins
   and only the resulting assignment errors are reported.
-  <!-- div: id=library/var-redeclaration-type dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_var_merge.ts -->
+  <!-- div: id=library/var-redeclaration-type dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_var_merge.ts -->
 - `TK2451` *cannot redeclare block-scoped variable* is not emitted when a script `const`/`let`
   collides with a library value (tsc reports it on the library declarations too).
-  <!-- div: id=library/const-redeclaration dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_const_merge.ts -->
+  <!-- div: id=library/const-redeclaration dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_const_merge.ts -->
 - `TK2300` *duplicate identifier* is not emitted when a script declaration collides with a
   library declaration in another declaration space.
-  <!-- div: id=library/duplicate-identifier dir=under scope=s-duplicate-declarations owner=../backlog/103-library-merge-panics-and-routing.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_duplicate_identifier.ts -->
+  <!-- div: id=library/duplicate-identifier dir=under scope=s-duplicate-declarations owner=../backlog/18-duplicate-identifier-detection.md witness=../../tests/cases/b102_frozen_prefix_writes/library_global_duplicate_identifier.ts -->
 ### Soundness-review deferred ledger (backlog `18`/`30`/`60`/`62`/`66`/`76`)
 
 Known dropped-error (under-report) families from the 2026-07-07 cross-cutting review,
@@ -559,10 +554,8 @@ contextual typing of fresh object/array/tuple literals against concrete declarat
 parameter, `new`/`super`, and declared-return targets (M30); tuple rest elements plus
 function rest/optional/default signature shape (M32).
 
-- **Deferred:** array METHODS (`push`/`map`/…) and the `ReadonlyArray` interface surface (need
-  `lib.d.ts`); optional tuple elements (`[number?]`) remain deferred with the rest of M18's tuple
-  gaps.
-  <!-- div: id=arrays/array-methods-need-lib dir=over scope=design-oos owner=../backlog/14-libdts-loading.md witness=../../tests/cases/m17_arrays -->
+- **Deferred:** optional tuple elements (`[number?]`) remain deferred with the rest of M18's tuple
+  gaps. Array methods and the `ReadonlyArray` interface surface ship through the default library.
   <!-- div: id=tuples/optional-elements dir=under scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/m18_tuples -->
 - **Tuple labels are transparent, but some valid rest containers are not provably array-like
   (over-report / OOS).** Conditional and mapped containers in official
@@ -800,17 +793,8 @@ resolved to provided `.ts` files; named imports, `import type`, exported declara
 
 - **Out of scope (deferred):** packages / `node_modules`, `tsconfig` resolver options, `.d.ts`,
   default imports, namespace imports, star imports/re-exports, re-export-from, CommonJS, ambient
-  modules, cyclic module graphs, and parallel cross-file identity. The rest of **`lib.d.ts`
-  globals** (`console`, string methods, `Promise`, …) are still out of scope — fixtures avoid the
-  standard library otherwise. Since M33 preserves overload annotations instead of skipping them,
-  official files such as `assignFromStringInterface2.ts` and `unionTypeCallSignatures2.ts` can
-  self-gate as `OOS:unresolved` on missing lib names (`RegExp`, `RegExpMatchArray`, `Date`) that
-  were previously hidden behind skipped overloads. Likewise, WU1's `throw`-operand and
-  `for`-header checking (2026-07-10) evaluates lib globals (`Error`, `Number`) previously behind
-  un-traversed code, so `controlFlowIIFE.ts`, `controlFlowInOperator.ts`,
-  `booleanLiteralTypes1/2.ts`, `literalTypes3.ts`, and `numericLiteralTypes1/2.ts` self-gate as
-  `OOS:unresolved` on a no-lib `TK2304` — lost measurement coverage, not a dropped error.
-  (Backlog `14`, `15`, `38`, `52`.)
+  modules, cyclic module graphs, and parallel cross-file identity. The production driver supplies
+  the full default library independently of this unresolved module-resolution surface.
   <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
 
 The 1.0 plan narrows that deferred resolver surface to `moduleResolution: "bundler"` and delegates

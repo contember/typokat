@@ -1019,7 +1019,7 @@ fn scope_inventory_rejects_unmarked_duplicate_and_wrong_tier_families() {
 // deps <-> blocked-by parity witnesses (table-driven).
 //
 // The `open-one` criterion owns backlog `16`, whose real `blocked-by` frontmatter
-// is `[14, 15]`; a matching `deps` array makes the base pass. Each mutation
+// is `[15]`; a matching `deps` array makes the base pass. Each mutation
 // then drifts one side and must be rejected unless a `deps_exception` justifies it.
 // ---------------------------------------------------------------------------
 
@@ -1029,10 +1029,7 @@ fn deps_parity_base() -> String {
             "owner = \"./79-resolution-query-surface.md\"",
             "owner = \"./16-parallelism-type-universe.md\"",
         )
-        .replace(
-            "deps = []\n",
-            "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]\n",
-        )
+        .replace("deps = []\n", "deps = [\"./15-modules-imports.md\"]\n")
 }
 
 #[test]
@@ -1053,11 +1050,11 @@ fn rejects_deps_parity_drift() {
 
     let cases: Vec<(&str, String, &str)> = vec![
         (
-            // Drop one of the owner's dependencies.
+            // Drop the owner's dependency.
             "16 drift (deps drop 15)",
             deps_parity_base().replace(
-                "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]",
-                "deps = [\"./14-libdts-loading.md\"]",
+                "deps = [\"./15-modules-imports.md\"]",
+                "deps = []",
             ),
             "disagree with owner",
         ),
@@ -1065,8 +1062,8 @@ fn rejects_deps_parity_drift() {
             // Extra dep the owner's blocked-by does not list.
             "deps names an unlisted dependency",
             deps_parity_base().replace(
-                "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]",
-                "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\", \"./42-enums-type-side.md\"]",
+                "deps = [\"./15-modules-imports.md\"]",
+                "deps = [\"./15-modules-imports.md\", \"./42-enums-type-side.md\"]",
             ),
             "disagree with owner",
         ),
@@ -1102,8 +1099,8 @@ fn rejects_deps_parity_drift() {
 fn deps_exception_permits_a_declared_slice() {
     // A drift with an explicit rationale is allowed (a deliberate dependency slice).
     let text = deps_parity_base().replace(
-        "deps = [\"./14-libdts-loading.md\", \"./15-modules-imports.md\"]",
-        "deps = [\"./14-libdts-loading.md\"]\ndeps_exception = \"slice defers the module prerequisite\"",
+        "deps = [\"./15-modules-imports.md\"]",
+        "deps = []\ndeps_exception = \"slice defers the module prerequisite\"",
     );
     assert!(
         validate_deps_parity(&text, &backlog_dir()).is_ok(),
@@ -1113,8 +1110,8 @@ fn deps_exception_permits_a_declared_slice() {
 
 #[test]
 fn rejects_wu0_dependency_drift_fixture() {
-    // The WU0 rejection fixture: criterion claims a dep (`./70-this-parameters.md`)
-    // absent from owner 14's blocked-by, with no deps_exception.
+    // The WU0 rejection fixture: criterion omits owner 16's live module dependency,
+    // with no deps_exception.
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("surface")

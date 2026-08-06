@@ -74,7 +74,7 @@ facts re-checked, and four of its bullets described things that no longer exist.
   owned runtime product and **no evidence** — evidence generation left the cold path on 2026-07-26
   (`a0977ea`) and survives only as `canonical_library_evidence_for_test`
   (`library_compiler.rs:2303`).
-- ⚠ **Backlog [`103`](../backlog/103-library-merge-panics-and-routing.md)'s guard tier shipped; its
+- ⚠ **Backlog `103`'s guard tier shipped; its
   correctness tier did not, so there is still no collision route.**
   `crates/typokat-library/src/collision_preflight.rs` is a complete classifier, but its only
   production entry point is `issue_caller_certified_capability()` (`:19-25`), which runs
@@ -408,7 +408,7 @@ the claim to the easy fast path.
 ### WU8 — authoritative performance gate and optimization loop (effort XL)
 
 - **Blocked by backlog `103` and the subsequent WU7 cutover.** Backlog
-  [`103`](../backlog/103-library-merge-panics-and-routing.md)'s correctness tier: `collision` and
+  `103`'s correctness tier: `collision` and
   `fanout` exit 3 by design under the guard tier, so two of the four rows cannot produce a time —
   WU8 is *hard-blocked* on `103`, not merely sequenced after it. The runner plumbing is complete,
   but its route probe deliberately rejects the current prelude-backed CLI until WU7 switches both
@@ -1202,10 +1202,10 @@ number for the shape WU8 will eventually gate on, rather than for an in-process 
   the binding claim. So ~1.2× **passes** the gate and sits just under its `1.25×` engineering
   target; it is 2× that is out of reach single-threaded, and 2× is no longer what is being claimed.
 - **Two of four benchmark rows still cannot run.** `collision` and `fanout` exit 101. Filed as
-  backlog [`103`](../backlog/103-library-merge-panics-and-routing.md), which now owns WU5's ground:
+  historical backlog `103`, which then owned WU5's ground:
   five panic sites, all one cause — an in-place merge into the frozen prefix.
-- **The quiet half of that boundary was the larger defect** — backlog
-  [`102`](../backlog/102-frozen-prefix-writes-vanish-silently.md), shipped in `74a6da3`/`6161527`.
+- **The quiet half of that boundary was the larger defect** — historical backlog `102`, shipped in
+  `74a6da3`/`6161527`.
   Five sites wrote with `if let Some(row) = table.get_mut(id)` and dropped the user's declaration
   when the row was in the frozen prefix. An ordinary cross-file `globals.d.ts` reported `TK2304`.
   It fires on *fresh* names, so no collision classifier would ever have caught it.
@@ -1304,8 +1304,8 @@ it**. The split has its own record, so what belongs here is only what it changed
 
 **Work-unit position, precisely.** WU0A, WU0B, WU1, WU2, WU3 and WU4 are done. **WU5 shipped only
 its guard tier** — the exhaustive classifier and the authenticated replay index are built and green,
-but the merge itself does not exist, which is backlog
-[`103`](../backlog/103-library-merge-panics-and-routing.md)'s correctness tier and the one thing
+but the merge itself does not exist, which is historical backlog
+`103`'s correctness tier and the one thing
 blocking WU7. **WU6's corpus is committed but mostly gated**: 9 of 14 flat fixtures and 2 of 12
 projects run. **WU7, WU8 and WU9 have never run** — the CLI is still on the prelude, and
 `tooling/full-lib-bench/evidence/` still holds only WU0A's RED baseline.

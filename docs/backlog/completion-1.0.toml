@@ -626,11 +626,11 @@ deps = []
 id = "D-libdts-loading"
 track = "D"
 title = "Full lib.d.ts loading + parallelism Stage 1"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./14-libdts-loading.md"
-witness = "readiness.toml is GO after standalone namespace publication at 23bad42 and confirmation at 52cea92; exact official missing-global/host-heritage witnesses define the loader boundary"
-links = ["./lib-audit-6.0.3.md", "../../tooling/official-suite/scoreboard.txt"]
+owner = "shipped"
+witness = "the active 2026-08-02 closure sprint records the full-library production cutover and semantic gates; candidate-d1aa6d4.json is the retained authoritative all-row GO evidence"
+links = ["../sprints/sprint-2026-08-02-default-library-cutover-closure.md", "../../tooling/full-lib-bench/evidence/candidate-d1aa6d4.json"]
 deps = []
 
 [[criterion]]
@@ -653,7 +653,7 @@ blocks_release = "true"
 owner = "./16-parallelism-type-universe.md"
 witness = "multi-file checking shares prelude + cross-file types across workers with identical diagnostics regardless of worker count"
 links = []
-deps = ["./14-libdts-loading.md", "./15-modules-imports.md"]
+deps = ["./15-modules-imports.md"]
 
 [[criterion]]
 id = "D-incrementality"

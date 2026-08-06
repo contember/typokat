@@ -1,13 +1,13 @@
 ---
 id: 16
 title: Parallelism — shared type universe (Stages 1 & 2)
-blocked-by: [./14-libdts-loading.md, ./15-modules-imports.md]
+blocked-by: [./15-modules-imports.md]
 ---
 
 # 16 — Parallelism: shared type universe (Stages 1 & 2)
 
-**Summary.** The per-file driver already ships (Stage 0); what remains is hardening the shared
-*type universe* after full `lib.d.ts` and modules exist. Architecture §8. **Ownership boundary
+**Summary.** The per-file driver and shared read-only default-library base already ship (Stages 0
+and 1); what remains is hardening the shared *type universe* after modules exist. Architecture §8. **Ownership boundary
 (WU7):** this item is the **sole** owner of parallel **cross-file type identity** (Stage 2);
 backlog [`15`](./15-modules-imports.md) owns serial resolver breadth and does not duplicate
 Stage 2.
@@ -25,8 +25,8 @@ work under per-file parallel execution.
 
 ## Approach / acceptance
 
-- **Stage 1** — the shared read-only prelude (lands with full `lib.d.ts`, item 14, or replaces any
-  earlier minimal prelude slice).
+- **Stage 1 (shipped)** — the shared read-only default-library base replaced the earlier minimal
+  production prelude.
 - **Stage 2** — cross-file type identity for the parallel module checker (lands after the
   correctness-first module slice from item 15): the stable structural hash, or a shared *growing*
   interner (the §3.4 knot).

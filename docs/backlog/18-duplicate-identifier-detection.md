@@ -37,6 +37,12 @@ the missing `TS2300`/`TS2393`, this can drop an independent `TS2345`; the disabl
 `sr_deferred_ledger/b18_duplicate_function_implementations.ts` fixture pins that
 soundness consequence.
 
+The frozen default-library merge route also exposes three instances of the same diagnostic family.
+An incompatible script `var`, a block-scoped `const`/`let`, or a cross-space declaration can merge
+or route correctly while still omitting TypeScript's `TS2403`, `TS2451`, or `TS2300`. The enabled
+`b102_frozen_prefix_writes/` corpus pins all three outcomes. The library route itself is shipped;
+only duplicate-declaration detection remains here.
+
 ## Approach / acceptance
 
 Add duplicate-member detection for object type literals and interfaces, reporting
@@ -46,7 +52,8 @@ function-implementation/`var` conflict diagnostics (`TK2300`/`TK2393`/`TK2403`).
 Preserve legal declaration merging. Acceptance includes property/property and
 property/method duplicates, block-scoped redeclarations, duplicate function
 implementations, and proof that rejected duplicates cannot suppress independent call
-diagnostics, all checked against `tsc --strict`.
+diagnostics. It also includes library-global `var`, block-scoped value, and cross-space
+collisions, all checked against `tsc --strict`.
 
 ## Touch points
 

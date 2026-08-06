@@ -1,11 +1,10 @@
 # Surface-accounting fixture — DEPENDENCY DRIFT (sprint 2026-07-10, WU0).
 #
 # Expected WU1/WU6-validator outcome: REJECT with a deps-vs-blocked-by mismatch on
-# criterion "A-libdts-loading". A completion criterion's `deps` must agree with its
+# criterion "D-parallel-cross-file-identity". A completion criterion's `deps` must agree with its
 # backlog owner's `blocked-by` frontmatter, unless an explicit `deps_exception` field
-# documents a deliberate slice. Here `deps` names `./70-this-parameters.md` while the
-# owner's `blocked-by` is empty — the historical 14/70 drift that
-# triggered backlog 75's audit. There is no `deps_exception`, so it must be rejected.
+# documents a deliberate slice. Here `deps` omits `./15-modules-imports.md` while
+# owner 16 still names that prerequisite. There is no `deps_exception`, so it must be rejected.
 #
 # This is completion-manifest shaped (mirrors docs/backlog/completion-1.0.toml); WU6
 # extends tests/manifest.rs to cross-check `deps` against each owner's `blocked-by`.
@@ -14,13 +13,12 @@
 schema_version = "1"
 
 [[criterion]]
-id = "A-libdts-loading"
-track = "A"
-title = "lib.d.ts loading (dependency-drift witness)"
+id = "D-parallel-cross-file-identity"
+track = "D"
+title = "parallel cross-file identity (dependency-drift witness)"
 state = "incomplete"
 blocks_release = "true"
-owner = "./14-libdts-loading.md"
+owner = "./16-parallelism-type-universe.md"
 witness = "spec-first corpus"
-# DRIFT: owner 14 has no `blocked-by` entry; this criterion claims dependency 70 without a
-# `deps_exception`.
-deps = ["./70-this-parameters.md"]
+# DRIFT: owner 16 requires backlog 15, but this criterion omits it without a `deps_exception`.
+deps = []
