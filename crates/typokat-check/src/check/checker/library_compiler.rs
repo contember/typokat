@@ -9380,6 +9380,35 @@ mod tests {
     }
 
     #[test]
+    fn complete_combined_probe_does_not_publish_product_census_evidence() {
+        let sources = [
+            InjectedLibrarySource {
+                file_ordinal: LibraryFileOrdinal::new(0),
+                name: "probe-evidence-lib.d.ts",
+                source: "interface ProbeEvidence { value: string }",
+            },
+            InjectedLibrarySource {
+                file_ordinal: LibraryFileOrdinal::new(1),
+                name: "probe-evidence-user.ts",
+                source: "const value: ProbeEvidence = { value: 'ok' };",
+            },
+        ];
+        let scope = CompleteSourceRouteWorkScopeForTest::start();
+
+        let (run, _runtime) = compile_complete_combined_profile_for_test(&sources, 1)
+            .expect("complete-combined probe fixture compiles");
+        let work = scope.finish();
+
+        assert_eq!(run.phase_counts.parse_units, 2);
+        assert_eq!(run.phase_counts.statement_check_units, 2);
+        assert_eq!(work.semantic_publications, 1);
+        assert_eq!(
+            work.library_evidence, None,
+            "product census serialization is an explicit suite witness, not probe compile work"
+        );
+    }
+
+    #[test]
     fn replay_receipts_track_the_central_trace_and_plan_entries() {
         let scope = CompleteSourceRouteWorkScopeForTest::start();
 
