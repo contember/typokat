@@ -301,3 +301,97 @@ fn user_index(file_ordinal: LibraryFileOrdinal, user_count: usize) -> Option<usi
         .checked_sub(LIBRARY_COUNT)
         .filter(|index| *index < user_count)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FAST_ERRORS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tooling/full-lib-bench/workloads/fast-errors/main.ts"
+    );
+    const UMD_EXPORT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/cases/b43_namespaces_declaration_merging/umd_export.d.ts"
+    );
+
+    fn check(paths: &[&str]) -> (u8, String, String) {
+        let mut args = vec![
+            "one_pass_probe".to_owned(),
+            "check".to_owned(),
+            "--format".to_owned(),
+            "compact".to_owned(),
+        ];
+        args.extend(paths.iter().map(|path| (*path).to_owned()));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = match run(&args, &mut stdout, &mut stderr) {
+            Ok(status) => status,
+            Err(error) => panic!("probe failed: {error}"),
+        };
+        let stdout = match String::from_utf8(stdout) {
+            Ok(stdout) => stdout,
+            Err(error) => panic!("stdout was not UTF-8: {error}"),
+        };
+        let stderr = match String::from_utf8(stderr) {
+            Ok(stderr) => stderr,
+            Err(error) => panic!("stderr was not UTF-8: {error}"),
+        };
+        (status, stdout, stderr)
+    }
+
+    fn assert_fast_errors(stderr: &str) {
+        assert_eq!(stderr.matches("error[TK2322]").count(), 6, "{stderr}");
+        for line in 4..=9 {
+            assert!(
+                stderr.contains(&format!("{FAST_ERRORS}({line},")),
+                "{stderr}"
+            );
+        }
+    }
+
+    fn assert_umd_incomplete(stderr: &str) {
+        assert_eq!(stderr.matches("incomplete[").count(), 2, "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "{UMD_EXPORT}(2,1): incomplete[decl/namespace-export/self]"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "{UMD_EXPORT}(3,1): incomplete[decl/export-assignment/self]"
+            )),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn routes_complete_source_user_records_in_both_file_orders() {
+        let (status, stdout, stderr) = check(&[FAST_ERRORS]);
+        assert_eq!(status, EXIT_ERRORS, "{stderr}");
+        assert!(stdout.is_empty(), "{stdout}");
+        assert_fast_errors(&stderr);
+        assert!(!stderr.contains("incomplete["), "{stderr}");
+
+        for paths in [[FAST_ERRORS, UMD_EXPORT], [UMD_EXPORT, FAST_ERRORS]] {
+            let (status, stdout, stderr) = check(&paths);
+            assert_eq!(status, EXIT_INCOMPLETE, "{stderr}");
+            assert!(stdout.is_empty(), "{stdout}");
+            assert_fast_errors(&stderr);
+            assert_umd_incomplete(&stderr);
+
+            let first = stderr.find(paths[0]).unwrap_or_else(|| {
+                panic!("missing first path '{}':\n{stderr}", paths[0]);
+            });
+            let second = stderr.find(paths[1]).unwrap_or_else(|| {
+                panic!("missing second path '{}':\n{stderr}", paths[1]);
+            });
+            assert!(
+                first < second,
+                "records did not follow input order:\n{stderr}"
+            );
+        }
+    }
+}

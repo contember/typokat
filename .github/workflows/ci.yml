@@ -55,6 +55,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
+      - run: cargo test --example one_pass_probe
 
   # `cargo build --release` — the release profile must build.
   build:
