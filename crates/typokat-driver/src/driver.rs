@@ -11,9 +11,9 @@ use crate::check::checker::{
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
-    parse_source_errors, run_project_frontend, run_project_frontend_with_auxiliary,
-    run_project_parse_only, run_source_frontend, AuxiliarySourceInput, FileInput,
-    ProjectFrontendRun, ProjectProgram,
+    parse_source_errors, run_clean_project_frontend_with_deferred_auxiliary, run_project_frontend,
+    run_project_frontend_with_auxiliary, run_project_parse_only, run_source_frontend,
+    AuxiliarySourceInput, FileInput, ProjectFrontendRun, ProjectProgram,
 };
 use crate::library::{
     FrozenLibraryBase, LibraryBaseProvider, LibraryInitError, RoutedLibraryProject,
@@ -215,6 +215,108 @@ pub fn check_project(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverEr
     }
 }
 
+/// Check one standalone project through a complete library-plus-project source publication.
+pub fn check_project_once(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, DriverError> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+    #[cfg(test)]
+    {
+        let (reports, receipt, complete_source_receipt) = on_standalone_check_worker(|| {
+            let reports = check_project_once_inner(inputs);
+            let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
+            let complete_source_receipt = crate::check::checker::library_compiler::complete_source_route_thread_receipt_for_test();
+            (reports, receipt, complete_source_receipt)
+        })?;
+        crate::check::checker::merge_project_binding_thread_receipt_for_test(receipt);
+        crate::check::checker::library_compiler::merge_complete_source_route_thread_receipt_for_test(
+            complete_source_receipt,
+        );
+        let reports = reports.map_err(complete_source_driver_error)?;
+        test_support::record_reports_exposed_for_test(reports.len());
+        Ok(reports)
+    }
+    #[cfg(not(test))]
+    {
+        on_standalone_check_worker(|| check_project_once_inner(inputs))?
+            .map_err(complete_source_driver_error)
+    }
+}
+
+enum CompleteSourceCheckError {
+    Library(LibraryInitError),
+    Check(String),
+}
+
+fn complete_source_driver_error(error: CompleteSourceCheckError) -> DriverError {
+    match error {
+        CompleteSourceCheckError::Library(error) => {
+            DriverError::LibraryInitialization(Arc::new(error))
+        }
+        CompleteSourceCheckError::Check(message) => check_failure(message),
+    }
+}
+
+fn check_project_once_inner(
+    inputs: Vec<FileInput>,
+) -> Result<Vec<FileReport>, CompleteSourceCheckError> {
+    let run = run_clean_project_frontend_with_deferred_auxiliary(
+        inputs,
+        crate::library::packaged_library_source_inputs,
+        move |_, source_specs, library_programs, units, _parse_work| {
+            #[cfg(test)]
+            crate::check::checker::library_compiler::record_complete_source_auxiliary_parse_work_for_test(
+                _parse_work.parser_invocations,
+                _parse_work.source_reparses,
+            );
+            let injected = source_specs
+                .iter()
+                .map(
+                    |source| crate::check::checker::library_compiler::InjectedLibrarySource {
+                        file_ordinal: crate::library::LibraryFileOrdinal::new(
+                            source.source_ordinal,
+                        ),
+                        name: &source.name,
+                        source: &source.source,
+                    },
+                )
+                .collect::<Vec<_>>();
+            crate::check::checker::library_compiler::compile_complete_source_project_programs(
+                &injected,
+                library_programs,
+                units,
+            )
+        },
+    );
+    match run.product {
+        Ok(None) => Ok(parse_reports_from_frontend_run(
+            run.inputs,
+            run.parse_errors,
+        )),
+        Err(error) => Err(CompleteSourceCheckError::Library(error)),
+        Ok(Some(Err(error))) => Err(CompleteSourceCheckError::Check(format!(
+            "complete-source project compilation failed: {error:?}"
+        ))),
+        Ok(Some(Ok(results))) => project_reports_from_frontend_run(ProjectFrontendRun {
+            inputs: run.inputs,
+            parse_errors: run.parse_errors,
+            product: (
+                results
+                    .iter()
+                    .map(|result| result.module_ordinal.index())
+                    .collect(),
+                Ok(results),
+            ),
+        })
+        .map_err(|message| CompleteSourceCheckError::Check(message.to_owned())),
+    }
+}
+
+/// Stable attestation for the standalone CLI lifecycle.
+pub const fn production_cli_route() -> &'static str {
+    "production-complete-source-once"
+}
+
 fn check_project_inner(
     base: &FrozenLibraryBase,
     inputs: Vec<FileInput>,
@@ -249,6 +351,25 @@ where
     T: Send,
     W: FnOnce() -> T + Send,
 {
+    on_check_worker_with_identity(Some(Arc::as_ptr(_base).addr()), work)
+}
+
+fn on_standalone_check_worker<T, W>(work: W) -> Result<T, DriverInfrastructureError>
+where
+    T: Send,
+    W: FnOnce() -> T + Send,
+{
+    on_check_worker_with_identity(None, work)
+}
+
+fn on_check_worker_with_identity<T, W>(
+    _base_identity: Option<usize>,
+    work: W,
+) -> Result<T, DriverInfrastructureError>
+where
+    T: Send,
+    W: FnOnce() -> T + Send,
+{
     #[cfg(test)]
     if test_support::worker_fault_for_test() == Some(DriverInfrastructureKind::WorkerSpawn) {
         return Err(driver_failure(
@@ -257,7 +378,7 @@ where
         ));
     }
     #[cfg(test)]
-    test_support::record_worker_start_for_test(Arc::as_ptr(_base).addr());
+    test_support::record_worker_start_for_test(_base_identity.unwrap_or_default());
     std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .stack_size(CHECK_STACK_SIZE)
@@ -413,10 +534,17 @@ fn check_project_against_library(
 
 fn parse_only_project_reports(inputs: Vec<FileInput>) -> Vec<FileReport> {
     let run = run_project_parse_only(inputs);
-    debug_assert_eq!(run.inputs.len(), run.parse_errors.len());
-    run.inputs
+    parse_reports_from_frontend_run(run.inputs, run.parse_errors)
+}
+
+fn parse_reports_from_frontend_run(
+    inputs: Vec<FileInput>,
+    parse_errors: Vec<Vec<String>>,
+) -> Vec<FileReport> {
+    debug_assert_eq!(inputs.len(), parse_errors.len());
+    inputs
         .into_iter()
-        .zip(run.parse_errors)
+        .zip(parse_errors)
         .map(|(input, parse_errors)| FileReport {
             name: input.name,
             source: input.source,

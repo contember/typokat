@@ -3,6 +3,9 @@ name = "typokat-frontend"
 version.workspace = true
 edition.workspace = true
 
+[features]
+test-utils = []
+
 [dependencies]
 oxc_allocator.workspace = true
 oxc_ast.workspace = true

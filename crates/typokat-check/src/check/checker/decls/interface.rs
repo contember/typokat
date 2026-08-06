@@ -249,7 +249,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         heritage: &TSInterfaceHeritage<'_>,
     ) -> Option<ObjectType> {
         let base_ty = self.resolve_heritage_type(scope, heritage)?;
-        if self.interner.store().array_type(base_ty).is_some() {
+        let array_candidate = match self.interner.store().readonly_operand(base_ty) {
+            Some(operand) => operand,
+            None => base_ty,
+        };
+        if self.interner.store().array_type(array_candidate).is_some() {
             return self
                 .project_library_heritage_surface(scope, base_ty)
                 .and_then(|projected| self.project_interface_heritage_type(projected))

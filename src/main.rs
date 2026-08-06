@@ -7,7 +7,10 @@ use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
 use typokat::diagnostics::{self, DiagnosticFormat};
-use typokat::driver::{check_project, production_library_route, DriverError, FileReport};
+use typokat::driver::{
+    check_project, check_project_once, production_cli_route, production_library_route, DriverError,
+    FileReport,
+};
 use typokat::frontend::FileInput;
 
 // jemalloc: the run is allocation-churn heavy (building the default library from
@@ -25,7 +28,7 @@ const EXIT_USAGE: u8 = 2;
 const EXIT_INCOMPLETE: u8 = 3;
 const USAGE: &str = "usage: typokat check [--format rich|compact] <file.ts>...";
 const LIBRARY_INFO_USAGE: &str = "usage: typokat library-info --format json";
-const LIBRARY_INFO_SCHEMA: u32 = 1;
+const LIBRARY_INFO_SCHEMA: u32 = 2;
 const OFFICIAL_BATCH_SCHEMA: u64 = 1;
 const OFFICIAL_BATCH_MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const OFFICIAL_BATCH_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -62,7 +65,7 @@ fn main() -> ExitCode {
         &args,
         &mut stdout,
         &mut stderr,
-        check_project,
+        check_project_once,
     ))
 }
 
@@ -414,12 +417,14 @@ fn write_library_info_to(writer: &mut impl Write) -> Result<(), String> {
     let provider_route = production_library_route().map_err(|error| {
         format!("failed to initialize embedded TypeScript 6.0.3 library: {error}")
     })?;
+    let check_route = production_cli_route();
     writeln!(
         writer,
-        "{{\"schema\":{},\"profile_sha256\":\"{}\",\"file_count\":{},\"provider_route\":\"{}\"}}",
+        "{{\"schema\":{},\"profile_sha256\":\"{}\",\"file_count\":{},\"check_route\":\"{}\",\"provider_route\":\"{}\"}}",
         LIBRARY_INFO_SCHEMA,
         metadata.profile_identity(),
         metadata.file_count(),
+        check_route,
         provider_route,
     )
     .map_err(|error| format!("failed to write library info: {error}"))?;

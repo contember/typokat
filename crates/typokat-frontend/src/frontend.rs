@@ -23,6 +23,7 @@ pub struct FileInput {
 }
 
 /// One owned auxiliary source parsed alongside a user project.
+#[derive(Clone)]
 pub struct AuxiliarySourceInput {
     pub source_ordinal: usize,
     pub name: String,
@@ -34,6 +35,25 @@ pub struct AuxiliaryProgram<'ast> {
     pub source_ordinal: usize,
     pub name: &'ast str,
     pub program: &'ast Program<'ast>,
+    pub parser_diagnostics: Vec<AuxiliaryParserDiagnostic>,
+    pub parser_panicked: bool,
+}
+
+/// Test-only work receipt produced at the real auxiliary parser entry point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuxiliaryParseWork {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub parser_invocations: u64,
+    #[cfg(any(test, feature = "test-utils"))]
+    pub source_reparses: u64,
+}
+
+/// Parser evidence retained for authoritative auxiliary-source validation.
+pub struct AuxiliaryParserDiagnostic {
+    pub scope: Option<String>,
+    pub number: Option<String>,
+    pub labels: Vec<Span>,
+    pub rendered: String,
 }
 
 /// One parsed project unit handed to the serial project checker.
@@ -79,7 +99,58 @@ pub fn parse_source_errors(source: &str) -> Vec<String> {
 }
 
 fn parse_errors(parsed: &oxc_parser::ParserReturn<'_>) -> Vec<String> {
-    parsed.diagnostics.iter().map(ToString::to_string).collect()
+    let mut errors = parsed
+        .diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if parsed.panicked && errors.is_empty() {
+        errors.push("parser panicked without a diagnostic".to_owned());
+    }
+    errors
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn parse_auxiliary_source<'ast>(
+    allocator: &'ast Allocator,
+    input: &'ast AuxiliarySourceInput,
+    invocations: &mut BTreeMap<(usize, String), u64>,
+) -> oxc_parser::ParserReturn<'ast> {
+    let count = invocations
+        .entry((input.source_ordinal, input.name.clone()))
+        .or_default();
+    *count = count.saturating_add(1);
+    let source_type = if source_file_kind(&input.name).is_declaration() {
+        SourceType::d_ts()
+    } else {
+        SourceType::ts()
+    };
+    Parser::new(allocator, &input.source, source_type).parse()
+}
+
+#[cfg(not(any(test, feature = "test-utils")))]
+fn parse_auxiliary_source<'ast>(
+    allocator: &'ast Allocator,
+    input: &'ast AuxiliarySourceInput,
+) -> oxc_parser::ParserReturn<'ast> {
+    let source_type = if source_file_kind(&input.name).is_declaration() {
+        SourceType::d_ts()
+    } else {
+        SourceType::ts()
+    };
+    Parser::new(allocator, &input.source, source_type).parse()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn auxiliary_parse_work(invocations: &BTreeMap<(usize, String), u64>) -> AuxiliaryParseWork {
+    AuxiliaryParseWork {
+        parser_invocations: invocations.values().copied().sum(),
+        source_reparses: invocations
+            .values()
+            .copied()
+            .map(|count| count.saturating_sub(1))
+            .sum(),
+    }
 }
 
 /// Parse one TypeScript source and keep its borrowed AST inside `consume`.
@@ -156,23 +227,235 @@ pub fn run_project_frontend_with_auxiliary<Product>(
         &[ProjectProgram<'ast>],
     ) -> Product,
 ) -> ProjectFrontendRun<Product> {
+    run_project_frontend_with_auxiliary_control(
+        inputs,
+        auxiliary,
+        |_, interner, auxiliary_units, project_units| {
+            consume(interner, auxiliary_units, project_units)
+        },
+    )
+}
+
+/// Parse a project once and expose semantics only when every user source parsed cleanly.
+pub fn run_clean_project_frontend_with_auxiliary<Product>(
+    inputs: Vec<FileInput>,
+    auxiliary: Vec<AuxiliarySourceInput>,
+    consume: impl for<'ast> FnOnce(
+        &mut Interner,
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+    ) -> Product,
+) -> ProjectFrontendRun<Option<Product>> {
+    run_project_frontend_with_auxiliary_control(
+        inputs,
+        auxiliary,
+        |user_parse_rejected, interner, auxiliary_units, project_units| {
+            if user_parse_rejected {
+                None
+            } else {
+                Some(consume(interner, auxiliary_units, project_units))
+            }
+        },
+    )
+}
+
+/// Parse user sources first and load auxiliary sources only for a clean project.
+pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
+    inputs: Vec<FileInput>,
+    load_auxiliary: impl FnOnce() -> Result<Vec<AuxiliarySourceInput>, Error>,
+    consume: impl for<'ast> FnOnce(
+        &mut Interner,
+        &[AuxiliarySourceInput],
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+        AuxiliaryParseWork,
+    ) -> Product,
+) -> ProjectFrontendRun<Result<Option<Product>, Error>> {
+    let user_allocators = (0..inputs.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    let parsed = inputs
+        .iter()
+        .zip(&user_allocators)
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
+        .collect::<Vec<_>>();
+    let parse_errors = parsed.iter().map(parse_errors).collect::<Vec<_>>();
+    let user_parse_rejected = parsed
+        .iter()
+        .any(|parsed| parsed.panicked || !parsed.diagnostics.is_empty());
+    if user_parse_rejected {
+        return ProjectFrontendRun {
+            inputs,
+            parse_errors,
+            product: Ok(None),
+        };
+    }
+
+    let auxiliary = match load_auxiliary() {
+        Ok(auxiliary) => auxiliary,
+        Err(error) => {
+            return ProjectFrontendRun {
+                inputs,
+                parse_errors,
+                product: Err(error),
+            };
+        }
+    };
+    let auxiliary_allocators = (0..auxiliary.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut auxiliary_parse_invocations = BTreeMap::new();
+    let auxiliary_parsed = auxiliary
+        .iter()
+        .zip(&auxiliary_allocators)
+        .map(|(input, allocator)| {
+            #[cfg(any(test, feature = "test-utils"))]
+            {
+                parse_auxiliary_source(allocator, input, &mut auxiliary_parse_invocations)
+            }
+            #[cfg(not(any(test, feature = "test-utils")))]
+            {
+                parse_auxiliary_source(allocator, input)
+            }
+        })
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let auxiliary_parse_work = auxiliary_parse_work(&auxiliary_parse_invocations);
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let auxiliary_parse_work = AuxiliaryParseWork::default();
+    let programs = parsed
+        .iter()
+        .map(|parsed| &parsed.program)
+        .collect::<Vec<_>>();
+    let project_units = resolved_project_programs(&inputs, &programs);
+    let auxiliary_units = auxiliary
+        .iter()
+        .zip(&auxiliary_parsed)
+        .map(|(input, parsed)| AuxiliaryProgram {
+            source_ordinal: input.source_ordinal,
+            name: &input.name,
+            program: &parsed.program,
+            parser_diagnostics: parsed
+                .diagnostics
+                .iter()
+                .map(|diagnostic| AuxiliaryParserDiagnostic {
+                    scope: diagnostic.code.scope.as_deref().map(str::to_owned),
+                    number: diagnostic.code.number.as_deref().map(str::to_owned),
+                    labels: diagnostic
+                        .labels
+                        .iter()
+                        .map(|label| {
+                            Span::new(label.offset(), label.offset().saturating_add(label.len()))
+                        })
+                        .collect(),
+                    rendered: diagnostic.to_string(),
+                })
+                .collect(),
+            parser_panicked: parsed.panicked,
+        })
+        .collect::<Vec<_>>();
+    let mut interner = Interner::with_intrinsics();
+    let product = consume(
+        &mut interner,
+        &auxiliary,
+        &auxiliary_units,
+        &project_units,
+        auxiliary_parse_work,
+    );
+    ProjectFrontendRun {
+        inputs,
+        parse_errors,
+        product: Ok(Some(product)),
+    }
+}
+
+fn run_project_frontend_with_auxiliary_control<Product>(
+    inputs: Vec<FileInput>,
+    auxiliary: Vec<AuxiliarySourceInput>,
+    consume: impl for<'ast> FnOnce(
+        bool,
+        &mut Interner,
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+    ) -> Product,
+) -> ProjectFrontendRun<Product> {
     let source_count = inputs.len() + auxiliary.len();
     let allocators: Vec<Allocator> = (0..source_count).map(|_| Allocator::default()).collect();
     let parsed: Vec<_> = inputs
         .iter()
-        .map(|input| input.source.as_str())
-        .chain(auxiliary.iter().map(|input| input.source.as_str()))
+        .map(|input| (input.source.as_str(), SourceType::ts()))
+        .chain(auxiliary.iter().map(|input| {
+            let source_type = if source_file_kind(&input.name).is_declaration() {
+                SourceType::d_ts()
+            } else {
+                SourceType::ts()
+            };
+            (input.source.as_str(), source_type)
+        }))
         .zip(&allocators)
-        .map(|(source, allocator)| Parser::new(allocator, source, SourceType::ts()).parse())
+        .map(|((source, source_type), allocator)| {
+            Parser::new(allocator, source, source_type).parse()
+        })
         .collect();
     let (parsed, auxiliary_parsed) = parsed.split_at(inputs.len());
 
-    let parse_errors: Vec<Vec<String>> = parsed
+    let parse_errors = parsed.iter().map(parse_errors).collect::<Vec<_>>();
+    let user_parse_rejected = parsed
         .iter()
-        .map(|parsed| parsed.diagnostics.iter().map(ToString::to_string).collect())
+        .any(|parsed| parsed.panicked || !parsed.diagnostics.is_empty());
+
+    let programs = parsed
+        .iter()
+        .map(|parsed| &parsed.program)
+        .collect::<Vec<_>>();
+    let project_units = resolved_project_programs(&inputs, &programs);
+    let auxiliary_units: Vec<AuxiliaryProgram<'_>> = auxiliary
+        .iter()
+        .zip(auxiliary_parsed)
+        .map(|(input, parsed)| AuxiliaryProgram {
+            source_ordinal: input.source_ordinal,
+            name: &input.name,
+            program: &parsed.program,
+            parser_diagnostics: parsed
+                .diagnostics
+                .iter()
+                .map(|diagnostic| AuxiliaryParserDiagnostic {
+                    scope: diagnostic.code.scope.as_deref().map(str::to_owned),
+                    number: diagnostic.code.number.as_deref().map(str::to_owned),
+                    labels: diagnostic
+                        .labels
+                        .iter()
+                        .map(|label| {
+                            Span::new(label.offset(), label.offset().saturating_add(label.len()))
+                        })
+                        .collect(),
+                    rendered: diagnostic.to_string(),
+                })
+                .collect(),
+            parser_panicked: parsed.panicked,
+        })
         .collect();
 
-    let paths = normalized_input_paths(&inputs);
+    let mut interner = Interner::with_intrinsics();
+    let product = consume(
+        user_parse_rejected,
+        &mut interner,
+        &auxiliary_units,
+        &project_units,
+    );
+    ProjectFrontendRun {
+        inputs,
+        parse_errors,
+        product,
+    }
+}
+
+fn resolved_project_programs<'ast>(
+    inputs: &[FileInput],
+    programs: &[&'ast Program<'ast>],
+) -> Vec<ProjectProgram<'ast>> {
+    let paths = normalized_input_paths(inputs);
     let source_keys = stable_source_keys(&paths);
     let path_to_index: BTreeMap<PathBuf, usize> = paths
         .iter()
@@ -180,11 +463,11 @@ pub fn run_project_frontend_with_auxiliary<Product>(
         .enumerate()
         .map(|(index, path)| (path, index))
         .collect();
-    let raw_imports: Vec<Vec<RawImport>> = parsed
+    let raw_imports = programs
         .iter()
         .zip(&paths)
-        .map(|(parsed, path)| scan_imports(&parsed.program, path, &path_to_index))
-        .collect();
+        .map(|(program, path)| scan_imports(program, path, &path_to_index))
+        .collect::<Vec<_>>();
     let order = dependency_order(&raw_imports);
     let mut ordered_index = vec![0usize; inputs.len()];
     for (position, &original) in order.iter().enumerate() {
@@ -193,19 +476,19 @@ pub fn run_project_frontend_with_auxiliary<Product>(
         }
     }
 
-    let project_units: Vec<ProjectProgram<'_>> = order
+    order
         .iter()
         .enumerate()
         .map(|(unit_slot, &original)| ProjectProgram {
             module_ordinal: ModuleOrdinal::new(original),
             unit_slot: UnitSlot::new(unit_slot),
             normalized_path: paths[original].to_string_lossy().into_owned(),
-            program: &parsed[original].program,
+            program: programs[original],
             compilation_unit: CompilationUnit {
                 source: source_keys[original],
                 origin: CompilationOrigin::User(OriginalModuleOrdinal::new(original)),
                 binding: ModuleBindingContext::for_program(
-                    &parsed[original].program,
+                    programs[original],
                     source_file_kind(&inputs[original].name),
                 ),
             },
@@ -230,24 +513,7 @@ pub fn run_project_frontend_with_auxiliary<Product>(
                 })
                 .collect(),
         })
-        .collect();
-    let auxiliary_units: Vec<AuxiliaryProgram<'_>> = auxiliary
-        .iter()
-        .zip(auxiliary_parsed)
-        .map(|(input, parsed)| AuxiliaryProgram {
-            source_ordinal: input.source_ordinal,
-            name: &input.name,
-            program: &parsed.program,
-        })
-        .collect();
-
-    let mut interner = Interner::with_intrinsics();
-    let product = consume(&mut interner, &auxiliary_units, &project_units);
-    ProjectFrontendRun {
-        inputs,
-        parse_errors,
-        product,
-    }
+        .collect()
 }
 
 #[derive(Clone)]
@@ -435,4 +701,37 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod auxiliary_parse_work_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_exact_source_parse_changes_invocation_and_reparse_receipts() {
+        let allocator = Allocator::default();
+        let source = AuxiliarySourceInput {
+            source_ordinal: 7,
+            name: "lib.same.d.ts".to_owned(),
+            source: "interface Same {}".to_owned(),
+        };
+        let distinct_name = AuxiliarySourceInput {
+            source_ordinal: 7,
+            name: "lib.distinct.d.ts".to_owned(),
+            source: "interface Distinct {}".to_owned(),
+        };
+        let mut invocations = BTreeMap::new();
+
+        let _first = parse_auxiliary_source(&allocator, &source, &mut invocations);
+        let _reparse = parse_auxiliary_source(&allocator, &source, &mut invocations);
+        let _distinct = parse_auxiliary_source(&allocator, &distinct_name, &mut invocations);
+
+        assert_eq!(
+            auxiliary_parse_work(&invocations),
+            AuxiliaryParseWork {
+                parser_invocations: 3,
+                source_reparses: 1,
+            }
+        );
+    }
 }

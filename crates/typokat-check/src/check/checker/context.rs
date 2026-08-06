@@ -32,7 +32,7 @@ use super::classes::retained::RetainedClassCallable;
 use super::events::{CandidateEffects, UserRecordTicket};
 use super::function_groups::FunctionGroupRegistry;
 use super::lexical_events::{CallableTickets, LexicalReservations};
-use super::library_identities::LibrarySemanticIdentities;
+use super::library_identities::{LibrarySemanticIdentities, NativeArrayGroups};
 use super::namespace_values::NamespaceValueRegistry;
 use super::replay_index::ReplayDependencyTrace;
 use super::replay_index::ReplayOwner;
@@ -1791,6 +1791,7 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
         FxHashMap<SymbolId, ValueStorageId>,
     pub(in crate::check::checker) private_collision_value_winners_by_name:
         FxHashMap<String, ValueStorageId>,
+    pub(in crate::check::checker) combined_source_library_value_precedence: bool,
     /// Published `globalThis` object, augmented only inside a private collision epoch.
     pub(in crate::check::checker) global_object_type: Option<TypeId>,
     /// Hierarchical lexical/speculative output owners; only the outer owner commits.
@@ -1832,6 +1833,10 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     pub(in crate::check::checker) semantic_queries: SemanticQueryState,
     /// Source-provider-selected full-library roots for native-syntax member surfaces.
     pub(in crate::check::checker) library_semantic_identities: Option<LibrarySemanticIdentities>,
+    /// Exact library-root array roles available before type-group publication.
+    pub(in crate::check::checker) early_native_array_groups: Option<NativeArrayGroups>,
+    /// Outermost type-declaration source that authorizes construction-only array roles.
+    pub(in crate::check::checker) early_native_array_root_source: Option<SourceUnit>,
     /// Value roots authenticated before any library interface is filled.
     pub(in crate::check::checker) certified_library_values: CertifiedLibraryValues,
     /// Identity of the transitional minimal-prelude Array alias.

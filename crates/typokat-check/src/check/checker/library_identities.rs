@@ -86,6 +86,15 @@ pub(in crate::check::checker) struct NativeArrayGroups {
 }
 
 impl NativeArrayGroups {
+    pub(in crate::check::checker) fn select_from_library_roots(
+        projection: &LibraryRootProjection,
+    ) -> Self {
+        Self {
+            array: library_root_type_group(projection, "Array"),
+            readonly_array: library_root_type_group(projection, "ReadonlyArray"),
+        }
+    }
+
     pub(in crate::check::checker) fn alias_of(
         self,
         group: TypeGroupId,
@@ -97,6 +106,13 @@ impl NativeArrayGroups {
             return Some(NativeArrayAlias::ReadonlyArray);
         }
         None
+    }
+
+    fn group_for_alias(self, alias: NativeArrayAlias) -> Option<TypeGroupId> {
+        match alias {
+            NativeArrayAlias::Array => self.array,
+            NativeArrayAlias::ReadonlyArray => self.readonly_array,
+        }
     }
 }
 
@@ -189,11 +205,7 @@ impl LibrarySemanticIdentities {
         store: &Store,
     ) -> Self {
         let select = |name: &str, arity| {
-            let group = projection
-                .root_rows
-                .iter()
-                .find(|row| row.name == name)
-                .and_then(|row| row.ty);
+            let group = library_root_type_group(projection, name);
             select_exact_group(published, store, group, arity)
         };
         Self {
@@ -500,11 +512,19 @@ enum NativeMemberBridge {
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    pub(in crate::check::checker) fn install_early_native_array_groups(
+        &mut self,
+        groups: NativeArrayGroups,
+    ) {
+        self.early_native_array_groups = Some(groups);
+    }
+
     pub(in crate::check::checker) fn install_library_semantic_identities(
         &mut self,
         identities: LibrarySemanticIdentities,
     ) {
         assert!(self.library_semantic_identities.is_none());
+        self.early_native_array_groups = None;
         self.semantic_queries
             .set_library_object_context(identities.object_relation_context());
         self.library_semantic_identities = Some(identities);
@@ -594,7 +614,40 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         ty: TypeId,
     ) -> Option<TypeId> {
-        let identities = self.library_semantic_identities.clone()?;
+        let Some(identities) = self.library_semantic_identities.clone() else {
+            let NativeSourceSurface::Array {
+                readonly, argument, ..
+            } = classify_native_source_surface(self.interner, ty)?
+            else {
+                return None;
+            };
+            let alias = if readonly {
+                NativeArrayAlias::ReadonlyArray
+            } else {
+                NativeArrayAlias::Array
+            };
+            let group = self
+                .native_array_groups()
+                .group_for_alias(alias)
+                .filter(|group| self.combined_user_library_type_groups.contains(group))?;
+            if !self.type_group_construction_is_frozen(group) {
+                return None;
+            }
+            let parameters = match self.type_decls.get(group.index()) {
+                Some(TypeDecl::Interface {
+                    recovery_params, ..
+                }) => recovery_params.clone(),
+                _ => return None,
+            };
+            let parameter = parameters.first().copied()?;
+            let template = self.resolve_type_decl(scope, group);
+            let substitutions = FxHashMap::from_iter([(parameter, argument)]);
+            return Some(self.substitute_ready_type_group_application(
+                template,
+                &parameters,
+                &substitutions,
+            ));
+        };
         let NativeMemberBridge::Generic {
             terminal, argument, ..
         } = native_bridge(self.interner, ty, &identities)?
@@ -765,6 +818,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
     }
+}
+
+fn library_root_type_group(projection: &LibraryRootProjection, name: &str) -> Option<TypeGroupId> {
+    projection
+        .root_rows
+        .iter()
+        .find(|row| row.name == name)
+        .and_then(|row| row.ty)
 }
 
 fn direct_object_member(

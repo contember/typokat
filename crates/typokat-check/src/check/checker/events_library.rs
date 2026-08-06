@@ -123,8 +123,7 @@ pub struct LibraryEventLedger {
     events: Vec<LibraryEventMeta>,
     next_event_ordinal: BTreeMap<LibraryFileOrdinal, usize>,
     completions: BTreeMap<LibraryEventKey, LibraryCompletion>,
-    replay_trace_seed: ReplayTraceSeed,
-    owner_site_storage_mode: OwnerSiteStorageMode,
+    replay_trace_seed: Option<ReplayTraceSeed>,
     trace_domain_sealed: bool,
     binder_reporting_complete: bool,
     retain_records: bool,
@@ -153,8 +152,19 @@ impl LibraryEventLedger {
             events: Vec::new(),
             next_event_ordinal: BTreeMap::new(),
             completions: BTreeMap::new(),
-            replay_trace_seed: ReplayTraceSeed::new(owner_site_storage_mode),
-            owner_site_storage_mode,
+            replay_trace_seed: Some(ReplayTraceSeed::new(owner_site_storage_mode)),
+            trace_domain_sealed: false,
+            binder_reporting_complete: false,
+            retain_records,
+        }
+    }
+
+    pub fn new_without_replay(retain_records: bool) -> Self {
+        Self {
+            events: Vec::new(),
+            next_event_ordinal: BTreeMap::new(),
+            completions: BTreeMap::new(),
+            replay_trace_seed: None,
             trace_domain_sealed: false,
             binder_reporting_complete: false,
             retain_records,
@@ -178,19 +188,30 @@ impl LibraryEventLedger {
         if !self.binder_reporting_complete {
             return Err(LibraryEventLedgerError::BinderReportingIncomplete);
         }
-        if !self.replay_trace_seed.ticket_reservations_are_valid() {
+        let Some(seed) = self.replay_trace_seed.as_mut() else {
+            return Err(LibraryEventLedgerError::TraceDomainSealed);
+        };
+        if !seed.ticket_reservations_are_valid() {
             return Err(LibraryEventLedgerError::NoncontiguousReplayTicketReservation);
         }
         self.trace_domain_sealed = true;
-        let missing_owner_site_count = self.replay_trace_seed.missing_owner_site_ticket_count();
-        self.replay_trace_seed.missing_owner_site_count =
-            u64::try_from(missing_owner_site_count).unwrap_or(u64::MAX);
+        let missing_owner_site_count = seed.missing_owner_site_ticket_count();
+        seed.missing_owner_site_count = u64::try_from(missing_owner_site_count).unwrap_or(u64::MAX);
+        seed.trace_domain_sealed_after_binder_reporting = true;
         self.replay_trace_seed
-            .trace_domain_sealed_after_binder_reporting = true;
-        Ok(std::mem::replace(
-            &mut self.replay_trace_seed,
-            ReplayTraceSeed::new(self.owner_site_storage_mode),
-        ))
+            .take()
+            .ok_or(LibraryEventLedgerError::TraceDomainSealed)
+    }
+
+    pub fn seal_reporting_without_replay(&mut self) -> Result<(), LibraryEventLedgerError> {
+        if !self.binder_reporting_complete {
+            return Err(LibraryEventLedgerError::BinderReportingIncomplete);
+        }
+        if self.replay_trace_seed.is_some() {
+            return Err(LibraryEventLedgerError::NoncontiguousReplayTicketReservation);
+        }
+        self.trace_domain_sealed = true;
+        Ok(())
     }
 
     fn record_replay_owner_site(
@@ -211,11 +232,14 @@ impl LibraryEventLedger {
         } else {
             phase
         };
+        if self.replay_trace_seed.is_none() {
+            return;
+        }
         let Ok(key) = self.key(ticket) else {
-            self.replay_trace_seed.duplicate_owner_site_count = self
-                .replay_trace_seed
-                .duplicate_owner_site_count
-                .saturating_add(1);
+            let Some(seed) = self.replay_trace_seed.as_mut() else {
+                return;
+            };
+            seed.duplicate_owner_site_count = seed.duplicate_owner_site_count.saturating_add(1);
             return;
         };
         let site = CollisionReplayOwnerSite {
@@ -224,14 +248,13 @@ impl LibraryEventLedger {
             span,
             provenance: CollisionReplaySiteProvenance::Event { phase },
         };
-        let duplicate = self
-            .replay_trace_seed
-            .record_ticket_owner_site(library_record_ticket_key(ticket), site);
+        let (event, record) = library_record_ticket_key(ticket);
+        let Some(seed) = self.replay_trace_seed.as_mut() else {
+            return;
+        };
+        let duplicate = seed.record_ticket_owner_site((event, record), site);
         if duplicate != Some(false) {
-            self.replay_trace_seed.duplicate_owner_site_count = self
-                .replay_trace_seed
-                .duplicate_owner_site_count
-                .saturating_add(1);
+            seed.duplicate_owner_site_count = seed.duplicate_owner_site_count.saturating_add(1);
         }
     }
 
@@ -272,8 +295,9 @@ impl LibraryEventLedger {
             self.completions.insert(key, LibraryCompletion::Pending);
         }
         let ticket_key = (id.index(), primary.record_ordinal);
-        self.replay_trace_seed
-            .reserve_owner_site_ticket(ticket_key, key);
+        if let Some(seed) = self.replay_trace_seed.as_mut() {
+            seed.reserve_owner_site_ticket(ticket_key, key);
+        }
         LibraryReservedEvent { id, primary }
     }
 
@@ -303,11 +327,10 @@ impl LibraryEventLedger {
             record_ordinal: ticket.record_ordinal,
         };
         let ticket_key = (event.index(), ticket.record_ordinal);
-        if !self
-            .replay_trace_seed
-            .reserve_owner_site_ticket(ticket_key, key)
-        {
-            return Err(LibraryEventLedgerError::NoncontiguousReplayTicketReservation);
+        if let Some(seed) = self.replay_trace_seed.as_mut() {
+            if !seed.reserve_owner_site_ticket(ticket_key, key) {
+                return Err(LibraryEventLedgerError::NoncontiguousReplayTicketReservation);
+            }
         }
         let Some(meta) = self.events.get_mut(event.index()) else {
             return Err(LibraryEventLedgerError::UnknownEvent(event));

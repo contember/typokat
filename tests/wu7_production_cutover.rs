@@ -86,7 +86,7 @@ fn parallel_mode_preserves_filename_derived_declaration_semantics() {
 }
 
 #[test]
-fn production_sources_have_one_result_bearing_provider_route_and_no_prelude_asset() {
+fn production_sources_have_explicit_cli_and_provider_routes_and_no_prelude_asset() {
     let root = root();
     assert!(
         !root.join("crates/typokat-check/src/prelude.ts").exists(),
@@ -178,6 +178,10 @@ fn production_sources_have_one_result_bearing_provider_route_and_no_prelude_asse
     assert!(
         main.contains("production_library_route"),
         "library-info must attest through the ordinary driver singleton"
+    );
+    assert!(
+        main.contains("check_project_once") && main.contains("production_cli_route"),
+        "ordinary CLI checks need the explicit complete-source lifecycle"
     );
 }
 

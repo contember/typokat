@@ -8,7 +8,7 @@ use super::type_groups::{
     InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeParameterDefault,
 };
 use crate::binder::declaration::{
-    DeclarationKind as BinderDeclarationKind, TypeGroupFragment, TypeGroupId,
+    DeclId, DeclarationKind as BinderDeclarationKind, TypeGroupFragment, TypeGroupId,
 };
 use crate::binder::namespace::{MergeDisposition, SourceUnitKey};
 use crate::binder::scope::ScopeId;
@@ -624,8 +624,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
             let owner = self.merged_header_owner(index, declaration, header_span.start);
-            self.with_replay_owner(super::replay_index::ReplayOwner::TypeGroup(group), |pass| {
-                pass.with_ticket_effects(owner, lower)
+            self.with_exact_type_declaration_source(declaration, |pass| {
+                pass.with_replay_owner(super::replay_index::ReplayOwner::TypeGroup(group), |pass| {
+                    pass.with_ticket_effects(owner, lower)
+                })
             })
         } else {
             self.with_type_decl_effects(group, lower)
@@ -736,10 +738,62 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .lexical_events
             .declaration_owner(declaration)
             .expect("type declaration must have a preallocated lexical owner");
-        self.with_replay_owner(
-            super::replay_index::ReplayOwner::TypeGroup(decl_id),
-            |pass| pass.with_ticket_effects(owner.ticket, produce),
-        )
+        self.with_type_declaration_source(declaration, |pass| {
+            pass.with_replay_owner(
+                super::replay_index::ReplayOwner::TypeGroup(decl_id),
+                |pass| pass.with_ticket_effects(owner.ticket, produce),
+            )
+        })
+    }
+
+    /// Nested endpoints retain the outer type declaration's provenance.
+    fn with_type_declaration_source<R>(
+        &mut self,
+        declaration: DeclId,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let source = self
+            .lexical_events
+            .declaration_source(declaration)
+            .map(|source| source.unit);
+        let previous_source = self.current_source;
+        let previous_root_source = self.early_native_array_root_source;
+        if let Some(source) = source {
+            self.current_source = source;
+            if previous_root_source.is_none() {
+                self.early_native_array_root_source = Some(source);
+            }
+        } else {
+            self.early_native_array_root_source = None;
+        }
+        let result = produce(self);
+        self.current_source = previous_source;
+        self.early_native_array_root_source = previous_root_source;
+        result
+    }
+
+    /// A merged interface fragment overrides its group's provenance.
+    fn with_exact_type_declaration_source<R>(
+        &mut self,
+        declaration: DeclId,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let source = self
+            .lexical_events
+            .declaration_source(declaration)
+            .map(|source| source.unit);
+        let previous_source = self.current_source;
+        let previous_root_source = self.early_native_array_root_source;
+        if let Some(source) = source {
+            self.current_source = source;
+            self.early_native_array_root_source = Some(source);
+        } else {
+            self.early_native_array_root_source = None;
+        }
+        let result = produce(self);
+        self.current_source = previous_source;
+        self.early_native_array_root_source = previous_root_source;
+        result
     }
 
     pub(super) fn resolve_type_decl(&mut self, scope: ScopeId, decl_id: TypeGroupId) -> TypeId {
@@ -1148,12 +1202,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut conflict_inputs = Vec::with_capacity(interfaces.len());
             for fragment in interfaces {
                 let frame = self.build_type_param_frame(fragment.param_decl, &fragment.params);
-                let own = self.with_type_params(frame.clone(), |pass| {
-                    pass.lower_interface_declaration_members(
-                        fragment.declaration,
-                        fragment.scope,
-                        fragment.members,
-                    )
+                let own = self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                    pass.with_type_params(frame.clone(), |pass| {
+                        pass.lower_interface_declaration_members(
+                            fragment.declaration,
+                            fragment.scope,
+                            fragment.members,
+                        )
+                    })
                 });
                 let method_names = own.method_keys;
                 let own = own.object;
@@ -1172,22 +1228,31 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         )
                         .expect("interface heritage has one exact preallocated owner");
                     let plan = topology.plan(fragment.declaration, heritage);
-                    let resolved = self.with_ticket_effects(owner, |pass| {
-                        pass.with_type_params(frame.clone(), |pass| match plan {
-                            InterfaceHeritagePlan::Complete(_) => {
-                                pass.ensure_heritage_base_filled(fragment.scope, heritage);
-                                pass.resolve_heritage_type(fragment.scope, heritage)
-                            }
-                            InterfaceHeritagePlan::Poisoned => {
-                                pass.diagnose_poisoned_interface_heritage(fragment.scope, heritage);
-                                None
-                            }
-                            InterfaceHeritagePlan::Opaque(_) => {
-                                pass.record_opaque_interface_heritage(fragment.scope, heritage);
-                                None
-                            }
-                        })
-                    });
+                    let resolved =
+                        self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                            pass.with_ticket_effects(owner, |pass| {
+                                pass.with_type_params(frame.clone(), |pass| match plan {
+                                    InterfaceHeritagePlan::Complete(_) => {
+                                        pass.ensure_heritage_base_filled(fragment.scope, heritage);
+                                        pass.resolve_heritage_type(fragment.scope, heritage)
+                                    }
+                                    InterfaceHeritagePlan::Poisoned => {
+                                        pass.diagnose_poisoned_interface_heritage(
+                                            fragment.scope,
+                                            heritage,
+                                        );
+                                        None
+                                    }
+                                    InterfaceHeritagePlan::Opaque(_) => {
+                                        pass.record_opaque_interface_heritage(
+                                            fragment.scope,
+                                            heritage,
+                                        );
+                                        None
+                                    }
+                                })
+                            })
+                        });
                     if let Some(resolved) = resolved {
                         let base_name = heritage_display_name(heritage);
                         let mut objects = Vec::new();
@@ -1847,13 +1912,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut lowered_fragments = Vec::with_capacity(fragments.len());
             for fragment in fragments {
                 let frame = self.build_type_param_frame(fragment.param_decl, &fragment.params);
-                let lowered = self.with_type_params(frame, |pass| {
-                    pass.lower_interface_declaration_members(
-                        fragment.declaration,
-                        fragment.scope,
-                        fragment.members,
-                    )
-                });
+                let lowered =
+                    self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                        pass.with_type_params(frame, |pass| {
+                            pass.lower_interface_declaration_members(
+                                fragment.declaration,
+                                fragment.scope,
+                                fragment.members,
+                            )
+                        })
+                    });
                 let fragment_is_user = self
                     .binder
                     .declarations
@@ -1943,39 +2011,52 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             .any(|group| component_set.contains(&group.index()))
                     });
                     if internal {
-                        self.with_ticket_effects(owner, |pass| {
-                            pass.with_type_params(frame, |pass| match plan {
-                                InterfaceHeritagePlan::Complete(_) => pass
-                                    .validate_interface_heritage_application_without_resolution(
-                                        fragment.scope,
-                                        heritage,
-                                    ),
-                                InterfaceHeritagePlan::Opaque(_) => {
-                                    pass.record_opaque_interface_heritage(fragment.scope, heritage)
-                                }
-                                InterfaceHeritagePlan::Poisoned => {}
+                        self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                            pass.with_ticket_effects(owner, |pass| {
+                                pass.with_type_params(frame, |pass| match plan {
+                                    InterfaceHeritagePlan::Complete(_) => pass
+                                        .validate_interface_heritage_application_without_resolution(
+                                            fragment.scope,
+                                            heritage,
+                                        ),
+                                    InterfaceHeritagePlan::Opaque(_) => pass
+                                        .record_opaque_interface_heritage(fragment.scope, heritage),
+                                    InterfaceHeritagePlan::Poisoned => {}
+                                })
                             })
                         });
                         // Cyclic bases are invalid. Their annotations still own all
                         // diagnostics, but their members never cross the SCC boundary.
                         continue;
                     }
-                    let base = self.with_ticket_effects(owner, |pass| {
-                        pass.with_type_params(frame, |pass| match plan {
-                            InterfaceHeritagePlan::Complete(_) => {
-                                pass.ensure_heritage_base_filled(fragment.scope, heritage);
-                                pass.resolve_interface_heritage_object(fragment.scope, heritage)
-                            }
-                            InterfaceHeritagePlan::Poisoned => {
-                                pass.diagnose_poisoned_interface_heritage(fragment.scope, heritage);
-                                None
-                            }
-                            InterfaceHeritagePlan::Opaque(_) => {
-                                pass.record_opaque_interface_heritage(fragment.scope, heritage);
-                                None
-                            }
-                        })
-                    });
+                    let base =
+                        self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                            pass.with_ticket_effects(owner, |pass| {
+                                pass.with_type_params(frame, |pass| match plan {
+                                    InterfaceHeritagePlan::Complete(_) => {
+                                        pass.ensure_heritage_base_filled(fragment.scope, heritage);
+                                        pass.resolve_interface_heritage_object(
+                                            fragment.scope,
+                                            heritage,
+                                        )
+                                    }
+                                    InterfaceHeritagePlan::Poisoned => {
+                                        pass.diagnose_poisoned_interface_heritage(
+                                            fragment.scope,
+                                            heritage,
+                                        );
+                                        None
+                                    }
+                                    InterfaceHeritagePlan::Opaque(_) => {
+                                        pass.record_opaque_interface_heritage(
+                                            fragment.scope,
+                                            heritage,
+                                        );
+                                        None
+                                    }
+                                })
+                            })
+                        });
                     if let Some(base) = base {
                         heritage_surfaces.push((
                             owner,
@@ -2171,32 +2252,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .map(|declaration| declaration.site.binding_span)
                 .unwrap_or(Span::new(0, 0));
             let owner = self.merged_header_owner(index, fragment.declaration, header_span.start);
-            let shape = self.with_ticket_effects(owner, |pass| {
-                pass.with_type_params(frame, |pass| {
-                    let descriptors = pass.lower_interface_fragment_parameter_descriptors(
-                        fragment.scope,
-                        fragment.param_decl,
-                        &fragment.params,
-                    );
-                    fragment
-                        .param_decl
-                        .iter()
-                        .flat_map(|declaration| declaration.params.iter())
-                        .enumerate()
-                        .map(|(position, parameter)| {
-                            let constraint = descriptors
-                                .constraints
-                                .get(position)
-                                .copied()
-                                .unwrap_or(TypeParameterMetadataState::Absent);
-                            let default = descriptors
-                                .defaults
-                                .get(position)
-                                .copied()
-                                .unwrap_or(TypeParameterMetadataState::Absent);
-                            (parameter.name.name.to_string(), constraint, default)
-                        })
-                        .collect::<Vec<_>>()
+            let shape = self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                pass.with_ticket_effects(owner, |pass| {
+                    pass.with_type_params(frame, |pass| {
+                        let descriptors = pass.lower_interface_fragment_parameter_descriptors(
+                            fragment.scope,
+                            fragment.param_decl,
+                            &fragment.params,
+                        );
+                        fragment
+                            .param_decl
+                            .iter()
+                            .flat_map(|declaration| declaration.params.iter())
+                            .enumerate()
+                            .map(|(position, parameter)| {
+                                let constraint = descriptors
+                                    .constraints
+                                    .get(position)
+                                    .copied()
+                                    .unwrap_or(TypeParameterMetadataState::Absent);
+                                let default = descriptors
+                                    .defaults
+                                    .get(position)
+                                    .copied()
+                                    .unwrap_or(TypeParameterMetadataState::Absent);
+                                (parameter.name.name.to_string(), constraint, default)
+                            })
+                            .collect::<Vec<_>>()
+                    })
                 })
             });
             supplied_defaults.extend(
@@ -4057,7 +4140,7 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
         decls,
         resolved,
     };
-    reserve_type_decls_with_selection(state, module, program, None, false);
+    reserve_type_decls_with_selection(state, module, program, None, false, None);
 }
 
 pub(in crate::check::checker) struct TypeDeclReservationState<'a, 'ast> {
@@ -4074,7 +4157,23 @@ pub(in crate::check::checker) fn reserve_type_decls_for_combined_library<'ast>(
     module: ScopeId,
     program: &'ast Program<'ast>,
 ) {
-    reserve_type_decls_with_selection(state, module, program, None, true);
+    reserve_type_decls_with_selection(state, module, program, None, true, None);
+}
+
+pub(in crate::check::checker) fn reserve_type_decls_for_combined_user<'ast>(
+    state: TypeDeclReservationState<'_, 'ast>,
+    module: ScopeId,
+    program: &'ast Program<'ast>,
+    library_declarations: &FxHashSet<DeclId>,
+) {
+    reserve_type_decls_with_selection(
+        state,
+        module,
+        program,
+        None,
+        false,
+        Some(library_declarations),
+    );
 }
 
 pub(in crate::check::checker) fn reserve_type_decls_selected<'ast>(
@@ -4083,7 +4182,7 @@ pub(in crate::check::checker) fn reserve_type_decls_selected<'ast>(
     program: &'ast Program<'ast>,
     selected: &BTreeSet<ReplayOwner>,
 ) {
-    reserve_type_decls_with_selection(state, module, program, Some(selected), false);
+    reserve_type_decls_with_selection(state, module, program, Some(selected), false, None);
 }
 
 fn reserve_type_decls_with_selection<'ast>(
@@ -4092,6 +4191,7 @@ fn reserve_type_decls_with_selection<'ast>(
     program: &'ast Program<'ast>,
     selected: Option<&BTreeSet<ReplayOwner>>,
     retain_library_declarations: bool,
+    preserved_library_declarations: Option<&FxHashSet<DeclId>>,
 ) {
     let TypeDeclReservationState {
         interner,
@@ -4327,6 +4427,17 @@ fn reserve_type_decls_with_selection<'ast>(
                                     disposition != MergeDisposition::Admitted
                                 })
                         {
+                            let preserves_library_alias = preserved_library_declarations
+                                .is_some_and(|library_declarations| {
+                                    matches!(
+                                        decls.get(group.index()),
+                                        Some(TypeDecl::Alias { declaration, .. })
+                                            if library_declarations.contains(declaration)
+                                    )
+                                });
+                            if preserves_library_alias {
+                                return;
+                            }
                             if group.index() < decls.published_len()
                                 && decls.has_replacement(group.index())
                             {

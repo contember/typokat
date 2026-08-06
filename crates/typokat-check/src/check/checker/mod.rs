@@ -91,8 +91,9 @@ use context::{
 #[cfg(any(test, feature = "test-utils"))]
 use decls::type_decl_id;
 use decls::{
-    reserve_type_decls, reserve_type_decls_for_combined_library, reserve_type_decls_selected,
-    walk_type_decls, TopTypeDecl,
+    reserve_type_decls, reserve_type_decls_for_combined_library,
+    reserve_type_decls_for_combined_user, reserve_type_decls_selected, walk_type_decls,
+    TopTypeDecl,
 };
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
 use events_library::{library_record_ticket_key, LibraryEventLedger, LibraryRecordTicket};
@@ -211,6 +212,14 @@ impl UserReportingOwner for UserRecordTicket {
 
     fn user_ticket(self) -> Result<UserRecordTicket, Self::Error> {
         Ok(self)
+    }
+}
+
+impl UserReportingOwner for LibraryRecordTicket {
+    type Error = &'static str;
+
+    fn user_ticket(self) -> Result<UserRecordTicket, Self::Error> {
+        Err("user source resolved to a library-only reporting ticket")
     }
 }
 
@@ -813,6 +822,7 @@ fn bootstrap_test_support_prelude(
 /// The structured outcome of checking one module: type diagnostics plus the third
 /// incomplete-surface channel (in-scope AST positions the checker skipped). An empty
 /// `incomplete` is the normal case today — WU3–5 wire the emissions (sprint 2026-07-10).
+#[derive(Debug)]
 pub struct CheckResult {
     pub module_ordinal: ModuleOrdinal,
     pub unit_slot: UnitSlot,
@@ -3004,14 +3014,18 @@ enum AuthoritativeProjectBinderFinish {
     Continuation,
 }
 
-fn bind_authoritative_project_core<'ast>(
+fn bind_authoritative_project_core<'ast, Ticket>(
     mut builder: ProjectBinderBuilder<'ast>,
     units: &[ProjectProgram<'ast>],
     source_offset: u32,
-    lexical_events: &LexicalReservations,
+    lexical_events: &LexicalReservations<Ticket>,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     finish: AuthoritativeProjectBinderFinish,
-) -> Result<BoundProjectBinder, String> {
+) -> Result<BoundProjectBinder, String>
+where
+    Ticket: UserReportingOwner,
+    Ticket::Error: std::fmt::Display,
+{
     #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECT_BINDING_ENTRIES.set(PROJECT_BINDING_ENTRIES.get().saturating_add(1));
@@ -3043,22 +3057,19 @@ fn bind_authoritative_project_core<'ast>(
     let mut module_placeholders = Vec::with_capacity(units.len());
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
     for unit in units {
-        let imports = infallible(imported_symbols(
-            unit,
-            &exports,
-            lexical_events,
-            external_effects,
-        ));
+        let imports = imported_symbols(unit, &exports, lexical_events, external_effects)
+            .map_err(|error| format!("project import reporting owner failed: {error}"))?;
         let compilation = shifted_unit(unit)?;
         let (scope, placeholders) = builder.add_module(unit.program, &imports, compilation);
-        let surface = infallible(collect_exports(
+        let surface = collect_exports(
             &builder,
             scope,
             unit.program,
             unit.module_ordinal,
             lexical_events,
             external_effects,
-        ));
+        )
+        .map_err(|error| format!("project export reporting owner failed: {error}"))?;
         module_scopes.push(scope);
         module_placeholders.push(placeholders);
         exports.push(surface);
@@ -4803,9 +4814,10 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     ) -> Option<ValueStorageId> {
         let symbol = self.resolve_value_replay(scope, name)?;
         if let Some(winner) = self.private_collision_value_winners.get(&symbol).copied() {
-            if self
-                .private_collision_affected
-                .contains(&ReplayOwner::Value(winner))
+            if self.combined_source_library_value_precedence
+                || self
+                    .private_collision_affected
+                    .contains(&ReplayOwner::Value(winner))
             {
                 return Some(winner);
             }
@@ -5542,6 +5554,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         combined_user_source: false,
         private_collision_value_winners: FxHashMap::default(),
         private_collision_value_winners_by_name: FxHashMap::default(),
+        combined_source_library_value_precedence: false,
         global_object_type: None,
         effect_stack: Vec::new(),
         provisional_argument_effects: Vec::new(),
@@ -5564,6 +5577,8 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         }),
         semantic_queries: SemanticQueryState::default(),
         library_semantic_identities: None,
+        early_native_array_groups: None,
+        early_native_array_root_source: None,
         certified_library_values: context::CertifiedLibraryValues::default(),
         lexical_array_alias: None,
         class_application_parameters: LayeredMap::default(),

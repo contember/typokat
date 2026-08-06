@@ -1,7 +1,8 @@
 //! Measurement-only compiler for injected declaration-library profiles.
 
 use super::classes::application::ClassTypeParameterDefault;
-use super::context::{CertifiedLibraryValues, DeclTypes, TypeDecl};
+use super::context::{CertifiedLibraryValues, CheckerRecordBatch, DeclTypes, TypeDecl};
+use super::events::{CandidateEffects, EventStore, UserRecordTicket};
 use super::events_library::{
     library_record_ticket_key, LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError,
     LibraryRecordTicket, LibrarySemanticReportingAdapter,
@@ -13,7 +14,7 @@ use super::lexical_events_library::library_unit;
 #[cfg(any(test, feature = "test-utils"))]
 use super::lexical_events_library::ExactUnit;
 use super::library_identities::LibraryIdentityTerminal;
-use super::library_identities::LibrarySemanticIdentities;
+use super::library_identities::{LibrarySemanticIdentities, NativeArrayGroups};
 #[cfg(any(test, feature = "test-utils"))]
 use super::library_reporting::independent_library_reporting_site_descriptors;
 use super::library_reporting::LibraryReportingConsumer;
@@ -47,15 +48,21 @@ use super::type_groups::{
     PublishedTypeParameterDefault,
 };
 use super::{
-    build_pass_with_tickets, finish_semantic_effects, reserve_type_decls,
-    reserve_type_decls_for_combined_library, FrozenCheckerRuntimeMetadata,
-    FrozenCheckerRuntimeSnapshotParts, PassReporting, PassReportingPlan,
+    attach_class_bindings, attach_type_decl_owners, build_pass_with_tickets,
+    enqueue_ambient_context_diagnostics, enqueue_local_ambient_export_alias_diagnostics,
+    enqueue_namespace_placement_diagnostics, finish_semantic_effects,
+    private_combined_record_ticket_key, reserve_type_decls,
+    reserve_type_decls_for_combined_library, reserve_type_decls_for_combined_user,
+    FrozenCheckerRuntimeMetadata, FrozenCheckerRuntimeSnapshotParts, PassReporting,
+    PassReportingPlan, PrivateCombinedRecordTicket,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use super::{check_bound_user_program_with_final_identity_inspector, BoundUserBase};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::bind::LibraryBinderCheckpointEnds;
-use crate::binder::bind::{LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder};
+use crate::binder::bind::{
+    ImportPlaceholder, LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder,
+};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::declaration::DeclId;
 #[cfg(any(test, feature = "test-utils"))]
@@ -82,9 +89,9 @@ use crate::class_semantics::OwnedPublishedClassTerminal;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::diagnostics::render_type;
 use crate::diagnostics::{render_to_writer_with_format, DiagnosticFormat};
-#[cfg(any(test, feature = "test-utils"))]
-use crate::source::SourceUnit;
-use crate::source::{CompilationOrigin, LibraryFileOrdinal};
+use crate::source::{
+    CompilationOrigin, LibraryFileOrdinal, ModuleOrdinal, SourceOrdinal, SourceUnit, UnitSlot,
+};
 use crate::span::Span;
 use crate::types::repr::ClassId;
 use crate::types::repr::TypeParamId;
@@ -98,7 +105,8 @@ use crate::types::store::Store;
 use crate::types::store::TypeId;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
-use oxc_parser::{Parser, ParserReturn};
+use oxc_ast::ast::Program;
+use oxc_parser::Parser;
 use oxc_span::SourceType;
 #[cfg(any(test, feature = "test-utils"))]
 use sha2::{Digest, Sha256};
@@ -1733,7 +1741,12 @@ impl OwnedLibraryRuntimeState {
         self.binder.freeze_as_base()?;
         self.published_types.freeze_as_base()?;
         self.decl_types.freeze_as_base()?;
-        self.runtime.freeze_as_base()
+        self.runtime.freeze_as_base()?;
+        #[cfg(any(test, feature = "test-utils"))]
+        record_complete_source_route_work_for_test(|work| {
+            work.frozen_base_seals = work.frozen_base_seals.saturating_add(1);
+        });
+        Ok(())
     }
 
     pub fn fork_collision_free_user_delta(
@@ -3427,6 +3440,7 @@ pub struct InjectedProfileRun {
     /// [`LibraryRecordRetention::Collect`]. Nothing downstream of a compile retains them
     /// (ADR-0018).
     pub library_records: Vec<(LibraryEventKey, CheckerRecord)>,
+    user_results: Vec<super::CheckResult>,
     #[cfg(any(test, feature = "test-utils"))]
     pub pass_source_units: Vec<ExactUnit>,
     #[cfg(any(test, feature = "test-utils"))]
@@ -3452,6 +3466,187 @@ pub struct CanonicalLibraryEvidence {
     pub diagnostics: Vec<u8>,
     pub incompletes: Vec<u8>,
     pub ledger: Vec<u8>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CompleteSourceRouteWorkForTest {
+    pub profile_loads: u64,
+    pub library_parse_units: u64,
+    pub library_bind_units: u64,
+    pub user_bind_units: u64,
+    pub semantic_publications: u64,
+    pub replay_trace_constructions: u64,
+    pub replay_plan_constructions: u64,
+    pub frozen_base_seals: u64,
+    pub library_source_reparses: u64,
+    pub library_evidence: Option<CanonicalLibraryEvidence>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static COMPLETE_SOURCE_ROUTE_WORK: RefCell<CompleteSourceRouteWorkForTest> =
+        RefCell::new(CompleteSourceRouteWorkForTest::default());
+    static COMPLETE_SOURCE_EVIDENCE_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_complete_source_route_work_for_test(
+    record: impl FnOnce(&mut CompleteSourceRouteWorkForTest),
+) {
+    COMPLETE_SOURCE_ROUTE_WORK.with(|work| record(&mut work.borrow_mut()));
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_complete_source_profile_load_for_test() {
+    record_complete_source_route_work_for_test(|work| {
+        work.profile_loads = work.profile_loads.saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn record_complete_source_auxiliary_parse_work_for_test(
+    parser_invocations: u64,
+    source_reparses: u64,
+) {
+    record_complete_source_route_work_for_test(|work| {
+        work.library_parse_units = work.library_parse_units.saturating_add(parser_invocations);
+        work.library_source_reparses = work.library_source_reparses.saturating_add(source_reparses);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_complete_source_bind_for_test(library_count: usize, user_count: usize) {
+    record_complete_source_route_work_for_test(|work| {
+        work.library_bind_units = work
+            .library_bind_units
+            .saturating_add(u64::try_from(library_count).unwrap_or(u64::MAX));
+        work.user_bind_units = work
+            .user_bind_units
+            .saturating_add(u64::try_from(user_count).unwrap_or(u64::MAX));
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn record_complete_source_publication_entry_for_test() {
+    record_complete_source_route_work_for_test(|work| {
+        work.semantic_publications = work.semantic_publications.saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn record_replay_trace_construction_for_test() {
+    record_complete_source_route_work_for_test(|work| {
+        work.replay_trace_constructions = work.replay_trace_constructions.saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub(in crate::check::checker) fn record_replay_plan_construction_for_test() {
+    record_complete_source_route_work_for_test(|work| {
+        work.replay_plan_constructions = work.replay_plan_constructions.saturating_add(1);
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn record_complete_source_evidence_for_test(evidence: CanonicalLibraryEvidence) {
+    record_complete_source_route_work_for_test(|work| work.library_evidence = Some(evidence));
+    COMPLETE_SOURCE_EVIDENCE_GENERATION
+        .set(COMPLETE_SOURCE_EVIDENCE_GENERATION.get().saturating_add(1));
+}
+
+#[cfg(not(any(test, feature = "test-utils")))]
+pub fn record_complete_source_profile_load_for_test() {}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn complete_source_route_thread_receipt_for_test() -> CompleteSourceRouteWorkForTest {
+    COMPLETE_SOURCE_ROUTE_WORK.with(|work| work.borrow().clone())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn merge_complete_source_route_thread_receipt_for_test(
+    receipt: CompleteSourceRouteWorkForTest,
+) {
+    record_complete_source_route_work_for_test(|work| {
+        work.profile_loads = work.profile_loads.saturating_add(receipt.profile_loads);
+        work.library_parse_units = work
+            .library_parse_units
+            .saturating_add(receipt.library_parse_units);
+        work.library_bind_units = work
+            .library_bind_units
+            .saturating_add(receipt.library_bind_units);
+        work.user_bind_units = work.user_bind_units.saturating_add(receipt.user_bind_units);
+        work.semantic_publications = work
+            .semantic_publications
+            .saturating_add(receipt.semantic_publications);
+        work.replay_trace_constructions = work
+            .replay_trace_constructions
+            .saturating_add(receipt.replay_trace_constructions);
+        work.replay_plan_constructions = work
+            .replay_plan_constructions
+            .saturating_add(receipt.replay_plan_constructions);
+        work.frozen_base_seals = work
+            .frozen_base_seals
+            .saturating_add(receipt.frozen_base_seals);
+        work.library_source_reparses = work
+            .library_source_reparses
+            .saturating_add(receipt.library_source_reparses);
+        if receipt.library_evidence.is_some() {
+            work.library_evidence = receipt.library_evidence;
+            COMPLETE_SOURCE_EVIDENCE_GENERATION
+                .set(COMPLETE_SOURCE_EVIDENCE_GENERATION.get().saturating_add(1));
+        }
+    });
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct CompleteSourceRouteWorkScopeForTest {
+    start: CompleteSourceRouteWorkForTest,
+    evidence_generation: u64,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl CompleteSourceRouteWorkScopeForTest {
+    pub fn start() -> Self {
+        Self {
+            start: complete_source_route_thread_receipt_for_test(),
+            evidence_generation: COMPLETE_SOURCE_EVIDENCE_GENERATION.get(),
+        }
+    }
+
+    pub fn finish(self) -> CompleteSourceRouteWorkForTest {
+        let end = complete_source_route_thread_receipt_for_test();
+        let evidence_changed =
+            COMPLETE_SOURCE_EVIDENCE_GENERATION.get() != self.evidence_generation;
+        CompleteSourceRouteWorkForTest {
+            profile_loads: end.profile_loads.saturating_sub(self.start.profile_loads),
+            library_parse_units: end
+                .library_parse_units
+                .saturating_sub(self.start.library_parse_units),
+            library_bind_units: end
+                .library_bind_units
+                .saturating_sub(self.start.library_bind_units),
+            user_bind_units: end
+                .user_bind_units
+                .saturating_sub(self.start.user_bind_units),
+            semantic_publications: end
+                .semantic_publications
+                .saturating_sub(self.start.semantic_publications),
+            replay_trace_constructions: end
+                .replay_trace_constructions
+                .saturating_sub(self.start.replay_trace_constructions),
+            replay_plan_constructions: end
+                .replay_plan_constructions
+                .saturating_sub(self.start.replay_plan_constructions),
+            frozen_base_seals: end
+                .frozen_base_seals
+                .saturating_sub(self.start.frozen_base_seals),
+            library_source_reparses: end
+                .library_source_reparses
+                .saturating_sub(self.start.library_source_reparses),
+            library_evidence: evidence_changed.then_some(end.library_evidence).flatten(),
+        }
+    }
 }
 
 impl InjectedProfileRun {
@@ -3491,18 +3686,18 @@ struct CanonicalInput<'source> {
 #[cfg(any(test, feature = "test-utils"))]
 fn independent_event_owner_sites_for_oracle(
     canonical: &[CanonicalInput<'_>],
-    parsed: &[ParserReturn<'_>],
+    parsed: &[&Program<'_>],
     binder: &Binder,
 ) -> Result<Vec<CollisionReplayOwnerSite>, InjectedProfileError> {
     let mut allocator = IndependentEventOwnerSiteOracle::new();
     let mut reservations: LexicalReservations<(usize, usize)> = LexicalReservations::default();
-    for (input, parsed) in canonical.iter().zip(parsed) {
+    for (input, program) in canonical.iter().zip(parsed) {
         allocator.select_file(input.file_ordinal);
         reservations
-            .reserve_program_with(&parsed.program, &mut allocator)
+            .reserve_program_with(program, &mut allocator)
             .map_err(|message| InjectedProfileError::Reservation(message.to_owned()))?;
         allocator.reserve_exact_site(
-            Span::from_oxc(parsed.program.span),
+            Span::from_oxc(program.span),
             CollisionReplayEventPhase::Immediate,
         );
     }
@@ -3535,11 +3730,16 @@ fn verify_independent_event_owner_sites(
 
 struct CanonicalLibraryFrontend<'source, 'ast> {
     canonical: Vec<CanonicalInput<'source>>,
-    parsed: Vec<ParserReturn<'ast>>,
+    parsed: Vec<&'ast Program<'ast>>,
     binder: Binder,
     module_scopes: Vec<ScopeId>,
     semantic_scopes: Vec<ScopeId>,
     user_start: Option<usize>,
+    user_units: Vec<(ModuleOrdinal, UnitSlot)>,
+    user_events: EventStore,
+    combined_lexical_events: Option<LexicalReservations<PrivateCombinedRecordTicket>>,
+    external_effects: BTreeMap<UserRecordTicket, CandidateEffects>,
+    module_placeholders: Vec<Vec<ImportPlaceholder>>,
     collision_root_provenance: LibraryRootProjection,
     #[cfg(any(test, feature = "test-utils"))]
     parse_elapsed: Duration,
@@ -5344,7 +5544,7 @@ fn build_collision_replay_index(
     runtime: &FrozenCheckerRuntimeSnapshotParts,
     semantic_identities: Option<&LibrarySemanticIdentities>,
     canonical: &[CanonicalInput<'_>],
-    parsed: &[oxc_parser::ParserReturn<'_>],
+    parsed: &[&Program<'_>],
     module_scopes: &[ScopeId],
     class_declarations: &BTreeMap<ClassId, crate::binder::declaration::DeclId>,
     records: &[(LibraryEventKey, CheckerRecord)],
@@ -5554,10 +5754,10 @@ fn build_collision_replay_index(
     let mut explicit_global_this = false;
     let mut contributor_sites = Vec::new();
     let mut explicit_global_this_sites = Vec::new();
-    for ((input, parsed), module) in canonical.iter().zip(parsed).zip(module_scopes) {
+    for ((input, program), module) in canonical.iter().zip(parsed).zip(module_scopes) {
         let provenance = source_global_binding_census_with_provenance(
-            &parsed.program,
-            ModuleBindingContext::for_program(&parsed.program, input.kind),
+            program,
+            ModuleBindingContext::for_program(program, input.kind),
         );
         record_collision_plan_forbidden_work(|work| {
             work.second_source_censuses = work.second_source_censuses.saturating_add(1);
@@ -5794,6 +5994,235 @@ pub fn compile_complete_combined_profile_for_test(
     })
 }
 
+/// Compile the packaged library and one resolved user project in one semantic publication.
+pub fn compile_complete_source_project_programs<'ast>(
+    sources: &[InjectedLibrarySource<'_>],
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[crate::frontend::ProjectProgram<'ast>],
+) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
+    let frontend = complete_source_project_frontend(sources, library_programs, units)?;
+    let (run, _runtime, replay_plan) = compile_owned_injected_frontend(
+        frontend,
+        ReplayIndexPlan::None,
+        LibraryRecordRetention::Collect,
+        OwnerSiteStorageMode::Flat,
+    )?;
+    if replay_plan.is_some() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete-source project retained a replay plan".to_owned(),
+        ));
+    }
+
+    Ok(run.user_results)
+}
+
+fn complete_source_project_frontend<'source, 'ast>(
+    sources: &[InjectedLibrarySource<'source>],
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[crate::frontend::ProjectProgram<'ast>],
+) -> Result<CanonicalLibraryFrontend<'source, 'ast>, InjectedProfileError> {
+    let mut canonical = canonical_inputs(sources)?;
+    if canonical.len() != library_programs.len() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete-source frontend changed the library source count".to_owned(),
+        ));
+    }
+    let mut parser_export_claims = Vec::new();
+    let mut parsed = Vec::with_capacity(canonical.len().saturating_add(units.len()));
+    for ((input, source), program) in canonical.iter().zip(sources).zip(library_programs) {
+        if input.file_ordinal.index() != program.source_ordinal || source.name != program.name {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "complete-source frontend changed library source identity".to_owned(),
+            ));
+        }
+        if program.parser_panicked {
+            return Err(InjectedProfileError::Parse {
+                file_ordinal: input.file_ordinal,
+                messages: if program.parser_diagnostics.is_empty() {
+                    vec!["parser panicked without a diagnostic".to_owned()]
+                } else {
+                    program
+                        .parser_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.rendered.clone())
+                        .collect()
+                },
+            });
+        }
+        for diagnostic in &program.parser_diagnostics {
+            let [span] = diagnostic.labels.as_slice() else {
+                return Err(InjectedProfileError::Parse {
+                    file_ordinal: input.file_ordinal,
+                    messages: program
+                        .parser_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.rendered.clone())
+                        .collect(),
+                });
+            };
+            if diagnostic.scope.as_deref() != Some("TS")
+                || diagnostic.number.as_deref() != Some("1319")
+            {
+                return Err(InjectedProfileError::Parse {
+                    file_ordinal: input.file_ordinal,
+                    messages: program
+                        .parser_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.rendered.clone())
+                        .collect(),
+                });
+            }
+            parser_export_claims.push(ParserExportClaim {
+                file_ordinal: input.file_ordinal,
+                span: *span,
+            });
+        }
+        parsed.push(program.program);
+    }
+
+    let prelude_allocator = Allocator::default();
+    let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+    let mut builder = ProjectBinderBuilder::new(&prelude.program);
+    let library_units = canonical
+        .iter()
+        .zip(&parsed)
+        .map(|(input, program)| {
+            (
+                *program,
+                CompilationUnit {
+                    source: input.source_key,
+                    origin: input.origin,
+                    binding: ModuleBindingContext::for_program(program, input.kind),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut module_scopes = builder
+        .try_add_library_modules(&library_units)
+        .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+    let mut library_binder = builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)));
+    let collision_root_provenance =
+        library_binder
+            .take_library_root_projection()
+            .ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "library binder did not retain its one-pass root projection".to_owned(),
+                )
+            })?;
+    let checkpoint_units = canonical
+        .iter()
+        .zip(module_scopes.iter().copied())
+        .map(|(input, module)| LibraryBinderUnit {
+            ordinal: input.file_ordinal,
+            source: input.source_key,
+            module,
+        })
+        .collect();
+    let checkpoint = build_library_binder_checkpoint(library_binder, checkpoint_units);
+    let checkpoint_ends = checkpoint.checkpoint_ends();
+    let (builder, _) = checkpoint.into_continuation();
+    let source_offset = u32::try_from(checkpoint_ends.next_source)
+        .map_err(|_| InjectedProfileError::SourceKeyOverflow)?
+        .checked_sub(1)
+        .ok_or_else(|| {
+            InjectedProfileError::CanonicalProjection(
+                "library source prefix omits the prelude".to_owned(),
+            )
+        })?;
+    let mut user_events = EventStore::default();
+    let mut combined_lexical_events: LexicalReservations<PrivateCombinedRecordTicket> =
+        LexicalReservations::default();
+    for unit in units {
+        combined_lexical_events
+            .reserve_private_continuation_program(
+                unit.module_ordinal,
+                unit.unit_slot,
+                unit.program,
+                unit.compilation_unit.binding,
+                &mut user_events,
+            )
+            .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
+    }
+    let mut external_effects = BTreeMap::new();
+    let bound = super::bind_authoritative_project_core(
+        builder,
+        units,
+        source_offset,
+        &combined_lexical_events,
+        &mut external_effects,
+        super::AuthoritativeProjectBinderFinish::Continuation,
+    )
+    .map_err(InjectedProfileError::Binder)?;
+    validate_parser_export_claims(
+        &bound.binder,
+        parser_export_claims,
+        canonical[0].file_ordinal,
+    )?;
+    let super::BoundProjectBinder {
+        binder,
+        module_scopes: user_module_scopes,
+        module_placeholders,
+        ..
+    } = bound;
+    #[cfg(any(test, feature = "test-utils"))]
+    record_complete_source_bind_for_test(canonical.len(), units.len());
+
+    let library_count = canonical.len();
+    for unit in units {
+        let ordinal = library_count
+            .checked_add(unit.module_ordinal.index())
+            .ok_or(InjectedProfileError::SourceKeyOverflow)?;
+        let source_key = source_offset
+            .checked_add(unit.compilation_unit.source.0)
+            .map(exact_key)
+            .ok_or(InjectedProfileError::SourceKeyOverflow)?;
+        canonical.push(CanonicalInput {
+            file_ordinal: LibraryFileOrdinal::new(ordinal),
+            source: "",
+            kind: source_file_kind(&unit.normalized_path),
+            source_key,
+            origin: unit.compilation_unit.origin,
+        });
+        parsed.push(unit.program);
+    }
+    module_scopes.extend(user_module_scopes);
+    let semantic_scopes = canonical
+        .iter()
+        .zip(&parsed)
+        .zip(module_scopes.iter().copied())
+        .map(|((input, program), module)| {
+            if matches!(input.origin, CompilationOrigin::User(_))
+                || ModuleBindingContext::for_program(program, input.kind).external_module
+            {
+                module
+            } else {
+                binder.compilation_global
+            }
+        })
+        .collect();
+    Ok(CanonicalLibraryFrontend {
+        canonical,
+        parsed,
+        binder,
+        module_scopes,
+        semantic_scopes,
+        user_start: Some(library_count),
+        user_units: units
+            .iter()
+            .map(|unit| (unit.module_ordinal, unit.unit_slot))
+            .collect(),
+        user_events,
+        combined_lexical_events: Some(combined_lexical_events),
+        external_effects,
+        module_placeholders,
+        collision_root_provenance,
+        #[cfg(any(test, feature = "test-utils"))]
+        parse_elapsed: Duration::ZERO,
+        #[cfg(any(test, feature = "test-utils"))]
+        bind_elapsed: Duration::ZERO,
+    })
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub struct CompleteCombinedOracleForTest {
     pub normalized_records: Vec<(LibraryFileOrdinal, String)>,
@@ -5940,13 +6369,17 @@ fn with_canonical_frontend<'source, Output>(
             Ok((parsed, claims))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut parsed = Vec::with_capacity(parsed_and_claims.len());
+    let mut parser_returns = Vec::with_capacity(parsed_and_claims.len());
     let mut claims = Vec::with_capacity(parsed_and_claims.len());
     for (parsed_unit, claims_unit) in parsed_and_claims {
-        parsed.push(parsed_unit);
+        parser_returns.push(parsed_unit);
         claims.push(claims_unit);
     }
     let parser_export_claims = claims.into_iter().flatten().collect::<Vec<_>>();
+    let parsed = parser_returns
+        .iter()
+        .map(|parsed| &parsed.program)
+        .collect::<Vec<_>>();
     #[cfg(any(test, feature = "test-utils"))]
     let parse_elapsed = parse_started.elapsed();
 
@@ -5955,13 +6388,13 @@ fn with_canonical_frontend<'source, Output>(
     let units = parsed
         .iter()
         .zip(&canonical)
-        .map(|(parsed, input)| {
+        .map(|(program, input)| {
             (
-                &parsed.program,
+                *program,
                 CompilationUnit {
                     source: input.source_key,
                     origin: input.origin,
-                    binding: ModuleBindingContext::for_program(&parsed.program, input.kind),
+                    binding: ModuleBindingContext::for_program(program, input.kind),
                 },
             )
         })
@@ -6042,6 +6475,11 @@ fn with_canonical_frontend<'source, Output>(
         module_scopes,
         semantic_scopes,
         user_start,
+        user_units: Vec::new(),
+        user_events: EventStore::default(),
+        combined_lexical_events: None,
+        external_effects: BTreeMap::new(),
+        module_placeholders: Vec::new(),
         collision_root_provenance,
         #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
@@ -6287,8 +6725,8 @@ pub fn compile_owned_injected_records(
     .map(|(run, _, _)| run.library_records)
 }
 
-fn intern_compiled_global_object(
-    pass: &mut super::Pass<'_, '_, LibraryRecordTicket>,
+fn intern_compiled_global_object<Ticket: Copy + PartialEq>(
+    pass: &mut super::Pass<'_, '_, Ticket>,
     projection: &LibraryRootProjection,
     additional_contributors: &[(String, ValueStorageId)],
 ) -> TypeId {
@@ -6304,6 +6742,13 @@ fn intern_compiled_global_object(
         .filter_map(|row| row.value.map(|storage| (row.name.clone(), storage)))
         .collect::<BTreeMap<_, _>>();
     contributors.extend(additional_contributors.iter().cloned());
+    if pass.combined_source_library_value_precedence {
+        contributors.extend(
+            pass.private_collision_value_winners_by_name
+                .iter()
+                .map(|(name, storage)| (name.clone(), *storage)),
+        );
+    }
     let mut properties = contributors
         .into_iter()
         .filter(|(name, _)| name != "undefined")
@@ -6322,7 +6767,333 @@ fn intern_compiled_global_object(
     })
 }
 
+trait InjectedCompileRoute {
+    type Ticket: Copy + Ord + super::UserReportingOwner<Error = &'static str>;
+
+    fn lexical_events(
+        combined: Option<LexicalReservations<PrivateCombinedRecordTicket>>,
+    ) -> Result<LexicalReservations<Self::Ticket>, InjectedProfileError>;
+
+    fn reserve_library_program(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError>;
+
+    fn attach_library_owners(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        spans: &super::ModuleDeclarationSpans,
+        declarations: &super::context::TypeDeclTable<'_>,
+    );
+
+    fn attach_user_owners(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        module_ordinal: ModuleOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        spans: &super::ModuleDeclarationSpans,
+        declarations: &super::context::TypeDeclTable<'_>,
+    ) -> Result<(), InjectedProfileError>;
+
+    fn pending_tickets(reservations: &LexicalReservations<Self::Ticket>) -> Vec<Self::Ticket>;
+
+    fn ticket_key() -> fn(Self::Ticket) -> (usize, usize);
+
+    fn user_ticket(owner: UserRecordTicket) -> Result<Self::Ticket, InjectedProfileError>;
+
+    fn complete_batches(
+        batches: Vec<CheckerRecordBatch<Self::Ticket>>,
+        ledger: &mut LibraryEventLedger,
+        user_events: &mut EventStore,
+    ) -> Result<(), InjectedProfileError>;
+}
+
+struct LegacyLibraryRoute;
+
+impl InjectedCompileRoute for LegacyLibraryRoute {
+    type Ticket = LibraryRecordTicket;
+
+    fn lexical_events(
+        combined: Option<LexicalReservations<PrivateCombinedRecordTicket>>,
+    ) -> Result<LexicalReservations<Self::Ticket>, InjectedProfileError> {
+        if combined.is_some() {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "library-only compiler received user lexical reservations".to_owned(),
+            ));
+        }
+        Ok(LexicalReservations::default())
+    }
+
+    fn reserve_library_program(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError> {
+        reservations.reserve_library_program(file_ordinal, program, ledger)
+    }
+
+    fn attach_library_owners(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        spans: &super::ModuleDeclarationSpans,
+        declarations: &super::context::TypeDeclTable<'_>,
+    ) {
+        reservations.attach_library_declaration_owners(file_ordinal, binder, scope, program, spans);
+        reservations.attach_library_class_bindings(
+            file_ordinal,
+            binder,
+            scope,
+            program,
+            declarations,
+        );
+    }
+
+    fn attach_user_owners(
+        _: &mut LexicalReservations<Self::Ticket>,
+        _: ModuleOrdinal,
+        _: &Binder,
+        _: ScopeId,
+        _: &Program<'_>,
+        _: &super::ModuleDeclarationSpans,
+        _: &super::context::TypeDeclTable<'_>,
+    ) -> Result<(), InjectedProfileError> {
+        Err(InjectedProfileError::CanonicalProjection(
+            "library-only compiler received a user source".to_owned(),
+        ))
+    }
+
+    fn pending_tickets(reservations: &LexicalReservations<Self::Ticket>) -> Vec<Self::Ticket> {
+        reservations.library_semantic_tickets()
+    }
+
+    fn ticket_key() -> fn(Self::Ticket) -> (usize, usize) {
+        library_record_ticket_key
+    }
+
+    fn user_ticket(_: UserRecordTicket) -> Result<Self::Ticket, InjectedProfileError> {
+        Err(InjectedProfileError::CanonicalProjection(
+            "library-only compiler received user effects".to_owned(),
+        ))
+    }
+
+    fn complete_batches(
+        batches: Vec<CheckerRecordBatch<Self::Ticket>>,
+        ledger: &mut LibraryEventLedger,
+        _: &mut EventStore,
+    ) -> Result<(), InjectedProfileError> {
+        LibrarySemanticReportingAdapter::new(ledger)
+            .complete_semantic_batches(batches)
+            .map_err(InjectedProfileError::Reporting)
+    }
+}
+
+struct CompleteSourceRoute;
+
+impl InjectedCompileRoute for CompleteSourceRoute {
+    type Ticket = PrivateCombinedRecordTicket;
+
+    fn lexical_events(
+        combined: Option<LexicalReservations<PrivateCombinedRecordTicket>>,
+    ) -> Result<LexicalReservations<Self::Ticket>, InjectedProfileError> {
+        combined.ok_or_else(|| {
+            InjectedProfileError::CanonicalProjection(
+                "complete-source compiler lost user lexical reservations".to_owned(),
+            )
+        })
+    }
+
+    fn reserve_library_program(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError> {
+        reservations.reserve_complete_library_program(file_ordinal, program, ledger)
+    }
+
+    fn attach_library_owners(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        spans: &super::ModuleDeclarationSpans,
+        declarations: &super::context::TypeDeclTable<'_>,
+    ) {
+        reservations.attach_complete_library_declaration_owners(
+            file_ordinal,
+            binder,
+            scope,
+            program,
+            spans,
+        );
+        reservations.attach_complete_library_class_bindings(
+            file_ordinal,
+            binder,
+            scope,
+            program,
+            declarations,
+        );
+    }
+
+    fn attach_user_owners(
+        reservations: &mut LexicalReservations<Self::Ticket>,
+        module_ordinal: ModuleOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        spans: &super::ModuleDeclarationSpans,
+        declarations: &super::context::TypeDeclTable<'_>,
+    ) -> Result<(), InjectedProfileError> {
+        attach_type_decl_owners(
+            reservations,
+            SourceOrdinal::User(module_ordinal),
+            binder,
+            scope,
+            program,
+            spans,
+        );
+        attach_class_bindings(
+            reservations,
+            SourceOrdinal::User(module_ordinal),
+            binder,
+            scope,
+            program,
+            declarations,
+            None,
+        );
+        Ok(())
+    }
+
+    fn pending_tickets(reservations: &LexicalReservations<Self::Ticket>) -> Vec<Self::Ticket> {
+        let mut tickets = reservations.source_anchor_tickets();
+        tickets.extend(reservations.tickets());
+        tickets
+    }
+
+    fn ticket_key() -> fn(Self::Ticket) -> (usize, usize) {
+        private_combined_record_ticket_key
+    }
+
+    fn user_ticket(owner: UserRecordTicket) -> Result<Self::Ticket, InjectedProfileError> {
+        Ok(PrivateCombinedRecordTicket::User(owner))
+    }
+
+    fn complete_batches(
+        batches: Vec<CheckerRecordBatch<Self::Ticket>>,
+        ledger: &mut LibraryEventLedger,
+        user_events: &mut EventStore,
+    ) -> Result<(), InjectedProfileError> {
+        for batch in batches {
+            let (owner, records) = batch.into_parts();
+            match owner {
+                PrivateCombinedRecordTicket::Library(owner) => ledger
+                    .complete(owner, records)
+                    .map_err(InjectedProfileError::Reporting)?,
+                PrivateCombinedRecordTicket::DisabledLibrary(_) => {}
+                PrivateCombinedRecordTicket::User(owner) => user_events
+                    .complete(owner, records)
+                    .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?,
+            }
+        }
+        Ok(())
+    }
+}
+
 fn compile_owned_injected_frontend(
+    frontend: CanonicalLibraryFrontend<'_, '_>,
+    replay_index_plan: ReplayIndexPlan,
+    record_retention: LibraryRecordRetention,
+    owner_site_storage_mode: OwnerSiteStorageMode,
+) -> Result<
+    (
+        InjectedProfileRun,
+        OwnedLibraryRuntimeState,
+        Option<std::sync::Arc<CollisionReplayPlan>>,
+    ),
+    InjectedProfileError,
+> {
+    if frontend.user_start.is_some() {
+        compile_owned_injected_frontend_for_route::<CompleteSourceRoute>(
+            frontend,
+            replay_index_plan,
+            record_retention,
+            owner_site_storage_mode,
+        )
+    } else {
+        compile_owned_injected_frontend_for_route::<LegacyLibraryRoute>(
+            frontend,
+            replay_index_plan,
+            record_retention,
+            owner_site_storage_mode,
+        )
+    }
+}
+
+fn validate_complete_source_user_units(
+    canonical_len: usize,
+    user_start: Option<usize>,
+    user_units: &[(ModuleOrdinal, UnitSlot)],
+) -> Result<(), InjectedProfileError> {
+    if user_start.is_some_and(|start| canonical_len.saturating_sub(start) != user_units.len()) {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "complete-source user identities do not match the parsed suffix".to_owned(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    if let Some((module_ordinal, _)) = user_units
+        .iter()
+        .find(|(module_ordinal, _)| !seen.insert(*module_ordinal))
+    {
+        return Err(InjectedProfileError::CanonicalProjection(format!(
+            "complete-source user module ordinal {} is duplicated",
+            module_ordinal.index()
+        )));
+    }
+    Ok(())
+}
+
+fn assemble_complete_source_user_results(
+    user_units: &[(ModuleOrdinal, UnitSlot)],
+    mut user_records: BTreeMap<ModuleOrdinal, Vec<CheckerRecord>>,
+) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
+    let mut results = Vec::with_capacity(user_units.len());
+    for (module_ordinal, unit_slot) in user_units {
+        let mut diagnostics = Vec::new();
+        let mut incomplete = Vec::new();
+        for record in user_records.remove(module_ordinal).unwrap_or_default() {
+            match record {
+                CheckerRecord::Diagnostic(diagnostic) => diagnostics.push(diagnostic),
+                CheckerRecord::Incomplete(record) => incomplete.push(record),
+            }
+        }
+        results.push(super::CheckResult {
+            module_ordinal: *module_ordinal,
+            unit_slot: *unit_slot,
+            diagnostics,
+            incomplete,
+        });
+    }
+    if let Some(module_ordinal) = user_records.keys().next() {
+        return Err(InjectedProfileError::CanonicalProjection(format!(
+            "complete-source retained records for unexpected user module ordinal {}",
+            module_ordinal.index()
+        )));
+    }
+    Ok(results)
+}
+
+fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     frontend: CanonicalLibraryFrontend<'_, '_>,
     replay_index_plan: ReplayIndexPlan,
     record_retention: LibraryRecordRetention,
@@ -6346,12 +7117,30 @@ fn compile_owned_injected_frontend(
         module_scopes,
         semantic_scopes,
         user_start,
+        user_units,
+        mut user_events,
+        combined_lexical_events,
+        mut external_effects,
+        module_placeholders,
         collision_root_provenance,
         #[cfg(any(test, feature = "test-utils"))]
         parse_elapsed,
         #[cfg(any(test, feature = "test-utils"))]
         bind_elapsed,
     } = frontend;
+    validate_complete_source_user_units(canonical.len(), user_start, &user_units)?;
+    let source_unit_for_index = |index: usize, input: &CanonicalInput<'_>| {
+        user_start
+            .and_then(|start| index.checked_sub(start))
+            .and_then(|user_index| user_units.get(user_index).copied())
+            .map_or_else(
+                || library_unit(input.file_ordinal),
+                |(module_ordinal, unit_slot)| SourceUnit::User {
+                    module_ordinal,
+                    unit_slot,
+                },
+            )
+    };
     #[cfg(any(test, feature = "test-utils"))]
     CANONICAL_FRONTEND_FULL_PRODUCTS.set(CANONICAL_FRONTEND_FULL_PRODUCTS.get().saturating_add(1));
     #[cfg(any(test, feature = "test-utils"))]
@@ -6363,27 +7152,27 @@ fn compile_owned_injected_frontend(
 
     #[cfg(any(test, feature = "test-utils"))]
     let reserve_fill_started = Instant::now();
-    let mut ledger = LibraryEventLedger::new_with_owner_site_storage(
-        matches!(record_retention, LibraryRecordRetention::Collect),
-        owner_site_storage_mode,
-    );
-    let mut lexical_events: LexicalReservations<LibraryRecordTicket> =
-        LexicalReservations::default();
-    for (index, (input, parsed)) in canonical.iter().zip(&parsed).enumerate() {
+    let retain_library_records = matches!(record_retention, LibraryRecordRetention::Collect);
+    let mut ledger = if replay_index_plan == ReplayIndexPlan::None {
+        LibraryEventLedger::new_without_replay(retain_library_records)
+    } else {
+        LibraryEventLedger::new_with_owner_site_storage(
+            retain_library_records,
+            owner_site_storage_mode,
+        )
+    };
+    let mut lexical_events = Route::lexical_events(combined_lexical_events)?;
+    for (index, (input, program)) in canonical.iter().zip(&parsed).enumerate() {
         if user_start.is_some_and(|user_start| index >= user_start) {
-            lexical_events
-                .reserve_continuation_library_program(
-                    input.file_ordinal,
-                    &parsed.program,
-                    ModuleBindingContext::for_program(&parsed.program, input.kind),
-                    &mut ledger,
-                )
-                .map_err(InjectedProfileError::Reporting)?;
-        } else {
-            lexical_events
-                .reserve_library_program(input.file_ordinal, &parsed.program, &mut ledger)
-                .map_err(InjectedProfileError::Reporting)?;
+            continue;
         }
+        Route::reserve_library_program(
+            &mut lexical_events,
+            input.file_ordinal,
+            program,
+            &mut ledger,
+        )
+        .map_err(InjectedProfileError::Reporting)?;
     }
 
     let mut interner = Interner::with_intrinsics();
@@ -6403,10 +7192,12 @@ fn compile_owned_injected_frontend(
     #[cfg(any(test, feature = "test-utils"))]
     let initial_class_id = next_class_id;
     let declaration_spans = super::ModuleDeclarationSpans::index(&binder);
-    for ((input, parsed), scope) in canonical
+    let mut combined_library_declarations = None;
+    for (index, ((input, program), scope)) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
+        .enumerate()
     {
         if user_start.is_some() && matches!(input.origin, CompilationOrigin::Library(_)) {
             reserve_type_decls_for_combined_library(
@@ -6419,34 +7210,81 @@ fn compile_owned_injected_frontend(
                     resolved: &mut type_resolved,
                 },
                 scope,
-                &parsed.program,
+                program,
+            );
+        } else if user_start.is_some() {
+            if combined_library_declarations.is_none() {
+                combined_library_declarations = Some(
+                    binder
+                        .declarations
+                        .iter()
+                        .filter(|declaration| {
+                            lexical_events
+                                .declaration_source(declaration.id)
+                                .is_some_and(|source| {
+                                    matches!(source.unit, SourceUnit::Library { .. })
+                                })
+                        })
+                        .map(|declaration| declaration.id)
+                        .collect::<rustc_hash::FxHashSet<_>>(),
+                );
+            }
+            let Some(library_declarations) = combined_library_declarations.as_ref() else {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    "complete-source library declaration provenance is missing".to_owned(),
+                ));
+            };
+            reserve_type_decls_for_combined_user(
+                super::decls::TypeDeclReservationState {
+                    interner: &mut interner,
+                    binder: &binder,
+                    next_type_param: &mut next_type_param,
+                    next_class_id: &mut next_class_id,
+                    decls: &mut type_decls,
+                    resolved: &mut type_resolved,
+                },
+                scope,
+                program,
+                library_declarations,
             );
         } else {
             reserve_type_decls(
                 &mut interner,
                 &binder,
                 scope,
-                &parsed.program,
+                program,
                 &mut next_type_param,
                 &mut next_class_id,
                 &mut type_decls,
                 &mut type_resolved,
             );
         }
-        lexical_events.attach_library_declaration_owners(
-            input.file_ordinal,
-            &binder,
-            scope,
-            &parsed.program,
-            &declaration_spans,
-        );
-        lexical_events.attach_library_class_bindings(
-            input.file_ordinal,
-            &binder,
-            scope,
-            &parsed.program,
-            &type_decls,
-        );
+        if let Some(user_index) = user_start.and_then(|start| index.checked_sub(start)) {
+            let Some((module_ordinal, _)) = user_units.get(user_index).copied() else {
+                return Err(InjectedProfileError::CanonicalProjection(
+                    "complete-source user unit identity is missing".to_owned(),
+                ));
+            };
+            Route::attach_user_owners(
+                &mut lexical_events,
+                module_ordinal,
+                &binder,
+                scope,
+                program,
+                &declaration_spans,
+                &type_decls,
+            )?;
+        } else {
+            Route::attach_library_owners(
+                &mut lexical_events,
+                input.file_ordinal,
+                &binder,
+                scope,
+                program,
+                &declaration_spans,
+                &type_decls,
+            );
+        }
     }
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
@@ -6481,13 +7319,50 @@ fn compile_owned_injected_frontend(
         .map_err(InjectedProfileError::Reporting)?;
     #[cfg(not(any(test, feature = "test-utils")))]
     let _ = &reporting_receipts;
-    let pending_tickets = lexical_events.library_semantic_tickets();
+    if user_start.is_some() {
+        enqueue_local_ambient_export_alias_diagnostics(
+            &binder,
+            &lexical_events,
+            &mut external_effects,
+        )
+        .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
+        enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects)
+            .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
+        enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)
+            .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
+    }
+    let mut decl_types = DeclTypes::new(binder.decl_count);
+    let error = interner.well_known().error;
+    for placeholders in &module_placeholders {
+        for placeholder in placeholders {
+            if let Some(decl_id) = placeholder.value {
+                decl_types.set(decl_id, error);
+            }
+        }
+    }
+    let user_declaration_contributors = binder
+        .declarations
+        .iter()
+        .filter(|declaration| {
+            lexical_events
+                .declaration_source(declaration.id)
+                .is_some_and(|source| matches!(source.unit, SourceUnit::User { .. }))
+        })
+        .map(|declaration| declaration.id)
+        .collect::<rustc_hash::FxHashSet<_>>();
+    let user_value_contributors = binder
+        .declarations
+        .iter()
+        .filter(|declaration| user_declaration_contributors.contains(&declaration.id))
+        .filter_map(|declaration| declaration.value_storage)
+        .collect::<rustc_hash::FxHashSet<ValueStorageId>>();
+    let pending_tickets = Route::pending_tickets(&lexical_events);
     let mut pass = build_pass_with_tickets(
         &mut interner,
         &binder,
         type_decls,
         type_resolved,
-        DeclTypes::new(binder.decl_count),
+        decl_types,
         next_type_param,
         PassReportingPlan {
             reporting: PassReporting {
@@ -6496,30 +7371,35 @@ fn compile_owned_injected_frontend(
                 suppress_effects: false,
             },
             pending_tickets,
-            ticket_key: library_record_ticket_key,
+            ticket_key: Route::ticket_key(),
         },
     );
+    if user_start.is_some() {
+        pass.install_early_native_array_groups(NativeArrayGroups::select_from_library_roots(
+            &collision_root_provenance,
+        ));
+    }
+    for effects in external_effects.into_values() {
+        let (owner, records) = effects.into_parts();
+        let mut combined = super::context::CheckerEffects::new(Route::user_ticket(owner)?);
+        for record in records {
+            combined.records.record(record);
+        }
+        pass.enqueue_effects(combined);
+    }
     pass.certified_library_values = certify_library_values(&collision_root_provenance);
-    if let Some(user_start) = user_start {
-        let user_modules = module_scopes[user_start..].to_vec();
-        let user_values = binder
-            .declarations
-            .iter()
-            .filter(|declaration| user_modules.contains(&declaration.site.module))
-            .filter_map(|declaration| declaration.value_storage)
-            .collect::<Vec<_>>();
+    if user_start.is_some() {
+        pass.combined_source_library_value_precedence = true;
         for group in collision_root_provenance
             .root_rows
             .iter()
             .filter_map(|row| row.ty)
         {
             let user_fragment = binder.type_groups.get(group).is_some_and(|group| {
-                group.fragments.iter().any(|fragment| {
-                    binder
-                        .declarations
-                        .get(fragment.declaration)
-                        .is_some_and(|declaration| user_modules.contains(&declaration.site.module))
-                })
+                group
+                    .fragments
+                    .iter()
+                    .any(|fragment| user_declaration_contributors.contains(&fragment.declaration))
             });
             if user_fragment {
                 pass.combined_user_library_type_groups.insert(group);
@@ -6529,36 +7409,52 @@ fn compile_owned_injected_frontend(
             let Some(library_participant) = row.value else {
                 continue;
             };
-            let Some(symbol) = pass
-                .resolve_value_replay(binder.compilation_global, &row.name)
-                .and_then(|symbol| binder.symbols.get(symbol))
+            let Some(symbol_id) = pass.resolve_value_replay(binder.compilation_global, &row.name)
             else {
                 continue;
             };
+            let Some(symbol) = binder.symbols.get(symbol_id) else {
+                continue;
+            };
+            if symbol.value.is_some_and(|current| {
+                current != library_participant && user_value_contributors.contains(&current)
+            }) {
+                pass.private_collision_value_winners
+                    .insert(symbol_id, library_participant);
+                pass.private_collision_value_winners_by_name
+                    .insert(row.name.clone(), library_participant);
+            }
             if symbol.function_values.len() > 1
                 && symbol.function_values.contains(&library_participant)
                 && symbol
                     .function_values
                     .iter()
-                    .any(|participant| user_values.contains(participant))
+                    .any(|participant| user_value_contributors.contains(participant))
             {
                 pass.function_group_precedence_tails_by_name
                     .insert(row.name.clone(), library_participant);
             }
         }
     }
-    let mut replay_trace_seed = ledger
-        .take_replay_trace_seed()
-        .map_err(InjectedProfileError::Reporting)?;
-    #[cfg(any(test, feature = "test-utils"))]
-    if FORCED_COLLISION_PLAN_FAILURE.get() == Some(ForcedCollisionPlanFailure::LateOwnerReservation)
-    {
-        let _late = ledger
-            .replay_reservation_domain()
+    if replay_index_plan == ReplayIndexPlan::None {
+        ledger
+            .seal_reporting_without_replay()
             .map_err(InjectedProfileError::Reporting)?;
+    } else {
+        let mut replay_trace_seed = ledger
+            .take_replay_trace_seed()
+            .map_err(InjectedProfileError::Reporting)?;
+        #[cfg(any(test, feature = "test-utils"))]
+        if FORCED_COLLISION_PLAN_FAILURE.get()
+            == Some(ForcedCollisionPlanFailure::LateOwnerReservation)
+        {
+            let _late = ledger
+                .replay_reservation_domain()
+                .map_err(InjectedProfileError::Reporting)?;
+        }
+        replay_trace_seed.extend_owner_sites(pass.lexical_events.take_collision_owner_sites());
+        pass.replay_trace = Some(ReplayDependencyTrace::new(replay_trace_seed));
     }
-    replay_trace_seed.extend_owner_sites(pass.lexical_events.take_collision_owner_sites());
-    pass.replay_trace = Some(ReplayDependencyTrace::new(replay_trace_seed));
     pass.capture_compact_replay_dependencies = replay_index_plan != ReplayIndexPlan::None;
 
     let declaration_count = pass.type_decls.len();
@@ -6572,19 +7468,20 @@ fn compile_owned_injected_frontend(
         .iter()
         .copied()
         .zip(parsed.iter())
-        .map(|(scope, parsed)| (scope, parsed.program.body.as_slice()))
+        .map(|(scope, program)| (scope, program.body.as_slice()))
         .collect::<Vec<_>>();
     if let Some(user_start) = user_start {
-        for ((scope, parsed), input) in module_scopes
+        for (index, ((scope, program), input)) in module_scopes
             .iter()
             .copied()
             .zip(&parsed)
             .zip(&canonical)
+            .enumerate()
             .skip(user_start)
         {
             pass.current_module = scope;
-            pass.current_source = library_unit(input.file_ordinal);
-            pass.reserve_local_type_annotation_surfaces(scope, &parsed.program.body);
+            pass.current_source = source_unit_for_index(index, input);
+            pass.reserve_local_type_annotation_surfaces(scope, &program.body);
         }
     }
     pass.combined_user_source = user_start.is_some();
@@ -6618,9 +7515,9 @@ fn compile_owned_injected_frontend(
     #[cfg(any(test, feature = "test-utils"))]
     let lexical_source_units = pass
         .lexical_events
-        .library_lexical_evidence()
-        .iter()
-        .copied()
+        .retained_source_units()
+        .into_iter()
+        .filter(|unit| matches!(unit, crate::source::SourceUnit::Library { .. }))
         .collect::<Vec<_>>();
     #[cfg(any(test, feature = "test-utils"))]
     let publication_validation_elapsed = publication_validation_started.elapsed();
@@ -6629,8 +7526,8 @@ fn compile_owned_injected_frontend(
     let statement_check_started = Instant::now();
     let mut pass_source_units = Vec::with_capacity(canonical.len());
     let mut mixed_semantic_identities = None;
-    let mut mixed_global_object_type = None;
     let mut user_global_contributors = Vec::new();
+    let mut user_global_contributor_names = Vec::new();
     if let Some(user_start) = user_start {
         let identities = LibrarySemanticIdentities::select_from_library_roots(
             &collision_root_provenance,
@@ -6643,9 +7540,8 @@ fn compile_owned_injected_frontend(
             intern_compiled_global_object(pass, &collision_root_provenance, &[])
         });
         pass.global_object_type = Some(base_global_object);
-        mixed_global_object_type = Some(base_global_object);
 
-        for (((user_input, user_parsed), _user_module), semantic_scope) in canonical
+        for (((user_input, user_program), _user_module), semantic_scope) in canonical
             .iter()
             .zip(&parsed)
             .zip(module_scopes.iter().copied())
@@ -6653,22 +7549,25 @@ fn compile_owned_injected_frontend(
             .skip(user_start)
         {
             let census = source_global_binding_census_with_provenance(
-                &user_parsed.program,
-                ModuleBindingContext::for_program(&user_parsed.program, user_input.kind),
+                user_program,
+                ModuleBindingContext::for_program(user_program, user_input.kind),
             );
+            let mut contributor_names = rustc_hash::FxHashSet::default();
             for (name, candidate) in census.census.candidates {
-                if !candidate.global_object_contributor {
+                if name == "globalThis" || !candidate.global_object_contributor {
                     continue;
                 }
+                contributor_names.insert(name.clone());
                 let Some(storage) = pass.value_decl_id_replay(semantic_scope, &name) else {
                     continue;
                 };
                 user_global_contributors.push((name, storage));
             }
+            user_global_contributor_names.push(contributor_names);
         }
     }
     let mut surfaces = Vec::with_capacity(canonical.len());
-    for (index, (((input, parsed), module), semantic_scope)) in canonical
+    for (index, (((input, program), module), semantic_scope)) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
@@ -6677,13 +7576,14 @@ fn compile_owned_injected_frontend(
     {
         pass.combined_user_source = user_start.is_some_and(|user_start| index >= user_start);
         pass.current_module = module;
-        pass.current_source = library_unit(input.file_ordinal);
-        let reserved = pass.reserve_function_surfaces(semantic_scope, &parsed.program.body);
-        pass.reserve_var_annotation_surfaces(semantic_scope, &parsed.program.body);
+        pass.current_source = source_unit_for_index(index, input);
+        let mut reserved = pass.reserve_function_surfaces(semantic_scope, &program.body);
+        pass.reserve_var_annotation_surfaces(semantic_scope, &program.body);
+        pass.reserve_continuation_global_augmentation_surfaces(&program.body, &mut reserved);
         surfaces.push(reserved);
     }
     pass.combined_user_source = false;
-    if user_start.is_some() {
+    if let Some(user_start) = user_start {
         let global_object = pass.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
             intern_compiled_global_object(
                 pass,
@@ -6692,9 +7592,22 @@ fn compile_owned_injected_frontend(
             )
         });
         pass.global_object_type = Some(global_object);
-        mixed_global_object_type = Some(global_object);
+        pass.refresh_user_global_object(
+            canonical
+                .iter()
+                .zip(&parsed)
+                .zip(module_scopes.iter().copied())
+                .skip(user_start)
+                .map(|((input, program), module)| {
+                    (
+                        module,
+                        *program,
+                        ModuleBindingContext::for_program(program, input.kind),
+                    )
+                }),
+        );
     }
-    for (index, ((((input, unit_parsed), module), semantic_scope), mut reserved)) in canonical
+    for (index, ((((input, program), module), semantic_scope), mut reserved)) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
@@ -6706,17 +7619,31 @@ fn compile_owned_injected_frontend(
             pass.combined_user_source = true;
         }
         pass.current_module = module;
-        pass.current_source = library_unit(input.file_ordinal);
+        pass.current_source = source_unit_for_index(index, input);
         pass_source_units.push(pass.current_source);
-        pass.build_flow_graph(semantic_scope, &unit_parsed.program.body);
+        pass.build_flow_graph(semantic_scope, &program.body);
         let mut no_return = None;
-        pass.check_statement_list_with_surfaces(
-            semantic_scope,
-            &unit_parsed.program.body,
-            None,
-            &mut no_return,
-            &mut reserved,
-        );
+        if let Some(contributor_names) = user_start
+            .and_then(|start| index.checked_sub(start))
+            .and_then(|user_index| user_global_contributor_names.get(user_index))
+        {
+            pass.check_statement_list_with_global_contributors(
+                semantic_scope,
+                &program.body,
+                None,
+                &mut no_return,
+                &mut reserved,
+                contributor_names,
+            );
+        } else {
+            pass.check_statement_list_with_surfaces(
+                semantic_scope,
+                &program.body,
+                None,
+                &mut no_return,
+                &mut reserved,
+            );
+        }
     }
     let batches = finish_semantic_effects(&mut pass);
     let semantic_identities = mixed_semantic_identities.unwrap_or_else(|| {
@@ -6741,19 +7668,49 @@ fn compile_owned_injected_frontend(
         pass.interner.store(),
         &pass.namespace_values,
     );
-    LibrarySemanticReportingAdapter::new(&mut ledger)
-        .complete_semantic_batches(batches)
-        .map_err(InjectedProfileError::Reporting)?;
-    let global_object_type = Some(mixed_global_object_type.unwrap_or_else(|| {
-        pass.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
+    Route::complete_batches(batches, &mut ledger, &mut user_events)?;
+    let global_object_type = pass.global_object_type.or_else(|| {
+        Some(pass.with_replay_owner(ReplayOwner::GlobalObject, |pass| {
             intern_compiled_global_object(pass, &collision_root_provenance, &[])
-        })
-    }));
+        }))
+    });
     let snapshot = ledger.snapshot();
-    let ledger_output = ledger
-        .finish_with_fingerprints()
-        .map_err(InjectedProfileError::Reporting)?;
+    let ledger_output = if replay_index_plan == ReplayIndexPlan::None {
+        super::events_library::LibraryEventLedgerOutput {
+            records: ledger.finish().map_err(InjectedProfileError::Reporting)?,
+            fingerprints: Vec::new(),
+        }
+    } else {
+        ledger
+            .finish_with_fingerprints()
+            .map_err(InjectedProfileError::Reporting)?
+    };
     let library_records = ledger_output.records;
+    let user_records = user_events
+        .finish()
+        .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?
+        .into_iter()
+        .fold(
+            BTreeMap::<ModuleOrdinal, Vec<_>>::new(),
+            |mut records, (key, record)| {
+                records.entry(key.module_ordinal).or_default().push(record);
+                records
+            },
+        );
+    let user_results = assemble_complete_source_user_results(&user_units, user_records)?;
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(library_count) = user_start {
+        let evidence_sources = canonical[..library_count]
+            .iter()
+            .map(|input| InjectedLibrarySource {
+                file_ordinal: input.file_ordinal,
+                name: "",
+                source: input.source,
+            })
+            .collect::<Vec<_>>();
+        let evidence = canonical_library_evidence_for_test(&evidence_sources, &library_records)?;
+        record_complete_source_evidence_for_test(evidence);
+    }
     let replay_baselines = ledger_output
         .fingerprints
         .into_iter()
@@ -6770,32 +7727,38 @@ fn compile_owned_injected_frontend(
         .namespace_values
         .try_freeze_terminals()
         .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
-    let replay_trace = pass.replay_trace.take().ok_or_else(|| {
-        InjectedProfileError::CanonicalProjection(
+    let mut replay_trace = pass.replay_trace.take();
+    if replay_index_plan != ReplayIndexPlan::None && replay_trace.is_none() {
+        return Err(InjectedProfileError::CanonicalProjection(
             "source library compilation lost its replay trace".to_owned(),
-        )
-    })?;
+        ));
+    }
     let compact_only_replay_edges = pass.compact_only_replay_edges.borrow().clone();
     if replay_index_plan == ReplayIndexPlan::Assemble {
-        replay_trace.remove_direct_dependencies(&compact_only_replay_edges);
+        if let Some(trace) = replay_trace.as_ref() {
+            trace.remove_direct_dependencies(&compact_only_replay_edges);
+        }
     }
     #[cfg(any(test, feature = "test-utils"))]
-    match FORCED_COLLISION_PLAN_FAILURE.get() {
-        Some(ForcedCollisionPlanFailure::UnownedTypedReference) => {
-            let observation = replay_trace.observe_typed_demand("forced-unowned-typed-reference");
-            drop(observation);
+    if let Some(replay_trace) = replay_trace.as_ref() {
+        match FORCED_COLLISION_PLAN_FAILURE.get() {
+            Some(ForcedCollisionPlanFailure::UnownedTypedReference) => {
+                let observation =
+                    replay_trace.observe_typed_demand("forced-unowned-typed-reference");
+                drop(observation);
+            }
+            Some(ForcedCollisionPlanFailure::RawSemanticAccess) => {
+                replay_trace.record_raw_semantic_access();
+            }
+            Some(ForcedCollisionPlanFailure::ForbiddenProjection) => {
+                let _ = snapshot_namespace_terminals_for_replay(&namespace_terminals)?;
+            }
+            Some(
+                ForcedCollisionPlanFailure::EventCaptureCorruption
+                | ForcedCollisionPlanFailure::LateOwnerReservation,
+            ) => {}
+            None => {}
         }
-        Some(ForcedCollisionPlanFailure::RawSemanticAccess) => {
-            replay_trace.record_raw_semantic_access();
-        }
-        Some(ForcedCollisionPlanFailure::ForbiddenProjection) => {
-            let _ = snapshot_namespace_terminals_for_replay(&namespace_terminals)?;
-        }
-        Some(
-            ForcedCollisionPlanFailure::EventCaptureCorruption
-            | ForcedCollisionPlanFailure::LateOwnerReservation,
-        ) => {}
-        None => {}
     }
     let super::context::Pass {
         type_environment,
@@ -6837,6 +7800,11 @@ fn compile_owned_injected_frontend(
         .then_some(semantic_identities.clone());
     let (replay_index, collision_plan) = match replay_index_plan {
         ReplayIndexPlan::Assemble => {
+            let replay_trace = replay_trace.take().ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "full replay assembly lost its source trace".to_owned(),
+                )
+            })?;
             let namespace_terminal_rows =
                 snapshot_namespace_terminals_for_replay(&runtime.namespace_terminals)?;
             let runtime_parts = runtime
@@ -6913,6 +7881,11 @@ fn compile_owned_injected_frontend(
         }
         // The production path consumes the one live source trace directly into the compact plan.
         ReplayIndexPlan::Deferred => {
+            let replay_trace = replay_trace.take().ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection(
+                    "deferred replay plan lost its source trace".to_owned(),
+                )
+            })?;
             let forbidden_work = collision_plan_work_scope.finish();
             let prefix_cardinalities = [
                 interner.store().len(),
@@ -6940,7 +7913,7 @@ fn compile_owned_injected_frontend(
         }
         ReplayIndexPlan::None => {
             let _ = collision_plan_work_scope.finish();
-            drop(replay_trace);
+            debug_assert!(replay_trace.is_none());
             (None, None)
         }
     };
@@ -6995,6 +7968,7 @@ fn compile_owned_injected_frontend(
             LibraryRecordRetention::Drop => Vec::new(),
             LibraryRecordRetention::Collect => library_records,
         },
+        user_results,
         #[cfg(any(test, feature = "test-utils"))]
         pass_source_units,
         #[cfg(any(test, feature = "test-utils"))]
@@ -7767,11 +8741,11 @@ fn type_probe(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn collect_value_probes(
+fn collect_value_probes<Ticket: Copy>(
     binder: &Binder,
     decl_types: &DeclTypes,
     store: &Store,
-    namespace_values: &NamespaceValueRegistry<LibraryRecordTicket>,
+    namespace_values: &NamespaceValueRegistry<Ticket>,
 ) -> BTreeMap<String, ValueProbe> {
     let mut probes = BTreeMap::new();
     for (symbol_id, symbol) in binder.symbols.iter() {
@@ -7798,11 +8772,11 @@ fn collect_value_probes(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn value_probe_for_symbol(
+fn value_probe_for_symbol<Ticket: Copy>(
     binder: &Binder,
     decl_types: &DeclTypes,
     store: &Store,
-    namespace_values: &NamespaceValueRegistry<LibraryRecordTicket>,
+    namespace_values: &NamespaceValueRegistry<Ticket>,
     owner_scope: ScopeId,
     symbol_id: SymbolId,
 ) -> Option<ValueProbe> {
@@ -8235,6 +9209,99 @@ mod tests {
     use crate::check::checker::type_groups::PublishedTypeGroup;
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
+
+    #[test]
+    fn frozen_base_receipt_tracks_the_successful_central_freeze() {
+        let (_, mut state) = compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "freeze-receipt.d.ts",
+            source: "interface FreezeReceipt { value: string }",
+        }])
+        .expect("freeze receipt fixture compiles");
+        let scope = CompleteSourceRouteWorkScopeForTest::start();
+
+        state
+            .freeze_as_library_base()
+            .expect("runtime state freezes through the central operation");
+
+        let work = scope.finish();
+        assert_eq!(work.frozen_base_seals, 1);
+        assert_eq!(work.semantic_publications, 0);
+        assert_eq!(work.replay_trace_constructions, 0);
+        assert_eq!(work.replay_plan_constructions, 0);
+    }
+
+    #[test]
+    fn semantic_publication_receipt_tracks_the_actual_publish_entry() {
+        let scope = CompleteSourceRouteWorkScopeForTest::start();
+
+        compile_owned_injected_profile(&[InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "publication-receipt.d.ts",
+            source: "interface PublicationReceipt { value: string }",
+        }])
+        .expect("publication receipt fixture compiles");
+
+        let work = scope.finish();
+        assert_eq!(work.semantic_publications, 1);
+        assert_eq!(work.replay_plan_constructions, 0);
+        assert_eq!(work.frozen_base_seals, 0);
+    }
+
+    #[test]
+    fn replay_receipts_track_the_central_trace_and_plan_entries() {
+        let scope = CompleteSourceRouteWorkScopeForTest::start();
+
+        ReplayDependencyTrace::default()
+            .finish_compact_plan(
+                Vec::new(),
+                Vec::new(),
+                [0; 9],
+                CollisionReplayConstructionEvidence::default(),
+            )
+            .expect("empty replay plan is structurally valid");
+
+        let work = scope.finish();
+        assert_eq!(work.replay_trace_constructions, 1);
+        assert_eq!(work.replay_plan_constructions, 1);
+        assert_eq!(work.semantic_publications, 0);
+        assert_eq!(work.frozen_base_seals, 0);
+    }
+
+    #[test]
+    fn complete_source_user_unit_validation_rejects_duplicate_module_ordinals() {
+        let duplicate = ModuleOrdinal::new(4);
+        let error = validate_complete_source_user_units(
+            3,
+            Some(1),
+            &[(duplicate, UnitSlot::new(0)), (duplicate, UnitSlot::new(1))],
+        )
+        .expect_err("duplicate user module ordinal must fail closed");
+
+        assert_eq!(
+            error,
+            InjectedProfileError::CanonicalProjection(
+                "complete-source user module ordinal 4 is duplicated".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn complete_source_result_assembly_rejects_unexpected_module_records() {
+        let unexpected = ModuleOrdinal::new(9);
+        let error = assemble_complete_source_user_results(
+            &[(ModuleOrdinal::new(2), UnitSlot::new(0))],
+            BTreeMap::from([(unexpected, Vec::new())]),
+        )
+        .expect_err("unexpected user module records must fail closed");
+
+        assert_eq!(
+            error,
+            InjectedProfileError::CanonicalProjection(
+                "complete-source retained records for unexpected user module ordinal 9".to_owned()
+            )
+        );
+    }
 
     #[test]
     fn canonical_property_key_bytes_pin_symbol_discriminants() {

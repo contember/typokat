@@ -1217,6 +1217,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 
     pub(in crate::check::checker) fn publish_type_groups(&mut self) -> TypeGroupPublicationOutcome {
+        #[cfg(any(test, feature = "test-utils"))]
+        super::library_compiler::record_complete_source_publication_entry_for_test();
         let owned_parameters: Vec<TypeParamId> = self
             .type_decls
             .changed_entries()

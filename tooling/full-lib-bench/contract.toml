@@ -6,7 +6,8 @@ forbidden_flags = ["--noLib", "--skipLibCheck", "--skipDefaultLibCheck", "--noCh
 
 [provider_probe]
 args = ["library-info", "--format", "json"]
-schema = 1
+schema = 2
+check_route = "production-complete-source-once"
 provider_route = "production-default-library"
 
 [profile]

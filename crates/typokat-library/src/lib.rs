@@ -64,6 +64,40 @@ pub const fn embedded_library_profile_metadata() -> EmbeddedLibraryProfileMetada
     }
 }
 
+/// Load the exact packaged source profile for a same-run complete-source compiler.
+#[doc(hidden)]
+pub fn packaged_library_source_inputs(
+) -> Result<Vec<typokat_frontend::frontend::AuxiliarySourceInput>, LibraryInitError> {
+    typokat_check::check::checker::library_compiler::record_complete_source_profile_load_for_test();
+    let profile = profile::ExactLibraryProfile::load_packaged().map_err(|error| {
+        LibraryInitError::new(
+            LibraryInitStage::ProfileLoad,
+            LibraryInitCause::ProfileRejected {
+                message: error.to_string(),
+            },
+        )
+    })?;
+    profile
+        .sources()
+        .iter()
+        .map(|source| {
+            let text = std::str::from_utf8(source.bytes()).map_err(|_| {
+                LibraryInitError::new(
+                    LibraryInitStage::ProfileLoad,
+                    LibraryInitCause::ProfileRejected {
+                        message: format!("library source {:?} is not UTF-8", source.name()),
+                    },
+                )
+            })?;
+            Ok(typokat_frontend::frontend::AuxiliarySourceInput {
+                source_ordinal: source.ordinal().index(),
+                name: source.name().to_owned(),
+                source: text.to_owned(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod user_delta_spec;
 

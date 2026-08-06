@@ -1282,14 +1282,42 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.panic_before_cycle_tainted_application_cache_publish = true;
     }
 
-    /// The native-array declaration identities of the installed library, or an empty
-    /// set on the prelude path (where no library identities are installed).
+    /// The published identities, or their construction-only exact library-root roles.
     pub(in crate::check::checker) fn native_array_groups(&self) -> NativeArrayGroups {
-        self.library_semantic_identities
-            .as_ref()
-            .map_or_else(NativeArrayGroups::default, |identities| {
-                identities.native_array_groups()
-            })
+        let Some(source) = self.early_native_array_root_source else {
+            return self
+                .library_semantic_identities
+                .as_ref()
+                .map_or_else(NativeArrayGroups::default, |identities| {
+                    identities.native_array_groups()
+                });
+        };
+        self.native_array_groups_for_source(source)
+    }
+
+    pub(in crate::check::checker) fn native_array_groups_for_source(
+        &self,
+        source: crate::source::SourceUnit,
+    ) -> NativeArrayGroups {
+        if let Some(identities) = self.library_semantic_identities.as_ref() {
+            return identities.native_array_groups();
+        }
+        if matches!(source, crate::source::SourceUnit::User { .. }) {
+            return self.early_native_array_groups.unwrap_or_default();
+        }
+        NativeArrayGroups::default()
+    }
+
+    pub(in crate::check::checker) fn with_explicit_native_array_source<R>(
+        &mut self,
+        source: Option<crate::source::SourceUnit>,
+        produce: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous_source = self.early_native_array_root_source;
+        self.early_native_array_root_source = source;
+        let result = produce(self);
+        self.early_native_array_root_source = previous_source;
+        result
     }
 
     /// `Array<E>` / `ReadonlyArray<E>` lowered to the intrinsic array type they name.

@@ -43,8 +43,8 @@ MAX_RSS_RATIO = 1.25
 PROFILE_SHA256 = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
 
 FROZEN_DIGESTS = {
-    "collector_sha256": "72038536ed20541e2245a887aeb842957f4fb75e1a507bc5e1dae1b3b9134a13",
-    "contract_sha256": "8f86a78d6c8e0b4427cba7044180567dd776ba91a881268516798b2baffe0b22",
+    "collector_sha256": "dc4e610d60e1eb4c1a41f90f9158d14b6571156e3129d3273b9f876efbc298dd",
+    "contract_sha256": "7162d237cdfaf55dae562979ed76df6567b172db23165eb586d0912a6a974acb",
     "libraries_sha256": "eb9c05d9e53c95c1690a986c3bc5367d0f16dcf466e39e20712cfb443cc8f675",
     "workloads_sha256": "71372ae0c63f9b393f2f383ee3a15aae54a2fd25f8752b18fc296256a9955b6a",
     "oracles_sha256": "1b1297705791cd4702e3512561b5312c56477d63f8f4e5c14011562a74d220c8",
@@ -206,13 +206,14 @@ def verify_references() -> dict[str, object]:
 def validate_production_info(value: Any) -> None:
     observed = _exact_keys(
         value,
-        {"schema", "profile_sha256", "file_count", "provider_route"},
+        {"schema", "profile_sha256", "file_count", "check_route", "provider_route"},
         "production route probe",
     )
     expected = {
-        "schema": 1,
+        "schema": 2,
         "profile_sha256": PROFILE_SHA256,
         "file_count": 82,
+        "check_route": "production-complete-source-once",
         "provider_route": "production-default-library",
     }
     _int(observed["schema"], "production route probe schema", minimum=1)

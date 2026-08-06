@@ -75,7 +75,7 @@ class ContractTests(unittest.TestCase):
             boolean_schema = Path(temporary) / "boolean-schema.toml"
             boolean_schema.write_text(
                 source.replace(
-                    'args = ["library-info", "--format", "json"]\nschema = 1',
+                    'args = ["library-info", "--format", "json"]\nschema = 2',
                     'args = ["library-info", "--format", "json"]\nschema = true',
                     1,
                 ),
@@ -431,9 +431,10 @@ class ContractTests(unittest.TestCase):
 
     def test_wrong_provider_probe_is_rejected(self) -> None:
         observed = {
-            "schema": 1,
+            "schema": 2,
             "profile_sha256": self.contract["profile"]["length_framed_sha256"],
             "file_count": 82,
+            "check_route": self.contract["provider_probe"]["check_route"],
             "provider_route": "test-only-provider",
         }
         with self.assertRaisesRegex(bench.ContractError, "provider route differs"):
@@ -444,6 +445,7 @@ class ContractTests(unittest.TestCase):
             "schema": True,
             "profile_sha256": self.contract["profile"]["length_framed_sha256"],
             "file_count": 82,
+            "check_route": self.contract["provider_probe"]["check_route"],
             "provider_route": self.contract["provider_probe"]["provider_route"],
         }
         with self.assertRaisesRegex(bench.ContractError, "not bool"):

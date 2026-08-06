@@ -9,7 +9,7 @@ type ProductionProjectResult = Result<Vec<FileReport>, DriverError>;
 type ProductionProjectCheck = fn(Vec<FileInput>) -> ProductionProjectResult;
 
 // The generic IO core must remain instantiated by this exact production callback shape.
-const _: ProductionProjectCheck = typokat::driver::check_project;
+const _: ProductionProjectCheck = typokat::driver::check_project_once;
 
 #[derive(Debug)]
 struct InjectedProviderError;

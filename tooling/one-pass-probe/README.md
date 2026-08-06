@@ -60,7 +60,7 @@ The frozen rows are `fast-clean`, `fast-errors`, `collision`, and `fanout`. The 
 Production JSON has exactly these keys:
 
 ```json
-{"schema":1,"profile_sha256":"<frozen profile>","file_count":82,"provider_route":"production-default-library"}
+{"schema":2,"profile_sha256":"<frozen profile>","file_count":82,"check_route":"production-complete-source-once","provider_route":"production-default-library"}
 ```
 
 One-pass JSON has exactly these keys:

@@ -3449,17 +3449,40 @@ impl Binder {
     pub fn local_standalone_namespace_value_attachments(
         &self,
     ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
-        self.namespaces
+        let namespaces = self
+            .namespaces
             .namespaces
             .changed_iter()
-            .map(|(_, namespace)| &namespace.id)
+            .map(|(_, namespace)| namespace.id)
             .inspect(|_| {
                 #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_attachment_namespace_row();
             })
+            .collect::<Vec<_>>();
+        self.standalone_namespace_value_attachments_for(namespaces)
+    }
+
+    pub fn all_standalone_namespace_value_attachments(
+        &self,
+    ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
+        let namespaces = self
+            .namespaces
+            .namespaces
+            .iter()
+            .map(|namespace| namespace.id)
+            .collect::<Vec<_>>();
+        self.standalone_namespace_value_attachments_for(namespaces)
+    }
+
+    fn standalone_namespace_value_attachments_for(
+        &self,
+        namespaces: Vec<NamespaceId>,
+    ) -> Vec<StandaloneNamespaceValueAttachment<'_>> {
+        namespaces
+            .into_iter()
             .filter_map(|namespace| {
-                let storage = self.namespaces.standalone_value_storage(*namespace)?;
-                let root = self.namespaces.get(*namespace)?;
+                let storage = self.namespaces.standalone_value_storage(namespace)?;
+                let root = self.namespaces.get(namespace)?;
                 let fragments = root
                     .fragments
                     .iter()
@@ -3537,7 +3560,7 @@ impl Binder {
                     });
                 }
                 Some(StandaloneNamespaceValueAttachment {
-                    namespace: *namespace,
+                    namespace,
                     storage,
                     symbol: root.symbol,
                     fragments,
@@ -3927,13 +3950,29 @@ impl Binder {
     }
 
     pub fn local_ambient_export_alias_failures(&self) -> Vec<LocalAmbientExportAliasFailure> {
-        self.namespaces
+        let members = self
+            .namespaces
             .members
             .local_iter()
             .inspect(|_| {
                 #[cfg(any(test, feature = "test-utils"))]
                 record_continuation_ambient_alias_member_row();
             })
+            .collect::<Vec<_>>();
+        self.ambient_export_alias_failures_for(members)
+    }
+
+    pub fn all_ambient_export_alias_failures(&self) -> Vec<LocalAmbientExportAliasFailure> {
+        let members = self.namespaces.members.iter().collect::<Vec<_>>();
+        self.ambient_export_alias_failures_for(members)
+    }
+
+    fn ambient_export_alias_failures_for(
+        &self,
+        members: Vec<&NamespaceMember>,
+    ) -> Vec<LocalAmbientExportAliasFailure> {
+        members
+            .into_iter()
             .filter(|member| {
                 matches!(member.owner, NamespaceMemberOwner::Fragment(_))
                     && member.kind == MergeDeclarationKind::DeferredExport

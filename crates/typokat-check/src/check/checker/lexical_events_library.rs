@@ -1,8 +1,9 @@
 //! Test-only library-domain adapter for the shared lexical reservation walk.
 
+use super::events_library::LibraryRecordTicket;
 use super::events_library::{
-    LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryRecordTicket,
-    LibraryReplayReservationDomain, LibraryReservedEvent,
+    LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError, LibraryReplayReservationDomain,
+    LibraryReservedEvent,
 };
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations, SourceSite};
 use super::replay_index::CollisionReplayEventPhase;
@@ -18,11 +19,11 @@ pub(crate) const fn library_unit(file_ordinal: LibraryFileOrdinal) -> ExactUnit 
     SourceUnit::Library { file_ordinal }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LibraryLexicalEvidence(Vec<SourceUnit>);
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 impl LibraryLexicalEvidence {
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
@@ -159,39 +160,13 @@ impl LexicalReservations<LibraryRecordTicket> {
         Ok(())
     }
 
-    pub(crate) fn reserve_continuation_library_program(
-        &mut self,
-        file_ordinal: LibraryFileOrdinal,
-        program: &Program<'_>,
-        context: crate::binder::namespace::ModuleBindingContext,
-        ledger: &mut LibraryEventLedger,
-    ) -> Result<(), LibraryEventLedgerError> {
-        let mut allocator = LibraryReservationAllocator {
-            file_ordinal,
-            reservations: ledger.replay_reservation_domain()?,
-        };
-        self.reserve_continuation_program_with(program, context, &mut allocator)?;
-        let source = SourceSite {
-            unit: allocator.source_unit(),
-            source_start: program.span.start,
-        };
-        let (_, owner) = allocator.reserve_event(source.source_start);
-        allocator.record_owner_site(
-            owner,
-            crate::span::Span::from_oxc(program.span),
-            CollisionReplayEventPhase::Immediate,
-        );
-        self.retain_source_anchor(source, owner);
-        Ok(())
-    }
-
     pub(crate) fn library_semantic_tickets(&self) -> Vec<LibraryRecordTicket> {
         let mut tickets = self.source_anchor_tickets();
         tickets.extend(self.tickets());
         tickets
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     pub(crate) fn library_lexical_evidence(&self) -> LibraryLexicalEvidence {
         LibraryLexicalEvidence(self.retained_source_units())
     }
@@ -235,6 +210,32 @@ impl LexicalReservations<LibraryRecordTicket> {
 }
 
 impl LexicalReservations<PrivateCombinedRecordTicket> {
+    pub(crate) fn reserve_complete_library_program(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        program: &Program<'_>,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError> {
+        let mut allocator = PrivateCombinedLibraryReservationAllocator {
+            file_ordinal,
+            reservations: ledger.replay_reservation_domain()?,
+            omitted_owner: None,
+        };
+        self.reserve_program_with(program, &mut allocator)?;
+        let source = SourceSite {
+            unit: allocator.source_unit(),
+            source_start: program.span.start,
+        };
+        let (_, owner) = allocator.reserve_event(source.source_start);
+        allocator.record_owner_site(
+            owner,
+            crate::span::Span::from_oxc(program.span),
+            CollisionReplayEventPhase::Immediate,
+        );
+        self.retain_source_anchor(source, owner);
+        Ok(())
+    }
+
     pub(crate) fn reserve_private_library_program(
         &mut self,
         file_ordinal: LibraryFileOrdinal,
@@ -248,6 +249,43 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             omitted_owner,
         };
         self.reserve_program_with(program, &mut allocator)
+    }
+
+    pub(crate) fn attach_complete_library_declaration_owners(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        spans: &ModuleDeclarationSpans,
+    ) {
+        attach_type_decl_owners(
+            self,
+            SourceOrdinal::Library(file_ordinal),
+            binder,
+            scope,
+            program,
+            spans,
+        );
+    }
+
+    pub(in crate::check::checker) fn attach_complete_library_class_bindings(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        binder: &Binder,
+        scope: ScopeId,
+        program: &Program<'_>,
+        declarations: &super::context::TypeDeclTable<'_>,
+    ) {
+        attach_class_bindings(
+            self,
+            SourceOrdinal::Library(file_ordinal),
+            binder,
+            scope,
+            program,
+            declarations,
+            None,
+        );
     }
 }
 

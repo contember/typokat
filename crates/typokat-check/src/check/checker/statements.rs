@@ -1577,8 +1577,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .get(identifier.name.as_str())
                 .copied()
                 .filter(|winner| {
-                    self.private_collision_affected
-                        .contains(&ReplayOwner::Value(*winner))
+                    self.combined_source_library_value_precedence
+                        || self
+                            .private_collision_affected
+                            .contains(&ReplayOwner::Value(*winner))
                 })
                 .unwrap_or(decl_id),
             _ => decl_id,
@@ -1630,8 +1632,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .get(identifier.name.as_str())
                 .copied()
                 .filter(|winner| {
-                    self.private_collision_affected
-                        .contains(&ReplayOwner::Value(*winner))
+                    self.combined_source_library_value_precedence
+                        || self
+                            .private_collision_affected
+                            .contains(&ReplayOwner::Value(*winner))
                 })
                 .unwrap_or(decl_id),
             _ => decl_id,

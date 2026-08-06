@@ -2023,6 +2023,8 @@ impl ReplayDependencyTrace {
         }
     }
     pub fn new(seed: ReplayTraceSeed) -> Self {
+        #[cfg(any(test, feature = "test-utils"))]
+        super::library_compiler::record_replay_trace_construction_for_test();
         Self {
             state: Rc::new(RefCell::new(ReplayTraceState::new(seed))),
         }
@@ -2239,6 +2241,8 @@ impl ReplayDependencyTrace {
         prefix_cardinalities: [usize; 9],
         mut construction: CollisionReplayConstructionEvidence,
     ) -> Result<CollisionReplayPlan, ReplayIndexGenerationError> {
+        #[cfg(any(test, feature = "test-utils"))]
+        super::library_compiler::record_replay_plan_construction_for_test();
         let state = Rc::try_unwrap(self.state)
             .map_err(|_| ReplayIndexGenerationError::SharedTraceAtFinalization)?
             .into_inner();

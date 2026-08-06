@@ -711,7 +711,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Vec<SurfaceTypeFailure<Ticket>>,
     ) {
         let error = self.interner.well_known().error;
-        let native_array_groups = self.native_array_groups();
+        let native_array_groups = self.native_array_groups_for_source(self.current_source);
         let source = source_ordinal(self.current_source);
         let replay_trace = self.replay_trace.clone();
         let (result, child_failures, application_checks) = {
@@ -754,7 +754,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Vec<SurfaceTypeFailure<Ticket>>,
     ) {
         let error = self.interner.well_known().error;
-        let native_array_groups = self.native_array_groups();
+        let native_array_groups = self.native_array_groups_for_source(self.current_source);
         let source = source_ordinal(self.current_source);
         let replay_trace = self.replay_trace.clone();
         let (result, child_failures, application_checks) = {
@@ -998,7 +998,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
 
             let error = self.interner.well_known().error;
-            let native_array_groups = self.native_array_groups();
+            let native_array_groups = self.native_array_groups_for_source(reservation.source.unit);
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,

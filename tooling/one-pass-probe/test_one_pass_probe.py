@@ -205,9 +205,10 @@ class FakeExecutor:
 
         if command[-3:] == ("library-info", "--format", "json"):
             payload = {
-                "schema": 1,
+                "schema": 2,
                 "profile_sha256": PROFILE_SHA256,
                 "file_count": 82,
+                "check_route": "production-complete-source-once",
                 "provider_route": "production-default-library",
             }
             return self.result(command, 0, json.dumps(payload, separators=(",", ":")) + "\n", "", 0.01)

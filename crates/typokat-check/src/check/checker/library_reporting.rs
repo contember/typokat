@@ -53,7 +53,7 @@ pub(crate) fn independent_library_reporting_site_descriptors(
     }
 
     let mut sites = Vec::new();
-    for failure in binder.local_ambient_export_alias_failures() {
+    for failure in binder.all_ambient_export_alias_failures() {
         push(&mut sites, failure.origin, failure.local_span);
     }
     for issue in binder.namespaces.placement_issues() {
@@ -74,7 +74,7 @@ pub(crate) fn independent_library_reporting_site_descriptors(
         push(&mut sites, member.origin, member.declaration_span);
     }
     let mut standalone_members = binder
-        .local_standalone_namespace_value_attachments()
+        .all_standalone_namespace_value_attachments()
         .into_iter()
         .flat_map(|attachment| attachment.members)
         .collect::<Vec<_>>();
@@ -101,7 +101,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
     ) -> Result<Vec<LibraryReportingReceipt>, LibraryEventLedgerError> {
         let mut receipts = BTreeMap::new();
 
-        for failure in binder.local_ambient_export_alias_failures() {
+        for failure in binder.all_ambient_export_alias_failures() {
             let diagnostic = match failure.kind {
                 LocalAmbientExportAliasFailureKind::Missing => {
                     Diagnostic::cannot_find_name(failure.local_span, &failure.local_name)
@@ -217,7 +217,7 @@ impl<'ledger> LibraryReportingConsumer<'ledger> {
         }
 
         let mut standalone_members = binder
-            .local_standalone_namespace_value_attachments()
+            .all_standalone_namespace_value_attachments()
             .into_iter()
             .flat_map(|attachment| attachment.members)
             .collect::<Vec<_>>();
