@@ -409,3 +409,17 @@ after a WU6 NO-GO, but it cannot support a product claim.
   Closure-candidate commits `91bfaf7` and `760f46c` passed the focused 22/22 checks, formatting and
   diff validation; docs lint remains unchanged at 20 historical-link findings. Lifecycle closure
   still follows the remote gate; this is not final WU7 PASS or an OUTCOME.
+- **2026-08-06 — local closure candidate validated at `365db4`.** Full `cargo test`, formatting,
+  clippy with `-D warnings`, the release build, the `one_pass_probe` example, and the clean package
+  gate all passed. The 874-case official-suite ratchet reported zero regressions and zero progress;
+  differential repros were green, and the differential self-check completed 472/472 cases before
+  its fixed time budget. The exact-`d1aa6d4` remote-CI outage remains the closure gate.
+- **2026-08-06 — divergence-owner closure audit graduated at `8a16b10`.** Stale backlog-`14`
+  aggregates were split among `48`, `51`, `75`, and new backlogs `107`/`108`. The disabled B51
+  assignment-target evaluation-order spec pins tsc 6.0.3 to exactly `TS2339`; current typokat is
+  silent. Independent review passed with zero HIGH, MEDIUM, or LOW findings. No scoreboard was
+  rebaselined, and production, build, collector, contract, and active benchmark evidence remain
+  unchanged. Focused manifest/divergences/readiness/surface checks passed 22/22, conformance marker
+  parsers passed 2/2, formatting and diff checks were clean, and docs lint remained unchanged at 20
+  historical-link findings. The exact-`d1aa6d4` remote-CI outage remains the sole technical closure
+  gate; WU7 is not yet final PASS and no OUTCOME is declared.
