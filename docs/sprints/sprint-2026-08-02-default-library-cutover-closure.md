@@ -366,3 +366,46 @@ after a WU6 NO-GO, but it cannot support a product claim.
   example, so O/P no longer answers a release decision. The probe is retired unchanged; its raw
   verdict was not relabelled, while WU6A's all-row falsifier is PASS. Authoritative WU6 remains
   mandatory.
+- **2026-08-06 — WU5 exact rerun passed at `176423c`; first authoritative retry exposed a
+  collector bug.** All local gates were green. GitHub Actions run `31114984298` passed all eight
+  push-relevant jobs; scheduled tsc truth mode was skipped by event and is not claimed as executed.
+  The first authoritative retry completed semantic, control, and timing work, then stopped before
+  verdict because the collector treated GNU `time`'s nonzero-status message as compiler stderr. It
+  wrote no JSON; its partial assets were retained.
+- **2026-08-06 — memory parser hardened spec-first; exact-commit CI blocked externally.** Commit
+  `b2d1bfb` pinned the parser contract, adversarial boundary commit `23bbfc4` established RED, and
+  `d1aa6d4` implemented the correction. All 62 Python tests passed, independent review passed, and
+  a live GNU `time` memory probe passed. Exact-`d1aa6d4` GitHub Actions run `31118462286` did not
+  provide code evidence: setup-stage jobs hit `Service Unavailable`, and both overall attempts were
+  then invalidated/cancelled during the documented GitHub Actions critical outage. The user
+  explicitly approved running WU6 before remote CI recovered while retaining exact-`d1aa6d4`
+  remote CI as a closure gate.
+- **2026-08-06 — authoritative four-row WU6 rerun returned GO.** From a clean `d1aa6d4`, the
+  trusted collector ran under `flock -w 3600 /tmp/typokat-perf.lock` and
+  `cpu-lease run -n 4 --no-smt`:
+  `python3 tooling/full-lib-bench/full_lib_bench.py run --typokat target/release/typokat --tsgo
+  tooling/full-lib-bench/.stage/tsgo-7.0.2/lib/tsc --output
+  tooling/full-lib-bench/evidence/candidate-d1aa6d4.json --window-label
+  2026-08-06-complete-source-retry-window-1 --window-label
+  2026-08-06-complete-source-retry-window-2 --window-label
+  2026-08-06-complete-source-retry-window-3`. Commit `f70e587` retains the GO artifact at
+  `tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`, SHA-256
+  `a120f159bb6bb68253dd6df80d03c1e035bf69a860947d79c2cdb781e82dda7a`. The attested SHA-256
+  identities are typokat `87a5c653815a5667a4461a3e4a62683f3bdcef873a5a250828cd86127f0d23b1`,
+  comparator `4f2de678286401759b3fb4475bafe35b8f32b4b3a07d92642bbf37eadc9b34a4`, profile
+  `ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d`, and contract
+  `7162d237cdfaf55dae562979ed76df6567b172db23165eb586d0912a6a974acb`. Across exactly the four
+  approved rows (`fast-clean`, `fast-errors`, `collision`, `fanout`), the weakest median speedup was
+  `1.277993`, weakest p95 ratio `1.256933`, and weakest bootstrap lower bound `1.268481`; all 12
+  window/row cells exceeded `1.25` on all three metrics (36 metric values). Typokat median RSS was
+  about 75 MiB versus about 98–100 MiB for tsgo, with worst RSS-max ratio `0.74562`. The evidence
+  inspector passed at measured parent
+  `d1aa6d4` under the identical lease. This is only the four-row full-library cutover claim, not a
+  general checker-performance claim.
+- **2026-08-06 — WU7 independent review is CONDITIONAL PASS.** A fresh review at `f70e587` found
+  zero HIGH or MEDIUM issues and confirmed that the user-approved out-of-order performance evidence
+  remains valid. Only exact-`d1aa6d4` remote CI remains as the technical closure gate; any
+  production, build, collector, or contract fix invalidates the evidence and requires a rerun.
+  Closure-candidate commits `91bfaf7` and `760f46c` passed the focused 22/22 checks, formatting and
+  diff validation; docs lint remains unchanged at 20 historical-link findings. Lifecycle closure
+  still follows the remote gate; this is not final WU7 PASS or an OUTCOME.
