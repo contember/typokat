@@ -354,6 +354,37 @@ fn complete_combined_oracle_preserves_interleaved_user_record_order() {
 }
 
 #[test]
+fn complete_combined_oracle_preserves_non_contiguous_user_file_ordinal() {
+    let sources = [
+        crate::check::checker::library_compiler::InjectedLibrarySource {
+            file_ordinal: crate::source::LibraryFileOrdinal::new(7),
+            name: "ordinal-lib.d.ts",
+            source: "",
+        },
+        crate::check::checker::library_compiler::InjectedLibrarySource {
+            file_ordinal: crate::source::LibraryFileOrdinal::new(42),
+            name: "ordinal-user.ts",
+            source: "const value: string = 1;\n",
+        },
+    ];
+    let oracle =
+        crate::check::checker::library_compiler::compile_complete_combined_oracle_for_test(
+            &sources,
+            1,
+            &[],
+        )
+        .expect("combined oracle retains source file ordinals");
+    let ordinal = oracle
+        .normalized_records
+        .iter()
+        .find(|(_, record)| record.starts_with("TK2322 "))
+        .map(|(ordinal, _)| *ordinal)
+        .expect("user diagnostic");
+
+    assert_eq!(ordinal, crate::source::LibraryFileOrdinal::new(42));
+}
+
+#[test]
 fn exact_locked_production_collision_uses_replay_without_source_fallback() {
     let root =
         crate::test_support::repository_root().join("tooling/full-lib-bench/workloads/collision");
