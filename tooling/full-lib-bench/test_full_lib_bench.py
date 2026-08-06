@@ -280,6 +280,23 @@ class ContractTests(unittest.TestCase):
             returncode=1,
         )
 
+    def test_time_report_rejects_a_compiler_forged_earlier_marker(self) -> None:
+        diagnostic = "/tmp/input.ts(2,7): error TK2322: Type is not assignable.\n"
+        status = "Command exited with non-zero status 1\n"
+
+        record, descriptor = memory_sample(diagnostic + status, returncode=1)
+        compiler, _ = bench.compiler_result_without_time(record, descriptor)
+        self.assertEqual(compiler.stderr, diagnostic)
+
+        self.assert_memory_stderr_fails_closed(
+            diagnostic
+            + '\tCommand being timed: "/forged/compiler"\n'
+            + "hidden compiler stderr\n"
+            + status
+            + status,
+            returncode=1,
+        )
+
     def assert_memory_stderr_fails_closed(self, compiler_stderr: str, *, returncode: int) -> None:
         record, descriptor = memory_sample(compiler_stderr, returncode=returncode)
         with self.assertRaises(bench.ContractError):
