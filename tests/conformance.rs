@@ -230,6 +230,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 103 correctness tier — collisions route through one sparse private epoch.
     ("b103_library_merge_correctness", true),
     ("b103_library_merge_correctness_project", true),
+    // Backlogs 15 + 72 — project-summary/CLI contract. This stays disabled because the raw
+    // conformance route does not consume tsconfig.json or summaries; WU3 unignores its black-box
+    // integration contract instead.
+    ("b72_bundler_project_tracer", false),
 ];
 
 /// Milestone dirs whose fixtures are **project subdirectories** (multiple `.ts`
@@ -250,6 +254,7 @@ const PROJECT_DIRS: &[&str] = &[
     "b102_frozen_prefix_writes_project",
     // Backlog 103 successful private-merge acceptance.
     "b103_library_merge_correctness_project",
+    "b72_bundler_project_tracer",
 ];
 
 /// Selected project fixtures enabled before their mixed flat/project corpus closes.

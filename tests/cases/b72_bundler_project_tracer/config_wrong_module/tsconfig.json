@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "CommonJS",
+    "moduleResolution": "Bundler"
+  },
+  "files": ["main.ts"]
+}

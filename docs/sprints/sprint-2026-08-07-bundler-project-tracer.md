@@ -147,16 +147,20 @@ thresholds; it removes the circular sequencing.
   declaration before filtering, classify every specifier/form as resolved, unresolved, or
   unsupported, construct a deterministic local graph/order, and expose a separate project summary
   while reusing the existing serial semantic route. In the same reviewed commit, wire directory and
-  explicit-config inputs into the public CLI. No public project mode may exist without this
-  accounting boundary.
+  explicit-config inputs into the public CLI. The same inventory must guard the existing explicit
+  file-list route: admitted file-list output stays byte-identical, but a currently filtered module
+  form becomes explicit non-clean output rather than preserving a false negative. No public project
+  mode may exist without this accounting boundary.
 - **Stop / falsifier.** Stop if correctness requires a local fallback resolver, package/`@types`
   loading, default/namespace/star/re-export semantics, supported module cycles, a second parse or
   publication path, or Stage-2 cross-file identity.
 - **Acceptance / witness.** Every admitted resolution matches pinned `tsc`; missing and unsupported
   cases are non-clean and preserve normalized file/specifier identity; both production/shared
   semantic routes retain exact result coverage; directory/config CLI contracts and the four-way exit
-  behavior pass; repeated runs and reversed enumeration are byte-identical. A deliberately broken
-  pre-change/local-join resolver fails the `.js` substitution and accounting controls.
+  behavior pass; repeated runs and reversed enumeration are byte-identical. The raw conformance row
+  stays disabled because it cannot observe config or summary behavior; the black-box contract is
+  unignored in this atomic commit. A deliberately broken pre-change/local-join resolver fails the
+  `.js` substitution and accounting controls.
 - **Touch points.** `Cargo.toml`, `Cargo.lock`, `crates/typokat-frontend/{Cargo.toml,src/}`,
   `crates/typokat-driver/src/driver.rs`, `src/main.rs`, WU1 fixtures, and focused tests.
 
@@ -312,6 +316,13 @@ ratchets twice from a fresh cache; fresh official-suite `run --check`; docs lint
 
 ## Run log
 
+- 2026-08-07 — WU1 PASS. The behavior-neutral spec commit pins 25 synthetic projects, 22 exact
+  config-boundary cases, every OXC module-declaration form outside the admitted named-import slice,
+  four-way exit precedence, normalized line/column identities, and directory/config equivalence.
+  Pinned `tsc 6.0.3` config and directory invocations were byte-identical for every project and
+  config case. The two active preservation guards passed; forcing the five disabled WU3 contract
+  groups failed on pre-change project/accounting behavior. Independent adversarial review passed
+  after three remediation rounds; no production source changed.
 - 2026-08-07 — Plan grounded at clean `7e3c221` after the full default-library closure. Two
   independent read-only audits agreed that the old witness-first sprint should be archived, the
   first slice should remain local/named/dependency-free, and complete pre-filter module accounting

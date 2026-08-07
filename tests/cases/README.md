@@ -228,6 +228,7 @@ keep at most one mismatched argument per call.
 | `m31_intersections/` | M31 — intersection types (`A & B`): canonicalization, dual relation directions, merged member access + excess |
 | `m32_signature_shape/` | M32 — signature shape: rest elements plus optional/default parameters |
 | `m33_function_overloads/` | M33 — function overloads: ordered signatures, implementation compatibility, overload call resolution |
+| `b72_bundler_project_tracer/` | Backlogs 15 + 72 — disabled Bundler project/CLI contract: root discovery, local `oxc_resolver` lookup, complete module-form accounting, deterministic summary |
 
 ## Project fixture convention (M29+)
 
@@ -246,6 +247,32 @@ ledger.)
 
 Flat `.d.ts`/`.d.mts`/`.d.cts` fixtures run through the same one-file project
 path so their filename-derived declaration context is preserved.
+
+### Bundler project tracer contract (backlogs 15 + 72)
+
+`b72_bundler_project_tracer/` is a permanently disabled raw-conformance corpus. The raw fixture
+route does not consume `tsconfig.json` or project summaries, so WU3 enables its dedicated black-box
+integration contract instead. [`contract.json`](b72_bundler_project_tracer/contract.json) is the machine-readable WU1
+acceptance contract. It pins `typokat check --project-summary json <directory|tsconfig.json>`, the
+exact normalized summary shape, identity ordering, exit precedence, and the pinned `tsc 6.0.3`
+Bundler oracle for every synthetic project.
+
+The admitted slice is deliberately local and dependency-free: exact `strict`, `noEmit`, `module`,
+and `moduleResolution` values, a non-empty project-relative `files` array, named imports,
+declaration/local export forms, extensionless imports, and runtime-style
+`.js` → `.ts` substitution. Roots are normalized, deduplicated, and path-sorted. Missing local
+modules remain ordinary `TK2307` diagnostics. Missing/empty/invalid `files`, roots outside the
+project, unsupported root extensions, `include`/`exclude`, `extends`, `references`, `lib` and other
+unconsumed compiler options, bare
+specifiers, default/namespace/side-effect/import-equals imports, default/export-assignment/
+namespace exports, every source re-export shape, non-Bundler profiles, and module cycles are
+explicit project-level non-clean identities. Unsupported projects stop semantic checking. No
+listed form may disappear before accounting or fall through an error type.
+
+Both directory and explicit-config invocations must produce the same normalized summary. Every
+array is ordered by normalized relative path, then source position, then identity. The corpus is a
+negative control at pre-change HEAD: direct project input is unavailable, `.js` substitution fails,
+and unsupported forms are filtered before a project-level identity exists.
 
 ## Fixture routing
 

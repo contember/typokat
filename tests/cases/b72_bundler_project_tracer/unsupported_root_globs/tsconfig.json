@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "files": ["src/main.ts", "src/value.ts"],
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/excluded.ts"]
+}

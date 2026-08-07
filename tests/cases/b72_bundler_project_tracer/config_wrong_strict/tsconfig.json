@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "strict": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "files": ["main.ts"]
+}
