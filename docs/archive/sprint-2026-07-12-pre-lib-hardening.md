@@ -51,9 +51,9 @@ closable; the batch does not authorize a VM or namespace/type-container redesign
 - ✔ The namespace symbol slot remains unused and explicitly post-MVP; backlog `43` is an
   XL binder/type-container/merge milestone rather than an honest parallel filler —
   `src/binder/symbol.rs:47-51`.
-- ✔ The separate real-project preview sprint remains paused at its zero-threshold public
-  witness gate; this sprint does not modify its contract —
-  `docs/sprints/sprint-2026-07-12-real-project-preview.md`.
+- ✔ At this sprint's execution, the separate real-project preview remained paused at its
+  zero-threshold public witness gate; this sprint did not modify its contract —
+  `docs/archive/sprint-2026-07-12-real-project-preview.md`.
 
 ## Work units
 

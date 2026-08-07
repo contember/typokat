@@ -61,9 +61,9 @@ members, ambient declarations, or close the blocked real-project preview.
 - ✔ Array member access synthesizes only `.length`; generic methods do not by themselves make
   `array.map` available. That member projection and the full standard-library source remain owned
   by `14` — `src/check/checker/expr.rs:1112-1124`.
-- ✔ The active real-project preview sprint is stopped at its zero-threshold witness gate. `41` is
-  being run for Track A dependency leverage, not represented as a hidden relaxation or completion of
-  `72` — `docs/sprints/sprint-2026-07-12-real-project-preview.md`.
+- ✔ At this sprint's execution, the real-project preview was stopped at its zero-threshold witness
+  gate. `41` was run for Track A dependency leverage, not represented as a hidden relaxation or
+  completion of `72` — `docs/archive/sprint-2026-07-12-real-project-preview.md`.
 
 ## Work units
 

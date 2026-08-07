@@ -195,25 +195,26 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Keep `72` paused at its WU0 witness gate.** The accounting sprints (2026-07-10 and
-   2026-07-12) shipped the AST census, explicit incomplete outcome, and the final expression-shape
-   emission tail, but no public candidate met the preview contract without a project-specific shim.
-   The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
-   sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
-   `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Climb the remaining full-project/scale ladder** (`15` → `16` → `17`), finishing the A/B/C
-   remainder along the way. After `15` ships, it and the shipped production work of `14` must
-   graduate a pinned Bundler-compatible full-stack witness (deptective only if it qualifies); the
-   small `72` preview is not evidence for full resolver/lib fidelity. Per
+1. **Ship the bounded `15` + `72` Bundler project tracer.** The original witness-first preview
+   stopped before implementation because no public candidate met its zero thresholds. The active
+   [`2026-08-07 sprint`](../sprints/sprint-2026-08-07-bundler-project-tracer.md) first specifies and
+   lands local project discovery, `oxc_resolver` lookup, complete module accounting, and a
+   deterministic public result against synthetic oracle projects. It then selects one
+   dependency-free public witness without relaxing the old thresholds or adding a project shim.
+2. **Continue the full-project/scale ladder** (remainder of `15` → `16` → `17`), finishing the A/B/C
+   remainder along the way. The tracer closes `72`, not general resolver breadth. After `15` ships,
+   it and the shipped production work of `14` must graduate a pinned Bundler-compatible full-stack
+   witness (deptective only if it qualifies); the small `72` preview is not evidence for full
+   resolver/lib fidelity. Per
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.
-3. **Land `79` + `80` alongside that climb, not after it.** With `72` paused at its witness gate we
-   are short of real-world evidence, and the resolution oracle is a cheaper way to buy it: pavouk
-   already holds ~138k compiler-accurate resolution assertions over a real monorepo, so `80` turns
-   `14`/`15` from "shipped" into a *measured* coverage derivative — including the ~16.5k member-call
-   edges that are the whole reason a checker exists here. Expect the first run to be mostly
-   `incomplete`; that baseline is the point. `81` stays last and may be dropped on the profile.
+3. **Land `79` + `80` alongside the post-tracer breadth climb.** The tracer buys one honest public
+   checker workflow; the resolution oracle then adds breadth without enlarging that first public
+   claim. Pavouk already holds ~138k compiler-accurate resolution assertions over a real monorepo,
+   so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
+   Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
+   may be dropped on the profile.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.

@@ -24,8 +24,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have
   caught them. It previously ran alongside the now-archived full-library sprint in different files.
-- [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
-  paused at WU0's zero-threshold public-witness gate; no implementation started.
+- [`sprint-2026-08-07-bundler-project-tracer.md`](sprint-2026-08-07-bundler-project-tracer.md) —
+  active: ship a synthetic Bundler project/resolver slice first, then prove it on one pinned public
+  strict-TypeScript project with complete accounting and mutation gates.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
   planned behavior-preserving cleanup, now unblocked by the default-library closure; requires a
   fresh HEAD re-verification before WU1 starts.

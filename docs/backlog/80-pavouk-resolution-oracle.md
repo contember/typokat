@@ -16,9 +16,11 @@ monorepo. Non-blocking for checker 1.0, but the strongest scale signal available
 ## Problem
 
 typokat's conformance corpus is 211 fixtures / 778 expected diagnostics — excellent for the type
-model, silent about whether resolution holds up on a real repository. Backlog `72` has been paused
-at its WU0 witness gate precisely because no public candidate met the preview contract without a
-project-specific shim: we lack a *cheap, high-volume, real-world* correctness signal.
+model, silent about whether resolution holds up on a real repository. Backlog `72`'s first
+witness-first sprint stopped at WU0 because no public candidate met the preview contract without a
+project-specific shim. The active Bundler project tracer now builds a bounded synthetic resolver
+surface before repeating that gate, but we still lack a *cheap, high-volume, real-world*
+correctness signal.
 
 `pavouk` (a sibling repo: compiler-accurate code graph for monorepos, ts-morph over the real TS
 checker) already produces exactly that signal as a by-product. Indexed against the Contember

@@ -27,8 +27,9 @@ decisions → reference → archive.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
-- [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
-  paused at WU0's zero-threshold witness gate after public candidate screening.
+- [`sprint-2026-08-07-bundler-project-tracer.md`](sprints/sprint-2026-08-07-bundler-project-tracer.md) —
+  active: a bounded `15` + `72` slice that specifies project discovery and local Bundler resolution
+  synthetically before proving the public CLI on one pinned real project.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
   planned behavior-preserving cleanup, not started; unblocked by the full-library closure and
   requiring complete re-verification at current HEAD before WU1.
@@ -120,14 +121,16 @@ decisions → reference → archive.
   persistent generic method/call/construct binders now survive substitution and relate under a
   cache-safe local alignment. Namespace value publication subsequently shipped under ADR-0010,
   unblocking `14`; explicit `this`/`ThisType<T>` shipped with `70`.
-- **Real-project preview (`72`) paused at WU0** — no screened public project met the multi-file,
-  minimal-graph, zero-threshold contract; no implementation or prelude expansion started.
+- **Bundler project tracer (`15` + `72`) active** — the old witness-first preview is
+  [`archived incomplete`](archive/sprint-2026-07-12-real-project-preview.md). The replacement
+  specifies and ships local project discovery/resolution before selecting a public witness; its
+  zero thresholds and ban on project-specific shims remain unchanged.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
   owner; three review/audit failures were remediated before PASS. Backlog `73` is closed, but this
-  did not produce the qualifying public witness required by `72`; **do not resume `72` until such
-  a witness exists**.
+  did not produce the qualifying public witness required by `72`; the active tracer now builds the
+  bounded resolver/project surface before repeating that witness gate.
 - **JS-exact number stringification (`30`) shipped 2026-07-11** (archived:
   [`archive/sprint-2026-07-11-js-number-stringification.md`](archive/sprint-2026-07-11-js-number-stringification.md)) —
   numeric literal holes now use ECMA-exact formatting; `${number}` keeps its
@@ -169,8 +172,8 @@ decisions → reference → archive.
   subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** `72` remains paused at its witness gate; `14` is closed, while Bundler module
-  breadth and the remaining model-completeness items continue independently.
+  (`72`). **Now:** `14` is closed and the active Bundler project tracer combines a bounded `15`
+  slice with `72`; general resolver breadth and the remaining model-completeness items stay open.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

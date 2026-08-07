@@ -199,10 +199,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   and every audited expression shape. The remaining expression-shape semantics are explicitly
   incomplete, never silently clean: `x!`/`a?.b` remain backlog `49`; traversal/iteration forms
   such as elisions, spreads, and tagged templates remain `71`; the other deferred surface tail is
-  `75`. The pinned real-project preview gate (`72`) remains required but **paused**: no screened
-  public project met its multi-file, minimal-graph, zero-threshold witness contract. Do not resume
-  `72`, add a project-specific shim, or add a project-specific ambient shim merely to manufacture
-  that witness. The full default-library production cutover is shipped and archived after WU7
+  `75`. The pinned real-project preview gate (`72`) remains required. Its first witness-first sprint
+  stopped before implementation because no screened public project met the zero-threshold contract;
+  the active replacement first builds a bounded Bundler resolver/project slice, then repeats the
+  witness gate without project-specific code or ambient shims. The full default-library production
+  cutover is shipped and archived after WU7
   independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
   Bundler module resolution (`15`) is the next step on the scale ladder. A clean
   result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
