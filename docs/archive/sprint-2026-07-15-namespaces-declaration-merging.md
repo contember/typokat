@@ -485,7 +485,7 @@ and makes all explicitly staged commits.
 ## Out of scope
 
 - Full `lib.d.ts` discovery/loading, frozen base plus delta `Store`, or parallelism Stage 1
-  ([`14`](../backlog/14-libdts-loading.md)).
+  ([`14`](backlog-14-libdts-loading.md)).
 - General Bundler/package/module resolution or string-literal ambient external modules
   ([`15`](../backlog/15-modules-imports.md)).
 - Namespace runtime emit, JavaScript transformation, or compiler output.

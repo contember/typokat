@@ -12,8 +12,9 @@ probe-verified vs tsc 6.0.3.
 
 The pinned ES5 readiness proof adds one exact parity record here: heritage checking emits one
 surplus `TK2430` for each of `CallableFunction` and `NewableFunction` at the same two sites as the
-canonical backlog-14 diagnostics. These 2 extra diagnostics are safe-direction parity noise; they
-do not block backlog `14` from starting. See
+canonical diagnostics. This item owns both the underlying Callable/Newable apparent-`Function`
+compatibility and the two surplus diagnostics as parity work; neither blocked the shipped default
+library route. See
 [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 
 ## The list
@@ -63,9 +64,9 @@ do not block backlog `14` from starting. See
   recursive-descent parser** before lowering runs, so the guard cannot see it — this needs
   an oxc-side parser nesting limit (or a pre-lowering token-depth reject). tsc 6.0.3 itself
   dies at ~3k. Pinned by the enabled `sr_wu3_types_recursion/deep_annotation.ts` fixture.
-- **ES5 heritage cardinality (m):** canonical `CallableFunction` and `NewableFunction` heritage
-  each emit a duplicate `TK2430`. Backlog `14` owns the underlying apparent-`Function`
-  compatibility; this item owns only the surplus cardinality.
+- **ES5 heritage compatibility and cardinality (m):** canonical `CallableFunction` and
+  `NewableFunction` heritage each emit an underlying apparent-`Function` compatibility diagnostic
+  plus one duplicate `TK2430`. This item owns the canonical compatibility and surplus cardinality.
 
 ## Acceptance
 

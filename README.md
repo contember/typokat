@@ -202,9 +202,9 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `75`. The pinned real-project preview gate (`72`) remains required but **paused**: no screened
   public project met its multi-file, minimal-graph, zero-threshold witness contract. Do not resume
   `72`, add a project-specific shim, or add a project-specific ambient shim merely to manufacture
-  that witness. The full default-library production cutover is shipped; its WU7 independent review
-  is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, pending exact `d1aa6d4` remote CI and
-  lifecycle closure. Bundler module resolution (`15`) is the next step on the scale ladder. A clean
+  that witness. The full default-library production cutover is shipped and archived after WU7
+  independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
+  Bundler module resolution (`15`) is the next step on the scale ladder. A clean
   result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families

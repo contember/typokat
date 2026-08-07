@@ -27,14 +27,10 @@ decisions → reference → archive.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
-- [`sprint-2026-08-02-default-library-cutover-closure.md`](sprints/sprint-2026-08-02-default-library-cutover-closure.md) —
-  active backlog `14` closure sprint: production and the authoritative four-row performance gate
-  are shipped; WU7 independent review is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, and
-  only exact `d1aa6d4` remote CI plus documentation lifecycle closure remain.
 - [`sprint-2026-07-12-real-project-preview.md`](sprints/sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold witness gate after public candidate screening.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, not started; gated on final full-library sprint closure and
+  planned behavior-preserving cleanup, not started; unblocked by the full-library closure and
   requiring complete re-verification at current HEAD before WU1.
 
 ## What's hot
@@ -48,7 +44,7 @@ decisions → reference → archive.
   [`107`](backlog/107-apparent-built-in-surfaces.md), and generic arrow descriptors by
   [`108`](backlog/108-generic-arrow-signature-descriptors.md). None is a default-library routing
   condition.
-- **Full default-library production cutover is shipped; closure is active** —
+- **Full default-library production cutover shipped 2026-08-07** —
   [`ADR-0011`](decisions/0011-freeze-pinned-default-library-base.md) accepts an exact embedded
   TypeScript 6.0.3 ES2025 full-host profile, one AST-free frozen library base with private deltas,
   and a same-pipeline private universe for global collisions;
@@ -74,9 +70,9 @@ decisions → reference → archive.
   the complete set as a named `(code, site)` multiset
   (`tests/fixtures/library-owned-records.txt`), which narrows ADR-0011's "preserved exactly" to the
   pinned suite rather than the published base. The
-  [`active sprint`](sprints/sprint-2026-08-02-default-library-cutover-closure.md) has WU7
-  independent review at **CONDITIONAL PASS** with zero HIGH/MEDIUM findings; it now owns only exact
-  `d1aa6d4` remote CI and lifecycle closure. The production Stage-1 cutover is shipped: the public
+  [`archived closure sprint`](archive/sprint-2026-08-02-default-library-cutover-closure.md) records
+  final WU7 independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4`
+  remote CI. The production Stage-1 cutover is shipped: the public
   driver and CLI use the source-compiled full library, conformance has no
   alternate base, and the old production prelude asset is gone. The authoritative fresh-process
   evidence measures commit `d1aa6d4` and is retained by `f70e587` at
@@ -90,8 +86,8 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-15-namespaces-declaration-merging.md`](archive/sprint-2026-07-15-namespaces-declaration-merging.md)) —
   ordered groups, qualified types, keep-pairs, legal global type publication, and immutable
   standalone instantiated namespace values are complete. The pinned ES5 proof is GO and backlog
-  `14` passed its namespace model prerequisite; production delivery is shipped under the active
-  closure sprint; `15`, `63`, `76`, and `82` retain their explicit non-namespace tails.
+  `14` passed its namespace model prerequisite; production delivery is archived under its closure
+  sprint; `15`, `63`, `76`, and `82` retain their explicit non-namespace tails.
 - **Semantic duplication/layering shipped 2026-07-14** (archived:
   [`archive/sprint-2026-07-13-semantic-duplication-layering.md`](archive/sprint-2026-07-13-semantic-duplication-layering.md)) —
   immutable complete `ClassInstance` applications, atomic declaration-SCC publication, retained
@@ -150,8 +146,8 @@ decisions → reference → archive.
   [`archive/sprint-2026-07-11-declaration-hoisting-parity.md`](archive/sprint-2026-07-11-declaration-hoisting-parity.md)) —
   forward ordinary/generic/overload calls now see stable callable surfaces; `var`
   binds to its function/module owner while initializer and flow timing stay lexical/source ordered.
-  `72` was subsequently screened and paused; the full default-library step is shipped with WU7 at
-  **CONDITIONAL PASS**, pending exact `d1aa6d4` remote CI and lifecycle closure.
+  `72` was subsequently screened and paused; the full default-library step is shipped and archived
+  after final WU7 PASS and exact-`d1aa6d4` remote CI.
 - **2026-07-10 completeness-accounting sprint shipped** (archived:
   [`archive/sprint-2026-07-10-completeness-accounting.md`](archive/sprint-2026-07-10-completeness-accounting.md)) —
   machine-validated OXC surface inventory with compile-time drift tripwires, a first-class
@@ -168,15 +164,13 @@ decisions → reference → archive.
   [`backlog/completion-1.0.toml`](backlog/completion-1.0.toml) validated by
   `tests/manifest.rs`, with the pinned TS 6.0.3 lib audit
   ([`backlog/lib-audit-6.0.3.md`](backlog/lib-audit-6.0.3.md)) now backed by the committed namespace
-  readiness proof: type/value publication is GO, and the production work for `14` is shipped under
-  its active closure sprint; `70` this-parameter typing
+  readiness proof: type/value publication is GO, and `14` is shipped and archived under its
+  [`closure sprint`](archive/sprint-2026-08-02-default-library-cutover-closure.md); `70` this-parameter typing
   subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** `72` remains paused at its witness gate; `14` has WU7 independent review at
-  **CONDITIONAL PASS** with zero HIGH/MEDIUM findings and awaits only exact `d1aa6d4` remote CI and
-  documentation closure, while Bundler module breadth and the remaining model-completeness items
-  continue independently.
+  (`72`). **Now:** `72` remains paused at its witness gate; `14` is closed, while Bundler module
+  breadth and the remaining model-completeness items continue independently.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

@@ -19,7 +19,8 @@ sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 (M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
 sprint-2026-07-09), `40` (M33 function overloads,
 sprint-2026-07-09), `74` (declaration hoisting parity, sprint-2026-07-11),
-`38` (minimal ambient prelude, sprint-2026-07-11), `67` (modeled `ReturnType`
+`38` (minimal ambient prelude, sprint-2026-07-11), `14` (full source-compiled default library,
+sprint-2026-08-02), `67` (modeled `ReturnType`
 constraint, sprint-2026-07-11), and `30` (JS-exact number stringification,
 sprint-2026-07-11), and `41` + `23` (persistent generic method/call/construct signatures,
 including the static generic binder path, sprint-2026-07-12), and `22` (parenthesized and
@@ -33,7 +34,7 @@ closed 2026-07-13), `43` (namespace/declaration-space completion,
 [`sprint-2026-07-15-namespaces-declaration-merging.md`](../archive/sprint-2026-07-15-namespaces-declaration-merging.md)). The earlier shipped items are in
 [`../archive/`](../archive/README.md), including the completed WU6 official-suite ratchet.
 The implementation for `102` (visible frozen-prefix writes) and `103` (source-native sparse
-collision epochs and routing) shipped through the active backlog-`14` closure sprint; both shipped
+collision epochs and routing) shipped through the archived backlog-`14` closure sprint; both shipped
 backlog files have been removed.
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
@@ -68,9 +69,7 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **50 remaining items**, including backlog `14` while exact `d1aa6d4` remote CI and
-lifecycle closure are pending after WU7's **CONDITIONAL PASS** with zero HIGH/MEDIUM findings. The
-release classification comes from
+The roadmap has **49 remaining items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -79,8 +78,8 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 3 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 28 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, the default-library base, and checker scaling. |
-| **D — scale + IDE** | 8 | M–XL | Preview, full standard library, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
+| **C — soundness/parity tail** | 28 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
+| **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -176,12 +175,9 @@ Checker scaling (from sprint-2026-07-25):
 **D. Scale + IDE — the §12 phase ladder.**
 
 - **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
-- **XL** · [`14`](14-libdts-loading.md) — full `lib.d.ts` and shared-prelude parallelism Stage 1;
-  production and the authoritative four-row benchmark are shipped, WU7 is **CONDITIONAL PASS**
-  with zero HIGH/MEDIUM findings, and only exact `d1aa6d4` remote CI plus lifecycle closure remain.
 - **XL** · [`15`](15-modules-imports.md) — Bundler resolution via `oxc_resolver` plus typokat-owned
   module semantics; the local-relative slice shipped as M29.
-- **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `14`, `15`.
+- **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
 Consumer surface (non-blocking — these gate consumers of the checker, not checker 1.0; absent from
@@ -192,7 +188,7 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
   and `.d.ts.map` re-anchoring.
 - **M** · [`80`](80-pavouk-resolution-oracle.md) — differential *resolution* oracle against
   pavouk/ts-morph: ~138k real resolution assertions over the Contember monorepo as a scale ratchet ·
-  blocked by `79`; coverage tracks `15`, `14`.
+  blocked by `79`; coverage tracks `15` over the shipped default-library baseline.
 - **M** · [`81`](81-resolve-only-driver-mode.md) — resolve-only driver (no relation engine, no
   diagnostics) · blocked by `79`. **Low priority**: an optimization, not a capability;
   profiling-gated, drop it if the relation engine does not dominate.
@@ -205,26 +201,14 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    The five HIGH review findings (`53` `55` `57` `58` `61`) shipped in
    sprint-2026-07-07-soundness-fn-fixes; the remaining silent-FN C group (`60`, `62`, `32`,
    `21`, `66`, `71`, `78`) remains available as independently valuable dropped-error work.
-2. **Close the active full-library sprint (`14`).** Production, cross-tool gates, and the
-   authoritative benchmark are shipped. The
-   [active sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md) has WU7 at
-   **CONDITIONAL PASS** with zero HIGH/MEDIUM findings and now owns only exact `d1aa6d4` remote CI
-   plus documentation lifecycle closure. Its performance claim is limited to the four approved
-   full-library rows. The shipped semantic
-   snapshot it once carried was retired by
-   [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md); `98` is its
-   remaining fallout.
-   Backlogs `50`/`75` remain independent 1.0 work; `63` owns Callable/Newable canonical and surplus
-   parity. The `13` profiling gate
-   closed DEFER/no-VM under ADR-0001.
-3. **Climb the remaining full-project/scale ladder** (`15` → `16` → `17`), finishing the A/B/C
+2. **Climb the remaining full-project/scale ladder** (`15` → `16` → `17`), finishing the A/B/C
    remainder along the way. After `15` ships, it and the shipped production work of `14` must
    graduate a pinned Bundler-compatible full-stack witness (deptective only if it qualifies); the
    small `72` preview is not evidence for full resolver/lib fidelity. Per
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.
-4. **Land `79` + `80` alongside that climb, not after it.** With `72` paused at its witness gate we
+3. **Land `79` + `80` alongside that climb, not after it.** With `72` paused at its witness gate we
    are short of real-world evidence, and the resolution oracle is a cheaper way to buy it: pavouk
    already holds ~138k compiler-accurate resolution assertions over a real monorepo, so `80` turns
    `14`/`15` from "shipped" into a *measured* coverage derivative — including the ~16.5k member-call

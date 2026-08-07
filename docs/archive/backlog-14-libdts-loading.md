@@ -4,6 +4,17 @@ title: Full lib.d.ts loading (the standard library)
 blocked-by: []
 ---
 
+# OUTCOME — SHIPPED (2026-08-07)
+
+The pinned TypeScript 6.0.3 ES2025 full-host default library now loads from its 82 vendored sources
+on every production route. The public CLI has no production prelude fallback, project-global merges
+are covered in both file orders, and the retained benchmark evidence is limited to the approved
+`fast-clean`, `fast-errors`, `collision`, and `fanout` rows. Final closure evidence and the commit
+map live in the archived
+[`2026-08-02 cutover-closure sprint`](sprint-2026-08-02-default-library-cutover-closure.md).
+Backlogs `15`, `16`, and `17` retain resolver breadth, parallel cross-file identity, and
+incrementality; model and parity tails remain with their explicit owners.
+
 # 14 — full `lib.d.ts` loading
 
 **Summary.** The "mandatory core" (architecture §4) — unlocks checking real-world code. Big. Also
@@ -12,7 +23,7 @@ start. It is the **full** standard-library load;
 the minimal ambient/prelude slice (`38`) is allowed before this item when it buys useful real-world
 feedback.
 
-**Active delivery contract.** The in-memory and collision semantics are accepted in
+**Delivery contract.** The in-memory and collision semantics are accepted in
 [`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md). Its startup clause was
 narrowly superseded by [`ADR-0012`](../decisions/0012-ship-the-canonical-default-library-snapshot.md)
 in favour of a shipped snapshot, and then **restored** by
@@ -21,16 +32,16 @@ snapshot: the library is compiled from its 82 vendored sources in every process.
 that changed the decision is that typokat's cold parse+bind+check of the pinned library is 277 ms
 against native TypeScript 7's 289 ms on the reference host, and the 1.85 s the source path used to
 cost was 62 % artifact generation with no comparator analogue. The
-[`2026-08-02 cutover-closure sprint`](../sprints/sprint-2026-08-02-default-library-cutover-closure.md)
+[`2026-08-02 cutover-closure sprint`](sprint-2026-08-02-default-library-cutover-closure.md)
 owns the production base/delta and collision paths, the atomic driver cutover, and a fail-closed
 fresh-process target against pinned native TypeScript 7 on every approved semantic row. The earlier
-[`2026-07-16 feasibility sprint`](../archive/sprint-2026-07-16-full-lib-loading.md) removed the
+[`2026-07-16 feasibility sprint`](sprint-2026-07-16-full-lib-loading.md) removed the
 first substitution and diagnostic-rendering barriers but ended at WU0 NO-GO: its authoritative
 5.00 s cold gate still exited 143 after 5.268 s. It did not authorize or run WU1–WU8. The current
 production driver and CLI now acquire the source-compiled frozen base, the conformance corpus has
-no alternate prelude route, and the retired production `prelude.ts` asset is gone. This item stays
-open until the active sprint completes its cross-tool, package, CI, authoritative timing, and
-independent closure gates.
+no alternate prelude route, and the retired production `prelude.ts` asset is gone. The archived
+closure sprint records the completed cross-tool, package, CI, authoritative timing, and independent
+review gates.
 
 ## Problem
 
@@ -39,8 +50,8 @@ checked. The lib's own source text uses nearly the whole type model, including t
 surface that owns regexp literals. The final namespace value-side prerequisite shipped at
 `23bad42`, and its WU7 adversarial review and official-suite ratchet are complete.
 Generic method, call, and construct signatures shipped with B41; explicit receiver parameters and
-contextual `ThisType<T>` shipped with B70; member projection and loading the declarations that expose those
-signatures remain this item's responsibility.
+contextual `ThisType<T>` shipped with B70; this item shipped member projection and loading the
+declarations that expose those signatures.
 Loading the lib with any of those
 still silently-permissive would poison every downstream check. A deliberately small prelude slice
 (`38`) may land earlier because it curates its declarations around the gaps.
@@ -108,10 +119,10 @@ explicit outcomes rather than approximate them.
 universe paths selected by its architecture design (parallelism Stage 1 — architecture §8.2). The
 accepted detailed design remains in
 [`ADR-0011`](../decisions/0011-freeze-pinned-default-library-base.md); the archived
-[`2026-07-16 feasibility attempt`](../archive/sprint-2026-07-16-full-lib-loading.md) records the
+[`2026-07-16 feasibility attempt`](sprint-2026-07-16-full-lib-loading.md) records the
 failed gate and optimization evidence but is not an active delivery contract. The
-[`active cutover-closure sprint`](../sprints/sprint-2026-08-02-default-library-cutover-closure.md)
-re-verifies the implementation touch points and owns delivery. The current explicit-input
+[`cutover-closure sprint`](sprint-2026-08-02-default-library-cutover-closure.md)
+records the re-verified implementation touch points and shipped delivery. The current explicit-input
 readiness fixture is not the loader.
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term scale + IDE). -->

@@ -33,7 +33,7 @@ members, ambient declarations, or close the blocked real-project preview.
 - ✔ At sprint start, generic methods were the dominant construct blocker in the pinned
   `lib.es5.d.ts` audit (`Array.map<U>`, `reduce<U>`, `Object.defineProperty<T>`, `freeze<T>`,
   `bind<T>`). B41 now models those signature forms; `43` and `70` remain the separate mandatory
-  blockers of `14` — `docs/backlog/lib-audit-6.0.3.md`, `docs/backlog/14-libdts-loading.md`.
+  blockers of `14` — `docs/backlog/lib-audit-6.0.3.md`, `docs/archive/backlog-14-libdts-loading.md`.
 - ⚠ Generic signature binders currently live only in a pass-local
   `TypeId → Vec<TypeParamId>` side map. They are not part of `FunctionType` or its structural hash —
   `src/check/checker/context.rs:224-227`, `src/types/repr.rs:457-471`,
@@ -204,7 +204,7 @@ members, ambient declarations, or close the blocked real-project preview.
 ## Out of scope (explicit)
 
 - Full `lib.d.ts`, array/primitive instance-member projection, or any new bounded-prelude member —
-  backlog [`14`](../backlog/14-libdts-loading.md).
+  backlog [`14`](backlog-14-libdts-loading.md).
 - Namespaces, qualified names, and declaration merging — backlog
   [`43`](sprint-2026-07-15-namespaces-declaration-merging.md).
 - Explicit `this` parameters, receiver compatibility, and contextual `ThisType<T>` — backlog

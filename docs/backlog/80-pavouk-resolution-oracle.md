@@ -63,8 +63,9 @@ regression).
   **incomplete** (typokat explicitly reported an unsupported surface). Report per edge kind and per
   target kind — the interesting cell is `calls` × member-target.
 - **Ratchet, not a gate.** A committed scoreboard with the counts; `--check` fails on regression.
-  The absolute numbers will start bad (no `lib.d.ts`, no `node_modules`) and that is fine — the
-  point is the *derivative*. As `15` and `14` land, whole cells should flip.
+  The absolute numbers may start bad because module and package breadth is incomplete, and that is
+  fine — the point is the *derivative*. The full default library is the shipped baseline; as `15`
+  lands, whole module-dependent cells should flip.
 - **Disagreements are two-way evidence.** pavouk is ground truth for *resolution*, not scripture: a
   disagreement is a bug in typokat, a bug in pavouk, or a deliberate divergence. Each one gets a
   disposition, and typokat's genuine divergences land in
@@ -76,14 +77,15 @@ the same policy as the official-suite ratchet.
 
 **Sequencing.** Useful as soon as `79` exists, but its coverage is bounded by the module layer:
 without `15` (`node_modules`, `.d.ts`, barrels, path aliases) most cross-package edges will
-classify as `incomplete`, and without `14` (`lib.d.ts`) receiver types that flow through
-`Promise`/`Array` will not resolve, silently costing *user-code* member edges downstream. Expect
-the honest first run to be mostly `incomplete`, and treat that as the baseline to climb.
+classify as `incomplete`. The shipped full default library lets receiver types that flow through
+`Promise`/`Array` participate from the first run. Expect the honest first run to remain mostly
+`incomplete` on module breadth, and treat that as the baseline to climb.
 
 ## Touch points
 
 New `tooling/resolution-oracle/` (harness + committed scoreboard + pinned corpus artifact); depends
-on the resolution map from backlog `79`. Coverage tracks `15` and `14`.
+on the resolution map from backlog `79`. Coverage tracks `15` over the shipped default-library
+baseline.
 
 <!-- Origin: pavouk/typokat integration design session, 2026-07-14. The insight is that the
      dependency is worth running *backwards*: pavouk-on-ts-morph is more valuable to typokat as an

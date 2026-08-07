@@ -18,7 +18,7 @@ owned by backlog [`15`](./15-modules-imports.md). The preview uses the supported
 The checker can run over explicitly supplied local `.ts` files, but that is not yet the user
 workflow. A normal project starts from a directory or `tsconfig.json`, may use Bundler-profile
 extension substitution and package declarations, and depends on ambient library names. Running
-today's checker on such a project mixes genuine checker diagnostics with resolution/prelude noise;
+today's checker on such a project mixes genuine checker diagnostics with resolution noise;
 unsupported AST paths can also make a clean result untrustworthy.
 
 The surface-accounting prerequisite shipped on 2026-07-12: every inventoried in-scope surface
@@ -42,8 +42,8 @@ Build one deliberately narrow, reusable vertical slice:
   early gate; if WU0 selects one trivial package, only its pinned declaration path enters the slice.
   General package/`@types`/declaration-layout coverage stays in `15`, and no local fallback resolver
   is added;
-- consume the minimal ambient declarations needed by the witness through the shipped canonical
-  prelude path; do not add an unrelated hard-coded global-name shim;
+- consume the fixed shipped TypeScript 6.0.3 ES2025 full-host default-library profile unchanged;
+  do not add an alternate bounded prelude or a project-specific global-name shim;
 - distinguish type diagnostics from explicit unsupported-surface notices, and never represent an
   unvisited in-scope AST form as a clean check (the shipped surface inventory enforces the
   systematic guarantee);
@@ -51,17 +51,18 @@ Build one deliberately narrow, reusable vertical slice:
   files checked/skipped, unsupported forms, unresolved modules, and diagnostics by code/file.
 
 WU0 must select and pin a genuinely small, public strict-TypeScript project whose ambient and
-language surface fits the shipped model plus the shipped bounded prelude. Record its repository URL,
-commit, lockfile digest, install command, tsconfig, TypeScript oracle version, and every exercised
-resolver/prelude feature before implementation. Reject candidates that require broad Node/Bun
+language surface fits the shipped model plus the fixed production default-library profile. Record
+its repository URL, commit, lockfile digest, install command, tsconfig, TypeScript oracle version, and every exercised
+resolver/default-library feature before implementation. Reject candidates that require broad Node/Bun
 declarations, a non-Bundler resolution profile, generic standard-library methods, or a large package
-graph: the preview must not silently expand the bounded prelude into a partial `lib.d.ts` or a
-project-specific shim.
+graph: the preview must not alter the fixed default library or add a project-specific shim.
 
 `contember/deptective` commit `e953c79edc395f8933afaba3ad5b0c57c6afd676` remains a **later
 full-stack witness candidate**, not the preview witness. Its repository config uses NodeNext,
-package `.d.ts`, Node/Bun ambient declarations, `Promise`, `Map`, `Set`, and `JSON`; backlogs `14`
-and `15` own making that project meaningful after full lib/resolver support. It qualifies only
+package `.d.ts`, Node/Bun ambient declarations, `Promise`, `Map`, `Set`, and `JSON`. Archived
+backlog [`14`](../archive/backlog-14-libdts-loading.md) supplies the fixed default library; backlog
+`15` owns the remaining resolver and ambient-package breadth needed to make that project meaningful.
+It qualifies only
 through a Bundler-compatible witness config that preserves the program's type meaning; otherwise
 replace it rather than claiming NodeNext support. Its witness uses the checker-wide pinned 6.0.3
 oracle.
@@ -96,9 +97,9 @@ cycle behavior beyond the pinned slice.
 
 `src/main.rs`, `crates/typokat-frontend/src/frontend.rs` for resolver/config/source discovery,
 `crates/typokat-driver/src/driver.rs` for orchestration/reporting, deterministic module accounting,
-the ambient prelude path, a checked-in real-project smoke runner/descriptor, and CI. Full Bundler
-breadth and the later full-stack resolver witness are
-backlog `15`; full `lib.d.ts` and the later ambient
-witness are backlog `14`; cross-file parallel identity is backlog `16`.
+the fixed production default-library route, a checked-in real-project smoke runner/descriptor, and
+CI. Full Bundler breadth and the later full-stack resolver witness are
+backlog `15`; the shipped full `lib.d.ts` profile is fixed by archived backlog
+[`14`](../archive/backlog-14-libdts-loading.md); cross-file parallel identity is backlog `16`.
 
 <!-- Origin: post-sprint MVP-readiness audit, 2026-07-10. -->

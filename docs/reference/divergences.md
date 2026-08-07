@@ -489,7 +489,8 @@ completeness (`TK2515`/`TK2654`) (b06); private/protected constructor accessibil
 - **Non-object interface heritage topology is explicitly unavailable (over-report / OOS).** A
   local interface extending a tuple alias records `interface/heritage/topology` instead of
   publishing a partial base; `contextualTypeWithTuple.ts` is the exact official witness. The
-  analogous implicit-`Array` case is a standard-library dependency owned by backlog `14`.
+  analogous implicit-`Array` dependency is covered by the shipped full default library and is not
+  part of this residual topology divergence.
   <!-- div: id=interfaces/tuple-alias-heritage-topology dir=over scope=b-type-level-tail owner=../backlog/75-scope-surface-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 
 - **Unannotated class-method returns are externally `void`.** Class fill publishes an omitted method

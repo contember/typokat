@@ -98,7 +98,7 @@ EOF spans.
 | `TK2374` | Duplicate index signature |
 | `TK2391` | Function implementation is missing or not immediately following overload declarations |
 | `TK2394` | Overload signature is not compatible with its implementation signature |
-| `TK2397` | Declaration name conflicts with built-in global identifier (disabled backlog-14 acceptance; WU3 owns production) |
+| `TK2397` | Declaration name conflicts with built-in global identifier (shipped B14 diagnostic) |
 | `TK2411` | Property is incompatible with a string index signature |
 | `TK2413` | Numeric index type is not assignable to string index type |
 | `TK2428` | Merged declarations must have identical type parameters |
@@ -325,8 +325,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
 | `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
-| `b14_full_lib_loading/` | shipped backlog `14` production corpus (final lifecycle closure pending) | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
-| `b14_full_lib_loading_project/` | shipped backlog `14` production corpus (final lifecycle closure pending) | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
+| `b14_full_lib_loading/` | shipped backlog `14` production corpus; archived after final WU7 PASS and exact-`d1aa6d4` remote CI | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
+| `b14_full_lib_loading_project/` | shipped backlog `14` production corpus; archived after final WU7 PASS and exact-`d1aa6d4` remote CI | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
 | `b102_frozen_prefix_writes/` | shipped backlogs `102`/`103` regression net | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
 | `b102_frozen_prefix_writes_project/` | shipped backlog `102` project regression net | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
 | `b103_library_merge_correctness/` | shipped backlog `103` correctness tier | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
@@ -683,7 +683,8 @@ namespace owner remains.
 `deep.Intl.value` now contributes the same `TK2322` as tsc, so the synthetic suffix is exactly 66
 `TK2322` diagnostics with no `TK2304` and no added incomplete. These counts are exact accounting,
 not a broad allowlist. The namespace lifecycle closed that historical start gate. Production
-standard-library loading subsequently shipped under the active closure sprint; this proof does
+standard-library loading subsequently shipped under the archived closure sprint after final WU7
+PASS and exact-`d1aa6d4` remote CI; this proof does
 not by itself claim that owners `50`/`75` or checker 1.0 are complete.
 
 The WU6A addendum specifies standalone instantiated namespace values under ADR-0010. Five enabled

@@ -23,13 +23,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 - [`sprint-2026-07-25-checker-scaling.md`](sprint-2026-07-25-checker-scaling.md) —
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have
-  caught them. Runs alongside the full-lib sprint — different files.
-- [`sprint-2026-08-02-default-library-cutover-closure.md`](sprint-2026-08-02-default-library-cutover-closure.md) —
-  active backlog `14` closure sprint: production and the authoritative four-row performance gate
-  are shipped; WU7 independent review is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings, and
-  only exact `d1aa6d4` remote CI plus documentation lifecycle closure remain.
+  caught them. It previously ran alongside the now-archived full-library sprint in different files.
 - [`sprint-2026-07-12-real-project-preview.md`](sprint-2026-07-12-real-project-preview.md) —
   paused at WU0's zero-threshold public-witness gate; no implementation started.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, not started; gated on the default-library closure sprint's
-  lifecycle close, then requires a fresh HEAD re-verification before work starts.
+  planned behavior-preserving cleanup, now unblocked by the default-library closure; requires a
+  fresh HEAD re-verification before WU1 starts.

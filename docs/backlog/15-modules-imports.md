@@ -82,7 +82,9 @@ Both the small preview witness and the later full-stack witness from `72` must r
 supported Bundler oracle profile. `contember/deptective` remains a candidate only if its pinned
 witness can use a Bundler-compatible config without changing the program's type meaning; otherwise
 select a replacement instead of claiming NodeNext support. The witness pins its lockfile/tool
-versions and the checker-wide TypeScript oracle; backlog `14` owns its ambient-library half.
+versions and the checker-wide TypeScript oracle. The ambient-library half shipped with archived
+backlog [`14`](../archive/backlog-14-libdts-loading.md); this item owns the remaining resolver,
+module-graph, import/export, and declaration-package breadth.
 
 This item consumes resolver-affecting compiler options; it does **not** own compiler-option
 validation diagnostics. Unknown/incompatible-option `5xxx` errors, emit-only switches, and CLI

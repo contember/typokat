@@ -9,7 +9,7 @@
 > -- --nocapture`: 9 differences across 574 files, clustered in `this` utility shadowing, obsolete
 > RegExp accounting, global value publication, and local `Array` heritage. No full release,
 > official-suite, differential, package, or benchmark closure is claimed. The plan is superseded by
-> [`sprint-2026-08-02-default-library-cutover-closure.md`](../sprints/sprint-2026-08-02-default-library-cutover-closure.md),
+> [`sprint-2026-08-02-default-library-cutover-closure.md`](sprint-2026-08-02-default-library-cutover-closure.md),
 > which starts from that exact state and puts the library-vs-project freeze boundary behind a
 > bounded decision gate before any more collision-route work.
 
@@ -22,7 +22,7 @@ compiling that library from source in every process. (The goal read "at least 2�
 when [`ADR-0017`](../decisions/0017-compile-the-default-library-from-source.md) retired the shipped
 snapshot that made 2× reachable — see the Binding performance claim below.)
 
-**Theme.** Backlog [`14`](../backlog/14-libdts-loading.md) is not complete merely because the 82
+**Theme.** Backlog [`14`](backlog-14-libdts-loading.md) is not complete merely because the 82
 declaration files can finish in a test-only pipeline. The production CLI must actually use the
 result, preserve every library-owned diagnostic/incomplete outcome, support the ADR-0011
 base/delta and collision semantics, and win a fail-closed apples-to-apples benchmark. The previous

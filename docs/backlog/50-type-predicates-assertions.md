@@ -12,8 +12,8 @@ calls to them narrow nothing (safe direction, but they are the idiomatic narrowi
 of real-world code, and `lib.d.ts` ships them — `Array.isArray`).
 
 The pinned TS 6.0.3 ES5 readiness gate records exactly 8
-`annotation-lower/type-predicate/self` incompletes owned here. They independently block checker
-1.0, but are not the remaining architecture dependency that prevents backlog `14` from starting.
+`annotation-lower/type-predicate/self` incompletes owned here. The shipped full default library
+exposes these records without approximating them; they remain independent checker-1.0 work.
 See [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 
 ## Problem

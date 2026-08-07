@@ -6,21 +6,21 @@ blocked-by: []
 
 # 94 — A flat 3× per-file regression sits under the modules exponent
 
-**Summary.** `modules-100000` costs **0.997 s / 372 MB** at HEAD against **0.30 s / 154 MB** at
-`f065e89` (2026-07-09) on the identical corpus — both reproduced today. Bisected to **four steps**,
-all eager per-declaration substrate built before anything consumes it. Getting back under
-0.35 s / 200 MB needs the **namespace** and **lexical-event** substrates fixed; neither alone covers
-the 165 MB gap. Effort L.
+**Summary.** On 2026-07-26, `modules-100000` cost **0.997 s / 372 MB** at the then-HEAD endpoint
+`a0a5a6c` against **0.30 s / 154 MB** at `f065e89` (2026-07-09) on the identical corpus. The dated
+bisect found four eager per-declaration substrate steps. It predates the source-backed default-
+library cutover; remeasure the current baseline before using its impact ranking. The recorded
+0.35 s / 200 MB target and historical evidence remain. Effort L.
 
 ## Problem
 
-`c8fc029` removed the last superlinear term (exponent 2.54 → 1.07). What remains is a flat constant,
-and it is large:
+At the measured 2026-07-26 endpoint, `c8fc029` removed the last superlinear term (exponent 2.54 →
+1.07). What remained there was a large flat constant:
 
 | | median | peak RSS | vs tsgo |
 |---|---|---|---|
 | `f065e89` (2026-07-09) | **0.30 s** | **154 MB** | tsgo 0.3741 s — **typokat won** |
-| HEAD | 0.997 s | 372 MB | tsgo ~0.30 s — 3.3× slower |
+| `a0a5a6c` (2026-07-26 endpoint) | 0.997 s | 372 MB | tsgo ~0.30 s — 3.3× slower |
 
 Both endpoints measured on the same box on 2026-07-26 with a corpus proven md5-identical
 (`696772268a1328475b0bd8895c364b73`) throughout; `tooling/bench/typobench.py` is byte-identical at
@@ -37,7 +37,7 @@ carries the full signature at 1/5 the cost.
 | 2 | `a7923b6` | 07-14 | +13.8 MB | 11.4 KB/file | deliberate intent, accidental representation |
 | 3 | `b6ecfa4` | 07-15 | +8.4 MB | } 15.1 KB/file | accidental |
 | 4 | `fe61867` | 07-15 | +11.1 MB | } combined | accidental |
-| 5 | diffuse 07-16 → HEAD | | +14.2 MB, no step >4.4 MB | ~7.7 KB/file | unattributed |
+| 5 | diffuse 07-16 → 2026-07-26 endpoint | | +14.2 MB, no step >4.4 MB | ~7.7 KB/file | unattributed |
 
 Per-file constants were confirmed at 312 / 1,249 / 2,499 files (10.9–11.9 KB/file for step 2;
 25.2–27.2 KB/file cumulative through step 4) and extrapolate to 213 MB at 6,249 files against a
@@ -67,14 +67,16 @@ takes wall 4.79 s → 0.192 s with RSS unchanged (81.4 → 81.6 MB). Two indepen
   file producing an 11-field `MergeParticipant` per declaration, keyed by a `MergeKey` that **owns a
   `String`** (`name.to_string()` for every declaration in the project). Its own commit message says
   the metadata is recorded "without publishing it to production resolution" — built eagerly before
-  anything consumed it. HEAD now walks each file ~9 times before the checking walk.
+  anything consumed it. The 2026-07-26 endpoint walked each file ~9 times before the checking walk.
 - **`53ad026`** (07-23) — every hot arena became `LayeredVec`/`LayeredMap`; `get` became a
   compare + subtract + `Arc<[T]>` deref, map `get` became `base.get().or_else(local.get)`. Only
-  +1.5 MB, so it is a **time** multiplier applied uniformly across all eight phases. With no library
-  loaded the base is always empty, so it is collapsible.
+  +1.5 MB, so it was a **time** multiplier applied uniformly across all eight measured phases. At
+  the 2026-07-26 endpoint, the then-production route left the layered base empty. That assumption
+  predates the source-backed cutover and requires fresh measurement.
 
-**Library loading is not implicated.** Startup floor at HEAD is 5.5 MB / ~0 ms; production still uses
-`crates/typokat-check/src/prelude.ts` (ADR-0012), and the 21 MB `include_bytes!` snapshot is `.rodata`, never read.
+**The 2026-07-26 bisect did not implicate library loading.** Its measured startup floor was 5.5 MB /
+~0 ms under the route that existed then. The source-backed cutover shipped later, so this is not a
+current startup or route claim. Re-establish the baseline before choosing or ranking a fix.
 
 The largest step (+19.5 MB combined) is **behaviourally inert at its own boundary**: 356 fixtures plus
 `errors-10000.ts` produce byte-identical output across it, 4,661 diagnostic lines each. It is
@@ -83,7 +85,8 @@ bisect — identical diagnostic multiset, one column regression, which is [`90`]
 
 ## Approach / acceptance
 
-All of the substrates must shrink; the measured constants say no single one covers the 165 MB gap.
+The 2026-07-26 evidence implicated all of these substrates and found that no single one covered the
+165 MB gap. Fresh measurement must confirm the current ranking before implementation.
 
 > **Correction (2026-07-26).** An earlier revision ranked "namespace substrate (~94 MB)" first with
 > `MergeKey` interning as its lead bullet. The ~94 MB is `b6ecfa4` **plus** `fe61867` — the
@@ -96,15 +99,15 @@ All of the substrates must shrink; the measured constants say no single one cove
 > gives 5.9 MB at 1,249 files against the bisect's measured +11.1 MB for `fe61867`, so the merge
 > substrate is ~53 % of that step and the model does not exceed it. The ranking below is corrected.
 
-Ranked by measured MB, not by effort:
+Ranked by measured MB at the 2026-07-26 endpoint, not by effort:
 
 1. **Lexical-event substrate** (~71 MB, the largest single item) — replace the `BTreeMap` with a
    dense arena indexed by reservation ordinal (M / medium), and make `deferred`/`incomplete` tickets
    lazy (M / medium). A full revert is **not available**: ADR-0008 requires the deterministic replay
    order. Existing source-order tests are the gate.
-2. **`DeclarationTable`** (`b6ecfa4`) — the other half of the ~94 MB pair, and untouched so far. One
-   dense row plus one hash entry per source declaration, eagerly materialized by a full AST walk the
-   checker then repeats. Size it before scoping the fix.
+2. **`DeclarationTable`** (`b6ecfa4`) — the other half of the ~94 MB pair, untouched at the dated
+   endpoint. One dense row plus one hash entry per source declaration, eagerly materialized by a
+   full AST walk the checker then repeats. Size it before scoping the fix.
 3. **Walk deduplication** — 9 walks per file down to 4–5. Overlaps with 2.
 4. **Namespace merge substrate** (~30 MB total, ~9 MB reachable at low risk) — intern `MergeKey`
    names, and stop cloning `participants` into `MergeRecord.declarations` when the `placements` map
@@ -117,10 +120,13 @@ Ranked by measured MB, not by effort:
    `crates/typokat-binder/src/binder/references.rs:808`), so synthesising them on demand is a
    behaviour change, not a representation
    change, and is deliberately deferred.
-5. **Collapse the layered indirection when `base_len() == 0`** — time only.
+5. **Collapse the layered indirection when `base_len() == 0`** — a time-only candidate at the dated
+   endpoint; current routes require fresh measurement.
 6. Re-measure. The diffuse ~7.7 KB/file tail from 07-16 onward needs its own pass if still short.
 
-Acceptance: `modules-100000` ≤0.35 s and ≤200 MB, which is what it takes to beat `tsgo` on this
+Before implementation, remeasure `modules-100000` at fresh HEAD under the current source-backed
+route. Acceptance remains ≤0.35 s and ≤200 MB, which is what the dated comparator evidence says is
+required to beat `tsgo` on this
 family again; diagnostics byte-identical over `tests/cases/` and `errors-10000.ts`; official-suite
 ratchet at 0 regressions. Do not weaken ADR-0008's replay determinism to get there.
 

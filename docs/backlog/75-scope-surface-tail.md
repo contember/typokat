@@ -11,8 +11,8 @@ manifest: each remaining family is implemented with a witness or explicitly move
 with a documented, sound boundary.
 
 The pinned TS 6.0.3 ES5 readiness gate assigns 173 explicit annotation incompletes here:
-polymorphic `this` 164, `intrinsic` 5, `symbol` 3, and `bigint` 1. This is independent
-1.0 work and does not prevent backlog `14` from starting. The exact
+polymorphic `this` 164, `intrinsic` 5, `symbol` 3, and `bigint` 1. The shipped full default library
+preserves these explicit records; they remain independent 1.0 work. The exact
 sites and counts are enforced by
 [`readiness.toml`](../../tests/fixtures/lib-es5-6.0.3/readiness.toml).
 
@@ -87,13 +87,15 @@ local generic class heritage:
   `class/class-index-signature/self`; class index signatures remain this item's boundary.
 - `contextualTypeWithTuple.ts` records `interface/heritage/topology` for an interface extending a
   tuple alias and therefore moves `IN` → `OOS:unsupported`.
-  `arityAndOrderCompatibility01.ts` makes the same state transition through the implicit
-  standard-library `Array` and is owned by backlog `14`, not by generic class heritage.
+  The implicit standard-library `Array` dependency in `arityAndOrderCompatibility01.ts` shipped
+  with the full default library; any remaining topology behavior stays with this item's generic
+  class-heritage scope.
 - `partiallyNamedTuples{,2}.ts` prove labels are transparent while conditional/mapped rest
   containers that are not provably array-like retain
   `annotation-lower/tuple-rest-element/non-array`; `partiallyNamedTuples3.ts` remains owned by
-  backlog `71` solely for spread-call traversal. In `partiallyNamedTuples2.ts`, `Iterable` is a
-  backlog `14` library dependency, while `null!` remains backlog `49`'s expression boundary.
+  backlog `71` solely for spread-call traversal. In `partiallyNamedTuples2.ts`, the `Iterable`
+  dependency now comes from the shipped full default library, while `null!` remains backlog `49`'s
+  expression boundary.
 - `dependentDestructuredVariables.ts` exposes the existing selected-key listener over-report after
   its event tuple labels lower; the multi-key `Events[K]` callback still conservatively sees the
   whole tuple union.

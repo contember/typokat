@@ -192,7 +192,8 @@ not the broad module-semantics milestone. Physical resolver ownership follows
 - **Scope.** Document the exact public project CLI, summary channels, exit behavior, pinned witness,
   reproducibility command, Bundler-only profile, `oxc_resolver` version/options, thresholds, and
   narrow limitations. Mark `D-real-project-preview` complete, delete backlog `72`, preserve
-  `14`/`15`/`16` ownership, stamp the sprint outcome, archive it, and update the docs indexes. Record
+  archived `14` profile facts and `15`/`16` ownership, stamp the sprint outcome, archive it, and
+  update the docs indexes. Record
   clean/mutation identity totals and any owned safe-direction or explicitly unsupported resolver
   mismatch in the outcome.
 - **Acceptance / witness.** `cargo fmt --check`; `cargo test`; `cargo clippy --all-targets -- -D
@@ -206,10 +207,9 @@ not the broad module-semantics milestone. Physical resolver ownership follows
 
 ## Out of scope (explicit)
 
-- Default-library changes or project-specific ambient shims. Backlog
-  [`14`](../backlog/14-libdts-loading.md) has shipped its production work and remains active only
-  for exact `d1aa6d4` remote CI and documentation closure after WU7's **CONDITIONAL PASS** with
-  zero HIGH/MEDIUM findings; this preview consumes that fixed profile.
+- Default-library changes or project-specific ambient shims. Archived backlog
+  [`14`](../archive/backlog-14-libdts-loading.md) shipped the fixed production profile after final
+  WU7 PASS and exact-`d1aa6d4` remote CI; this preview consumes that profile unchanged.
 - General Bundler package/`node_modules`/`@types` coverage, package conditions/layouts,
   declaration packages, project enumeration, and broad import/export semantics — backlog
   [`15`](../backlog/15-modules-imports.md).

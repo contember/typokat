@@ -25,7 +25,7 @@ claiming `lib.d.ts` fidelity.
 utility-type-only prelude to the pinned-project preview
 in [`72`](../backlog/72-real-project-preview-readiness.md). It adds only declarations
 the implemented model can faithfully check, measures their official-suite effect, and
-leaves one canonical loading path for backlog [`14`](../backlog/14-libdts-loading.md)
+leaves one canonical loading path for backlog [`14`](backlog-14-libdts-loading.md)
 to replace.
 
 ## Refs re-verified at HEAD (2026-07-11)
@@ -166,7 +166,7 @@ to replace.
 ## Out of scope (explicit)
 
 - Full `lib.d.ts`, lib file discovery/loading, and parallel shared-prelude work —
-  backlog [`14`](../backlog/14-libdts-loading.md) owns the canonical replacement.
+  backlog [`14`](backlog-14-libdts-loading.md) owns the canonical replacement.
 - Generic methods, namespaces/declaration merging, `this` parameters, enums, and
   `satisfies`/`as const` — Track A backlogs [`41`](../backlog/41-generic-methods.md),
   [`43`](sprint-2026-07-15-namespaces-declaration-merging.md),

@@ -9,7 +9,7 @@ date: 2026-07-16
 
 ## Context
 
-Backlog [`14`](../backlog/14-libdts-loading.md) replaces the bounded `src/prelude.ts` with
+Backlog [`14`](../archive/backlog-14-libdts-loading.md) replaces the bounded `src/prelude.ts` with
 typokat's sole 1.0 standard-library profile and delivers parallelism Stage 1. The authoritative
 product oracle is `tsc` 6.0.3 with `--strict --target es2025`; typokat 1.0 does not select a
 different target, `--lib` set, host profile, or installed TypeScript. The profile is TypeScript

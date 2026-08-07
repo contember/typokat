@@ -7,8 +7,10 @@ blocked-by: []
 # 86 — Free-param summary cache discards its sealed base on any mutation
 
 **Summary.** `FreeParamSummaryCache::align_with` resets its **base** map, not just its local delta, so the
-first user `<T extends …>` will discard every free-param summary of the frozen 82-file library base.
-Latent today, a hard cliff at the ADR-0012 library-base cutover. One-line fix, effort S.
+first user `<T extends …>` can discard free-param summaries retained in a frozen library base. The
+source-backed production cutover has shipped. Route impact now requires fresh-HEAD verification
+because standalone complete-source and persistent shared-provider routes have different lifecycles.
+The reset itself remains live. Effort S.
 
 ## Problem
 
@@ -23,11 +25,11 @@ once per constrained generic binder — and `fill_reserved_type_batch`
 (`crates/typokat-types/src/types/intern/mod.rs:682`) —
 once per interface SCC.
 
-**Why it is invisible right now:** the production CLI still bootstraps `crates/typokat-check/src/prelude.ts` rather than a
-frozen library base, so `base` is empty and clearing it costs nothing. After the ADR-0012 cutover the
-base holds the whole 82-file library, and the first user generic with a constraint throws all of it
-away — forcing `compute_application_summaries` to re-walk library subgraphs for the remainder of the
-run. That is precisely the work the shipped snapshot exists to avoid.
+**Current route question.** The 2026-07-25 finding predated the source-backed production cutover.
+The standalone CLI now uses complete-source compilation, while persistent consumers may acquire the
+shared provider base. Re-verify at fresh HEAD whether each route presents a non-empty summary base
+when the mutation occurs and measure any resulting `compute_application_summaries` re-walk. Do not
+infer current route cost from the retired prelude or snapshot lifecycle.
 
 ## Approach / acceptance
 
@@ -44,6 +46,7 @@ one.
 ## Touch points
 
 `crates/typokat-types/src/types/intern/mod.rs` (`FreeParamSummaryCache::align_with`, `DerivedGraphCache::align_with`),
-`crates/typokat-types/src/types/substitute/mod.rs` (`compute_application_summaries`), the library base cutover path.
+`crates/typokat-types/src/types/substitute/mod.rs` (`compute_application_summaries`), standalone
+complete-source and persistent shared-provider routes.
 
-<!-- Origin: type-store complexity hunt, 2026-07-25 (finding 3, latent). -->
+<!-- Origin: type-store complexity hunt, 2026-07-25 (finding 3). -->

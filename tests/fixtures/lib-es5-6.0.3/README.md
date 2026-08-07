@@ -3,9 +3,9 @@
 This fixture proves the current type model against one exact `lib.es5.d.ts`; it does not load a
 standard library into other source files. `readiness.toml` is the machine contract and records the
 historical **GO for starting backlog 14** result. The namespace/declaration-merging lifecycle
-closed that start gate; the full production default-library cutover subsequently shipped and now
-awaits only exact `d1aa6d4` remote CI and documentation closure after WU7's **CONDITIONAL PASS**
-with zero HIGH/MEDIUM findings. This fixture remains an explicit-input model proof, not the
+closed that start gate; the full production default-library cutover subsequently shipped and was
+archived after exact-`d1aa6d4` remote CI and final WU7 **PASS** with zero unresolved HIGH/MEDIUM
+findings. This fixture remains an explicit-input model proof, not the
 production-loader witness or checker 1.0 readiness. The owner-50 and owner-75 incompletes remain
 release work; backlog `63` owns canonical Callable/Newable compatibility and surplus cardinality.
 

@@ -1,3 +1,24 @@
+# OUTCOME — SHIPPED (2026-08-07)
+
+The exact pinned TypeScript 6.0.3 ES2025 full-host library is the production default on the public
+driver, CLI, and batch routes. The production prelude fallback is deleted. The B14 corpus,
+project-global merge routes, package gate, official-suite ratchet, differential gates, and local
+closure gate are green. WU7 ended in independent **PASS** with zero unresolved HIGH or MEDIUM
+findings after GitHub Actions run `31118462286`, attempt 3, verified exact head
+`d1aa6d4c5f99dd5b95260b6d90203af45a24300a`; all eight push-applicable jobs passed and the scheduled
+truth job was correctly skipped for the push event. The preceding WU5 remote gate was run
+`31114984298`, with all eight push-applicable jobs green.
+
+The authoritative fresh-process evidence is
+`tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`, SHA-256
+`a120f159bb6bb68253dd6df80d03c1e035bf69a860947d79c2cdb781e82dda7a`. Its claim is limited to the
+four approved rows: `fast-clean`, `fast-errors`, `collision`, and `fanout`. Every recorded
+window/row cell exceeded the 1.25 engineering target on median, p95 ratio, and bootstrap lower
+bound. It is not a general checker-performance claim. No production, build, collector, or contract
+change followed that measurement, so the evidence remains valid at closure. Backlog `14` is
+archived; resolver breadth, cross-file parallel identity, incrementality, and independently owned
+semantic/parity tails remain open.
+
 # Sprint — default-library cutover closure (2026-08-02)
 
 **Goal.** Ship the exact pinned TypeScript 6.0.3 ES2025 full-host library through the ordinary
@@ -232,7 +253,8 @@ assumption.
   a separately evidenced decision.
 - Stage-2 parallel export identity, stable structural hashes, incremental checking, and language
   service work.
-- Namespace binder refactoring; its active sprint remains gated on this cutover closing.
+- Namespace binder refactoring; its active sprint was gated on this cutover closing and is now
+  unblocked, subject to its required fresh-HEAD re-verification.
 
 ## Decisions
 
@@ -423,3 +445,9 @@ after a WU6 NO-GO, but it cannot support a product claim.
   parsers passed 2/2, formatting and diff checks were clean, and docs lint remained unchanged at 20
   historical-link findings. The exact-`d1aa6d4` remote-CI outage remains the sole technical closure
   gate; WU7 is not yet final PASS and no OUTCOME is declared.
+- **2026-08-07 — exact remote gate and WU7 closed.** GitHub Actions run `31118462286`, attempt 3,
+  verified exact head `d1aa6d4c5f99dd5b95260b6d90203af45a24300a`: all eight push-applicable
+  jobs passed and the scheduled truth job was correctly skipped for the push event. The independent
+  reviewer then returned final PASS with zero unresolved HIGH or MEDIUM findings. No production,
+  build, collector, or contract change followed the authoritative measurement; lifecycle closure
+  archives this sprint and backlog `14` without widening the four-row performance claim.

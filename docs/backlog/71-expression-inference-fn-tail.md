@@ -33,8 +33,8 @@ WU4-A adversarial review (all verified pre-existing at that sprint's HEAD).
   The update needs a target-wide owner because update-operand traversal is otherwise supported.
 - **`for-of` over a non-iterable / `for-in` over a non-object are undiagnosed**
   (tsc TS2488/TS2407) — the element type falls back to the error type (no cascade,
-  but no diagnostic either). Needs at least a structural iterability check; full
-  fidelity needs `lib.d.ts` (backlog `14`).
+  but no diagnostic either). The full default library is now available; this item still owns the
+  structural iteration-target checks and diagnostics that consume it.
 
 ## Approach / acceptance
 

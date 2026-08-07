@@ -1,6 +1,6 @@
 // Sorted after every mutation-capable project. No private rebuild may leak a root, member, global
 // object contribution, or unsupported merge into the shared base used by this external module.
-// Oracle: TS2304 x11, TS2339 x3, TS7017 x4, and TS2322 x2. This disabled typokat corpus
+// Oracle: TS2304 x11, TS2339 x3, TS7017 x4, and TS2322 x2. This shipped typokat corpus
 // normalizes TS7017 to the existing member-missing TK2339; bare absent roots remain TK2304.
 export {};
 

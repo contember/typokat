@@ -559,9 +559,10 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   semantic snapshot was built and then
   retired by [ADR-0017](../decisions/0017-compile-the-default-library-from-source.md): the library is
   compiled from its 82 vendored sources in every process. Production and the authoritative timing
-  gate are shipped. WU7 independent review is **CONDITIONAL PASS** with zero HIGH/MEDIUM findings;
-  only exact `d1aa6d4` remote CI and lifecycle closure remain under the active
-  [cutover-closure sprint](../sprints/sprint-2026-08-02-default-library-cutover-closure.md).
+  gate are shipped. The archived
+  [cutover-closure sprint](../archive/sprint-2026-08-02-default-library-cutover-closure.md) records
+  final WU7 independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4`
+  remote CI.
   The authoritative evidence measures commit `d1aa6d4` and is retained by `f70e587` at
   `tooling/full-lib-bench/evidence/candidate-d1aa6d4.json`. It reports GO only for the four approved
   rows — `fast-clean`, `fast-errors`, `collision`, and `fanout` — with median, p95 ratio, and

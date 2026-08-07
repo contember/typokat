@@ -22,8 +22,9 @@ module locals would leak or split identity; attaching them after publication wou
 existing class/function freeze barriers.
 
 The pinned ES5 library does not depend on this path. Its ambient variables and constructor values
-are top-level declarations loaded by [`14`](14-libdts-loading.md), rather than members of a
-`declare global` augmentation.
+are top-level declarations loaded by shipped backlog
+[`14`](../archive/backlog-14-libdts-loading.md), rather than members of a `declare global`
+augmentation.
 
 ## Approach / acceptance
 

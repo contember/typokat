@@ -23,7 +23,7 @@
 library profile, compiled once into an AST-free shared semantic base with identity-preserving
 private deltas and a correctness-first private rebuild for global collisions.
 
-**Theme.** Backlog [`14`](../backlog/14-libdts-loading.md) and parallelism Stage 1 are one
+**Theme.** Backlog [`14`](backlog-14-libdts-loading.md) and parallelism Stage 1 are one
 capability: real standard-library declarations must be ordinary checker input, but their immutable
 semantic result must not be parsed, bound, checked, or cloned once per worker. The binding decision
 is [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md). This sprint remains
