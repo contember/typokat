@@ -13,7 +13,8 @@ use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
     parse_source_errors, run_clean_project_frontend_with_deferred_auxiliary, run_project_frontend,
     run_project_frontend_with_auxiliary, run_project_parse_only, run_source_frontend,
-    AuxiliarySourceInput, FileInput, ProjectFrontendRun, ProjectProgram,
+    AccountedProjectProduct, AuxiliarySourceInput, DeferredProjectFrontendError, FileInput,
+    ProjectFrontendRun, ProjectModuleInventory, ProjectProgram, ProjectResolutionMode, ProjectRoot,
 };
 use crate::library::{
     FrozenLibraryBase, LibraryBaseProvider, LibraryInitError, RoutedLibraryProject,
@@ -23,6 +24,7 @@ use crate::library::{
 use crate::span::Span;
 use crate::types::Interner;
 use rayon::prelude::*;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +116,8 @@ pub struct CheckOutput {
     /// In-scope AST positions the checker skipped (sprint 2026-07-10, WU2). Nothing
     /// emits into this yet; when populated it drives exit `3` (incomplete).
     pub incomplete: Vec<IncompleteSurface>,
+    /// Project/module forms that were inventoried but are outside the admitted profile.
+    pub project_notices: Vec<String>,
 }
 
 impl CheckOutput {
@@ -126,7 +130,7 @@ impl CheckOutput {
     /// Whether the run recorded any incomplete surface. Exit `3` takes precedence
     /// over exit `1`, so the CLI checks this before [`has_errors`](CheckOutput::has_errors).
     pub fn is_incomplete(&self) -> bool {
-        !self.incomplete.is_empty()
+        !self.incomplete.is_empty() || !self.project_notices.is_empty()
     }
 }
 
@@ -162,6 +166,12 @@ pub struct FileReport {
     pub name: String,
     pub source: String,
     pub output: CheckOutput,
+}
+
+/// Production project reports plus the frontend-owned pre-semantic inventory.
+pub struct ProjectCheckRun {
+    pub reports: Vec<FileReport>,
+    pub inventory: ProjectModuleInventory,
 }
 
 /// Check many files in parallel, with an independent allocator/interner per file.
@@ -229,7 +239,8 @@ pub fn check_project_once(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, Dri
     #[cfg(test)]
     {
         let (reports, receipt, complete_source_receipt) = on_standalone_check_worker(|| {
-            let reports = check_project_once_inner(inputs);
+            let reports = check_project_once_inner(inputs, ProjectResolutionMode::ExplicitFileList)
+                .map(|run| run.reports);
             let receipt = crate::check::checker::project_binding_thread_receipt_for_test();
             let complete_source_receipt = crate::check::checker::library_compiler::complete_source_route_thread_receipt_for_test();
             (reports, receipt, complete_source_receipt)
@@ -244,9 +255,36 @@ pub fn check_project_once(inputs: Vec<FileInput>) -> Result<Vec<FileReport>, Dri
     }
     #[cfg(not(test))]
     {
-        on_standalone_check_worker(|| check_project_once_inner(inputs))?
-            .map_err(complete_source_driver_error)
+        on_standalone_check_worker(|| {
+            check_project_once_inner(inputs, ProjectResolutionMode::ExplicitFileList)
+                .map(|run| run.reports)
+        })?
+        .map_err(complete_source_driver_error)
     }
+}
+
+/// Check one config-backed Bundler project through the same production lifecycle.
+pub fn check_bundler_project_once(
+    inputs: Vec<FileInput>,
+    project_directory: PathBuf,
+    roots: Vec<ProjectRoot>,
+) -> Result<ProjectCheckRun, DriverError> {
+    if inputs.is_empty() {
+        return Ok(ProjectCheckRun {
+            reports: Vec::new(),
+            inventory: ProjectModuleInventory::default(),
+        });
+    }
+    on_standalone_check_worker(|| {
+        check_project_once_inner(
+            inputs,
+            ProjectResolutionMode::BundlerProject {
+                project_directory,
+                roots,
+            },
+        )
+    })?
+    .map_err(complete_source_driver_error)
 }
 
 enum CompleteSourceCheckError {
@@ -265,9 +303,11 @@ fn complete_source_driver_error(error: CompleteSourceCheckError) -> DriverError 
 
 fn check_project_once_inner(
     inputs: Vec<FileInput>,
-) -> Result<Vec<FileReport>, CompleteSourceCheckError> {
+    resolution_mode: ProjectResolutionMode,
+) -> Result<ProjectCheckRun, CompleteSourceCheckError> {
     let run = run_clean_project_frontend_with_deferred_auxiliary(
         inputs,
+        resolution_mode,
         crate::library::packaged_library_source_inputs,
         move |_, source_specs, library_programs, units, _parse_work| {
             #[cfg(test)]
@@ -295,26 +335,51 @@ fn check_project_once_inner(
         },
     );
     match run.product {
-        Ok(None) => Ok(parse_reports_from_frontend_run(
-            run.inputs,
-            run.parse_errors,
-        )),
-        Err(error) => Err(CompleteSourceCheckError::Library(error)),
-        Ok(Some(Err(error))) => Err(CompleteSourceCheckError::Check(format!(
+        Err(DeferredProjectFrontendError::Auxiliary(error)) => {
+            Err(CompleteSourceCheckError::Library(error))
+        }
+        Err(DeferredProjectFrontendError::Inventory(error)) => Err(
+            CompleteSourceCheckError::Check(format!("project inventory failed: {error}")),
+        ),
+        Ok(AccountedProjectProduct {
+            inventory,
+            product: None,
+        }) => {
+            let mut reports = parse_reports_from_frontend_run(run.inputs, run.parse_errors);
+            attach_project_notices(&mut reports, &inventory.notices);
+            Ok(ProjectCheckRun { reports, inventory })
+        }
+        Ok(AccountedProjectProduct {
+            product: Some(Err(error)),
+            ..
+        }) => Err(CompleteSourceCheckError::Check(format!(
             "complete-source project compilation failed: {error:?}"
         ))),
-        Ok(Some(Ok(results))) => project_reports_from_frontend_run(ProjectFrontendRun {
-            inputs: run.inputs,
-            parse_errors: run.parse_errors,
-            product: (
-                results
-                    .iter()
-                    .map(|result| result.module_ordinal.index())
-                    .collect(),
-                Ok(results),
-            ),
-        })
-        .map_err(|message| CompleteSourceCheckError::Check(message.to_owned())),
+        Ok(AccountedProjectProduct {
+            inventory,
+            product: Some(Ok(results)),
+        }) => {
+            let mut reports = project_reports_from_frontend_run(ProjectFrontendRun {
+                inputs: run.inputs,
+                parse_errors: run.parse_errors,
+                product: (
+                    results
+                        .iter()
+                        .map(|result| result.module_ordinal.index())
+                        .collect(),
+                    Ok(results),
+                ),
+            })
+            .map_err(|message| CompleteSourceCheckError::Check(message.to_owned()))?;
+            attach_project_notices(&mut reports, &inventory.notices);
+            Ok(ProjectCheckRun { reports, inventory })
+        }
+    }
+}
+
+fn attach_project_notices(reports: &mut [FileReport], notices: &[String]) {
+    if let Some(report) = reports.first_mut() {
+        report.output.project_notices.extend_from_slice(notices);
     }
 }
 
@@ -463,6 +528,7 @@ fn parse_only_source_output(source: &str) -> CheckOutput {
         diagnostics: Vec::new(),
         parse_errors: parse_source_errors(source),
         incomplete: Vec::new(),
+        project_notices: Vec::new(),
     }
 }
 
@@ -510,12 +576,14 @@ fn continue_source_with_library_runtime(
                 diagnostics,
                 parse_errors: run.parse_errors,
                 incomplete,
+                project_notices: Vec::new(),
             })
         }
         None => Ok(CheckOutput {
             diagnostics: Vec::new(),
             parse_errors: run.parse_errors,
             incomplete: Vec::new(),
+            project_notices: Vec::new(),
         }),
     }
 }
@@ -568,6 +636,7 @@ fn parse_reports_from_frontend_run(
                 diagnostics: Vec::new(),
                 parse_errors,
                 incomplete: Vec::new(),
+                project_notices: Vec::new(),
             },
         })
         .collect()
@@ -902,6 +971,7 @@ fn assemble_project_reports(
                     diagnostics,
                     parse_errors,
                     incomplete,
+                    project_notices: Vec::new(),
                 },
             })
         })

@@ -4,14 +4,19 @@
 
 use std::fmt::Display;
 use std::io::{BufRead, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use typokat::diagnostics::{self, DiagnosticFormat};
 use typokat::driver::{
-    check_project, check_project_once, production_cli_route, production_library_route, DriverError,
-    FileReport,
+    check_bundler_project_once, check_project, check_project_once, production_cli_route,
+    production_library_route, DriverError, FileReport, ProjectCheckRun,
 };
-use typokat::frontend::FileInput;
+use typokat::frontend::{
+    discover_project, DiscoveredProject, FileInput, ProjectDiscoveryError, ProjectModuleInventory,
+    ProjectNotice,
+};
+use typokat::span::LineIndex;
 
 // jemalloc: the run is allocation-churn heavy (building the default library from
 // source), and glibc malloc costs ~20 ms of it. Declared here, not in the library:
@@ -26,7 +31,7 @@ const EXIT_USAGE: u8 = 2;
 /// Exit code when the run is incomplete — the checker skipped an in-scope surface.
 /// Takes precedence over [`EXIT_ERRORS`] even when ordinary diagnostics also exist.
 const EXIT_INCOMPLETE: u8 = 3;
-const USAGE: &str = "usage: typokat check [--format rich|compact] <file.ts>...";
+const USAGE: &str = "usage: typokat check [--format rich|compact] [--project-summary json] <input>";
 const LIBRARY_INFO_USAGE: &str = "usage: typokat library-info --format json";
 const LIBRARY_INFO_SCHEMA: u32 = 2;
 const OFFICIAL_BATCH_SCHEMA: u64 = 1;
@@ -132,14 +137,24 @@ where
     let command = args.get(1).map(String::as_str);
     let result = match command {
         Some("check") => parse_check_args(&args[2..]).and_then(|check_args| {
-            check_paths_with_io(
-                &check_args.paths,
-                check_args.format,
-                stderr,
-                project_check,
-                format_project_error,
-            )
-            .map(CheckStatus::exit_code)
+            if check_args.project_summary {
+                check_project_path_with_summary(
+                    &check_args.paths,
+                    check_args.format,
+                    stdout,
+                    stderr,
+                )
+                .map(CheckStatus::exit_code)
+            } else {
+                check_paths_with_io(
+                    &check_args.paths,
+                    check_args.format,
+                    stderr,
+                    project_check,
+                    format_project_error,
+                )
+                .map(CheckStatus::exit_code)
+            }
         }),
         Some("library-info") => parse_library_info_args(&args[2..])
             .and_then(|()| write_library_info_to(stdout))
@@ -291,6 +306,10 @@ fn render_official_batch_reports(reports: &[FileReport]) -> Result<(CheckStatus,
     let mut had_errors = false;
     let mut had_incomplete = false;
     for report in reports {
+        for notice in &report.output.project_notices {
+            writeln!(output, "project: {notice}")
+                .map_err(|error| format!("failed to render project notice: {error}"))?;
+        }
         for parse_error in &report.output.parse_errors {
             writeln!(output, "error: {parse_error}")
                 .map_err(|error| format!("failed to render parse error: {error}"))?;
@@ -435,11 +454,13 @@ fn write_library_info_to(writer: &mut impl Write) -> Result<(), String> {
 
 struct CheckArgs {
     format: DiagnosticFormat,
+    project_summary: bool,
     paths: Vec<String>,
 }
 
 fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
     let mut format = DiagnosticFormat::Rich;
+    let mut project_summary = false;
     let mut paths = Vec::new();
     let mut after_options = false;
     let mut i = 0;
@@ -456,6 +477,19 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
                 .get(i + 1)
                 .ok_or_else(|| format!("missing value for --format\n{USAGE}"))?;
             format = parse_diagnostic_format(value)?;
+            i += 2;
+            continue;
+        }
+        if !after_options && arg == "--project-summary" {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| format!("missing value for --project-summary\n{USAGE}"))?;
+            if value != "json" {
+                return Err(format!(
+                    "unknown project summary format '{value}'; expected 'json'\n{USAGE}"
+                ));
+            }
+            project_summary = true;
             i += 2;
             continue;
         }
@@ -483,7 +517,11 @@ fn parse_check_args(args: &[String]) -> Result<CheckArgs, String> {
         return Err(format!("missing <file> argument\n{USAGE}"));
     }
 
-    Ok(CheckArgs { format, paths })
+    Ok(CheckArgs {
+        format,
+        project_summary,
+        paths,
+    })
 }
 
 fn parse_diagnostic_format(value: &str) -> Result<DiagnosticFormat, String> {
@@ -494,6 +532,276 @@ fn parse_diagnostic_format(value: &str) -> Result<DiagnosticFormat, String> {
             "unknown diagnostic format '{value}'; expected 'rich' or 'compact'\n{USAGE}"
         )),
     }
+}
+
+fn check_project_path_with_summary(
+    paths: &[String],
+    format: DiagnosticFormat,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<CheckStatus, String> {
+    if paths.len() != 1 {
+        let project_inputs = paths
+            .iter()
+            .filter(|path| is_project_input(Path::new(path)))
+            .count();
+        return if project_inputs >= 2 {
+            Err(format!("expected exactly one project input\n{USAGE}"))
+        } else {
+            Err(format!(
+                "project input cannot be combined with source-file inputs\n{USAGE}"
+            ))
+        };
+    }
+    let requested = Path::new(&paths[0]);
+    let project = discover_project(requested)
+        .map_err(|error| format_project_discovery_error(requested, error))?;
+    let (profile, config_notices) = project_profile_and_notices(&project);
+    let roots = project
+        .roots
+        .iter()
+        .map(|root| root.identity.clone())
+        .collect::<Vec<_>>();
+    if !config_notices.is_empty() {
+        for notice in &config_notices {
+            writeln!(stderr, "project: {notice}")
+                .map_err(|error| format!("failed to render project notice: {error}"))?;
+        }
+        stderr
+            .flush()
+            .map_err(|error| format!("failed to flush diagnostics: {error}"))?;
+        let inventory = ProjectModuleInventory {
+            notices: config_notices,
+            ..ProjectModuleInventory::default()
+        };
+        write_project_summary(stdout, &profile, &roots, false, &inventory, &[])?;
+        return Ok(CheckStatus::Incomplete);
+    }
+
+    let mut inputs = Vec::with_capacity(project.roots.len());
+    for root in &project.roots {
+        let source = std::fs::read_to_string(&root.path)
+            .map_err(|error| format!("cannot read '{}': {error}", root.path.display()))?;
+        inputs.push(FileInput {
+            name: root.identity.clone(),
+            source,
+        });
+    }
+    let ProjectCheckRun { reports, inventory } =
+        check_bundler_project_once(inputs, project.project_directory, project.roots)
+            .map_err(format_driver_error)?;
+    let status = render_project_reports(&reports, format, stderr)?;
+    let checked = !inventory.blocks_semantics();
+    write_project_summary(stdout, &profile, &roots, checked, &inventory, &reports)?;
+    Ok(status)
+}
+
+fn is_project_input(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        || path.file_name().is_some_and(|name| name == "tsconfig.json")
+}
+
+fn format_project_discovery_error(requested: &Path, error: ProjectDiscoveryError) -> String {
+    match error {
+        ProjectDiscoveryError::MissingConfig { .. } => format!(
+            "project directory does not contain 'tsconfig.json': {}",
+            requested.display()
+        ),
+        ProjectDiscoveryError::MalformedConfig { path, line, column } => format!(
+            "malformed project config '{}' at {line}:{column}",
+            path.display()
+        ),
+        other => other.to_string(),
+    }
+}
+
+fn project_profile_and_notices(project: &DiscoveredProject) -> (String, Vec<String>) {
+    let has_nodenext_module = project.notices.iter().any(|notice| {
+        matches!(
+            notice,
+            ProjectNotice::UnsupportedCompilerOption { option, value }
+                if option == "module" && value.as_deref() == Some("nodenext")
+        )
+    });
+    let has_nodenext_resolution = project.notices.iter().any(|notice| {
+        matches!(
+            notice,
+            ProjectNotice::UnsupportedCompilerOption { option, value }
+                if option == "moduleResolution" && value.as_deref() == Some("nodenext")
+        )
+    });
+    if has_nodenext_module && has_nodenext_resolution {
+        return (
+            "nodenext".to_owned(),
+            vec!["unsupported-module-resolution-profile nodenext tsconfig.json".to_owned()],
+        );
+    }
+    (
+        "bundler".to_owned(),
+        project
+            .notices
+            .iter()
+            .map(ProjectNotice::identity)
+            .collect(),
+    )
+}
+
+fn render_project_reports(
+    reports: &[FileReport],
+    format: DiagnosticFormat,
+    stderr: &mut impl Write,
+) -> Result<CheckStatus, String> {
+    let mut rendered = Vec::new();
+    let mut had_errors = false;
+    let mut had_incomplete = false;
+    for report in reports {
+        for notice in &report.output.project_notices {
+            writeln!(rendered, "project: {notice}")
+                .map_err(|error| format!("failed to render project notice: {error}"))?;
+        }
+        for parse_error in &report.output.parse_errors {
+            writeln!(rendered, "error: {parse_error}")
+                .map_err(|error| format!("failed to render parse error: {error}"))?;
+        }
+        diagnostics::render_to_writer_with_format(
+            &mut rendered,
+            &report.name,
+            &report.source,
+            &report.output.diagnostics,
+            format,
+        )
+        .map_err(|error| format!("failed to render diagnostics: {error}"))?;
+        diagnostics::render_incomplete_to_writer_with_format(
+            &mut rendered,
+            &report.name,
+            &report.source,
+            &report.output.incomplete,
+            format,
+        )
+        .map_err(|error| format!("failed to render incomplete surfaces: {error}"))?;
+        had_errors |= report.output.has_errors();
+        had_incomplete |= report.output.is_incomplete();
+    }
+    stderr
+        .write_all(&rendered)
+        .map_err(|error| format!("failed to write diagnostics: {error}"))?;
+    stderr
+        .flush()
+        .map_err(|error| format!("failed to flush diagnostics: {error}"))?;
+    Ok(if had_incomplete {
+        CheckStatus::Incomplete
+    } else if had_errors {
+        CheckStatus::Diagnostics
+    } else {
+        CheckStatus::Clean
+    })
+}
+
+fn write_project_summary(
+    writer: &mut impl Write,
+    profile: &str,
+    roots: &[String],
+    checked: bool,
+    inventory: &ProjectModuleInventory,
+    reports: &[FileReport],
+) -> Result<(), String> {
+    let checked_files = if checked { roots } else { &[] };
+    let skipped_files = if checked { &[] } else { roots };
+    let diagnostics = diagnostic_identities(reports, inventory);
+    let incomplete = incomplete_identities(reports);
+    let fields = [
+        "\"schema\":1".to_owned(),
+        format!(
+            "\"profile\":{}",
+            serde_json::to_string(profile).map_err(|error| error.to_string())?
+        ),
+        "\"config\":\"tsconfig.json\"".to_owned(),
+        json_field("roots", roots)?,
+        format!(
+            "\"files\":{{\"checked\":{},\"skipped\":{},\"excluded\":[]}}",
+            serde_json::to_string(checked_files).map_err(|error| error.to_string())?,
+            serde_json::to_string(skipped_files).map_err(|error| error.to_string())?
+        ),
+        json_field("resolutions", &inventory.resolutions)?,
+        json_field("project_notices", &inventory.notices)?,
+        json_field("parse_errors", &inventory.parse_errors)?,
+        json_field("incomplete", &incomplete)?,
+        json_field("diagnostics", &diagnostics)?,
+    ];
+    writeln!(writer, "{{{}}}", fields.join(","))
+        .map_err(|error| format!("failed to write project summary: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("failed to flush project summary: {error}"))
+}
+
+fn json_field(name: &str, values: &[String]) -> Result<String, String> {
+    serde_json::to_string(values)
+        .map(|value| format!("\"{name}\":{value}"))
+        .map_err(|error| format!("failed to serialize project summary: {error}"))
+}
+
+fn diagnostic_identities(
+    reports: &[FileReport],
+    inventory: &ProjectModuleInventory,
+) -> Vec<String> {
+    let mut identities = Vec::new();
+    for report in reports {
+        let lines = LineIndex::new(&report.source);
+        for diagnostic in &report.output.diagnostics {
+            let summary_offset = inventory
+                .missing_module_locations
+                .iter()
+                .find(|location| {
+                    diagnostic.code.as_str() == "TK2307"
+                        && location.file == report.name
+                        && location.diagnostic_span == diagnostic.span
+                })
+                .map_or(diagnostic.span.start, |location| location.summary_start);
+            let position = lines.line_col(summary_offset);
+            identities.push((
+                report.name.clone(),
+                summary_offset,
+                diagnostic.code.as_str(),
+                format!(
+                    "{}:{}:{} {}",
+                    report.name,
+                    position.line,
+                    position.column,
+                    diagnostic.code.as_str()
+                ),
+            ));
+        }
+    }
+    identities.sort();
+    identities
+        .into_iter()
+        .map(|(_, _, _, identity)| identity)
+        .collect()
+}
+
+fn incomplete_identities(reports: &[FileReport]) -> Vec<String> {
+    let mut identities = Vec::new();
+    for report in reports {
+        let lines = LineIndex::new(&report.source);
+        for incomplete in &report.output.incomplete {
+            let position = lines.line_col(incomplete.span.start);
+            identities.push((
+                report.name.clone(),
+                incomplete.span.start,
+                incomplete.id.clone(),
+                format!(
+                    "{}:{}:{} {}",
+                    report.name, position.line, position.column, incomplete.id
+                ),
+            ));
+        }
+    }
+    identities.sort();
+    identities
+        .into_iter()
+        .map(|(_, _, _, identity)| identity)
+        .collect()
 }
 
 /// Read inputs, check them as one local-relative project, and report diagnostics
@@ -526,6 +834,10 @@ where
     let mut had_errors = false;
     let mut had_incomplete = false;
     for report in &reports {
+        for notice in &report.output.project_notices {
+            writeln!(rendered, "project: {notice}")
+                .map_err(|error| format!("failed to render project notice: {error}"))?;
+        }
         for parse_error in &report.output.parse_errors {
             // Parser errors come pre-formatted from oxc; surface them plainly.
             writeln!(rendered, "error: {parse_error}")

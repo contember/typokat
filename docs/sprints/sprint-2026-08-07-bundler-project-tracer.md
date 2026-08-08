@@ -323,6 +323,21 @@ ratchets twice from a fresh cache; fresh official-suite `run --check`; docs lint
 
 ## Run log
 
+- 2026-08-08 — WU3 PASS. Spec commits `1cdb3c2` and `f2c3bb5` extended the frozen
+  contract with exact path-escape, unsupported-form, declaration-span, and empty-import
+  witnesses before implementation. The public `check --project-summary json` route now discovers
+  one directory or explicit `tsconfig.json`, uses `oxc_resolver 11.24.2` as the sole physical
+  lookup authority, inventories every module form before semantic filtering, and emits one
+  deterministic project summary. Config-backed notices stop semantics; explicit file-list mode
+  retains its established complete-source semantics while surfacing formerly silent forms.
+  Independent review found and drove fixes for a configured-root symlink escape, exit-2 handling
+  of valid unsupported syntax, a text-search-derived `TK2307` location, an empty named-import
+  false clean, compile-time repository-path capture, and explicit-mode conformance preemption.
+  Leader verification passed both B72 black-box targets (6/6 and 12/12), 11 frontend tests, 56
+  driver tests, five CLI tests, the full workspace suite including exact conformance over 655
+  files, all-target clippy with warnings denied, formatting, and diff checks. One initial full run
+  exposed a Git-untracked empty directory left by historical fixture deletion; removing that
+  filesystem residue restored the unchanged exact 2-shared/15-private B14 route matrix.
 - 2026-08-08 — WU2 PASS. Exact-pinned `oxc_resolver 11.24.2` owns config decoding and
   root enumeration; the bounded `jsonc-parser 0.33.1` pass audits every root-document key and
   fails closed on unsupported forms. Discovery accepts only a directory or an explicit

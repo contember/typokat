@@ -254,7 +254,7 @@ fn discover_project_with_resolver(
 
     let mut notices = audit.notices;
     let roots = match parsed.and_then(|parsed| parsed.files) {
-        Some(files) => normalize_roots(&project_directory, files, &mut notices),
+        Some(files) => normalize_roots(&project_directory, files, &mut notices)?,
         None => Vec::new(),
     };
     Ok(DiscoveredProject {
@@ -612,7 +612,12 @@ fn normalize_roots(
     project_directory: &Path,
     configured: Vec<PathBuf>,
     notices: &mut Vec<ProjectNotice>,
-) -> Vec<ProjectRoot> {
+) -> Result<Vec<ProjectRoot>, ProjectDiscoveryError> {
+    let canonical_project =
+        fs::canonicalize(project_directory).map_err(|error| ProjectDiscoveryError::ConfigIo {
+            path: project_directory.to_path_buf(),
+            kind: error.kind(),
+        })?;
     let mut roots = BTreeMap::new();
     for configured_root in configured {
         let Some(identity) = normalize_root_identity(&configured_root) else {
@@ -624,6 +629,18 @@ fn normalize_roots(
             notices.push(ProjectNotice::MissingConfiguredRoot {
                 root: identity.clone(),
             });
+        } else {
+            let canonical_root =
+                fs::canonicalize(&path).map_err(|error| ProjectDiscoveryError::ConfigIo {
+                    path: path.clone(),
+                    kind: error.kind(),
+                })?;
+            if !canonical_root.starts_with(&canonical_project) {
+                notices.push(ProjectNotice::UnsupportedConfigRoot {
+                    reason: "symlink-escape".to_owned(),
+                    root: identity.clone(),
+                });
+            }
         }
         roots.entry(identity.clone()).or_insert(ProjectRoot {
             identity,
@@ -631,7 +648,7 @@ fn normalize_roots(
             exists,
         });
     }
-    roots.into_values().collect()
+    Ok(roots.into_values().collect())
 }
 
 fn normalize_root_identity(path: &Path) -> Option<String> {
@@ -715,8 +732,22 @@ mod tests {
 
     static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+    fn repository_root() -> PathBuf {
+        let current = std::env::current_dir().expect("read test working directory");
+        current
+            .ancestors()
+            .find(|candidate| {
+                candidate.join("Cargo.toml").is_file()
+                    && candidate
+                        .join("tests/cases/b72_bundler_project_tracer/contract.json")
+                        .is_file()
+            })
+            .map(Path::to_path_buf)
+            .expect("find typokat repository root from test working directory")
+    }
+
     fn corpus_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases/b72_bundler_project_tracer")
+        repository_root().join("tests/cases/b72_bundler_project_tracer")
     }
 
     fn contract() -> JsonValue {
@@ -915,17 +946,13 @@ mod tests {
     }
 
     #[test]
-    fn production_dispatch_cannot_reach_discovery_before_wu3() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for relative in ["src/main.rs", "crates/typokat-driver/src/driver.rs"] {
-            let source = fs::read_to_string(repository.join(relative))
-                .unwrap_or_else(|error| panic!("read {relative}: {error}"));
-            assert!(
-                !source.contains("discover_project")
-                    && !source.contains("typokat_frontend::project"),
-                "{relative} must not expose WU2 discovery before atomic WU3"
-            );
-        }
+    fn production_dispatch_reaches_discovery_only_at_the_cli_boundary() {
+        let repository = repository_root();
+        let main = fs::read_to_string(repository.join("src/main.rs")).expect("read CLI source");
+        let driver = fs::read_to_string(repository.join("crates/typokat-driver/src/driver.rs"))
+            .expect("read driver source");
+        assert!(main.contains("discover_project"));
+        assert!(!driver.contains("discover_project"));
     }
 
     fn temp_project(label: &str) -> PathBuf {

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const CONTRACT: &str = include_str!("cases/b72_bundler_project_tracer/contract.json");
-const PRE_CUTOVER_USAGE: &str = "usage: typokat check [--format rich|compact] <file.ts>...";
 
 fn corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/b72_bundler_project_tracer")
@@ -144,19 +143,6 @@ fn assert_summary(case_id: &str, input: &Path) -> Output {
 }
 
 #[test]
-fn project_route_stays_unreachable_before_the_atomic_wu3_cutover() {
-    let project = corpus_root().join("admitted_files_extensionless");
-    let output = run(&project_args(&project));
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        format!("error: unknown option '--project-summary'\n{PRE_CUTOVER_USAGE}\n")
-    );
-}
-
-#[test]
-#[ignore = "WU3 public project route is intentionally unavailable"]
 fn directory_and_config_inputs_are_byte_identical() {
     for case in contract()["cases"].as_array().expect("cases are an array") {
         let case_id = case["id"].as_str().expect("case id");
@@ -169,7 +155,6 @@ fn directory_and_config_inputs_are_byte_identical() {
 }
 
 #[test]
-#[ignore = "WU3 public project route is intentionally unavailable"]
 fn unsupported_projects_fail_closed_with_complete_identities() {
     for case_id in [
         "unsupported_bare_specifier",
@@ -203,7 +188,6 @@ fn unsupported_projects_fail_closed_with_complete_identities() {
 }
 
 #[test]
-#[ignore = "WU3 public project route is intentionally unavailable"]
 fn config_boundary_is_explicit_and_fail_closed() {
     for case in contract()["config_boundary_cases"]
         .as_array()
@@ -245,7 +229,6 @@ fn config_boundary_is_explicit_and_fail_closed() {
 }
 
 #[test]
-#[ignore = "WU3 public project route is intentionally unavailable"]
 fn explicit_file_lists_do_not_keep_silently_filtered_imports_clean() {
     for case_id in [
         "unsupported_bare_specifier",
@@ -311,7 +294,6 @@ fn admitted_explicit_file_output_is_byte_identical() {
 }
 
 #[test]
-#[ignore = "WU3 public project route is intentionally unavailable"]
 fn malformed_and_ambiguous_project_inputs_are_exact_usage_failures() {
     let error_case = |id: &str| contract_entry("cli_error_cases", id);
 
