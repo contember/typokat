@@ -210,6 +210,18 @@ fn string_literal_imported_name_is_explicitly_unsupported() {
     );
 }
 
+#[test]
+fn empty_named_import_is_explicitly_unsupported() {
+    assert_unsupported_case(
+        "empty-named-import",
+        "import {} from \"./missing.js\";\nexport const value = 1;\n",
+        &["main.ts"],
+        &[],
+        "main.ts:1:1 empty-named-import ./missing.js -> unsupported",
+        "unsupported-module-form empty-named-import main.ts:1:1 ./missing.js",
+    );
+}
+
 fn assert_unsupported_form(label: &str, source: &str, form: &str) {
     let resolution = format!("main.ts:1:1 {form} ./value.js -> unsupported");
     let notice = format!("unsupported-module-form {form} main.ts:1:1 ./value.js");
