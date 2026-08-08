@@ -1,0 +1,3 @@
+test/extensions.test.ts(1,28): error TS2307: Cannot find module '../dist/Option' or its corresponding type declarations.
+test/utils.ts(175,5): error TS2591: Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.
+test/utils.ts(230,36): error TS2550: Property 'includes' does not exist on type 'unknown[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2016' or later.

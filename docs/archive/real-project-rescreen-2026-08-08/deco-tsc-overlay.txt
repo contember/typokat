@@ -1,0 +1,4 @@
+../../../../../tmp/typokat-b72-deco-EsFuf5/repo/src/coalesce.ts(1,27): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.
+../../../../../tmp/typokat-b72-deco-EsFuf5/repo/src/deco.ts(1,26): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.
+../../../../../tmp/typokat-b72-deco-EsFuf5/repo/src/deco.ts(2,23): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.
+../../../../../tmp/typokat-b72-deco-EsFuf5/repo/src/limit.ts(1,23): error TS5097: An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.

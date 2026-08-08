@@ -1,3 +1,16 @@
+> **OUTCOME — terminated incomplete 2026-08-08.** WU0 re-screened all six immutable candidates
+> at release HEAD `659e30ee97c53625d9a0412cd437e1224087147f` (binary SHA-256
+> `ac8ebc48de2136a6f7e15c9fcd56a8492ef24497c326002e63c6ddd2a90ce84c`) against pinned
+> `tsc 6.0.3`. None met the unchanged zero threshold. Independent review passed the hard stop and
+> reproduced every exit with clean trees and no hidden result channel. The pre-closure commit map
+> is plan `659e30e`; this archive change is the WU4 incomplete-closure commit. WU1–WU3 did not
+> start, no witness implementation or production behavior changed, and backlog `72` remains open.
+> `lokicik/placetext` now has one currently visible route blocker, a default export, but
+> route admission preempts semantic checking; native-versus-overlay target/library equivalence is
+> plausible, not proven. The next coherent backlog-`15` slice remains default declarations and
+> expressions plus default imports. This result neither observed a default import in `placetext`
+> nor proves that the project will pass after that slice.
+
 # Sprint — real-project witness re-screen (2026-08-08)
 
 **Goal.** Re-screen the same six immutable public candidates against the expanded production
@@ -138,3 +151,62 @@ WU3 → WU4; the no-qualifier branch is WU0 → WU4 incomplete closure.
 - Candidate substitutions, source/config edits, ambient shims, library changes, allowlists,
   production special cases, threshold changes, and performance claims.
 - The later `contember/deptective` full-stack witness.
+
+## Run log
+
+### 2026-08-08 — WU0 hard stop
+
+The release build ran from repository root as:
+
+```sh
+cpu-lease run -n 2 -- flock -w 3600 /tmp/typokat-perf.lock -c 'cargo build --release'
+```
+
+The build used HEAD `659e30ee97c53625d9a0412cd437e1224087147f`, which contains `daaad0c`.
+The resulting `target/release/typokat` SHA-256 was
+`ac8ebc48de2136a6f7e15c9fcd56a8492ef24497c326002e63c6ddd2a90ce84c`. The oracle was
+`/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc`, version `6.0.3`.
+
+Each candidate used a fresh `/tmp/typokat-b72-<slug>-XXXXXX` root verified empty before a
+`git -c protocol.file.allow=never clone --no-checkout <canonical-https-remote> <root>/repo` and a
+detached checkout of the pinned commit. No Git object cache was shared. The command shapes were:
+
+```sh
+(cd "$ROOT/repo" && "$TSC" --pretty false --strict --noEmit -p tsconfig.json) \
+  >"$ROOT/tsc-native.stdout" 2>"$ROOT/tsc-native.stderr"
+"$TSC" --pretty false -p "$ROOT/tsconfig.json" \
+  >"$ROOT/tsc-overlay.stdout" 2>"$ROOT/tsc-overlay.stderr"
+"$BIN" check --project-summary json "$ROOT/tsconfig.json" \
+  >"$ROOT/typokat.stdout" 2>"$ROOT/typokat.stderr"
+```
+
+No install ran for the first four candidates. `un-jinja` used
+`cpu-lease run -n 2 -- corepack pnpm@11.1.3 install --frozen-lockfile --ignore-scripts` from its
+repository. `south-african-id` used
+`cpu-lease run -n 2 -- pnpm install --frozen-lockfile --ignore-scripts`. Tool identities were Git
+`2.54.0`, Node `24.4.0`, npm `11.19.0`, host pnpm `10.30.3`; `un-jinja` declares pnpm `11.1.3`.
+
+| Candidate | Canonical remote; identity paths | Exits native / overlay / typokat | Roots; checked / skipped | First and currently visible blocker(s) | JSON SHA-256 |
+| --- | --- | --- | --- | --- | --- |
+| `morkg/jabr` | `https://github.com/morkg/jabr.git`; `LICENSE`; `package-lock.json` | `0 / 0 / 3` | `8; 0 / 8` | module cycle; also bare `..` and default export notices; all other channels empty | `eaba8c19750c6346d32c2c65adbdc899d75f2b83732aa41f884c7b5c0af39daf` |
+| `lokicik/placetext` | `https://github.com/lokicik/placetext.git`; `LICENSE`; `package-lock.json` | `0 / 0 / 3` | `9; 0 / 9` | sole currently visible route blocker: default export at `src/index.ts:104:1`; semantic checking was preempted; all other channels empty | `fb2478ac449e4b5bf074d38515efa7f9999e958b3ad9771158cb0dd97616840c` |
+| `naoeosavio/lite-fp` | `https://github.com/naoeosavio/lite-fp.git`; `LICENSE`; `package-lock.json` | `2 / 0 / 3` | `7; 7 / 0` | 13 incomplete records, first type predicate at `Either.ts:16:48`; 314 diagnostics, first `TK2322` at `Either.ts:24:21` | `86f15a914fe7d85683ce1b437a62c01c015cb3534f2f4681c81fca309552ee6a` |
+| `jacob-bennett/deco` | `https://github.com/jacob-bennett/deco.git`; `LICENSE.txt`; `package-lock.json` | `0 / 2 / 3` | `6; 0 / 6` | seven explicit-`.ts`-specifier notices, first at `coalesce.ts:1:1` | `3fa932a318e6564d1339c1dc28b1554f975d50c9904cd4b8b7ff2e8f69fad08c` |
+| `theetherGit/un-jinja` | `https://github.com/theetherGit/un-jinja.git`; `LICENSE.md`; `pnpm-lock.yaml` | `0 / 0 / 3` | `4; 4 / 0` | 15 incomplete records, first spread at `engine.ts:79:15`; 23 diagnostics, first `TK2339` at `engine.ts:72:47` | `61444201e912a3f3427025263f34f80d225ed90635c8461367d2aaca52588be2` |
+| `SiphoChris/south-african-id` | `https://github.com/SiphoChris/south-african-id.git`; `LICENSE`; `pnpm-lock.yaml` | `0 / 0 / 1` | `4; 4 / 0` | no incomplete records; eight diagnostics, first `TK2322` at line 130 (`TK2322` at 130/138/148/153 and `TK2339` at 215/233/251/269) | `f035270629e792efbebff0f39adb73282c419b078cccfa370575e87392bf1662` |
+
+The immutable commits and license/lock digests are the candidate table above. The transparent
+overlays preserve the selected production source subtrees, but they drop native compiler options.
+For `placetext`, target/library equivalence is plausible from the inspected program but was not
+proved. Its default-export rejection occurs before checking, so the clean semantic result remains
+unknown. A failed non-authoritative `jabr` `overlay.json` probe used a basename the CLI rejects; it
+was excluded from the table and did not affect the authoritative `tsconfig.json` run.
+
+The exact JSON summaries, nonempty oracle outputs, command and tool provenance, immutable
+identities, and ambient inventory are retained in the
+[`WU0 evidence directory`](real-project-rescreen-2026-08-08/README.md).
+
+An independent reviewer reproduced the six exact exit triples, verified every checkout was clean,
+confirmed that no stdout/stderr or JSON channel hid another result, and returned **PASS** on the
+WU0 hard stop. With no qualifier, WU1–WU3 did not start; WU4 performs this incomplete closure.
+Backlog `72` remains open.

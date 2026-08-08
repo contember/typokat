@@ -35,6 +35,16 @@ targets remain unsupported. Default declaration/expression export plus default-i
 the next independent spec-first slice. Keep both source orders and exact missing/export-space
 diagnostics in every slice; do not pull package loading into them.
 
+The follow-up immutable six-candidate re-screen at `659e30e` confirmed that no candidate yet meets
+backlog `72`'s unchanged zero threshold. `lokicik/placetext` now reaches one currently visible route
+notice, a default export at `src/index.ts:104:1`, before semantic checking starts. Its transparent
+overlay drops native target/library options; equivalence looks plausible but is not proved. This is
+evidence to keep default declarations/expressions and default imports as one general next slice,
+not evidence that `placetext` contains a default import or will pass after that slice. The other
+candidates still stop on cycles or specifier policy, explicit `.ts` specifiers, or checker model and
+diagnostic gaps. The exact exits and blockers are retained in the
+[`re-screen archive`](../archive/sprint-2026-08-08-real-project-rescreen.md).
+
 Later Bundler-profile breadth still needs declaration-aware extension substitution,
 `node_modules`/`@types`, package `exports`/`imports` and `types`, path aliases, tsconfig inheritance
 and references, and `.d.ts` consumption. Those physical lookup rules are already the domain of

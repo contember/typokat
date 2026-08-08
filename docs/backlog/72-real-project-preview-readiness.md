@@ -24,8 +24,14 @@ Two bounded screening sprints failed the unchanged witness gate. The latest ship
 first, then screened six immutable public projects. None qualified: common first failures were
 source re-exports and default exports; one used explicit `.ts` specifiers under NodeNext; others
 required Node ambient types or non-equivalent config/test exclusions. Every candidate failed before
-the mutation gate. The named source-re-export blocker is now removed for the shipped bounded form,
-but the six candidates have not been re-screened against that expanded surface. There is still no
+the mutation gate. The named source-re-export blocker is now removed for the shipped bounded form.
+A follow-up immutable re-screen at `659e30e` still found no qualifier: `jabr` stops on a cycle,
+bare `..`, and a default export; `placetext` has one currently visible default-export route notice
+before semantic checking; `lite-fp`, `un-jinja`, and `south-african-id` reach checker model or
+diagnostic failures; and `deco` retains explicit-`.ts` specifier incompatibility. The transparent
+`un-jinja` and `south-african-id` production-subtree overlays exclude native tooling/tests that
+consume `@types/node`, so they are not exact native programs. Exact evidence is retained in the
+[`re-screen archive`](../archive/real-project-rescreen-2026-08-08/README.md). There is still no
 pinned public baseline, mutation pack, ratchet, or CI promise.
 
 ## Approach / acceptance
