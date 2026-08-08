@@ -199,18 +199,23 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Re-screen and close `72` on a zero-clean public witness.** The archived
+1. **Implement the active default-slot slice of `15`.** The archived
    [`2026-08-07 sprint`](../archive/sprint-2026-08-07-bundler-project-tracer.md) shipped the exact
    files-only Bundler CLI and complete accounting, then terminated incomplete because all six
    public candidates failed before mutations. The archived
    [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) removed the
-   bounded acyclic named source-re-export blocker. Re-screen the unchanged candidates, then pin the
-   first qualifying project, three exact TS/TK mutations, the deterministic fresh-cache runner,
-   fault controls, and the CI identity ratchet. Do not relax a threshold or add a shim.
-2. **If the witness still stops, specify the next `15` slice.** Add default declaration/expression
-   exports and default imports without conflating the default slot with named exports. Keep
-   namespace/star forms, cycles, package loading, and checker-model fixes in their own later slices;
-   do not broaden production semantics inside the witness sprint.
+   bounded acyclic named source-re-export blocker. The subsequent
+   [`re-screen`](../archive/sprint-2026-08-08-real-project-rescreen.md) still found no qualifier;
+   `placetext` now has one currently visible default-export route blocker. The active
+   [`default-slot sprint`](../sprints/sprint-2026-08-08-default-module-slots.md) adds default
+   declarations/expressions and regular default imports without conflating the default slot with
+   named exports. Namespace/star forms, cycles, package loading, and checker-model fixes remain
+   separate.
+2. **Re-screen `placetext`, then close `72` only if it is genuinely zero-clean.** Preserve the
+   native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
+   unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic
+   fresh-cache runner, fault controls, and CI identity ratchet land. Do not relax a threshold or
+   add a shim.
 3. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
    `17`), finishing the A/B/C remainder along the way. After `15` ships, it and the shipped
    production work of `14` must graduate a pinned Bundler-compatible full-stack witness (deptective

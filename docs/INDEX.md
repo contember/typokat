@@ -24,6 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-08-default-module-slots.md`](sprints/sprint-2026-08-08-default-module-slots.md) —
+  active: add default declarations, expressions, and regular local default imports through a
+  distinct module slot; deferred named bridges and namespace-bearing surfaces stay non-clean.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -138,8 +141,9 @@ decisions → reference → archive.
   WU0 after all six immutable candidates still failed the unchanged zero threshold. No witness
   tooling or production broadening started; `placetext` has one currently visible default-export
   route blocker, but checking remains preempted and a clean result after the next slice is not
-  established. Default declarations/expressions plus default imports are the next coherent `15`
-  slice; package breadth remains later work.
+  established. The active
+  [`default-slot sprint`](sprints/sprint-2026-08-08-default-module-slots.md) owns the next coherent
+  `15` slice; package breadth remains later work.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic

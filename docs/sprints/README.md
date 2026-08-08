@@ -20,6 +20,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-08-08-default-module-slots.md`](sprint-2026-08-08-default-module-slots.md) —
+  active: add a structurally distinct default export slot and regular local default imports through
+  the bounded Bundler route, with named/default bridges and namespace-bearing defaults deferred.
 - [`sprint-2026-07-25-checker-scaling.md`](sprint-2026-07-25-checker-scaling.md) —
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have
