@@ -229,6 +229,7 @@ keep at most one mismatched argument per call.
 | `m32_signature_shape/` | M32 — signature shape: rest elements plus optional/default parameters |
 | `m33_function_overloads/` | M33 — function overloads: ordered signatures, implementation compatibility, overload call resolution |
 | `b72_bundler_project_tracer/` | Backlogs 15 + 72 — disabled Bundler project/CLI contract: root discovery, local `oxc_resolver` lookup, complete module-form accounting, deterministic summary |
+| `b15_acyclic_source_reexports/` | Backlog 15 — permanently disabled raw corpus plus exact TypeScript 6.0.3 oracle for acyclic named source re-exports; black-box acceptance owns project semantics |
 
 ## Project fixture convention (M29+)
 
@@ -273,6 +274,18 @@ Both directory and explicit-config invocations must produce the same normalized 
 array is ordered by normalized relative path, then source position, then identity. The corpus is a
 negative control at pre-change HEAD: direct project input is unavailable, `.js` substitution fails,
 and unsupported forms are filtered before a project-level identity exists.
+
+### Acyclic named source re-export contract (backlog 15)
+
+`b15_acyclic_source_reexports/` is permanently disabled on the raw conformance route. Its
+multi-file projects pin aliases, outer and inline type-only barriers, value/type class pairs,
+two-barrel chains, missing targets and members, empty lists, duplicate output names, namespace
+provenance, cycles, and deferred syntax. `contract.json` records the exact `tsc 6.0.3 --strict
+--noEmit --module esnext --moduleResolution bundler` result. The dedicated black-box integration
+test owns Bundler summaries and the separate explicit and legacy route baselines. The exact oracle
+also corrects the planned empty-list rule: `export {} from` a missing module is clean and emits no
+`TS2307` in TypeScript 6.0.3. Its enabled pre-change record freezes export attributes at their
+existing exit 2; that deferred form does not move in this sprint.
 
 ## Fixture routing
 

@@ -1,0 +1,2687 @@
+{
+  "schema": 1,
+  "oracle": {
+    "binary": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc",
+    "version": "Version 6.0.3",
+    "flags": [
+      "--strict",
+      "--noEmit",
+      "--module",
+      "esnext",
+      "--moduleResolution",
+      "bundler"
+    ],
+    "command_cwd": "<case-directory>",
+    "output_channel": "stdout",
+    "stderr_contract": "empty for all 58 runs"
+  },
+  "summary": {
+    "case_count": 29,
+    "run_count": 58,
+    "root_order_byte_identical_count": 29,
+    "empty_missing_oracle_correction": "export {} from a missing local module is clean in TypeScript 6.0.3; no TS2307",
+    "post_wu6_exact_summary_case_count": 16,
+    "post_wu6_exact_summary_run_count": 32,
+    "grouped_missing_resolution_contract": {
+      "single": "barrel.ts:1:1 source-reexport ./missing.js -> unresolved",
+      "multi": "barrel.ts:1:1 source-reexport ./missing.js -> unresolved",
+      "rows_per_declaration": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "01_basic_alias_mismatch",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { value as renamed } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { renamed } from \"./barrel.js\";\nconst good: number = renamed;\nconst bad: string = renamed;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:7 TK2322"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:7 TK2322"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "02a_outer_type_only",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export type { Shape } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { Shape } from \"./barrel.js\";\nconst good: Shape = { width: 1 };\nconst badValue = Shape;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export interface Shape { width: number }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,18): error TS2693: 'Shape' only refers to a type, but is being used as a value here.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,18): error TS2693: 'Shape' only refers to a type, but is being used as a value here.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:18 TK2693"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:18 TK2693"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "02b_inline_type_only_alias",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { type Shape as RenamedShape } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { RenamedShape } from \"./barrel.js\";\nconst good: RenamedShape = { width: 1 };\nconst badValue = RenamedShape;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export interface Shape { width: number }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,18): error TS2693: 'RenamedShape' only refers to a type, but is being used as a value here.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,18): error TS2693: 'RenamedShape' only refers to a type, but is being used as a value here.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:18 TK2693"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:18 TK2693"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "03_mixed_value_type_only",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { value as renamed, type Shape as RenamedShape } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { renamed, RenamedShape } from \"./barrel.js\";\nconst goodValue: number = renamed;\nconst goodShape: RenamedShape = { width: 1 };\nconst badValue: string = renamed;\nconst badTypeUse = RenamedShape;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\nexport interface Shape { width: number }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "consumer.ts(4,7): error TS2322: Type 'number' is not assignable to type 'string'.\nconsumer.ts(5,20): error TS2693: 'RenamedShape' only refers to a type, but is being used as a value here.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "consumer.ts(4,7): error TS2322: Type 'number' is not assignable to type 'string'.\nconsumer.ts(5,20): error TS2693: 'RenamedShape' only refers to a type, but is being used as a value here.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:4:7 TK2322",
+                "consumer.ts:5:20 TK2693"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:4:7 TK2322",
+                "consumer.ts:5:20 TK2693"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "04_two_barrel_chain",
+      "files": [
+        {
+          "path": "barrel-a.ts",
+          "text": "export { value as firstValue, type Shape as FirstShape } from \"./source.js\";\n"
+        },
+        {
+          "path": "barrel-b.ts",
+          "text": "export { firstValue as finalValue, type FirstShape as FinalShape } from \"./barrel-a.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { finalValue, FinalShape } from \"./barrel-b.js\";\nconst goodValue: number = finalValue;\nconst goodShape: FinalShape = { width: 1 };\nconst badValue: string = finalValue;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\nexport interface Shape { width: number }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel-a.ts",
+              "barrel-b.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "consumer.ts(4,7): error TS2322: Type 'number' is not assignable to type 'string'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel-b.ts",
+              "barrel-a.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "consumer.ts(4,7): error TS2322: Type 'number' is not assignable to type 'string'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel-a.ts",
+                "barrel-b.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel-a.ts",
+                  "barrel-b.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel-a.ts:1:1 source-reexport ./source.js -> source.ts",
+                "barrel-b.ts:1:1 source-reexport ./barrel-a.js -> barrel-a.ts",
+                "consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:4:7 TK2322"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel-a.ts",
+                "barrel-b.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel-a.ts",
+                  "barrel-b.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel-a.ts:1:1 source-reexport ./source.js -> source.ts",
+                "barrel-b.ts:1:1 source-reexport ./barrel-a.js -> barrel-a.ts",
+                "consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:4:7 TK2322"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "05_class_value_type_chain",
+      "files": [
+        {
+          "path": "barrel-a.ts",
+          "text": "export { Box as FirstBox } from \"./source.js\";\n"
+        },
+        {
+          "path": "barrel-b.ts",
+          "text": "export { FirstBox as FinalBox } from \"./barrel-a.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { FinalBox } from \"./barrel-b.js\";\nconst made: FinalBox = new FinalBox();\nconst bad: string = new FinalBox();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export class Box { value = 1 }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel-a.ts",
+              "barrel-b.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,7): error TS2322: Type 'Box' is not assignable to type 'string'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel-b.ts",
+              "barrel-a.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "consumer.ts(3,7): error TS2322: Type 'Box' is not assignable to type 'string'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel-a.ts",
+                "barrel-b.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel-a.ts",
+                  "barrel-b.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel-a.ts:1:1 source-reexport ./source.js -> source.ts",
+                "barrel-b.ts:1:1 source-reexport ./barrel-a.js -> barrel-a.ts",
+                "consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:7 TK2322"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel-a.ts",
+                "barrel-b.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel-a.ts",
+                  "barrel-b.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel-a.ts:1:1 source-reexport ./source.js -> source.ts",
+                "barrel-b.ts:1:1 source-reexport ./barrel-a.js -> barrel-a.ts",
+                "consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "consumer.ts:3:7 TK2322"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "06_no_local_binding",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { value } from \"./source.js\";\nconst local: number = value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(2,23): error TS2304: Cannot find name 'value'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(2,23): error TS2304: Cannot find name 'value'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:2:23 TK2304"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:2:23 TK2304"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "07a_missing_module_single",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { a } from \"./missing.js\";\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,19): error TS2307: Cannot find module './missing.js' or its corresponding type declarations.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,19): error TS2307: Cannot find module './missing.js' or its corresponding type declarations.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./missing.js -> unresolved"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:19 TK2307"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./missing.js -> unresolved"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:19 TK2307"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "07b_missing_member",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { absent } from \"./source.js\";\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const present = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,10): error TS2305: Module '\"./source.js\"' has no exported member 'absent'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,10): error TS2305: Module '\"./source.js\"' has no exported member 'absent'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:10 TK2305"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:10 TK2305"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "07c_missing_module_multi",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { a, b } from \"./missing.js\";\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,22): error TS2307: Cannot find module './missing.js' or its corresponding type declarations.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,22): error TS2307: Cannot find module './missing.js' or its corresponding type declarations.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./missing.js -> unresolved"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:22 TK2307"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./missing.js -> unresolved"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:22 TK2307"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "08a_empty_resolved",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export {} from \"./source.js\";\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 0,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": []
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 0,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": []
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "08b_empty_missing",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export {} from \"./missing.js\";\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 0,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": []
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 0,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": []
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "09_source_local_local_source",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "const local = 2;\nexport { local as duplicate };\nexport { remote as duplicate } from \"./source.js\";\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const remote = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(2,19): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(3,20): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(2,19): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(3,20): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:3:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:2:19 TK2300",
+                "barrel.ts:3:20 TK2300"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:3:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:2:19 TK2300",
+                "barrel.ts:3:20 TK2300"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "09_source_local_source_local",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "const local = 2;\nexport { remote as duplicate } from \"./source.js\";\nexport { local as duplicate };\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const remote = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(2,20): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(3,19): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(2,20): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(3,19): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:2:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:2:20 TK2300",
+                "barrel.ts:3:19 TK2300"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:2:1 source-reexport ./source.js -> source.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:2:20 TK2300",
+                "barrel.ts:3:19 TK2300"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "09_source_source_ab",
+      "files": [
+        {
+          "path": "a.ts",
+          "text": "export const first = 1;\n"
+        },
+        {
+          "path": "b.ts",
+          "text": "export const second = 2;\n"
+        },
+        {
+          "path": "barrel.ts",
+          "text": "export { first as duplicate } from \"./a.js\";\nexport { second as duplicate } from \"./b.js\";\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "a.ts",
+              "b.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,19): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(2,20): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "b.ts",
+              "a.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,19): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(2,20): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "a.ts",
+                "b.ts",
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "a.ts",
+                  "b.ts",
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./a.js -> a.ts",
+                "barrel.ts:2:1 source-reexport ./b.js -> b.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:19 TK2300",
+                "barrel.ts:2:20 TK2300"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "a.ts",
+                "b.ts",
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "a.ts",
+                  "b.ts",
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./a.js -> a.ts",
+                "barrel.ts:2:1 source-reexport ./b.js -> b.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:19 TK2300",
+                "barrel.ts:2:20 TK2300"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "09_source_source_ba",
+      "files": [
+        {
+          "path": "a.ts",
+          "text": "export const first = 1;\n"
+        },
+        {
+          "path": "b.ts",
+          "text": "export const second = 2;\n"
+        },
+        {
+          "path": "barrel.ts",
+          "text": "export { second as duplicate } from \"./b.js\";\nexport { first as duplicate } from \"./a.js\";\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "a.ts",
+              "b.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,20): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(2,19): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "b.ts",
+              "a.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 2,
+          "stdout": "barrel.ts(1,20): error TS2300: Duplicate identifier 'duplicate'.\nbarrel.ts(2,19): error TS2300: Duplicate identifier 'duplicate'.\n",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "a.ts",
+                "b.ts",
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "a.ts",
+                  "b.ts",
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./b.js -> b.ts",
+                "barrel.ts:2:1 source-reexport ./a.js -> a.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:20 TK2300",
+                "barrel.ts:2:19 TK2300"
+              ]
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 1,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "a.ts",
+                "b.ts",
+                "barrel.ts"
+              ],
+              "files": {
+                "checked": [
+                  "a.ts",
+                  "b.ts",
+                  "barrel.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./b.js -> b.ts",
+                "barrel.ts:2:1 source-reexport ./a.js -> a.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": [
+                "barrel.ts:1:20 TK2300",
+                "barrel.ts:2:19 TK2300"
+              ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "10a_namespace_only",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { N as Alias } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { Alias } from \"./barrel.js\";\nconst value: number = Alias.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export namespace N { export const value = 1 }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "10b_class_namespace",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { C as Merged } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { Merged } from \"./barrel.js\";\nconst instance: Merged = new Merged();\nconst tag: number = Merged.tag;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export class C {}\nexport namespace C { export const tag = 1 }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "10c_function_namespace",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { fn as merged } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { merged } from \"./barrel.js\";\nconst result: number = merged();\nconst tag: number = merged.tag;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export function fn() { return 1 }\nexport namespace fn { export const tag = 1 }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "10d_aliased_namespace_chain",
+      "files": [
+        {
+          "path": "barrel-a.ts",
+          "text": "export { C as First } from \"./source.js\";\n"
+        },
+        {
+          "path": "barrel-b.ts",
+          "text": "export { First as Final } from \"./barrel-a.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { Final } from \"./barrel-b.js\";\nconst instance: Final = new Final();\nconst tag: number = Final.tag;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export class C {}\nexport namespace C { export const tag = 1 }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel-a.ts",
+              "barrel-b.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel-b.ts",
+              "barrel-a.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "12a_reexport_cycle",
+      "files": [
+        {
+          "path": "a.ts",
+          "text": "export const a = 1;\nexport { b } from \"./b.js\";\n"
+        },
+        {
+          "path": "b.ts",
+          "text": "export const b = 2;\nexport { a } from \"./a.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { a, b } from \"./a.js\";\nconst pair: [number, number] = [a, b];\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "a.ts",
+              "b.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "b.ts",
+              "a.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "12b_mixed_import_reexport_cycle",
+      "files": [
+        {
+          "path": "a.ts",
+          "text": "import { b } from \"./b.js\";\nexport const a = b + 1;\n"
+        },
+        {
+          "path": "b.ts",
+          "text": "export const b = 1;\nexport { a } from \"./a.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { a, b } from \"./b.js\";\nconst pair: [number, number] = [a, b];\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "a.ts",
+              "b.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "b.ts",
+              "a.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13a_default_import_export",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import DefaultClass from \"./source.js\";\nconst instance: DefaultClass = new DefaultClass();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default class DefaultClass {}\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13b_star_reexport",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export * from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { value } from \"./barrel.js\";\nconst result: number = value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13c_namespace_reexport",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export * as ns from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { ns } from \"./barrel.js\";\nconst result: number = ns.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13d_string_literal_export_name",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { value as \"dash-name\" } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { \"dash-name\" as dashName } from \"./barrel.js\";\nconst result: number = dashName;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13e_export_attributes",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { value } from \"./source.js\" with { type: \"javascript\" };\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { value } from \"./barrel.js\";\nconst result: number = value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13f_bare_package_specifier",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { packageValue } from \"fixture-package\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { packageValue } from \"./barrel.js\";\nconst result: number = packageValue;\n"
+        },
+        {
+          "path": "node_modules/fixture-package/index.d.ts",
+          "text": "export declare const packageValue: number;\n"
+        },
+        {
+          "path": "node_modules/fixture-package/package.json",
+          "text": "{\"name\":\"fixture-package\",\"version\":\"1.0.0\",\"types\":\"index.d.ts\"}\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    },
+    {
+      "id": "13g_namespace_bearing_target",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { callable } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { callable } from \"./barrel.js\";\nconst result: number = callable();\nconst tag: number = callable.tag;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export function callable() { return 1 }\nexport namespace callable { export const tag = 2 }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true
+    }
+  ],
+  "classifications": {
+    "admitted": [
+      "01_basic_alias_mismatch",
+      "02a_outer_type_only",
+      "02b_inline_type_only_alias",
+      "03_mixed_value_type_only",
+      "04_two_barrel_chain",
+      "05_class_value_type_chain",
+      "06_no_local_binding",
+      "07a_missing_module_single",
+      "07b_missing_member",
+      "07c_missing_module_multi",
+      "09_source_local_local_source",
+      "09_source_local_source_local",
+      "09_source_source_ab",
+      "09_source_source_ba"
+    ],
+    "namespace_provenance": [
+      "10a_namespace_only",
+      "10b_class_namespace",
+      "10c_function_namespace",
+      "10d_aliased_namespace_chain",
+      "13g_namespace_bearing_target"
+    ],
+    "deferred": [
+      "12a_reexport_cycle",
+      "12b_mixed_import_reexport_cycle",
+      "13a_default_import_export",
+      "13b_star_reexport",
+      "13c_namespace_reexport",
+      "13d_string_literal_export_name",
+      "13e_export_attributes",
+      "13f_bare_package_specifier"
+    ],
+    "empty_noop": [
+      "08a_empty_resolved",
+      "08b_empty_missing"
+    ]
+  },
+  "pre_change": {
+    "bundler_source_reexport": {
+      "exit": 3,
+      "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+      "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n",
+      "resolution": "barrel.ts:1:1 source-reexport ./source.js -> unsupported",
+      "notice": "unsupported-module-form source-reexport barrel.ts:1:1 ./source.js"
+    },
+    "cases": [
+      {
+        "id": "01_basic_alias_mismatch",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "02a_outer_type_only",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "02b_inline_type_only_alias",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "03_mixed_value_type_only",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "04_two_barrel_chain",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel-a.ts\",\"barrel-b.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel-a.ts\",\"barrel-b.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel-a.ts:1:1 source-reexport ./source.js -> unsupported\",\"barrel-b.ts:1:1 source-reexport ./barrel-a.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel-a.ts:1:1 ./source.js\",\"unsupported-module-form source-reexport barrel-b.ts:1:1 ./barrel-a.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel-a.ts:1:1 ./source.js\nproject: unsupported-module-form source-reexport barrel-b.ts:1:1 ./barrel-a.js\n"
+      },
+      {
+        "id": "05_class_value_type_chain",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel-a.ts\",\"barrel-b.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel-a.ts\",\"barrel-b.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel-a.ts:1:1 source-reexport ./source.js -> unsupported\",\"barrel-b.ts:1:1 source-reexport ./barrel-a.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel-a.ts:1:1 ./source.js\",\"unsupported-module-form source-reexport barrel-b.ts:1:1 ./barrel-a.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel-a.ts:1:1 ./source.js\nproject: unsupported-module-form source-reexport barrel-b.ts:1:1 ./barrel-a.js\n"
+      },
+      {
+        "id": "06_no_local_binding",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "07a_missing_module_single",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./missing.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./missing.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./missing.js\n"
+      },
+      {
+        "id": "07b_missing_member",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "07c_missing_module_multi",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./missing.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./missing.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./missing.js\n"
+      },
+      {
+        "id": "08a_empty_resolved",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "08b_empty_missing",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./missing.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./missing.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./missing.js\n"
+      },
+      {
+        "id": "09_source_local_local_source",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:3:1 source-reexport ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:3:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:3:1 ./source.js\n"
+      },
+      {
+        "id": "09_source_local_source_local",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:2:1 source-reexport ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:2:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:2:1 ./source.js\n"
+      },
+      {
+        "id": "09_source_source_ab",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"a.ts\",\"b.ts\",\"barrel.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"a.ts\",\"b.ts\",\"barrel.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./a.js -> unsupported\",\"barrel.ts:2:1 source-reexport ./b.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./a.js\",\"unsupported-module-form source-reexport barrel.ts:2:1 ./b.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./a.js\nproject: unsupported-module-form source-reexport barrel.ts:2:1 ./b.js\n"
+      },
+      {
+        "id": "09_source_source_ba",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"a.ts\",\"b.ts\",\"barrel.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"a.ts\",\"b.ts\",\"barrel.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./b.js -> unsupported\",\"barrel.ts:2:1 source-reexport ./a.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./b.js\",\"unsupported-module-form source-reexport barrel.ts:2:1 ./a.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./b.js\nproject: unsupported-module-form source-reexport barrel.ts:2:1 ./a.js\n"
+      },
+      {
+        "id": "10a_namespace_only",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "10b_class_namespace",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "10c_function_namespace",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "10d_aliased_namespace_chain",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel-a.ts\",\"barrel-b.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel-a.ts\",\"barrel-b.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel-a.ts:1:1 source-reexport ./source.js -> unsupported\",\"barrel-b.ts:1:1 source-reexport ./barrel-a.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel-b.js -> barrel-b.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel-a.ts:1:1 ./source.js\",\"unsupported-module-form source-reexport barrel-b.ts:1:1 ./barrel-a.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel-a.ts:1:1 ./source.js\nproject: unsupported-module-form source-reexport barrel-b.ts:1:1 ./barrel-a.js\n"
+      },
+      {
+        "id": "12a_reexport_cycle",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"a.ts\",\"b.ts\",\"consumer.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"a.ts\",\"b.ts\",\"consumer.ts\"],\"excluded\":[]},\"resolutions\":[\"a.ts:2:1 source-reexport ./b.js -> unsupported\",\"b.ts:2:1 source-reexport ./a.js -> unsupported\",\"consumer.ts:1:1 named-import ./a.js -> a.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport a.ts:2:1 ./b.js\",\"unsupported-module-form source-reexport b.ts:2:1 ./a.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport a.ts:2:1 ./b.js\nproject: unsupported-module-form source-reexport b.ts:2:1 ./a.js\n"
+      },
+      {
+        "id": "12b_mixed_import_reexport_cycle",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"a.ts\",\"b.ts\",\"consumer.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"a.ts\",\"b.ts\",\"consumer.ts\"],\"excluded\":[]},\"resolutions\":[\"a.ts:1:1 named-import ./b.js -> b.ts\",\"b.ts:2:1 source-reexport ./a.js -> unsupported\",\"consumer.ts:1:1 named-import ./b.js -> b.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport b.ts:2:1 ./a.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport b.ts:2:1 ./a.js\n"
+      },
+      {
+        "id": "13a_default_import_export",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"consumer.ts:1:1 default-import ./source.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form default-import consumer.ts:1:1 ./source.js\",\"unsupported-module-form default-export source.ts:1:1\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form default-import consumer.ts:1:1 ./source.js\nproject: unsupported-module-form default-export source.ts:1:1\n"
+      },
+      {
+        "id": "13b_star_reexport",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 star-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form star-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form star-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "13c_namespace_reexport",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 namespace-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form namespace-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form namespace-reexport barrel.ts:1:1 ./source.js\n"
+      },
+      {
+        "id": "13d_string_literal_export_name",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 string-literal-import-name ./barrel.js -> unsupported\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\",\"unsupported-module-form string-literal-import-name consumer.ts:1:1 ./barrel.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\nproject: unsupported-module-form string-literal-import-name consumer.ts:1:1 ./barrel.js\n"
+      },
+      {
+        "id": "13e_export_attributes",
+        "exit": 2,
+        "stdout": "",
+        "stderr": "error: driver infrastructure failure: driver infrastructure failed at Check: project inventory failed: unfrozen export attribute surface at barrel.ts:1:1\n"
+      },
+      {
+        "id": "13f_bare_package_specifier",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport fixture-package -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 fixture-package\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 fixture-package\n"
+      },
+      {
+        "id": "13g_namespace_bearing_target",
+        "exit": 3,
+        "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[],\"skipped\":[\"barrel.ts\",\"consumer.ts\",\"source.ts\"],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> unsupported\",\"consumer.ts:1:1 named-import ./barrel.js -> barrel.ts\"],\"project_notices\":[\"unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\"],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+        "stderr": "project: unsupported-module-form source-reexport barrel.ts:1:1 ./source.js\n"
+      }
+    ]
+  },
+  "lifecycle": {
+    "wu6_unignores_exactly": [
+      "admitted_bundler_projects_match_oracle_in_both_root_orders",
+      "namespace_provenance_fails_closed_with_exact_identities",
+      "source_reexport_cycles_keep_the_exact_cycle_identity"
+    ],
+    "deferred_freeze": "Every classifications.deferred case, including 13e_export_attributes at exit 2, remains covered by pre_change_bundler_results_are_byte_exact and does not move in this sprint."
+  }
+}

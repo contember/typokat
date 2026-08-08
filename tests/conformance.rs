@@ -230,6 +230,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 103 correctness tier — collisions route through one sparse private epoch.
     ("b103_library_merge_correctness", true),
     ("b103_library_merge_correctness_project", true),
+    // Backlog 15 — named source re-exports are a config-backed project feature. The raw
+    // conformance route cannot exercise resolver inventory, so this oracle corpus stays disabled.
+    ("b15_acyclic_source_reexports", false),
     // Backlogs 15 + 72 — project-summary/CLI contract. This stays disabled because the raw
     // conformance route does not consume tsconfig.json or summaries; WU3 unignores its black-box
     // integration contract instead.
@@ -254,6 +257,7 @@ const PROJECT_DIRS: &[&str] = &[
     "b102_frozen_prefix_writes_project",
     // Backlog 103 successful private-merge acceptance.
     "b103_library_merge_correctness_project",
+    "b15_acyclic_source_reexports",
     "b72_bundler_project_tracer",
 ];
 
