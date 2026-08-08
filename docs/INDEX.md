@@ -24,6 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-08-real-project-rescreen.md`](sprints/sprint-2026-08-08-real-project-rescreen.md) —
+  active: re-screen the same six immutable public candidates against the expanded bounded Bundler
+  route; either pin a zero-clean witness or stop without broadening production semantics.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -133,8 +136,10 @@ decisions → reference → archive.
   Backlog [`72`](backlog/72-real-project-preview-readiness.md) retains the witness, mutation, ratchet,
   and CI promise. The archived
   [`acyclic source-re-export sprint`](archive/sprint-2026-08-08-acyclic-source-reexports.md) shipped
-  the first bounded slice of [`15`](backlog/15-modules-imports.md). Re-screening `72` is next;
-  default exports/imports and package breadth remain later work.
+  the first bounded slice of [`15`](backlog/15-modules-imports.md). The active
+  [`re-screen sprint`](sprints/sprint-2026-08-08-real-project-rescreen.md) now reruns the same six
+  immutable candidates with unchanged zero thresholds; default exports/imports and package breadth
+  remain later work.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
