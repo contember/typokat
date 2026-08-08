@@ -798,23 +798,25 @@ is assignable to an optional member. No new diagnostic code.
 
 ## Modules / imports (M29)
 
-Implemented (M29, the first correctness-first cross-file slice): local relative `./` / `../` imports
-resolved to provided `.ts` files; named imports, `import type`, exported declarations, and simple
-`export { x as y }` lists; one serial type universe.
+Implemented: local relative `./` / `../` imports resolved to configured `.ts` files; named imports,
+`import type`, exported declarations, and simple local `export { x as y }` lists in one serial type
+universe. The public `check --project-summary json <directory|tsconfig.json>` route accepts the exact
+files-only strict/noEmit/ESNext/Bundler config. It uses `oxc_resolver 11.24.2` for extensionless and
+`.js`→`.ts` physical lookup, inventories every module form before filtering, and emits a
+deterministic summary. Unsupported forms are explicit non-clean project notices, not silent drops.
 
-- **Out of scope (deferred):** packages / `node_modules`, `tsconfig` resolver options, `.d.ts`,
-  default imports, namespace imports, star imports/re-exports, re-export-from, CommonJS, ambient
+- **Out of scope (deferred):** packages / `node_modules`, broader config/root selection, `.d.ts`,
+  default imports, namespace imports, star imports/re-exports, source re-exports, CommonJS, ambient
   modules, cyclic module graphs, and parallel cross-file identity. The production driver supplies
   the full default library independently of this unresolved module-resolution surface.
   <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
 
-The 1.0 plan narrows that deferred resolver surface to `moduleResolution: "bundler"` and delegates
-physical resolution to `oxc_resolver` ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
-Typokat retains source-root accounting, module graph/import/export semantics, `.d.ts` checking,
-diagnostics, and determinism. Until backlog `15` lands, this is policy rather than implemented
-coverage. NodeNext/alternate profiles and known dependency gaps such as simplified `typesVersions`
-selection must remain explicit unsupported outcomes; they may not disappear behind the M29 local
-resolver or an error-type fallback.
+Backlog `15` expands this shipped Bundler substrate. Typokat retains source-root accounting, module
+graph/import/export semantics, `.d.ts` checking, diagnostics, and determinism while physical lookup
+stays with `oxc_resolver` ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
+NodeNext/alternate profiles and known dependency gaps such as simplified `typesVersions` selection
+must remain explicit unsupported outcomes; they may not disappear behind the bounded resolver or
+an error-type fallback.
 
 ## Intersection types (M31)
 

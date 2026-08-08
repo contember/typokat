@@ -8,19 +8,19 @@ blocked-by: [./79-resolution-query-surface.md]
 
 **Summary.** Use `contember/pavouk`'s ts-morph-resolved code graph as a **ground-truth oracle for
 resolution at scale**: ~138k real resolution assertions from real code, diffable edge by edge
-against typokat. This is a different oracle from the one backlog [`15`](./15-modules-imports.md)
-and [`72`](./72-real-project-preview-readiness.md) build — they diff *diagnostics* against `tsc` on
-a pinned witness; this diffs *resolution* against a compiler-accurate graph across a whole
+against typokat. This is different from backlog [`72`](./72-real-project-preview-readiness.md),
+which still needs a pinned diagnostic witness and mutation ratchet, and from the synthetic
+resolution contracts shipped under backlog [`15`](./15-modules-imports.md): this diffs
+*resolution* against a compiler-accurate graph across a whole
 monorepo. Non-blocking for checker 1.0, but the strongest scale signal available for the D track.
 
 ## Problem
 
-typokat's conformance corpus is 211 fixtures / 778 expected diagnostics — excellent for the type
-model, silent about whether resolution holds up on a real repository. Backlog `72`'s first
-witness-first sprint stopped at WU0 because no public candidate met the preview contract without a
-project-specific shim. The active Bundler project tracer now builds a bounded synthetic resolver
-surface before repeating that gate, but we still lack a *cheap, high-volume, real-world*
-correctness signal.
+typokat's conformance corpus is excellent for the type model, but silent about whether resolution
+holds up on a real repository. The bounded files-only Bundler route and synthetic accounting
+contract are shipped. Its follow-up six-candidate screen still found no zero-clean public witness,
+so backlog `72` remains incomplete. We also lack a *cheap, high-volume, real-world* correctness
+signal.
 
 `pavouk` (a sibling repo: compiler-accurate code graph for monorepos, ts-morph over the real TS
 checker) already produces exactly that signal as a by-product. Indexed against the Contember

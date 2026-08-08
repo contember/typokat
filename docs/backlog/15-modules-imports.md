@@ -6,19 +6,31 @@ blocked-by: []
 
 # 15 — Bundler modules / imports via `oxc_resolver`
 
-**Summary.** Integrate `oxc_resolver` as the physical-resolution authority for typokat's supported
-1.0 `moduleResolution: "bundler"` profile, then complete module graph and import/export semantics in
-one **serial** type universe. The correctness-first local-relative slice shipped as M29. Per
+**Summary.** Expand the shipped bounded Bundler project route into complete module/import/export
+coverage in one **serial** type universe. `oxc_resolver 11.24.2` is already the sole physical
+authority for the admitted files-only project profile. The next semantic breadth is source
+re-exports, then default exports/imports; package and declaration breadth follows later. Per
 [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), this item does not reimplement
 filesystem/package/tsconfig resolution and does not require NodeNext parity. Parallel cross-file
-type identity (Stage 2) remains solely backlog [`16`](./16-parallelism-type-universe.md). The pinned,
-narrow real-project vertical slice is backlog [`72`](./72-real-project-preview-readiness.md); its
-integration work becomes an input here, not a second resolver.
+type identity (Stage 2) remains solely backlog [`16`](./16-parallelism-type-universe.md). The pinned
+public witness and mutation ratchet remain backlog [`72`](./72-real-project-preview-readiness.md).
 
 ## Problem
 
 M29 added a serial `check_project` path for provided local relative `.ts` files with named
-imports/exports. Real Bundler-profile projects also need declaration-aware extension substitution,
+imports/exports. The bounded public project route now discovers an exact files-only
+strict/noEmit/ESNext/Bundler config, resolves configured local `.ts` roots and extensionless or
+`.js`→`.ts` named imports through `oxc_resolver 11.24.2`, inventories every module form before
+filtering, and returns a deterministic complete summary. Unsupported forms are explicit non-clean
+notices.
+
+The six-candidate WU4 screen showed the immediate practical gap: five projects first failed on
+source re-exports or default exports, while the sixth used NodeNext-only explicit `.ts` specifiers.
+Implement source re-export publication first, including type-only and aliased exports; then add
+default export/import semantics. Keep each as a spec-first slice with both source orders and exact
+missing/export-space diagnostics. Do not pull package loading into those slices.
+
+Later Bundler-profile breadth still needs declaration-aware extension substitution,
 `node_modules`/`@types`, package `exports`/`imports` and `types`, path aliases, tsconfig inheritance
 and references, and `.d.ts` consumption. Those physical lookup rules are already the domain of
 [`oxc_resolver`](https://docs.rs/oxc_resolver/latest/oxc_resolver/): its
@@ -27,10 +39,9 @@ API explicitly targets TypeScript Bundler resolution. Recreating the algorithms 
 `crates/typokat-frontend/src/frontend.rs` would add a second authority without advancing typokat's
 type model.
 
-Delegating lookup does not build a checker project. The CLI still needs to start from a directory or
-config and enumerate configured `files`/`include`/`exclude` roots where the crate does not provide a
-complete root set. Typokat must construct a deterministic module graph, load every resolved file,
-wire default/namespace/star imports and re-exports across value/type/namespace spaces, handle guarded
+Delegating lookup does not build module semantics. Typokat must publish re-exported and default
+symbols across value/type/namespace spaces, then broaden root selection and loading, construct the
+general deterministic graph, load every resolved file, wire namespace/star forms, handle guarded
 cycles, parse/bind/check `.d.ts`, and report every unresolved or unsupported branch explicitly.
 
 Ambient external modules and valid UMD global publication are also part of this module boundary. In
@@ -46,12 +57,15 @@ is specifically the `export =` form, not the complete differential matrix.
 
 Extend the serial `check_project` path with a single explicit dependency boundary:
 
-- **Correctness-first whole-repo slice (shipped as M29):** local relative module resolution +
-  import/export wiring runs serially. Acceptance: multi-file fixtures with imports/exports check
-  correctly.
-- **Preview vertical slice (owned by `72`):** configure `oxc_resolver` for Bundler declaration
-  resolution, discover and enumerate the witness project, and exercise only its import/export
-  forms. This proves the boundary early but does not close this item.
+- **Shipped substrate:** local named imports/exports run serially; the public exact files-only
+  Bundler route discovers roots, delegates physical lookup to `oxc_resolver 11.24.2`, accounts for
+  every form, and fails closed on unsupported input.
+- **Next breadth — source re-exports:** publish `export { x } from`, aliased and type-only variants,
+  with exact value/type/namespace slots, missing-export diagnostics, deterministic order, and no
+  error-type fallback. The public summary must classify these as resolved only after semantics run.
+- **Next breadth — default exports/imports:** add declaration and expression default exports plus
+  default imports without conflating the default slot with named exports. Namespace/star forms stay
+  deferred until their own spec-first slice.
 - **Physical resolution (external authority):** use the pinned crate's tsconfig and `resolve_dts`
   facilities for extension substitution, `node_modules`/`@types`, package conditions and declaration
   metadata, `paths`/`baseUrl`, inheritance, and references. Do not add fallback filesystem probes or
@@ -78,8 +92,8 @@ The spec-first corpus must pin these cases before integration. A mismatch is fix
 adopted through a pinned crate upgrade, or is an explicit unsupported project outcome with an owned
 fixture; it is never silently approximated in typokat.
 
-Both the small preview witness and the later full-stack witness from `72` must run under the
-supported Bundler oracle profile. `contember/deptective` remains a candidate only if its pinned
+Both the small preview witness from `72` and a later full-stack witness must run under the supported
+Bundler oracle profile. `contember/deptective` remains a candidate only if its pinned
 witness can use a Bundler-compatible config without changing the program's type meaning; otherwise
 select a replacement instead of claiming NodeNext support. The witness pins its lockfile/tool
 versions and the checker-wide TypeScript oracle. The ambient-library half shipped with archived
@@ -102,9 +116,9 @@ lands with `16`.
 
 ## Touch points
 
-`oxc_resolver` integration and option mapping; project/config discovery and source-root enumeration;
-deterministic module graph; import/export binding; `.d.ts` loading/checking; the serial
-`check_project` path and project accounting. (Cross-file identity and `driver::check_files` are
-backlog `16`.)
+Source re-export and default-slot binding; later `oxc_resolver` option mapping, broader
+project/config root enumeration, deterministic module graph, package/declaration loading,
+`.d.ts` checking, the serial `check_project` path, and project accounting. Cross-file identity and
+`driver::check_files` are backlog `16`.
 
 <!-- Origin: dev roadmap (was HANDOFF §3, long-term scale + IDE). -->

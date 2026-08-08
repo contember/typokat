@@ -6,56 +6,43 @@ blocked-by: []
 
 # 72 — Real-project preview readiness
 
-**Summary.** Deliver the first honest vertical slice where `typokat` can be pointed at a
-real strict TypeScript project and produce useful, differential output rather than resolver,
-ambient-library, or silent-skip noise. This is an early preview gate, not the full resolver
-owned by backlog [`15`](./15-modules-imports.md). The preview uses the supported 1.0
-`moduleResolution: "bundler"` profile and delegates physical resolution to `oxc_resolver` per
-[`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md).
+**Summary.** Pin one qualifying public strict-TypeScript project, prove the shipped bounded Bundler
+CLI against clean and mutated sources, and add a deterministic differential ratchet. Project
+discovery, local physical resolution, complete module accounting, and the public summary are
+already shipped. General module breadth remains backlog [`15`](./15-modules-imports.md).
 
 ## Problem
 
-The checker can run over explicitly supplied local `.ts` files, but that is not yet the user
-workflow. A normal project starts from a directory or `tsconfig.json`, may use Bundler-profile
-extension substitution and package declarations, and depends on ambient library names. Running
-today's checker on such a project mixes genuine checker diagnostics with resolution noise;
-unsupported AST paths can also make a clean result untrustworthy.
+The public command now accepts a directory or `tsconfig.json`, but its exact supported profile is
+deliberately small: files-only strict/noEmit/ESNext/Bundler, configured local `.ts` roots, and local
+named imports. `oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts` physical resolution.
+The deterministic JSON summary accounts for every root, resolution, unsupported form, parse error,
+incomplete surface, and diagnostic. Unsupported input is non-clean rather than silently filtered.
 
-The surface-accounting prerequisite shipped on 2026-07-12: every inventoried in-scope surface
-now either produces an incomplete record or has a durable semantic owner. This item is therefore
-unblocked; it owns the remaining project-level accounting and preview promise.
-
-Without a pinned project-level witness, the model and resolver roadmaps can turn green without
-proving the concrete preview promise: "point typokat at a project and understand the result."
+Two bounded screening sprints failed the unchanged witness gate. The latest shipped the substrate
+first, then screened six immutable public projects. None qualified: common first failures were
+source re-exports and default exports; one used explicit `.ts` specifiers under NodeNext; others
+required Node ambient types or non-equivalent config/test exclusions. Every candidate failed before
+the mutation gate. There is still no pinned public baseline, mutation pack, ratchet, or CI promise.
 
 ## Approach / acceptance
 
-Build one deliberately narrow, reusable vertical slice:
+Finish only the witness and durable gate:
 
-- expose and document a public CLI form for a project directory or `tsconfig.json`, discover the
-  config and its root `.ts` files from `files`/`include`/`exclude`, and report the selected
-  config/root set. Use `oxc_resolver` for config discovery/resolution and enumerate source roots in
-  typokat where the crate does not expose a complete root set; every unconsumed config form is an
-  explicit unsupported notice;
-- configure `oxc_resolver::resolve_dts` for Bundler resolution and support the import forms used by
-  the witness in one serial type universe. A dependency-free/local-only project is valid for this
-  early gate; if WU0 selects one trivial package, only its pinned declaration path enters the slice.
-  General package/`@types`/declaration-layout coverage stays in `15`, and no local fallback resolver
-  is added;
-- consume the fixed shipped TypeScript 6.0.3 ES2025 full-host default-library profile unchanged;
-  do not add an alternate bounded prelude or a project-specific global-name shim;
-- distinguish type diagnostics from explicit unsupported-surface notices, and never represent an
-  unvisited in-scope AST form as a clean check (the shipped surface inventory enforces the
-  systematic guarantee);
-- emit a deterministic project summary suitable for differential comparison: roots checked,
-  files checked/skipped, unsupported forms, unresolved modules, and diagnostics by code/file.
-
-WU0 must select and pin a genuinely small, public strict-TypeScript project whose ambient and
-language surface fits the shipped model plus the fixed production default-library profile. Record
-its repository URL, commit, lockfile digest, install command, tsconfig, TypeScript oracle version, and every exercised
-resolver/default-library feature before implementation. Reject candidates that require broad Node/Bun
-declarations, a non-Bundler resolution profile, generic standard-library methods, or a large package
-graph: the preview must not alter the fixed default library or add a project-specific shim.
+- select a genuinely small, immutable public project whose complete production graph fits the
+  supported route. Record repository, commit, license, lockfile digest, package-manager/tool
+  versions, native config, exact witness config, roots, graph, module forms, and ambient names;
+- require a clean pinned `tsc 6.0.3 --strict --noEmit` Bundler oracle and a zero-clean production
+  summary: no actionable diagnostics, unresolved modules, skipped roots/forms, project notices,
+  parse errors, or incomplete surfaces;
+- reject the project if it needs a source edit, ambient shim, fixed-library change, non-Bundler
+  profile, type-checking package, Node/Bun ambient dependency, unsupported form, or a config overlay
+  that changes the program's type meaning;
+- after the clean baseline only, apply isolated assignment (`2322`), call-argument (`2345`), and
+  missing-member (`2339`) mutations. Both `tsc` and typokat must report the exact identities at the
+  mutated sites, with full restoration between probes;
+- commit an immutable descriptor, mutation manifest, normalized expected summary, and fresh-cache
+  runner. Run it twice, seed runner faults, and add the identity-based ratchet to CI.
 
 `contember/deptective` commit `e953c79edc395f8933afaba3ad5b0c57c6afd676` remains a **later
 full-stack witness candidate**, not the preview witness. Its repository config uses NodeNext,
@@ -67,14 +54,12 @@ through a Bundler-compatible witness config that preserves the program's type me
 replace it rather than claiming NodeNext support. Its witness uses the checker-wide pinned 6.0.3
 oracle.
 
-Acceptance requires all of the following:
+Acceptance still requires all of the following:
 
-1. every configured source root is deterministically accounted for as checked or explicitly
-   unsupported; every admitted Bundler specifier resolves through `oxc_resolver`, and there are no
-   unclassified package-resolution failures or local fallback probes;
-2. the clean pinned-`tsc --noEmit` baseline produces no unclassified typokat type diagnostic; any
-   deliberate over-report or unsupported notice is linked to a live backlog/divergence owner and
-   appears separately from actionable type errors;
+1. every configured source root is checked; every admitted Bundler specifier resolves through
+   `oxc_resolver`; all unsupported, unresolved, skipped, parse, incomplete, and diagnostic channels
+   are empty on the clean project;
+2. the pinned `tsc --noEmit` baseline is clean and the exact source/config meaning is preserved;
 3. a committed mutation pack injects representative assignability, call-argument, and missing-
    member errors into the pinned checkout; typokat reports the expected `TK` identities at the
    mutated sites and the differential artifact records any remaining tsc misses;
@@ -82,24 +67,16 @@ Acceptance requires all of the following:
    no-regression ratchet by diagnostic identity, unresolved-module identity, and unsupported-form
    identity — aggregate counts alone are insufficient.
 
-The spec-only commit that precedes implementation must record the clean baseline, mutation list,
-the allowlist mapping every accepted mismatch/unsupported identity to its backlog or divergence,
-and numeric preview thresholds (maximum actionable false positives, unresolved modules, skipped
-files/forms, and missed seeded diagnostics). Implementation may improve those thresholds but may
-not relax them. CI runs the public CLI through the same runner and checks the committed scoreboard.
-
-This item may land the narrow `oxc_resolver` integration needed by the preview witness. Backlog `15`
-remains the owner of general supported-Bundler breadth and typokat-owned semantics: all admitted
-import/export forms, project enumeration/accounting, declaration consumption, module graphs, and
-cycle behavior beyond the pinned slice.
+The descriptor/spec commit must precede the runner. Thresholds stay exactly zero; there is no
+allowlist for a candidate-specific unsupported form. If no project fits after the next bounded
+screening pass, stop and leave this item incomplete. Do not broaden production semantics inside the
+witness sprint; land required general forms spec-first under backlog `15` first.
 
 ## Touch points
 
-`src/main.rs`, `crates/typokat-frontend/src/frontend.rs` for resolver/config/source discovery,
-`crates/typokat-driver/src/driver.rs` for orchestration/reporting, deterministic module accounting,
-the fixed production default-library route, a checked-in real-project smoke runner/descriptor, and
-CI. Full Bundler breadth and the later full-stack resolver witness are
-backlog `15`; the shipped full `lib.d.ts` profile is fixed by archived backlog
+Checked-in project descriptor, mutation manifest, normalized expected result, fresh-cache
+black-box runner, README, and CI. The production project substrate changes only through backlog
+`15`. The shipped full `lib.d.ts` profile is fixed by archived backlog
 [`14`](../archive/backlog-14-libdts-loading.md); cross-file parallel identity is backlog `16`.
 
 <!-- Origin: post-sprint MVP-readiness audit, 2026-07-10. -->

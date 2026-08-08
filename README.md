@@ -9,10 +9,10 @@ typing, control-flow narrowing, generics with inference, full classes, condition
 types, and the everyday "real-world" constructs.
 
 It is a **checker, not a compiler** — emit and JS runtime semantics are out of scope by design.
-Current M29 module coverage is deliberately narrow (local relative `.ts` modules); the planned sole
-1.0 profile is Bundler, with physical resolution delegated to `oxc_resolver` and alternate host
-profiles deferred. The one goal is to preserve the **type model** faithfully; when in doubt it
-*over-reports* (the safe direction). Full design:
+Current module coverage is deliberately narrow: local relative `.ts` modules plus a bounded
+files-only Bundler project route. Physical resolution is delegated to `oxc_resolver`; general
+packages and alternate host profiles remain deferred. The one goal is to preserve the **type
+model** faithfully; when in doubt it *over-reports* (the safe direction). Full design:
 [`docs/reference/architecture.md`](./docs/reference/architecture.md).
 
 <p>
@@ -31,7 +31,16 @@ clean, and **every milestone is cross-checked against real `tsc 6.0.3 --strict`*
 
 ```sh
 cargo run -- check path/to/file.ts
+cargo run -- check --project-summary json path/to/project
 ```
+
+The project form accepts a directory containing `tsconfig.json` or the config path itself. Its
+exact admitted config is `files` plus `strict: true`, `noEmit: true`, `module: "ESNext"`, and
+`moduleResolution: "Bundler"`. Every configured root must be a local `.ts` file. Local named
+imports may be extensionless or use `.js`→`.ts` substitution; `oxc_resolver 11.24.2` performs the
+physical lookup. The JSON summary deterministically accounts for roots, checked/skipped files,
+resolutions, project notices, parse errors, incomplete surfaces, and diagnostics. Any unsupported
+config, specifier, or module form is an explicit non-clean project notice.
 
 Exit code is `0` when the check is complete and clean, `1` when diagnostics are reported, `2` on
 usage/IO errors, and `3` when the checker hit an **unsupported in-scope construct** — the file was
@@ -60,7 +69,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, the pinned TypeScript 6.0.3 ES2025 full-host default library, and the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports, and the bounded files-only Bundler project route |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
@@ -182,10 +191,12 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   guard (over-reports `T | undefined`, the safe direction). (Backlog `49`.)
 - **Default-library and module profile.** Production checks use the exact pinned TypeScript 6.0.3
   ES2025 full-host library, compiled from its 82 vendored source files in each fresh process.
-  Modules/imports are implemented only for local relative `.ts` files with named imports/exports
-  in one serial project check. Still deferred: packages / `node_modules`, `tsconfig` resolver
-  options, `.d.ts`, default /
-  namespace / star imports, re-exports from another module, CommonJS, ambient modules, cyclic module
+  The public `check --project-summary json <directory|tsconfig.json>` route accepts only the exact
+  files-only strict/noEmit/ESNext/Bundler config and configured local `.ts` roots. It resolves local
+  named imports, including extensionless and `.js`→`.ts` forms, through `oxc_resolver 11.24.2` and
+  emits deterministic complete accounting. Every unsupported form is an explicit non-clean
+  notice. Still deferred: packages / `node_modules`, broader config/root selection, `.d.ts`,
+  default/namespace/star imports, source re-exports, CommonJS, ambient modules, cyclic module
   graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`) and a wrong type-argument count such as bare `Array`
@@ -199,13 +210,14 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   and every audited expression shape. The remaining expression-shape semantics are explicitly
   incomplete, never silently clean: `x!`/`a?.b` remain backlog `49`; traversal/iteration forms
   such as elisions, spreads, and tagged templates remain `71`; the other deferred surface tail is
-  `75`. The pinned real-project preview gate (`72`) remains required. Its first witness-first sprint
-  stopped before implementation because no screened public project met the zero-threshold contract;
-  the active replacement first builds a bounded Bundler resolver/project slice, then repeats the
-  witness gate without project-specific code or ambient shims. The full default-library production
+  `75`. The pinned real-project preview gate (`72`) remains required. The bounded Bundler
+  resolver/project substrate is shipped, but its replacement sprint also terminated incomplete:
+  six screened public projects failed the unchanged zero threshold before mutations. There is no
+  pinned public witness, mutation ratchet, or preview CI gate. The full default-library production
   cutover is shipped and archived after WU7
   independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
-  Bundler module resolution (`15`) is the next step on the scale ladder. A clean
+  Source re-exports and default exports are the next module-breadth targets in `15`; package breadth
+  follows later. A clean
   result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families

@@ -27,9 +27,6 @@ decisions → reference → archive.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
-- [`sprint-2026-08-07-bundler-project-tracer.md`](sprints/sprint-2026-08-07-bundler-project-tracer.md) —
-  active: a bounded `15` + `72` slice that specifies project discovery and local Bundler resolution
-  synthetically before proving the public CLI on one pinned real project.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
   planned behavior-preserving cleanup, not started; unblocked by the full-library closure and
   requiring complete re-verification at current HEAD before WU1.
@@ -102,7 +99,11 @@ decisions → reference → archive.
   [`ADR-0007`](decisions/0007-bundler-resolution-via-oxc-resolver.md) delegates physical
   package/filesystem/tsconfig resolution to `oxc_resolver`; typokat retains project enumeration,
   module-graph and import/export semantics, `.d.ts` checking, diagnostics, and determinism.
-  NodeNext and other host profiles are deferred rather than approximated.
+  The shipped `check --project-summary json <directory|tsconfig.json>` route accepts the exact
+  files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, and named imports;
+  `oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts` lookup. Every unsupported form is an
+  explicit non-clean notice. Packages, default/namespace imports, source re-exports, cycles,
+  NodeNext, and other host profiles remain deferred rather than approximated.
 - **Pre-lib hardening shipped 2026-07-13** (archived:
   [`archive/sprint-2026-07-12-pre-lib-hardening.md`](archive/sprint-2026-07-12-pre-lib-hardening.md)) —
   aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType` inference
@@ -121,10 +122,14 @@ decisions → reference → archive.
   persistent generic method/call/construct binders now survive substitution and relate under a
   cache-safe local alignment. Namespace value publication subsequently shipped under ADR-0010,
   unblocking `14`; explicit `this`/`ThisType<T>` shipped with `70`.
-- **Bundler project tracer (`15` + `72`) active** — the old witness-first preview is
-  [`archived incomplete`](archive/sprint-2026-07-12-real-project-preview.md). The replacement
-  specifies and ships local project discovery/resolution before selecting a public witness; its
-  zero thresholds and ban on project-specific shims remain unchanged.
+- **Bundler project tracer terminated incomplete after shipping its substrate** — the first
+  witness-first preview is [`archived incomplete`](archive/sprint-2026-07-12-real-project-preview.md).
+  Its [`replacement`](archive/sprint-2026-08-07-bundler-project-tracer.md) shipped local project
+  discovery, `oxc_resolver` lookup, complete module accounting, and the deterministic public
+  summary, then stopped after six candidates failed the unchanged zero threshold before mutations.
+  Backlog [`72`](backlog/72-real-project-preview-readiness.md) retains the witness, mutation, ratchet,
+  and CI promise; [`15`](backlog/15-modules-imports.md) next adds source re-exports and default
+  exports/imports before package breadth.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
@@ -172,8 +177,9 @@ decisions → reference → archive.
   subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** `14` is closed and the active Bundler project tracer combines a bounded `15`
-  slice with `72`; general resolver breadth and the remaining model-completeness items stay open.
+  (`72`). **Now:** `14` is closed; the bounded Bundler CLI/accounting substrate is shipped, while
+  `72` still lacks its public witness and `15` retains module breadth. The remaining
+  model-completeness items stay open.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint
   invariants CLEAN and filed `53`–`65`; the five HIGH silent-FN families then shipped through

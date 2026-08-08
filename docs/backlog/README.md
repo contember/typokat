@@ -13,7 +13,8 @@ This **is** the roadmap. Shipped so far: items `01`–`04` (current-impl bugs), 
 signatures, F1), `06`+`20` (class completeness + ctor accessibility), `07` (unstructured-flow
 narrowing, M23), `08`–`12` (constraints M24 → utility types M28: the type-level evaluation phase,
 complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), backlog `15` slice 1
-(M29 local-relative modules), `53` `55` `57` `58` `61` (the five HIGH silent-FN fixes,
+(M29 local-relative modules) plus its bounded files-only Bundler project route and deterministic
+accounting substrate, `53` `55` `57` `58` `61` (the five HIGH silent-FN fixes,
 sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 `54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), `24` `39`
 (M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
@@ -174,9 +175,10 @@ Checker scaling (from sprint-2026-07-25):
 
 **D. Scale + IDE — the §12 phase ladder.**
 
-- **XL** · [`72`](72-real-project-preview-readiness.md) — public project CLI, pinned strict project, mutation pack, and differential CI ratchet.
-- **XL** · [`15`](15-modules-imports.md) — Bundler resolution via `oxc_resolver` plus typokat-owned
-  module semantics; the local-relative slice shipped as M29.
+- **L** · [`72`](72-real-project-preview-readiness.md) — select a zero-clean public project atop the
+  shipped CLI, then land its mutation pack and differential CI ratchet.
+- **XL** · [`15`](15-modules-imports.md) — remaining Bundler module semantics and resolver breadth;
+  next source re-exports, then default exports/imports, with packages later.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
@@ -195,23 +197,24 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Ship the bounded `15` + `72` Bundler project tracer.** The original witness-first preview
-   stopped before implementation because no public candidate met its zero thresholds. The active
-   [`2026-08-07 sprint`](../sprints/sprint-2026-08-07-bundler-project-tracer.md) first specifies and
-   lands local project discovery, `oxc_resolver` lookup, complete module accounting, and a
-   deterministic public result against synthetic oracle projects. It then selects one
-   dependency-free public witness without relaxing the old thresholds or adding a project shim.
-2. **Continue the full-project/scale ladder** (remainder of `15` → `16` → `17`), finishing the A/B/C
-   remainder along the way. The tracer closes `72`, not general resolver breadth. After `15` ships,
-   it and the shipped production work of `14` must graduate a pinned Bundler-compatible full-stack
-   witness (deptective only if it qualifies); the small `72` preview is not evidence for full
-   resolver/lib fidelity. Per
+1. **Add the smallest module breadth exposed by the six-candidate stop.** The archived
+   [`2026-08-07 sprint`](../archive/sprint-2026-08-07-bundler-project-tracer.md) shipped the exact
+   files-only Bundler CLI and complete accounting, then terminated incomplete because all six
+   public candidates failed before mutations. Under `15`, implement source re-exports first and
+   default exports/imports second. Keep package loading out of these slices.
+2. **Close `72` on a zero-clean public witness.** Re-screen against the expanded shipped surface,
+   then pin the first qualifying project, three exact TS/TK mutations, the deterministic fresh-cache
+   runner, fault controls, and the CI identity ratchet. Do not relax a threshold or add a shim.
+3. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
+   `17`), finishing the A/B/C remainder along the way. After `15` ships, it and the shipped
+   production work of `14` must graduate a pinned Bundler-compatible full-stack witness (deptective
+   only if it qualifies); the small `72` preview is not evidence for full resolver/lib fidelity. Per
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.
-3. **Land `79` + `80` alongside the post-tracer breadth climb.** The tracer buys one honest public
-   checker workflow; the resolution oracle then adds breadth without enlarging that first public
-   claim. Pavouk already holds ~138k compiler-accurate resolution assertions over a real monorepo,
+4. **Land `79` + `80` alongside the breadth climb.** The shipped project summary provides the
+   bounded orchestration base; the resolution oracle adds breadth without enlarging the public
+   checker claim. Pavouk already holds ~138k compiler-accurate resolution assertions over a real monorepo,
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
    Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
    may be dropped on the profile.

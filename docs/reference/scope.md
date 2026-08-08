@@ -13,12 +13,12 @@ Codes use the `TK` prefix; the number mirrors `tsc` exactly (`TK2322` ≡ `TS232
 ## The boundary in one line
 
 typokat models TypeScript **types**. In scope: the semantic/type errors a strict
-`tsc --noEmit --strict` reports about an already-parsed `.ts` file or, for the M29
-slice, a local-relative `.ts` project with named imports/exports. Out of scope by
+`tsc --noEmit --strict` reports about an already-parsed `.ts` file or the bounded serial project
+slice: local-relative `.ts` roots with named imports/exports. Out of scope by
 design (per [`CLAUDE.md`](../../CLAUDE.md)): **parsing** (oxc owns it), **emit**,
 **JS runtime semantics**, reimplementing host/filesystem **module resolution**, and
-**compiler/CLI configuration diagnostics**. The planned 1.0 project profile is Bundler:
-`oxc_resolver` owns physical resolution while typokat owns module semantics and checking
+**compiler/CLI configuration diagnostics**. The supported project profile is a bounded Bundler
+route: `oxc_resolver` owns physical resolution while typokat owns module semantics and checking
 ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)). Everything below follows
 that boundary.
 
@@ -225,14 +225,16 @@ separates today's supported slice, planned resolver capability, and diagnostics 
 slice** (M29, backlog `15` slice 1) resolves imports, so it **emits** `TK2307` *Cannot find
 module…* and `TK2305` *Module has no exported member…* for that slice — both are live codes in
 `crates/typokat-diagnostics/src/diagnostics/mod.rs` and the README diagnostics list.
-Package/`node_modules`/tsconfig project
-resolution is **currently unsupported but planned** for the Bundler-only preview/full slices
-(`72`/`15`) through `oxc_resolver`. Resolver and import/export diagnostics for admitted Bundler
-forms are in scope as those slices land. Alternate profiles (including NodeNext/Node16), `TK2792`,
-`TK2459`, unknown-option validation, and `isolatedModules`/emit-target-gated diagnostics stay OOS
-unless deliberately promoted. An unsupported profile or dependency gap is a separate explicit
-project outcome, not a clean fallback. The divergence ledger's Modules section is the authoritative
-current boundary.
+The public `check --project-summary json <directory|tsconfig.json>` route accepts only an exact
+files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, and local named
+imports. Extensionless and `.js`→`.ts` physical resolution use `oxc_resolver 11.24.2`. Its
+deterministic summary accounts for every root and encountered module form; unsupported config,
+specifier, or form is an explicit non-clean project notice. Packages/`node_modules`, `.d.ts`,
+default/namespace imports, source re-exports, and module cycles remain unsupported under `15` and
+`72`. Alternate profiles (including NodeNext/Node16), `TK2792`, `TK2459`, unknown-option
+validation, and `isolatedModules`/emit-target-gated diagnostics stay OOS unless deliberately
+promoted. An unsupported profile or dependency gap is a separate explicit project outcome, not a
+clean fallback. The divergence ledger's Modules section is the authoritative current boundary.
 
 ## Why this is sound to bound this way
 

@@ -1,10 +1,12 @@
-<!--
-On close, prepend an OUTCOME block here, then `git mv` this file to ../archive/:
-
-> **OUTCOME — shipped YYYY-MM-DD.** <one-paragraph result.> Commit map: WU1 → <sha>,
-> WU2 → <sha>, … Verification: <the gate command + numbers>. Backlog closed:
-> <ids deleted/rescoped>. Deferred: <honest notes>.
--->
+> **OUTCOME — terminated incomplete 2026-08-08.** WU0–WU3 shipped the bounded public Bundler
+> route and complete project accounting. WU4 then reached its six-candidate stop with no public
+> project satisfying the unchanged zero thresholds. No candidate reached the mutation gate, so no
+> project descriptor, ratchet, or CI job landed; WU5–WU7 did not run. Backlog `72` and completion
+> criterion `D-real-project-preview` remain incomplete. Backlog `15` retains the missing module
+> breadth. Commit map: WU0 → `565f1b6`; WU1 → `36d833b`; WU2 → `706115f`, `1dec35f`; WU3 specs →
+> `1cdb3c2`, `f2c3bb5`; WU3 implementation → `ce27271`. Verification: six fresh-cache candidate
+> screens against pinned `tsc 6.0.3` and production `ce27271`, followed by an independent read-only
+> hard-stop audit, passed the termination contract.
 
 # Sprint — Bundler project tracer (2026-08-07)
 
@@ -322,6 +324,22 @@ unleased number is not evidence. The final gate is: `cargo fmt --check`; `cargo 
 ratchets twice from a fresh cache; fresh official-suite `run --check`; docs lint; WU6 PASS.
 
 ## Run log
+
+- 2026-08-08 — WU4 hard-stop PASS. Six immutable public candidates were screened from fresh
+  caches. Native results and transparent production-only/files-only overlays were kept distinct;
+  no source, shim, library, or checker change was used to qualify a project. `checked/skipped`
+  below are exact production `ce27271` summary counts for each overlay. Every production typokat
+  screening run exited `3` with empty `parse_errors`, `incomplete`, and `diagnostics` channels.
+  Every row failed before mutations, so the assignment/argument/member mutation pack was not run.
+
+  | Candidate | Immutable identity (license / lock SHA-256) | Native `tsc 6.0.3` / roots / profile | Honest WU3 screening overlay | `ce27271` result and first hard failure |
+  | --- | --- | --- | --- | --- |
+  | `morkg/jabr` | commit `9415fdad8b98dc0f1aba09c8badc5fc209bc30ba`; MIT license `1256366f990b3fa2b0780d082cae641a126c50cd5fdbe77acff3b45acfe056c2`; lock `1825f799ba12dee085a2da8ef33768efe9fe98bb0827ab9be7af384cf87070a5` | clean; 8 roots; ES2020 target/module, Bundler, `include` | same 8 roots, clean; files-only ESNext/Bundler drops native target/options and is not option-equivalent; graph would be cyclic if source re-exports were admitted | roots 8, checked 0, skipped 8; 9 notices: 7 source re-exports, 1 default export, 1 bare `..`; first `formula/index.ts:1:1` source re-export |
+  | `lokicik/placetext` | commit `faf233107146ceca63bf8a6fec8f07ad43ab17e2`; MIT license `52578f8c669574581e8a046ee80ec13827c006dc173af8f28621449516a52633`; lock `6632ffc7fce92584a119fbce40647358703915a93f4ba382a8c90e61278642b0` | clean; 9 roots; ES2020/ESNext/Bundler with `include` | same 9 roots, clean; files-only overlay drops target, lib, and diagnostic/build options | roots 9, checked 0, skipped 9; 4 notices: 3 source re-exports and 1 default export; first `src/index.ts:18:1` source re-export |
+  | `naoeosavio/lite-fp` | commit `09865973c3599928df272fc6f79c9daf9a955bc5`; MIT license `4bc6a360f7bab8b5c4b175bc24751c931f27bc5b4196a4cf8709fa9f624514d9`; lock `1a871ec1ddd676215fa2e125940c7d3cc9fc503fe03f8f68b475174c98d9e4d9` | exit 2; 15 roots; ES6/Bundler; `TS2307` missing `../dist/Option`, `TS2591` Node `process`, `TS2550` `unknown[].includes` ES-lib mismatch | complete 7-file production subtree, clean; excludes tests and changes ES6 module/target to ESNext/Bundler | roots 7, checked 0, skipped 7; 9 source-re-export notices; first `src/index.ts:2:1` |
+  | `jacob-bennett/deco` | commit `daa5feaa886de0727807aa12ea6ff2f4d7841f60`; MIT license `7530c8d9c1f25c7b5b85bca3b75db0165c0f2893d2736b5ffa615ce1786bd290`; lock `09ec03451feff0df14edf3deab3b8929fbd37e97745d09aeea5dec0361112616` | clean; 6 production roots; ES2022/NodeNext with explicit `.ts` specifiers; direct `@types/node` dev dependency | same 6 roots; NodeNext→Bundler drops rewrite semantics and `tsc` exits 2 with 4 `TS5097` records | roots 6, checked 0, skipped 6; 7 explicit-`.ts`-specifier notices; first `src/coalesce.ts:1:1` |
+  | `theetherGit/un-jinja` | commit `d43537ec4611e694528899dbfb97cbdc4b24b86c`; MIT license `3822d9bb8c5f39a4a07939371ff72adbbba20fade6c202523f21cfc7f3ef01b7`; lock `b9bdf32d064348ff28df2a23121bb6e7d0fae9d3b85df596fde8cec5322d4559` | clean; 8 roots including tooling/tests; ESNext/Bundler; native program consumes direct `@types/node` | complete 4-file production subtree, clean and no Node-type consumption; excludes tooling/tests and drops target/lib/options | roots 4, checked 0, skipped 4; 2 source-re-export notices; first `src/index.ts:1:1` |
+  | `SiphoChris/south-african-id` | commit `4e8ab8ac4e6bd8109983a7db6adbf39a3c422a61`; MIT license `eaa832a918a94cc080c2d2edf5b7b83b64a44a74797e1e99635bb0f8d2c5b727`; lock `3c2469deb9494cfee4cd8fefc4a74b920de81ba6b4ff85b4334d49e44805cbdf` | clean; 6 roots including tests; ES2020/ESNext/Bundler; native program consumes direct `@types/node` | complete 4-file production subtree, clean and no Node-type consumption; excludes tests and drops target/lib/options | roots 4, checked 0, skipped 4; 3 source-re-export notices; first `src/index.ts:22:1` |
 
 - 2026-08-08 — WU3 PASS. Spec commits `1cdb3c2` and `f2c3bb5` extended the frozen
   contract with exact path-escape, unsupported-form, declaration-span, and empty-import

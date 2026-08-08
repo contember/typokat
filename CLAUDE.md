@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 typokat — a from-scratch **TypeScript type checker in Rust**. A *checker, not a
 compiler*: it parses, binds, and type-checks TS and reports `tsc`-style diagnostics.
 Error codes mirror tsc (`TK2322` ≡ `TS2322`). Emit and JS runtime semantics are out of
-scope **by design**. Current M29 module coverage is a narrow type-checking slice (local relative
-`.ts` modules); the planned sole 1.0 profile is Bundler, with physical resolution delegated to
-`oxc_resolver` and alternate host profiles deferred. The goal is to preserve the type model.
+scope **by design**. Module coverage is a narrow type-checking slice: local relative `.ts` modules
+plus a bounded files-only Bundler project route. Physical resolution is delegated to
+`oxc_resolver`; general packages and alternate host profiles are deferred. The goal is to preserve
+the type model.
 M0–M33 are implemented. Coverage: [README.md](./README.md). Full design:
 [docs/reference/architecture.md](docs/reference/architecture.md).
 
@@ -17,6 +18,7 @@ M0–M33 are implemented. Coverage: [README.md](./README.md). Full design:
 
 ```sh
 cargo run -- check path/to/file.ts          # check one file (exit 1 if diagnostics)
+cargo run -- check --project-summary json path/to/project # bounded Bundler project summary
 cargo test                                  # unit tests + conformance corpus
 cargo test conformance                      # just the marker-driven conformance harness
 cargo test <name>                           # a single unit test by name
@@ -63,6 +65,13 @@ diagnostics; parsing and project dependency ordering belong to
   Split into `checker/` submodules.
 - **Default library** (`crates/typokat-library/src/`) — the pinned TypeScript profile,
   source-backed compiler, frozen shared base, and package-verification assets.
+
+The public project route accepts a directory or `tsconfig.json` with exactly `files`,
+`strict: true`, `noEmit: true`, `module: "ESNext"`, and `moduleResolution: "Bundler"`. Configured
+roots are local `.ts` files. Named local imports resolve extensionless and `.js`→`.ts` forms through
+`oxc_resolver 11.24.2`; every unsupported config, specifier, or module form is an explicit non-clean
+project notice in the deterministic JSON summary. Packages, default/namespace imports, source
+re-exports, and cycles remain unsupported.
 
 **Soundness > completeness**: when in doubt, over-report (the safe direction). Every
 deliberate `tsc` divergence is documented in

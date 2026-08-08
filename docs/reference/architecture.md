@@ -538,15 +538,20 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   self-contained universe = intrinsics + its own declarations. Sound and *lossless*
   exactly while there is no cross-file resolution. Maximal parallelism and zero sharing make it
   the architectural floor, while public production routes add the Stage-1 library lifecycle.
-- **Stage 0.5 — correctness-first serial project checker (M29).** Local relative
-  `.ts` modules, named imports/exports, and simple export lists are checked in a
-  single serial `Interner`, so cross-file `TypeId` identity is ordinary run-local
-  identity. This proves module semantics before the parallel type-universe problem
-  is solved. It is implemented as `driver::check_project` and is the CLI path for
-  `typokat check <files...>`. The planned 1.0 expansion preserves this semantic/type-universe
-  boundary while delegating physical Bundler resolution to `oxc_resolver`; project enumeration,
-  graph construction, import/export semantics, `.d.ts` checking, diagnostics, and determinism stay
-  in typokat ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
+- **Stage 0.5 — correctness-first serial project checker (M29).** Local relative `.ts` modules,
+  named imports/exports, and simple local export lists are checked in a single serial `Interner`,
+  so cross-file `TypeId` identity is ordinary run-local identity. This proves module semantics
+  before the parallel type-universe problem is solved. It is implemented as
+  `driver::check_project` for `typokat check <files...>`. The public
+  `typokat check --project-summary json <directory|tsconfig.json>` route adds a bounded Bundler
+  shell around the same semantic path: its exact config is files-only strict/noEmit/ESNext/Bundler;
+  roots are configured local `.ts` files; named imports admit extensionless and `.js`→`.ts`
+  specifiers; and `oxc_resolver 11.24.2` is the sole physical lookup authority. Typokat inventories
+  every module declaration before filtering and returns a deterministic summary of roots,
+  checked/skipped files, resolutions, project notices, parse errors, incompletes, and diagnostics.
+  Unsupported configs, specifiers, and forms are explicit non-clean outcomes. General packages,
+  default/namespace imports, source re-exports, and cycles are not admitted
+  ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
 - **Stage 1 — shared *read-only* default-library base (shipped).**
   `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
   per-file interners is absurd. [ADR-0011](../decisions/0011-freeze-pinned-default-library-base.md)
@@ -677,12 +682,13 @@ measured.
    accumulator reuse, explicit work-stack, arith intrinsics). This is where the design targets its
    largest type-level gains — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
    profiling-gated refactor**, not part of this phase (ADR-0001).
-5. **Phase 4 — Real-project scale.** Full `lib.d.ts` and parallelism Stage 1 are shipped. The
-   remaining modules/imports rollout starts from the shipped correctness-first whole-repo slice,
-   then adds the 1.0 Bundler profile with physical resolution
-   delegated to `oxc_resolver` and module semantics retained locally; then the cross-file
-   type-identity strategy (stable structural hash or a shared growing interner) needed for parallel
-   Stage 2. NodeNext and alternate host profiles are outside the required 1.0 ladder (ADR-0007).
+5. **Phase 4 — Real-project scale.** Full `lib.d.ts`, parallelism Stage 1, and the bounded
+   files-only Bundler project route are shipped. The remaining modules/imports rollout first adds
+   source re-exports and default exports, then package/`.d.ts`/config breadth while retaining
+   `oxc_resolver` as the physical lookup authority and module semantics locally. The cross-file
+   type-identity strategy (stable structural hash or a shared growing interner) then enables
+   parallel Stage 2. NodeNext and alternate host profiles are outside the required 1.0 ladder
+   (ADR-0007).
 6. **Phase 5 — Incrementality (IDE).** Salsa-style layer over the binder with durability
    (lib/deps = HIGH, workspace = LOW). This is where the stable structural hash becomes mandatory
    if it has not already landed for cross-file exports. A per-file bytecode cache is a complement

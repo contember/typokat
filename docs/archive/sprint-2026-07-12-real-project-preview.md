@@ -1,10 +1,10 @@
 > **OUTCOME — terminated incomplete and superseded 2026-08-07.** WU0 screened public
 > projects, but none met the original zero-threshold witness gate, so no production or test
 > implementation landed. The screening evidence and the accepted Bundler/`oxc_resolver` boundary
-> remain useful. The replacement
-> [`2026-08-07 sprint`](../sprints/sprint-2026-08-07-bundler-project-tracer.md) reverses the deadlocked
-> dependency: it first ships a synthetic, differentially specified resolver/project slice, then
-> selects a real witness that fits that proven surface. Backlog `72` remains open until that public
+> remain useful. The
+> [`2026-08-07 replacement`](sprint-2026-08-07-bundler-project-tracer.md) reversed the deadlocked
+> dependency and shipped the synthetic resolver/project substrate, then also terminated incomplete
+> after six public candidates failed before mutations. Backlog `72` remains open until a public
 > witness and mutation ratchet pass; backlog `15` retains general Bundler breadth.
 
 # Sprint — real-project preview (2026-07-12)
