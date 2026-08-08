@@ -20,6 +20,10 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-08-08-acyclic-source-reexports.md`](sprint-2026-08-08-acyclic-source-reexports.md) —
+  active: admit only acyclic local named source re-exports through the existing Bundler resolver and
+  direct value/type slot projection; defaults, namespaces, stars, cycles, packages, and the public
+  witness remain deferred.
 - [`sprint-2026-07-25-checker-scaling.md`](sprint-2026-07-25-checker-scaling.md) —
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have

@@ -178,7 +178,8 @@ Checker scaling (from sprint-2026-07-25):
 - **L** · [`72`](72-real-project-preview-readiness.md) — select a zero-clean public project atop the
   shipped CLI, then land its mutation pack and differential CI ratchet.
 - **XL** · [`15`](15-modules-imports.md) — remaining Bundler module semantics and resolver breadth;
-  next source re-exports, then default exports/imports, with packages later.
+  the active [`2026-08-08 sprint`](../sprints/sprint-2026-08-08-acyclic-source-reexports.md) owns
+  only acyclic named source re-exports; default exports/imports and packages remain later slices.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
@@ -197,11 +198,14 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Add the smallest module breadth exposed by the six-candidate stop.** The archived
+1. **Ship the active acyclic named source-re-export slice.** The archived
    [`2026-08-07 sprint`](../archive/sprint-2026-08-07-bundler-project-tracer.md) shipped the exact
    files-only Bundler CLI and complete accounting, then terminated incomplete because all six
-   public candidates failed before mutations. Under `15`, implement source re-exports first and
-   default exports/imports second. Keep package loading out of these slices.
+   public candidates failed before mutations. The
+   [`2026-08-08 sprint`](../sprints/sprint-2026-08-08-acyclic-source-reexports.md) admits only
+   acyclic local named source re-exports over existing value/type slots. Keep defaults,
+   namespace/star forms, cycles, package loading, and checker-model fixes out of this slice; default
+   exports/imports remain the next separately specified breadth.
 2. **Close `72` on a zero-clean public witness.** Re-screen against the expanded shipped surface,
    then pin the first qualifying project, three exact TS/TK mutations, the deterministic fresh-cache
    runner, fault controls, and the CI identity ratchet. Do not relax a threshold or add a shim.

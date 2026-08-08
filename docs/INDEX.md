@@ -24,6 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-08-acyclic-source-reexports.md`](sprints/sprint-2026-08-08-acyclic-source-reexports.md) —
+  active: acyclic local named source re-exports, including aliases, type-only forms, chains, and
+  class value/type slots, with all other module breadth still explicit and non-clean.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -128,8 +131,10 @@ decisions → reference → archive.
   discovery, `oxc_resolver` lookup, complete module accounting, and the deterministic public
   summary, then stopped after six candidates failed the unchanged zero threshold before mutations.
   Backlog [`72`](backlog/72-real-project-preview-readiness.md) retains the witness, mutation, ratchet,
-  and CI promise; [`15`](backlog/15-modules-imports.md) next adds source re-exports and default
-  exports/imports before package breadth.
+  and CI promise. The active
+  [`acyclic source-re-export sprint`](sprints/sprint-2026-08-08-acyclic-source-reexports.md) takes
+  the first bounded slice of [`15`](backlog/15-modules-imports.md); default exports/imports and
+  package breadth remain later work.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
