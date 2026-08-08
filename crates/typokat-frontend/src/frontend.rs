@@ -360,6 +360,31 @@ impl SourceReexportCollectionForTest {
     pub fn first_cycle(&self) -> Option<&[String]> {
         self.first_cycle.as_deref()
     }
+
+    /// Corrupt one resolved proof for checker invariant-path testing.
+    pub fn invalidate_first_resolved_provenance_for_test(
+        &mut self,
+    ) -> Result<(), ProjectInventoryError> {
+        let member = self
+            .admitted
+            .declarations
+            .iter_mut()
+            .find_map(|declaration| match declaration.source {
+                AdmittedSourceReexportSource::Resolved(_) => {
+                    declaration.members.iter_mut().find(|member| {
+                        member.namespace_provenance == Some(NamespaceProvenance::ProvenAbsent)
+                    })
+                }
+                AdmittedSourceReexportSource::Missing => None,
+            })
+            .ok_or_else(|| {
+                ProjectInventoryError::new(
+                    "source re-export test corruption requires one resolved member",
+                )
+            })?;
+        member.namespace_provenance = Some(NamespaceProvenance::PresentOrUnknown);
+        Ok(())
+    }
 }
 
 pub struct SourceFrontendRun<Product> {
@@ -2541,6 +2566,72 @@ mod source_reexport_collection_tests {
         let start = usize::try_from(span.start).ok()?;
         let end = usize::try_from(span.end).ok()?;
         source.get(start..end)
+    }
+
+    #[test]
+    fn test_hook_invalidates_only_one_resolved_provenance() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut collection = TestProject::collect(&[
+            (
+                "barrel.ts",
+                "export { first } from \"./source.js\";\nexport { second } from \"./source.js\";\n",
+            ),
+            (
+                "source.ts",
+                "export const first = 1;\nexport const second = 2;\n",
+            ),
+        ])?;
+        let mut expected = collection.admitted.clone();
+        let expected_member = expected
+            .declarations
+            .first_mut()
+            .and_then(|declaration| declaration.members.first_mut())
+            .ok_or_else(|| std::io::Error::other("resolved test member was not collected"))?;
+        expected_member.namespace_provenance = Some(NamespaceProvenance::PresentOrUnknown);
+        let untouched = expected
+            .declarations
+            .get(1)
+            .and_then(|declaration| declaration.members.first())
+            .ok_or_else(|| {
+                std::io::Error::other("second resolved test member was not collected")
+            })?;
+        assert_eq!(
+            untouched.namespace_provenance,
+            Some(NamespaceProvenance::ProvenAbsent)
+        );
+        let dependency_order = collection.dependency_order.clone();
+        let dependency_edge_count = collection.dependency_edge_count;
+        let resolutions = collection.resolutions.clone();
+        let blocked_notices = collection.blocked_notices.clone();
+        let first_cycle = collection.first_cycle.clone();
+
+        collection.invalidate_first_resolved_provenance_for_test()?;
+
+        assert_eq!(collection.admitted, expected);
+        assert_eq!(collection.dependency_order, dependency_order);
+        assert_eq!(collection.dependency_edge_count, dependency_edge_count);
+        assert_eq!(collection.resolutions, resolutions);
+        assert_eq!(collection.blocked_notices, blocked_notices);
+        assert_eq!(collection.first_cycle, first_cycle);
+
+        let mut missing =
+            TestProject::collect(&[("barrel.ts", "export { value } from \"./missing.js\";\n")])?;
+        let missing_admitted = missing.admitted.clone();
+        let missing_dependency_order = missing.dependency_order.clone();
+        let missing_dependency_edge_count = missing.dependency_edge_count;
+        let missing_resolutions = missing.resolutions.clone();
+        let missing_blocked_notices = missing.blocked_notices.clone();
+        let missing_first_cycle = missing.first_cycle.clone();
+        assert!(missing
+            .invalidate_first_resolved_provenance_for_test()
+            .is_err());
+        assert_eq!(missing.admitted, missing_admitted);
+        assert_eq!(missing.dependency_order, missing_dependency_order);
+        assert_eq!(missing.dependency_edge_count, missing_dependency_edge_count);
+        assert_eq!(missing.resolutions, missing_resolutions);
+        assert_eq!(missing.blocked_notices, missing_blocked_notices);
+        assert_eq!(missing.first_cycle, missing_first_cycle);
+        Ok(())
     }
 
     #[test]
