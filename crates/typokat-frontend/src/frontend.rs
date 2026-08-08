@@ -8,12 +8,13 @@ use crate::span::Span;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPattern, Declaration, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName,
-    Program, Statement, TSModuleDeclarationName, TSModuleReference,
+    BindingPattern, Declaration, ExportDefaultDeclarationKind, ImportDeclarationSpecifier,
+    ImportOrExportKind, ModuleExportName, Program, Statement, TSModuleDeclarationName,
+    TSModuleReference,
 };
 use oxc_parser::Parser;
 use oxc_resolver::{ResolveError, Resolver};
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -160,6 +161,386 @@ pub struct ProjectImport {
 pub enum ProjectImportSource {
     Resolved(usize),
     Missing(String),
+}
+
+/// Structural module-member identity retained before checker integration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModuleMemberIdentity {
+    Default,
+    Named(String),
+    Namespace,
+}
+
+/// Candidate disposition for one import declaration involving the default slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultImportCandidateDisposition {
+    Admitted,
+    NamedDefaultSyntax,
+    MixedDefaultNamed,
+    MixedDefaultNamespace,
+}
+
+/// Resolved source retained by the candidate default-import product.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DefaultImportCandidateSource {
+    Resolved(usize),
+    Missing,
+    UnsupportedTarget(Option<String>),
+}
+
+/// AST form retained separately from the member identity it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultImportSpecifierSyntax {
+    DirectDefault,
+    Named,
+    NamedDefault,
+    Namespace,
+}
+
+/// One import specifier retained without collapsing default into the named map.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultImportCandidateSpecifier {
+    identity: ModuleMemberIdentity,
+    syntax: DefaultImportSpecifierSyntax,
+    local: String,
+    type_only: bool,
+    inline_type_only: bool,
+    local_span: Span,
+    span: Span,
+}
+
+impl DefaultImportCandidateSpecifier {
+    #[must_use]
+    pub const fn identity(&self) -> &ModuleMemberIdentity {
+        &self.identity
+    }
+
+    #[must_use]
+    pub const fn syntax(&self) -> DefaultImportSpecifierSyntax {
+        self.syntax
+    }
+
+    #[must_use]
+    pub fn local(&self) -> &str {
+        &self.local
+    }
+
+    #[must_use]
+    pub const fn is_type_only(&self) -> bool {
+        self.type_only
+    }
+
+    #[must_use]
+    pub const fn is_inline_type_only(&self) -> bool {
+        self.inline_type_only
+    }
+
+    #[must_use]
+    pub const fn local_span(&self) -> Span {
+        self.local_span
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+}
+
+/// One frontend-classified import declaration involving the default slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultImportCandidate {
+    owner_module: usize,
+    source: DefaultImportCandidateSource,
+    module_specifier: String,
+    declaration_span: Span,
+    source_span: Span,
+    owner_start: u32,
+    declaration_type_only: bool,
+    disposition: DefaultImportCandidateDisposition,
+    specifiers: Vec<DefaultImportCandidateSpecifier>,
+}
+
+impl DefaultImportCandidate {
+    #[must_use]
+    pub const fn owner_module(&self) -> usize {
+        self.owner_module
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> &DefaultImportCandidateSource {
+        &self.source
+    }
+
+    #[must_use]
+    pub fn module_specifier(&self) -> &str {
+        &self.module_specifier
+    }
+
+    #[must_use]
+    pub const fn declaration_span(&self) -> Span {
+        self.declaration_span
+    }
+
+    #[must_use]
+    pub const fn source_span(&self) -> Span {
+        self.source_span
+    }
+
+    #[must_use]
+    pub const fn owner_start(&self) -> u32 {
+        self.owner_start
+    }
+
+    #[must_use]
+    pub const fn is_declaration_type_only(&self) -> bool {
+        self.declaration_type_only
+    }
+
+    #[must_use]
+    pub const fn disposition(&self) -> DefaultImportCandidateDisposition {
+        self.disposition
+    }
+
+    #[must_use]
+    pub fn specifiers(&self) -> &[DefaultImportCandidateSpecifier] {
+        &self.specifiers
+    }
+}
+
+/// Syntactic origin of one occurrence that reads or produces a default slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultExportOccurrenceKind {
+    DirectClass,
+    DirectFunction,
+    DefaultExpression,
+    DefaultInterface,
+    LocalExportListDefault,
+    SourceExportToDefault,
+    SourceDefaultReexport,
+}
+
+/// Why a module's candidate default surface cannot be published in this slice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultExportCandidateBlock {
+    DefaultInterface,
+    DirectNamedNamespaceMerge,
+    IdentifierNamespaceProvenance,
+    LocalExportListDefault,
+    SourceDefaultReexport,
+    DuplicateDefault,
+}
+
+/// Root-order-stable identity for one retained default export occurrence.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DefaultExportOccurrenceId {
+    owner_source_key: SourceUnitKey,
+    normalized_owner_path: String,
+    declaration_start: u32,
+    occurrence_ordinal: u32,
+}
+
+impl DefaultExportOccurrenceId {
+    #[must_use]
+    pub const fn owner_source_key(&self) -> SourceUnitKey {
+        self.owner_source_key
+    }
+
+    #[must_use]
+    pub fn normalized_owner_path(&self) -> &str {
+        &self.normalized_owner_path
+    }
+
+    #[must_use]
+    pub const fn declaration_start(&self) -> u32 {
+        self.declaration_start
+    }
+
+    #[must_use]
+    pub const fn occurrence_ordinal(&self) -> u32 {
+        self.occurrence_ordinal
+    }
+}
+
+/// One frontend-certified default export occurrence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultExportOccurrence {
+    id: DefaultExportOccurrenceId,
+    kind: DefaultExportOccurrenceKind,
+    declaration_span: Span,
+    subject_span: Span,
+    lexical_name: Option<String>,
+    lexical_name_span: Option<Span>,
+    declaration_anonymous: Option<bool>,
+    type_only: bool,
+    identifier_namespace_provenance: Option<NamespaceProvenance>,
+    imported: Option<ModuleMemberIdentity>,
+    exported: ModuleMemberIdentity,
+    produces_default: bool,
+}
+
+impl DefaultExportOccurrence {
+    #[must_use]
+    pub const fn id(&self) -> &DefaultExportOccurrenceId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> DefaultExportOccurrenceKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn declaration_span(&self) -> Span {
+        self.declaration_span
+    }
+
+    #[must_use]
+    pub const fn subject_span(&self) -> Span {
+        self.subject_span
+    }
+
+    #[must_use]
+    pub fn lexical_name(&self) -> Option<&str> {
+        self.lexical_name.as_deref()
+    }
+
+    #[must_use]
+    pub const fn lexical_name_span(&self) -> Option<Span> {
+        self.lexical_name_span
+    }
+
+    #[must_use]
+    pub const fn declaration_anonymous(&self) -> Option<bool> {
+        self.declaration_anonymous
+    }
+
+    #[must_use]
+    pub const fn is_type_only(&self) -> bool {
+        self.type_only
+    }
+
+    #[must_use]
+    pub const fn identifier_namespace_provenance(&self) -> Option<NamespaceProvenance> {
+        self.identifier_namespace_provenance
+    }
+
+    #[must_use]
+    pub const fn imported(&self) -> Option<&ModuleMemberIdentity> {
+        self.imported.as_ref()
+    }
+
+    #[must_use]
+    pub const fn exported(&self) -> &ModuleMemberIdentity {
+        &self.exported
+    }
+
+    #[must_use]
+    pub const fn produces_default(&self) -> bool {
+        self.produces_default
+    }
+}
+
+/// Candidate default-export surface for one dependency-ordered module.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultExportCandidateModule {
+    owner_module: usize,
+    normalized_path: String,
+    producer_count: usize,
+    occurrences: Vec<DefaultExportOccurrence>,
+    blocks: Vec<DefaultExportCandidateBlock>,
+}
+
+/// One dependency edge after root-order-independent module ordering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DefaultModuleDependencyEdge {
+    owner_module: usize,
+    target_module: usize,
+}
+
+impl DefaultModuleDependencyEdge {
+    #[must_use]
+    pub const fn owner_module(&self) -> usize {
+        self.owner_module
+    }
+
+    #[must_use]
+    pub const fn target_module(&self) -> usize {
+        self.target_module
+    }
+}
+
+impl DefaultExportCandidateModule {
+    #[must_use]
+    pub const fn owner_module(&self) -> usize {
+        self.owner_module
+    }
+
+    #[must_use]
+    pub fn normalized_path(&self) -> &str {
+        &self.normalized_path
+    }
+
+    #[must_use]
+    pub const fn producer_count(&self) -> usize {
+        self.producer_count
+    }
+
+    #[must_use]
+    pub fn occurrences(&self) -> &[DefaultExportOccurrence] {
+        &self.occurrences
+    }
+
+    #[must_use]
+    pub fn blocks(&self) -> &[DefaultExportCandidateBlock] {
+        &self.blocks
+    }
+
+    #[must_use]
+    pub fn is_admitted(&self) -> bool {
+        self.producer_count == 1 && self.blocks.is_empty()
+    }
+}
+
+/// Opaque frontend proof for the future default-slot project route.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultModuleCandidates {
+    imports: Vec<DefaultImportCandidate>,
+    exports: Vec<DefaultExportCandidateModule>,
+    dependency_order: Vec<String>,
+    dependency_edges: Vec<DefaultModuleDependencyEdge>,
+    first_cycle: Option<Vec<String>>,
+}
+
+impl DefaultModuleCandidates {
+    #[must_use]
+    pub fn imports(&self) -> &[DefaultImportCandidate] {
+        &self.imports
+    }
+
+    #[must_use]
+    pub fn exports(&self) -> &[DefaultExportCandidateModule] {
+        &self.exports
+    }
+
+    #[must_use]
+    pub fn dependency_order(&self) -> &[String] {
+        &self.dependency_order
+    }
+
+    #[must_use]
+    pub const fn dependency_edge_count(&self) -> usize {
+        self.dependency_edges.len()
+    }
+
+    #[must_use]
+    pub fn dependency_edges(&self) -> &[DefaultModuleDependencyEdge] {
+        &self.dependency_edges
+    }
+
+    #[must_use]
+    pub fn first_cycle(&self) -> Option<&[String]> {
+        self.first_cycle.as_deref()
+    }
 }
 
 /// Root-order-stable declaration identity owned by one normalized source path.
@@ -694,6 +1075,7 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
         &programs,
         &resolution_mode,
         source_reexport_accounting,
+        DefaultCandidateAccounting::FrozenUnsupported,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -758,6 +1140,7 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
         raw_imports,
         source_reexports,
         admitted_source_reexports,
+        default_module_authority: _,
     } = module_plan;
     let (admitted_source_reexports, admitted_dependency_order) = admitted_source_reexports
         .map(|product| {
@@ -1026,6 +1409,7 @@ struct AccountedModulePlan {
     raw_imports: Vec<Vec<RawImport>>,
     source_reexports: PendingSourceReexports,
     admitted_source_reexports: Option<AdmittedSourceReexportProduct>,
+    default_module_authority: Option<DefaultModuleAuthority>,
 }
 
 struct AdmittedSourceReexportProduct {
@@ -1058,6 +1442,18 @@ impl SourceReexportAccounting {
     }
 }
 
+#[derive(Clone, Copy)]
+enum DefaultCandidateAccounting {
+    FrozenUnsupported,
+    CollectCandidate,
+}
+
+struct DefaultModuleAuthority {
+    imports: Vec<RawDefaultImportCandidate>,
+    exports: Vec<RawDefaultExportCandidateModule>,
+    admitted_default_edges: Vec<BTreeSet<usize>>,
+}
+
 #[derive(Clone)]
 struct RawSourceReexportMember {
     imported: String,
@@ -1082,6 +1478,51 @@ struct PendingSourceReexports {
     dependency_edges: Vec<BTreeSet<usize>>,
     namespace_provenance: BTreeMap<(usize, String), NamespaceProvenance>,
     first_cycle: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RawDefaultImportCandidate {
+    owner_module: usize,
+    source: RawDefaultImportCandidateSource,
+    module_specifier: String,
+    declaration_span: Span,
+    source_span: Span,
+    owner_start: u32,
+    declaration_type_only: bool,
+    disposition: DefaultImportCandidateDisposition,
+    specifiers: Vec<DefaultImportCandidateSpecifier>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RawDefaultImportCandidateSource {
+    Resolved(usize),
+    Missing,
+    UnsupportedTarget(Option<String>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RawDefaultExportCandidateModule {
+    owner_module: usize,
+    producer_count: usize,
+    occurrences: Vec<DefaultExportOccurrence>,
+    blocks: Vec<DefaultExportCandidateBlock>,
+}
+
+struct DefaultImportShape {
+    specifiers: Vec<DefaultImportCandidateSpecifier>,
+    direct_default_count: usize,
+    named_default_count: usize,
+    named_count: usize,
+    namespace_count: usize,
+}
+
+struct DefaultCandidateResolution<'a> {
+    mode: &'a ProjectResolutionMode,
+    resolver: &'a Resolver,
+    importer_path: &'a Path,
+    explicit_path_to_index: &'a BTreeMap<PathBuf, usize>,
+    configured_roots: &'a BTreeMap<PathBuf, usize>,
+    canonical_project: Option<&'a Path>,
 }
 
 impl PendingSourceReexports {
@@ -1182,6 +1623,7 @@ fn account_project_modules(
     programs: &[&Program<'_>],
     mode: &ProjectResolutionMode,
     source_reexport_accounting: SourceReexportAccounting,
+    default_candidate_accounting: DefaultCandidateAccounting,
 ) -> Result<AccountedModulePlan, ProjectInventoryError> {
     let ResolutionPaths {
         paths,
@@ -1207,14 +1649,91 @@ fn account_project_modules(
     let mut resolution_identities = Vec::new();
     let mut notice_identities = Vec::new();
     let mut missing_module_locations = Vec::new();
+    let default_source_keys = matches!(
+        default_candidate_accounting,
+        DefaultCandidateAccounting::CollectCandidate
+    )
+    .then(|| stable_source_keys(&paths));
+    let mut default_module_authority = matches!(
+        default_candidate_accounting,
+        DefaultCandidateAccounting::CollectCandidate
+    )
+    .then(|| DefaultModuleAuthority {
+        imports: Vec::new(),
+        exports: Vec::new(),
+        admitted_default_edges: vec![BTreeSet::new(); inputs.len()],
+    });
 
     for (index, ((input, program), importer_path)) in
         inputs.iter().zip(programs).zip(&paths).enumerate()
     {
         let line_index = crate::span::LineIndex::new(&input.source);
+        let mut default_candidate_owner_starts = BTreeSet::new();
+        if let Some(authority) = &mut default_module_authority {
+            let imports = scan_default_import_candidates(
+                index,
+                program,
+                &DefaultCandidateResolution {
+                    mode,
+                    resolver: &resolver,
+                    importer_path,
+                    explicit_path_to_index: &explicit_path_to_index,
+                    configured_roots: &configured_roots,
+                    canonical_project: canonical_project.as_deref(),
+                },
+            )?;
+            validate_raw_default_imports(program, &imports)?;
+            for import in &imports {
+                default_candidate_owner_starts.insert(import.owner_start);
+                if import.disposition == DefaultImportCandidateDisposition::Admitted {
+                    if let RawDefaultImportCandidateSource::Resolved(target) = &import.source {
+                        let edges =
+                            authority
+                                .admitted_default_edges
+                                .get_mut(index)
+                                .ok_or_else(|| {
+                                    ProjectInventoryError::new(
+                                        "default import owner escaped authority graph",
+                                    )
+                                })?;
+                        edges.insert(*target);
+                    }
+                }
+            }
+            authority.imports.extend(imports);
+
+            let owner_source_key = default_source_keys
+                .as_ref()
+                .and_then(|keys| keys.get(index))
+                .copied()
+                .ok_or_else(|| {
+                    ProjectInventoryError::new(
+                        "default export owner lost its stable source identity",
+                    )
+                })?;
+            let normalized_owner_path = normalized_display_name(&input.name);
+            let exports = scan_default_export_candidates(
+                index,
+                owner_source_key,
+                &normalized_owner_path,
+                program,
+            );
+            validate_raw_default_exports(
+                program,
+                owner_source_key,
+                &normalized_owner_path,
+                &exports,
+            )?;
+            if !exports.occurrences.is_empty() {
+                authority.exports.push(exports);
+            }
+        }
         for statement in &program.body {
             match statement {
                 Statement::ImportDeclaration(import) => {
+                    if default_candidate_owner_starts.contains(&import.span.start) {
+                        continue;
+                    }
                     if import.phase.is_some() {
                         return Err(ProjectInventoryError::new(format!(
                             "unfrozen import phase surface at {}",
@@ -1664,6 +2183,7 @@ fn account_project_modules(
         raw_imports,
         source_reexports,
         admitted_source_reexports,
+        default_module_authority,
     })
 }
 
@@ -1703,6 +2223,7 @@ pub fn collect_admitted_source_reexports_for_test(
         &programs,
         &mode,
         SourceReexportAccounting::CollectEvidence,
+        DefaultCandidateAccounting::FrozenUnsupported,
     )?;
     let finalized =
         finalize_admitted_source_reexports(&inputs, &paths, &raw_imports, &source_reexports)?;
@@ -1726,6 +2247,1078 @@ pub fn collect_admitted_source_reexports_for_test(
         blocked_notices: sorted_identities(finalized.blocked_notices),
         first_cycle: finalized.first_cycle,
     })
+}
+
+/// Build the future default-slot proof without selecting it for a production route.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn collect_default_module_candidates(
+    inputs: Vec<FileInput>,
+    mode: ProjectResolutionMode,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    collect_default_module_candidates_with_mutation(inputs, mode, |_| Ok(()))
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn collect_default_module_candidates_with_mutation(
+    inputs: Vec<FileInput>,
+    mode: ProjectResolutionMode,
+    mutate: impl FnOnce(&mut DefaultModuleCandidates) -> Result<(), ProjectInventoryError>,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    let allocators = inputs
+        .iter()
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    let parsed = inputs
+        .iter()
+        .zip(&allocators)
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
+        .collect::<Vec<_>>();
+    if parsed
+        .iter()
+        .any(|result| result.panicked || !result.diagnostics.is_empty())
+    {
+        return Err(ProjectInventoryError::new(
+            "default-module test collector requires clean TypeScript input",
+        ));
+    }
+    let programs = parsed
+        .iter()
+        .map(|result| &result.program)
+        .collect::<Vec<_>>();
+    certify_default_module_candidates_from_parsed_programs_with_mutation(
+        &inputs, &programs, &mode, mutate,
+    )
+}
+
+/// Certify candidate default evidence from an existing clean project parse.
+#[doc(hidden)]
+pub fn certify_default_module_candidates_from_parsed_programs(
+    inputs: &[FileInput],
+    programs: &[&Program<'_>],
+    mode: &ProjectResolutionMode,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    validate_default_candidate_parsed_programs(inputs, programs)?;
+    let plan = account_project_modules(
+        inputs,
+        programs,
+        mode,
+        SourceReexportAccounting::AdmitBundler,
+        DefaultCandidateAccounting::CollectCandidate,
+    )?;
+    finalize_default_module_candidates(inputs, plan)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn certify_default_module_candidates_from_parsed_programs_with_mutation(
+    inputs: &[FileInput],
+    programs: &[&Program<'_>],
+    mode: &ProjectResolutionMode,
+    mutate: impl FnOnce(&mut DefaultModuleCandidates) -> Result<(), ProjectInventoryError>,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    validate_default_candidate_parsed_programs(inputs, programs)?;
+    let plan = account_project_modules(
+        inputs,
+        programs,
+        mode,
+        SourceReexportAccounting::AdmitBundler,
+        DefaultCandidateAccounting::CollectCandidate,
+    )?;
+    finalize_default_module_candidates_with_mutation(inputs, plan, mutate)
+}
+
+fn validate_default_candidate_parsed_programs(
+    inputs: &[FileInput],
+    programs: &[&Program<'_>],
+) -> Result<(), ProjectInventoryError> {
+    if inputs.len() != programs.len() {
+        return Err(ProjectInventoryError::new(
+            "default-module parsed-program coverage changed before accounting",
+        ));
+    }
+    for (input, program) in inputs.iter().zip(programs) {
+        if input.source != program.source_text {
+            return Err(ProjectInventoryError::new(format!(
+                "default-module parsed source changed for {}",
+                normalized_display_name(&input.name)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn finalize_default_module_candidates(
+    inputs: &[FileInput],
+    plan: AccountedModulePlan,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    let validation = prepare_default_module_candidate_validation(inputs, plan)?;
+    validate_default_module_candidates(
+        inputs,
+        &validation.raw_imports,
+        &validation.source_reexports,
+        &validation.authority,
+        &validation.product,
+    )?;
+    Ok(validation.product)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn finalize_default_module_candidates_with_mutation(
+    inputs: &[FileInput],
+    plan: AccountedModulePlan,
+    mutate: impl FnOnce(&mut DefaultModuleCandidates) -> Result<(), ProjectInventoryError>,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    let mut validation = prepare_default_module_candidate_validation(inputs, plan)?;
+    mutate(&mut validation.product)?;
+    validate_default_module_candidates(
+        inputs,
+        &validation.raw_imports,
+        &validation.source_reexports,
+        &validation.authority,
+        &validation.product,
+    )?;
+    Ok(validation.product)
+}
+
+struct DefaultModuleCandidateValidation {
+    raw_imports: Vec<Vec<RawImport>>,
+    source_reexports: PendingSourceReexports,
+    authority: DefaultModuleAuthority,
+    product: DefaultModuleCandidates,
+}
+
+fn prepare_default_module_candidate_validation(
+    inputs: &[FileInput],
+    plan: AccountedModulePlan,
+) -> Result<DefaultModuleCandidateValidation, ProjectInventoryError> {
+    let AccountedModulePlan {
+        raw_imports,
+        source_reexports,
+        default_module_authority,
+        ..
+    } = plan;
+    let authority = default_module_authority.ok_or_else(|| {
+        ProjectInventoryError::new("default-module accounting lost its raw authority")
+    })?;
+    let graph = default_candidate_graph(inputs, &raw_imports, &source_reexports, &authority)?;
+    let product = derive_default_module_candidates(inputs, &authority, &graph)?;
+    Ok(DefaultModuleCandidateValidation {
+        raw_imports,
+        source_reexports,
+        authority,
+        product,
+    })
+}
+
+struct DefaultCandidateGraph {
+    edges: Vec<BTreeSet<usize>>,
+    first_cycle: Option<Vec<String>>,
+    order: Vec<usize>,
+    ordered_index: Vec<usize>,
+}
+
+fn default_candidate_graph(
+    inputs: &[FileInput],
+    raw_imports: &[Vec<RawImport>],
+    source_reexports: &PendingSourceReexports,
+    authority: &DefaultModuleAuthority,
+) -> Result<DefaultCandidateGraph, ProjectInventoryError> {
+    if raw_imports.len() != inputs.len() || authority.admitted_default_edges.len() != inputs.len() {
+        return Err(ProjectInventoryError::new(
+            "default-module dependency graph changed before derivation",
+        ));
+    }
+    let mut edges = vec![BTreeSet::new(); inputs.len()];
+    for declaration in &source_reexports.declarations {
+        let involves_default = declaration
+            .members
+            .iter()
+            .any(|member| member.imported == "default" || member.exported == "default");
+        if involves_default {
+            continue;
+        }
+        if let RawImportSource::Resolved(target) = declaration.source {
+            let Some(owner_edges) = edges.get_mut(declaration.owner_module) else {
+                return Err(ProjectInventoryError::new(
+                    "source re-export owner escaped default dependency graph",
+                ));
+            };
+            owner_edges.insert(target);
+        }
+    }
+    for (owner_edges, default_edges) in edges.iter_mut().zip(&authority.admitted_default_edges) {
+        owner_edges.extend(default_edges);
+    }
+
+    let deferred_import_declarations = authority
+        .imports
+        .iter()
+        .filter(|import| import.disposition != DefaultImportCandidateDisposition::Admitted)
+        .map(|import| (import.owner_module, import.owner_start))
+        .collect::<BTreeSet<_>>();
+    for (owner, imports) in raw_imports.iter().enumerate() {
+        let Some(owner_edges) = edges.get_mut(owner) else {
+            return Err(ProjectInventoryError::new(
+                "named import owner escaped default dependency graph",
+            ));
+        };
+        for import in imports {
+            if deferred_import_declarations.contains(&(owner, import.owner_start)) {
+                continue;
+            }
+            if let RawImportSource::Resolved(target) = import.source {
+                owner_edges.insert(target);
+            }
+        }
+    }
+    let first_cycle = first_module_cycle(inputs, &edges);
+    let order = stable_dependency_order(inputs, &edges);
+    let mut ordered_index = vec![0usize; inputs.len()];
+    for (position, original) in order.iter().copied().enumerate() {
+        let Some(slot) = ordered_index.get_mut(original) else {
+            return Err(ProjectInventoryError::new(
+                "default-module order escaped configured roots",
+            ));
+        };
+        *slot = position;
+    }
+    Ok(DefaultCandidateGraph {
+        edges,
+        first_cycle,
+        order,
+        ordered_index,
+    })
+}
+
+fn derive_default_module_candidates(
+    inputs: &[FileInput],
+    authority: &DefaultModuleAuthority,
+    graph: &DefaultCandidateGraph,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    let mut imports = authority
+        .imports
+        .iter()
+        .map(|candidate| {
+            let owner = inputs.get(candidate.owner_module).ok_or_else(|| {
+                ProjectInventoryError::new("default import authority escaped configured roots")
+            })?;
+            let owner_module = graph
+                .ordered_index
+                .get(candidate.owner_module)
+                .copied()
+                .ok_or_else(|| {
+                    ProjectInventoryError::new("default import owner escaped dependency order")
+                })?;
+            let source = match candidate.source {
+                RawDefaultImportCandidateSource::Resolved(target) => {
+                    DefaultImportCandidateSource::Resolved(
+                        graph.ordered_index.get(target).copied().ok_or_else(|| {
+                            ProjectInventoryError::new(
+                                "default import target escaped dependency order",
+                            )
+                        })?,
+                    )
+                }
+                RawDefaultImportCandidateSource::Missing => DefaultImportCandidateSource::Missing,
+                RawDefaultImportCandidateSource::UnsupportedTarget(ref target) => {
+                    DefaultImportCandidateSource::UnsupportedTarget(target.clone())
+                }
+            };
+            Ok((
+                normalized_display_name(&owner.name),
+                DefaultImportCandidate {
+                    owner_module,
+                    source,
+                    module_specifier: candidate.module_specifier.clone(),
+                    declaration_span: candidate.declaration_span,
+                    source_span: candidate.source_span,
+                    owner_start: candidate.owner_start,
+                    declaration_type_only: candidate.declaration_type_only,
+                    disposition: candidate.disposition,
+                    specifiers: candidate.specifiers.clone(),
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>, ProjectInventoryError>>()?;
+    imports
+        .sort_by(|left, right| (&left.0, left.1.owner_start).cmp(&(&right.0, right.1.owner_start)));
+    let imports: Vec<DefaultImportCandidate> =
+        imports.into_iter().map(|(_, import)| import).collect();
+
+    let mut exports = authority
+        .exports
+        .iter()
+        .map(|candidate| {
+            let owner = inputs.get(candidate.owner_module).ok_or_else(|| {
+                ProjectInventoryError::new("default export authority escaped configured roots")
+            })?;
+            let normalized_path = normalized_display_name(&owner.name);
+            let owner_module = graph
+                .ordered_index
+                .get(candidate.owner_module)
+                .copied()
+                .ok_or_else(|| {
+                    ProjectInventoryError::new("default export owner escaped dependency order")
+                })?;
+            Ok(DefaultExportCandidateModule {
+                owner_module,
+                normalized_path,
+                producer_count: candidate.producer_count,
+                occurrences: candidate.occurrences.clone(),
+                blocks: candidate.blocks.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, ProjectInventoryError>>()?;
+    exports.sort_by(|left, right| left.normalized_path.cmp(&right.normalized_path));
+
+    let dependency_order = graph
+        .order
+        .iter()
+        .map(|original| normalized_display_name(&inputs[*original].name))
+        .collect::<Vec<_>>();
+    let mut dependency_edges = Vec::new();
+    for (owner, targets) in graph.edges.iter().enumerate() {
+        for target in targets {
+            let owner_module = graph.ordered_index.get(owner).copied().ok_or_else(|| {
+                ProjectInventoryError::new("dependency owner escaped default-module order")
+            })?;
+            let target_module = graph.ordered_index.get(*target).copied().ok_or_else(|| {
+                ProjectInventoryError::new("dependency target escaped default-module order")
+            })?;
+            dependency_edges.push(DefaultModuleDependencyEdge {
+                owner_module,
+                target_module,
+            });
+        }
+    }
+    dependency_edges.sort();
+    Ok(DefaultModuleCandidates {
+        imports,
+        exports,
+        dependency_order,
+        dependency_edges,
+        first_cycle: graph.first_cycle.clone(),
+    })
+}
+
+fn scan_default_import_candidates(
+    owner_module: usize,
+    program: &Program<'_>,
+    resolution: &DefaultCandidateResolution<'_>,
+) -> Result<Vec<RawDefaultImportCandidate>, ProjectInventoryError> {
+    let mut imports = Vec::new();
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        if import.phase.is_some() || import.with_clause.is_some() {
+            continue;
+        }
+        let Some(_) = &import.specifiers else {
+            continue;
+        };
+        let DefaultImportShape {
+            specifiers,
+            direct_default_count,
+            named_default_count,
+            named_count,
+            namespace_count,
+        } = default_import_shape(import);
+        if direct_default_count == 0 && named_default_count == 0 {
+            continue;
+        }
+        let disposition = if direct_default_count == 1
+            && named_default_count == 0
+            && named_count == 0
+            && namespace_count == 0
+            && specifiers.len() == 1
+        {
+            DefaultImportCandidateDisposition::Admitted
+        } else if direct_default_count > 0 && namespace_count > 0 {
+            DefaultImportCandidateDisposition::MixedDefaultNamespace
+        } else if direct_default_count > 0 {
+            DefaultImportCandidateDisposition::MixedDefaultNamed
+        } else {
+            DefaultImportCandidateDisposition::NamedDefaultSyntax
+        };
+        let module_specifier = import.source.value.as_str();
+        let source = if is_admitted_source_reexport_specifier(module_specifier) {
+            match resolve_named_import(
+                resolution.mode,
+                resolution.resolver,
+                resolution.importer_path,
+                module_specifier,
+                resolution.explicit_path_to_index,
+                resolution.configured_roots,
+                resolution.canonical_project,
+            )? {
+                NamedImportOutcome::Source(RawImportSource::Resolved(target)) => {
+                    RawDefaultImportCandidateSource::Resolved(target)
+                }
+                NamedImportOutcome::Source(RawImportSource::Missing) => {
+                    RawDefaultImportCandidateSource::Missing
+                }
+                NamedImportOutcome::UnsupportedTarget(target) => {
+                    RawDefaultImportCandidateSource::UnsupportedTarget(target)
+                }
+            }
+        } else {
+            RawDefaultImportCandidateSource::UnsupportedTarget(None)
+        };
+        imports.push(RawDefaultImportCandidate {
+            owner_module,
+            source,
+            module_specifier: module_specifier.to_owned(),
+            declaration_span: Span::from_oxc(import.span),
+            source_span: Span::from_oxc(import.source.span),
+            owner_start: import.span.start,
+            declaration_type_only: import.import_kind == ImportOrExportKind::Type,
+            disposition,
+            specifiers,
+        });
+    }
+    Ok(imports)
+}
+
+fn default_import_shape(import: &oxc_ast::ast::ImportDeclaration<'_>) -> DefaultImportShape {
+    let outer_type_only = import.import_kind == ImportOrExportKind::Type;
+    let mut specifiers = Vec::new();
+    let mut direct_default_count = 0usize;
+    let mut named_default_count = 0usize;
+    let mut named_count = 0usize;
+    let mut namespace_count = 0usize;
+    for specifier in import.specifiers.iter().flatten() {
+        match specifier {
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                direct_default_count = direct_default_count.saturating_add(1);
+                specifiers.push(DefaultImportCandidateSpecifier {
+                    identity: ModuleMemberIdentity::Default,
+                    syntax: DefaultImportSpecifierSyntax::DirectDefault,
+                    local: default.local.name.to_string(),
+                    type_only: outer_type_only,
+                    inline_type_only: false,
+                    local_span: Span::from_oxc(default.local.span),
+                    span: Span::from_oxc(default.span),
+                });
+            }
+            ImportDeclarationSpecifier::ImportSpecifier(named) => {
+                let (identity, syntax) = match module_export_name(&named.imported) {
+                    Some("default") => {
+                        named_default_count = named_default_count.saturating_add(1);
+                        (
+                            ModuleMemberIdentity::Default,
+                            DefaultImportSpecifierSyntax::NamedDefault,
+                        )
+                    }
+                    Some(name) => {
+                        named_count = named_count.saturating_add(1);
+                        (
+                            ModuleMemberIdentity::Named(name.to_owned()),
+                            DefaultImportSpecifierSyntax::Named,
+                        )
+                    }
+                    None => {
+                        named_count = named_count.saturating_add(1);
+                        (
+                            ModuleMemberIdentity::Named(named.imported.to_string()),
+                            DefaultImportSpecifierSyntax::Named,
+                        )
+                    }
+                };
+                specifiers.push(DefaultImportCandidateSpecifier {
+                    identity,
+                    syntax,
+                    local: named.local.name.to_string(),
+                    type_only: outer_type_only || named.import_kind == ImportOrExportKind::Type,
+                    inline_type_only: named.import_kind == ImportOrExportKind::Type,
+                    local_span: Span::from_oxc(named.local.span),
+                    span: Span::from_oxc(named.span),
+                });
+            }
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                namespace_count = namespace_count.saturating_add(1);
+                specifiers.push(DefaultImportCandidateSpecifier {
+                    identity: ModuleMemberIdentity::Namespace,
+                    syntax: DefaultImportSpecifierSyntax::Namespace,
+                    local: namespace.local.name.to_string(),
+                    type_only: outer_type_only,
+                    inline_type_only: false,
+                    local_span: Span::from_oxc(namespace.local.span),
+                    span: Span::from_oxc(namespace.span),
+                });
+            }
+        }
+    }
+    DefaultImportShape {
+        specifiers,
+        direct_default_count,
+        named_default_count,
+        named_count,
+        namespace_count,
+    }
+}
+
+fn scan_default_export_candidates(
+    owner_module: usize,
+    owner_source_key: SourceUnitKey,
+    normalized_owner_path: &str,
+    program: &Program<'_>,
+) -> RawDefaultExportCandidateModule {
+    let local_names = local_namespace_provenance(program);
+    let mut occurrences = Vec::new();
+    for statement in &program.body {
+        match statement {
+            Statement::ExportDefaultDeclaration(export) => {
+                let declaration_span = Span::from_oxc(export.span);
+                let id = default_export_occurrence_id(
+                    owner_source_key,
+                    normalized_owner_path,
+                    declaration_span.start,
+                    occurrences.len(),
+                );
+                let occurrence = match &export.declaration {
+                    ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                        let lexical_name = class.id.as_ref().map(|id| id.name.to_string());
+                        let provenance = lexical_name.as_ref().map(|name| {
+                            local_names
+                                .get(name)
+                                .copied()
+                                .unwrap_or(NamespaceProvenance::PresentOrUnknown)
+                        });
+                        DefaultExportOccurrence {
+                            id,
+                            kind: DefaultExportOccurrenceKind::DirectClass,
+                            declaration_span,
+                            subject_span: Span::from_oxc(class.span),
+                            lexical_name,
+                            lexical_name_span: class.id.as_ref().map(|id| Span::from_oxc(id.span)),
+                            declaration_anonymous: Some(class.id.is_none()),
+                            type_only: false,
+                            identifier_namespace_provenance: provenance,
+                            imported: None,
+                            exported: ModuleMemberIdentity::Default,
+                            produces_default: true,
+                        }
+                    }
+                    ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                        let lexical_name = function.id.as_ref().map(|id| id.name.to_string());
+                        let provenance = lexical_name.as_ref().map(|name| {
+                            local_names
+                                .get(name)
+                                .copied()
+                                .unwrap_or(NamespaceProvenance::PresentOrUnknown)
+                        });
+                        DefaultExportOccurrence {
+                            id,
+                            kind: DefaultExportOccurrenceKind::DirectFunction,
+                            declaration_span,
+                            subject_span: Span::from_oxc(function.span),
+                            lexical_name,
+                            lexical_name_span: function
+                                .id
+                                .as_ref()
+                                .map(|id| Span::from_oxc(id.span)),
+                            declaration_anonymous: Some(function.id.is_none()),
+                            type_only: false,
+                            identifier_namespace_provenance: provenance,
+                            imported: None,
+                            exported: ModuleMemberIdentity::Default,
+                            produces_default: true,
+                        }
+                    }
+                    ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
+                        DefaultExportOccurrence {
+                            id,
+                            kind: DefaultExportOccurrenceKind::DefaultInterface,
+                            declaration_span,
+                            subject_span: Span::from_oxc(interface.span),
+                            lexical_name: Some(interface.id.name.to_string()),
+                            lexical_name_span: Some(Span::from_oxc(interface.id.span)),
+                            declaration_anonymous: Some(false),
+                            type_only: true,
+                            identifier_namespace_provenance: Some(
+                                NamespaceProvenance::ProvenAbsent,
+                            ),
+                            imported: None,
+                            exported: ModuleMemberIdentity::Default,
+                            produces_default: true,
+                        }
+                    }
+                    expression => {
+                        let (lexical_name, lexical_name_span, provenance) =
+                            match expression.as_expression() {
+                                Some(oxc_ast::ast::Expression::Identifier(identifier)) => {
+                                    let name = identifier.name.to_string();
+                                    let provenance = local_names
+                                        .get(&name)
+                                        .copied()
+                                        .unwrap_or(NamespaceProvenance::PresentOrUnknown);
+                                    (
+                                        Some(name),
+                                        Some(Span::from_oxc(identifier.span)),
+                                        Some(provenance),
+                                    )
+                                }
+                                _ => (None, None, None),
+                            };
+                        DefaultExportOccurrence {
+                            id,
+                            kind: DefaultExportOccurrenceKind::DefaultExpression,
+                            declaration_span,
+                            subject_span: Span::from_oxc(expression.span()),
+                            lexical_name,
+                            lexical_name_span,
+                            declaration_anonymous: None,
+                            type_only: false,
+                            identifier_namespace_provenance: provenance,
+                            imported: None,
+                            exported: ModuleMemberIdentity::Default,
+                            produces_default: true,
+                        }
+                    }
+                };
+                occurrences.push(occurrence);
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                for specifier in &export.specifiers {
+                    let imported = member_identity(&specifier.local);
+                    let exported = member_identity(&specifier.exported);
+                    let involves_default = imported == ModuleMemberIdentity::Default
+                        || exported == ModuleMemberIdentity::Default;
+                    if !involves_default {
+                        continue;
+                    }
+                    let type_only = export.export_kind == ImportOrExportKind::Type
+                        || specifier.export_kind == ImportOrExportKind::Type;
+                    let lexical_name = if export.source.is_none() {
+                        member_identity_name(&imported).map(str::to_owned)
+                    } else {
+                        None
+                    };
+                    let kind = if export.source.is_none() {
+                        DefaultExportOccurrenceKind::LocalExportListDefault
+                    } else if exported == ModuleMemberIdentity::Default {
+                        DefaultExportOccurrenceKind::SourceExportToDefault
+                    } else {
+                        DefaultExportOccurrenceKind::SourceDefaultReexport
+                    };
+                    occurrences.push(DefaultExportOccurrence {
+                        id: default_export_occurrence_id(
+                            owner_source_key,
+                            normalized_owner_path,
+                            export.span.start,
+                            occurrences.len(),
+                        ),
+                        kind,
+                        declaration_span: Span::from_oxc(export.span),
+                        subject_span: Span::from_oxc(specifier.span),
+                        lexical_name,
+                        lexical_name_span: if export.source.is_none() {
+                            Some(Span::from_oxc(specifier.local.span()))
+                        } else {
+                            None
+                        },
+                        declaration_anonymous: None,
+                        type_only,
+                        identifier_namespace_provenance: None,
+                        imported: Some(imported),
+                        produces_default: exported == ModuleMemberIdentity::Default,
+                        exported,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    let producer_count = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.produces_default)
+        .count();
+    let blocks = default_export_blocks(&occurrences, producer_count);
+    RawDefaultExportCandidateModule {
+        owner_module,
+        producer_count,
+        occurrences,
+        blocks,
+    }
+}
+
+fn default_export_occurrence_id(
+    owner_source_key: SourceUnitKey,
+    normalized_owner_path: &str,
+    declaration_start: u32,
+    occurrence_index: usize,
+) -> DefaultExportOccurrenceId {
+    let occurrence_ordinal = u32::try_from(occurrence_index).unwrap_or(u32::MAX);
+    DefaultExportOccurrenceId {
+        owner_source_key,
+        normalized_owner_path: normalized_owner_path.to_owned(),
+        declaration_start,
+        occurrence_ordinal,
+    }
+}
+
+fn default_export_blocks(
+    occurrences: &[DefaultExportOccurrence],
+    producer_count: usize,
+) -> Vec<DefaultExportCandidateBlock> {
+    let mut blocks = Vec::new();
+    for occurrence in occurrences {
+        let block = match occurrence.kind {
+            DefaultExportOccurrenceKind::DefaultInterface => {
+                Some(DefaultExportCandidateBlock::DefaultInterface)
+            }
+            DefaultExportOccurrenceKind::DirectClass
+            | DefaultExportOccurrenceKind::DirectFunction
+                if occurrence.identifier_namespace_provenance
+                    == Some(NamespaceProvenance::PresentOrUnknown) =>
+            {
+                Some(DefaultExportCandidateBlock::DirectNamedNamespaceMerge)
+            }
+            DefaultExportOccurrenceKind::DefaultExpression
+                if occurrence.lexical_name.is_some()
+                    && occurrence.identifier_namespace_provenance
+                        != Some(NamespaceProvenance::ProvenAbsent) =>
+            {
+                Some(DefaultExportCandidateBlock::IdentifierNamespaceProvenance)
+            }
+            DefaultExportOccurrenceKind::LocalExportListDefault => {
+                Some(DefaultExportCandidateBlock::LocalExportListDefault)
+            }
+            DefaultExportOccurrenceKind::SourceExportToDefault
+            | DefaultExportOccurrenceKind::SourceDefaultReexport => {
+                Some(DefaultExportCandidateBlock::SourceDefaultReexport)
+            }
+            _ => None,
+        };
+        if let Some(block) = block {
+            if !blocks.contains(&block) {
+                blocks.push(block);
+            }
+        }
+    }
+    if producer_count > 1 {
+        blocks.push(DefaultExportCandidateBlock::DuplicateDefault);
+    }
+    blocks
+}
+
+fn local_namespace_provenance(program: &Program<'_>) -> BTreeMap<String, NamespaceProvenance> {
+    let mut names = BTreeMap::new();
+    for statement in &program.body {
+        if let Some(declaration) = statement.as_declaration() {
+            declaration_namespace_names(declaration, |name, provenance| {
+                join_namespace(&mut names, name, provenance);
+            });
+        }
+        match statement {
+            Statement::ImportDeclaration(import) => {
+                for specifier in import.specifiers.iter().flatten() {
+                    let local = match specifier {
+                        ImportDeclarationSpecifier::ImportSpecifier(named) => &named.local,
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                            &default.local
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                            &namespace.local
+                        }
+                    };
+                    join_namespace(
+                        &mut names,
+                        local.name.as_str(),
+                        NamespaceProvenance::PresentOrUnknown,
+                    );
+                }
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(declaration) = &export.declaration {
+                    declaration_namespace_names(declaration, |name, provenance| {
+                        join_namespace(&mut names, name, provenance);
+                    });
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                    if let Some(id) = &class.id {
+                        join_namespace(
+                            &mut names,
+                            id.name.as_str(),
+                            NamespaceProvenance::ProvenAbsent,
+                        );
+                    }
+                }
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    if let Some(id) = &function.id {
+                        join_namespace(
+                            &mut names,
+                            id.name.as_str(),
+                            NamespaceProvenance::ProvenAbsent,
+                        );
+                    }
+                }
+                ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
+                    join_namespace(
+                        &mut names,
+                        interface.id.name.as_str(),
+                        NamespaceProvenance::ProvenAbsent,
+                    );
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    names
+}
+
+fn member_identity(name: &ModuleExportName<'_>) -> ModuleMemberIdentity {
+    match module_export_name(name) {
+        Some("default") => ModuleMemberIdentity::Default,
+        Some(name) => ModuleMemberIdentity::Named(name.to_owned()),
+        None => ModuleMemberIdentity::Named(name.to_string()),
+    }
+}
+
+fn member_identity_name(identity: &ModuleMemberIdentity) -> Option<&str> {
+    match identity {
+        ModuleMemberIdentity::Named(name) => Some(name),
+        ModuleMemberIdentity::Default | ModuleMemberIdentity::Namespace => None,
+    }
+}
+
+fn validate_raw_default_imports(
+    program: &Program<'_>,
+    imports: &[RawDefaultImportCandidate],
+) -> Result<(), ProjectInventoryError> {
+    let valid = imports.iter().all(|candidate| {
+        let Some(import) = program.body.iter().find_map(|statement| {
+            let Statement::ImportDeclaration(import) = statement else {
+                return None;
+            };
+            (import.span.start == candidate.owner_start).then_some(import)
+        }) else {
+            return false;
+        };
+        let expected = default_import_shape(import).specifiers;
+        candidate.owner_start == candidate.declaration_span.start
+            && candidate.declaration_span == Span::from_oxc(import.span)
+            && candidate.source_span == Span::from_oxc(import.source.span)
+            && candidate.module_specifier == import.source.value.as_str()
+            && candidate.declaration_type_only == (import.import_kind == ImportOrExportKind::Type)
+            && candidate.specifiers == expected
+            && candidate.source_span.start >= candidate.declaration_span.start
+            && candidate.source_span.end <= candidate.declaration_span.end
+            && !candidate.module_specifier.is_empty()
+            && !candidate.specifiers.is_empty()
+            && candidate.specifiers.iter().all(|specifier| {
+                !specifier.local.is_empty()
+                    && specifier.local_span.start >= specifier.span.start
+                    && specifier.local_span.end <= specifier.span.end
+                    && specifier.span.start >= candidate.declaration_span.start
+                    && specifier.span.end <= candidate.declaration_span.end
+                    && !matches!(
+                        &specifier.identity,
+                        ModuleMemberIdentity::Named(name) if name == "default"
+                    )
+                    && matches!(
+                        (&specifier.identity, specifier.syntax),
+                        (
+                            ModuleMemberIdentity::Default,
+                            DefaultImportSpecifierSyntax::DirectDefault
+                                | DefaultImportSpecifierSyntax::NamedDefault
+                        ) | (
+                            ModuleMemberIdentity::Named(_),
+                            DefaultImportSpecifierSyntax::Named
+                        ) | (
+                            ModuleMemberIdentity::Namespace,
+                            DefaultImportSpecifierSyntax::Namespace
+                        )
+                    )
+                    && specifier.type_only
+                        == (candidate.declaration_type_only || specifier.inline_type_only)
+                    && (!specifier.inline_type_only
+                        || specifier.syntax == DefaultImportSpecifierSyntax::Named)
+            })
+    });
+    if !valid {
+        return Err(ProjectInventoryError::new(
+            "default import AST evidence changed during collection",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_raw_default_exports(
+    program: &Program<'_>,
+    owner_source_key: SourceUnitKey,
+    normalized_owner_path: &str,
+    exports: &RawDefaultExportCandidateModule,
+) -> Result<(), ProjectInventoryError> {
+    let rescanned = scan_default_export_candidates(
+        exports.owner_module,
+        owner_source_key,
+        normalized_owner_path,
+        program,
+    );
+    if &rescanned != exports {
+        return Err(ProjectInventoryError::new(
+            "default export AST evidence changed during collection",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_default_module_candidates(
+    inputs: &[FileInput],
+    raw_imports: &[Vec<RawImport>],
+    source_reexports: &PendingSourceReexports,
+    authority: &DefaultModuleAuthority,
+    candidates: &DefaultModuleCandidates,
+) -> Result<(), ProjectInventoryError> {
+    if authority
+        .imports
+        .iter()
+        .any(|candidate| candidate.owner_module >= inputs.len())
+        || authority
+            .exports
+            .iter()
+            .any(|candidate| candidate.owner_module >= inputs.len())
+    {
+        return Err(ProjectInventoryError::new(
+            "default-module authority escaped configured roots",
+        ));
+    }
+
+    let mut admitted_default_edges = vec![BTreeSet::new(); inputs.len()];
+    for import in &authority.imports {
+        if import.disposition == DefaultImportCandidateDisposition::Admitted {
+            if let RawDefaultImportCandidateSource::Resolved(target) = &import.source {
+                let edges = admitted_default_edges
+                    .get_mut(import.owner_module)
+                    .ok_or_else(|| {
+                        ProjectInventoryError::new(
+                            "default import authority escaped configured roots",
+                        )
+                    })?;
+                edges.insert(*target);
+            }
+        }
+    }
+    if admitted_default_edges != authority.admitted_default_edges {
+        return Err(ProjectInventoryError::new(
+            "default edge authority diverged from exact import evidence",
+        ));
+    }
+
+    let graph = default_candidate_graph(inputs, raw_imports, source_reexports, authority)?;
+    let expected_order = graph
+        .order
+        .iter()
+        .map(|original| normalized_display_name(&inputs[*original].name))
+        .collect::<Vec<_>>();
+    let mut expected_edges = Vec::new();
+    for (owner, targets) in graph.edges.iter().enumerate() {
+        for target in targets {
+            let owner_module = graph.ordered_index.get(owner).copied().ok_or_else(|| {
+                ProjectInventoryError::new("dependency owner escaped validation order")
+            })?;
+            let target_module = graph.ordered_index.get(*target).copied().ok_or_else(|| {
+                ProjectInventoryError::new("dependency target escaped validation order")
+            })?;
+            expected_edges.push(DefaultModuleDependencyEdge {
+                owner_module,
+                target_module,
+            });
+        }
+    }
+    expected_edges.sort();
+    if candidates.dependency_order != expected_order
+        || candidates.dependency_edges != expected_edges
+        || candidates.first_cycle != graph.first_cycle
+    {
+        return Err(ProjectInventoryError::new(
+            "default-module graph diverged from raw accounting evidence",
+        ));
+    }
+
+    let mut expected_imports = authority.imports.iter().collect::<Vec<_>>();
+    expected_imports.sort_by(|left, right| {
+        (
+            normalized_display_name(&inputs[left.owner_module].name),
+            left.owner_start,
+        )
+            .cmp(&(
+                normalized_display_name(&inputs[right.owner_module].name),
+                right.owner_start,
+            ))
+    });
+    let imports_match = candidates.imports.len() == expected_imports.len()
+        && candidates
+            .imports
+            .iter()
+            .zip(expected_imports)
+            .all(|(candidate, raw)| {
+                let source_matches = match (&candidate.source, &raw.source) {
+                    (
+                        DefaultImportCandidateSource::Resolved(actual),
+                        RawDefaultImportCandidateSource::Resolved(original),
+                    ) => graph
+                        .ordered_index
+                        .get(*original)
+                        .is_some_and(|expected| actual == expected),
+                    (
+                        DefaultImportCandidateSource::Missing,
+                        RawDefaultImportCandidateSource::Missing,
+                    ) => true,
+                    (
+                        DefaultImportCandidateSource::UnsupportedTarget(actual),
+                        RawDefaultImportCandidateSource::UnsupportedTarget(original),
+                    ) => actual == original,
+                    _ => false,
+                };
+                source_matches
+                    && graph
+                        .ordered_index
+                        .get(raw.owner_module)
+                        .is_some_and(|owner| candidate.owner_module == *owner)
+                    && candidate.module_specifier == raw.module_specifier
+                    && candidate.declaration_span == raw.declaration_span
+                    && candidate.source_span == raw.source_span
+                    && candidate.owner_start == raw.owner_start
+                    && candidate.declaration_type_only == raw.declaration_type_only
+                    && candidate.disposition == raw.disposition
+                    && candidate.specifiers == raw.specifiers
+            });
+    if !imports_match {
+        return Err(ProjectInventoryError::new(
+            "default imports diverged from exact AST and resolver evidence",
+        ));
+    }
+
+    let mut expected_exports = authority.exports.iter().collect::<Vec<_>>();
+    expected_exports
+        .sort_by_key(|candidate| normalized_display_name(&inputs[candidate.owner_module].name));
+    let exports_match = candidates.exports.len() == expected_exports.len()
+        && candidates
+            .exports
+            .iter()
+            .zip(expected_exports)
+            .all(|(candidate, raw)| {
+                let normalized_path = normalized_display_name(&inputs[raw.owner_module].name);
+                graph
+                    .ordered_index
+                    .get(raw.owner_module)
+                    .is_some_and(|owner| candidate.owner_module == *owner)
+                    && candidate.normalized_path == normalized_path
+                    && candidate.producer_count == raw.producer_count
+                    && candidate.occurrences == raw.occurrences
+                    && candidate.blocks == raw.blocks
+            });
+    if !exports_match {
+        return Err(ProjectInventoryError::new(
+            "default exports diverged from exact AST evidence",
+        ));
+    }
+    Ok(())
 }
 
 struct FinalizedSourceReexports {
@@ -2470,6 +4063,43 @@ fn first_module_cycle(
     None
 }
 
+fn stable_dependency_order(inputs: &[FileInput], edges: &[BTreeSet<usize>]) -> Vec<usize> {
+    fn visit_stable(
+        index: usize,
+        inputs: &[FileInput],
+        edges: &[BTreeSet<usize>],
+        state: &mut [VisitState],
+        order: &mut Vec<usize>,
+    ) {
+        match state.get(index).copied() {
+            Some(VisitState::Done | VisitState::Visiting) | None => return,
+            Some(VisitState::Unseen) => {}
+        }
+        state[index] = VisitState::Visiting;
+        let mut targets = edges
+            .get(index)
+            .into_iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| normalized_display_name(&inputs[*target].name));
+        for target in targets {
+            visit_stable(target, inputs, edges, state, order);
+        }
+        state[index] = VisitState::Done;
+        order.push(index);
+    }
+
+    let mut roots = (0..inputs.len()).collect::<Vec<_>>();
+    roots.sort_by_key(|index| normalized_display_name(&inputs[*index].name));
+    let mut state = vec![VisitState::Unseen; inputs.len()];
+    let mut order = Vec::with_capacity(inputs.len());
+    for root in roots {
+        visit_stable(root, inputs, edges, &mut state, &mut order);
+    }
+    order
+}
+
 #[derive(Clone)]
 struct RawImport {
     local: String,
@@ -2482,7 +4112,7 @@ struct RawImport {
     owner_start: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RawImportSource {
     Resolved(usize),
     Missing,
@@ -3115,6 +4745,1088 @@ mod source_reexport_collection_tests {
         let cycle = mixed_cycle.first_cycle().map(|items| items.join(" -> "));
         assert_eq!(cycle.as_deref(), Some("a.ts -> b.ts -> a.ts"));
         assert!(mixed_cycle.admitted().is_empty());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod default_module_candidate_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
+
+    struct TestProject {
+        directory: PathBuf,
+    }
+
+    impl TestProject {
+        fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "typokat-frontend-default-modules-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&directory)?;
+            Ok(Self { directory })
+        }
+
+        fn collect(
+            files: &[(&str, &str)],
+        ) -> Result<DefaultModuleCandidates, Box<dyn std::error::Error>> {
+            Self::collect_with_mutation(files, |_| Ok(()))
+        }
+
+        fn collect_with_mutation(
+            files: &[(&str, &str)],
+            mutate: impl FnOnce(&mut DefaultModuleCandidates) -> Result<(), ProjectInventoryError>,
+        ) -> Result<DefaultModuleCandidates, Box<dyn std::error::Error>> {
+            let project = Self::new()?;
+            let mut inputs = Vec::new();
+            let mut roots = Vec::new();
+            for (name, source) in files {
+                let path = project.directory.join(name);
+                fs::write(&path, source)?;
+                inputs.push(FileInput {
+                    name: (*name).to_owned(),
+                    source: (*source).to_owned(),
+                });
+                roots.push(ProjectRoot {
+                    identity: (*name).to_owned(),
+                    path,
+                    exists: true,
+                });
+            }
+            let result = collect_default_module_candidates_with_mutation(
+                inputs,
+                ProjectResolutionMode::BundlerProject {
+                    project_directory: project.directory.clone(),
+                    roots,
+                },
+                mutate,
+            )?;
+            drop(project);
+            Ok(result)
+        }
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn source_slice(source: &str, span: Span) -> Option<&str> {
+        let start = usize::try_from(span.start).ok()?;
+        let end = usize::try_from(span.end).ok()?;
+        source.get(start..end)
+    }
+
+    fn assert_candidate_rejected(
+        result: Result<DefaultModuleCandidates, Box<dyn std::error::Error>>,
+        expected: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match result {
+            Ok(_) => Err(std::io::Error::other("candidate mutation passed validation").into()),
+            Err(error) => {
+                assert_eq!(error.to_string(), expected);
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn retains_every_admitted_producer_and_default_import_in_both_root_orders(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let cases = [
+            (
+                "export default class Named {}\n",
+                DefaultExportOccurrenceKind::DirectClass,
+                Some(false),
+                Some("Named"),
+            ),
+            (
+                "export default class {}\n",
+                DefaultExportOccurrenceKind::DirectClass,
+                Some(true),
+                None,
+            ),
+            (
+                "export default function named() {}\n",
+                DefaultExportOccurrenceKind::DirectFunction,
+                Some(false),
+                Some("named"),
+            ),
+            (
+                "export default function() {}\n",
+                DefaultExportOccurrenceKind::DirectFunction,
+                Some(true),
+                None,
+            ),
+            (
+                "export default 1;\n",
+                DefaultExportOccurrenceKind::DefaultExpression,
+                None,
+                None,
+            ),
+            (
+                "export default { value: 1 };\n",
+                DefaultExportOccurrenceKind::DefaultExpression,
+                None,
+                None,
+            ),
+            (
+                "export default () => 1;\n",
+                DefaultExportOccurrenceKind::DefaultExpression,
+                None,
+                None,
+            ),
+            (
+                "const local = 1;\nexport default local;\n",
+                DefaultExportOccurrenceKind::DefaultExpression,
+                None,
+                Some("local"),
+            ),
+            (
+                "class Local {}\nexport default Local;\n",
+                DefaultExportOccurrenceKind::DefaultExpression,
+                None,
+                Some("Local"),
+            ),
+            (
+                "function local() {}\nexport default local;\n",
+                DefaultExportOccurrenceKind::DefaultExpression,
+                None,
+                Some("local"),
+            ),
+        ];
+        let consumer = "import Value from \"./source.js\";\nexport const retained = Value;\n";
+        for (source, kind, anonymous, lexical_name) in cases {
+            let normal = TestProject::collect(&[("consumer.ts", consumer), ("source.ts", source)])?;
+            let reverse =
+                TestProject::collect(&[("source.ts", source), ("consumer.ts", consumer)])?;
+            assert_eq!(normal, reverse);
+            assert_eq!(normal.dependency_order(), ["source.ts", "consumer.ts"]);
+            assert_eq!(normal.dependency_edge_count(), 1);
+            assert!(normal.first_cycle().is_none());
+
+            let import = normal
+                .imports()
+                .first()
+                .ok_or_else(|| std::io::Error::other("default import evidence was not retained"))?;
+            assert_eq!(import.owner_module(), 1);
+            assert_eq!(import.source(), &DefaultImportCandidateSource::Resolved(0));
+            assert_eq!(
+                import.disposition(),
+                DefaultImportCandidateDisposition::Admitted
+            );
+            assert_eq!(import.specifiers().len(), 1);
+            assert_eq!(
+                import.specifiers()[0].identity(),
+                &ModuleMemberIdentity::Default
+            );
+            assert_eq!(
+                import.specifiers()[0].syntax(),
+                DefaultImportSpecifierSyntax::DirectDefault
+            );
+            assert_eq!(import.specifiers()[0].local(), "Value");
+            assert_eq!(
+                source_slice(consumer, import.specifiers()[0].local_span()),
+                Some("Value")
+            );
+            assert_eq!(
+                source_slice(consumer, import.source_span()),
+                Some("\"./source.js\"")
+            );
+
+            let module = normal
+                .exports()
+                .first()
+                .ok_or_else(|| std::io::Error::other("default export evidence was not retained"))?;
+            assert_eq!(module.owner_module(), 0);
+            assert_eq!(module.normalized_path(), "source.ts");
+            assert_eq!(module.producer_count(), 1);
+            assert!(module.is_admitted());
+            assert_eq!(module.occurrences().len(), 1);
+            let occurrence = &module.occurrences()[0];
+            assert_eq!(occurrence.id().normalized_owner_path(), "source.ts");
+            assert_eq!(
+                occurrence.id().declaration_start(),
+                occurrence.declaration_span().start
+            );
+            assert_eq!(occurrence.id().occurrence_ordinal(), 0);
+            assert_eq!(occurrence.kind(), kind);
+            assert_eq!(occurrence.declaration_anonymous(), anonymous);
+            assert_eq!(occurrence.lexical_name(), lexical_name);
+            assert_eq!(occurrence.exported(), &ModuleMemberIdentity::Default);
+            assert!(occurrence.produces_default());
+            if lexical_name.is_some() {
+                assert_eq!(
+                    occurrence.identifier_namespace_provenance(),
+                    Some(NamespaceProvenance::ProvenAbsent)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn retains_type_only_and_every_deferred_import_specifier(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = "export default class Shape {}\nexport const named = 1;\nexport interface TypeOnly {}\n";
+        let admitted = TestProject::collect(&[
+            (
+                "consumer.ts",
+                "import type Shape from \"./source.js\";\nlet value: Shape;\n",
+            ),
+            ("source.ts", source),
+        ])?;
+        let specifier = &admitted.imports()[0].specifiers()[0];
+        assert!(specifier.is_type_only());
+        assert_eq!(
+            source_slice(
+                "import type Shape from \"./source.js\";\nlet value: Shape;\n",
+                specifier.local_span()
+            ),
+            Some("Shape")
+        );
+
+        let extensionless = TestProject::collect(&[
+            ("consumer.ts", "import Shape from \"./source\";\n"),
+            ("source.ts", source),
+        ])?;
+        assert_eq!(
+            extensionless.imports()[0].source(),
+            &DefaultImportCandidateSource::Resolved(0)
+        );
+
+        let missing =
+            TestProject::collect(&[("consumer.ts", "import Missing from \"./missing.js\";\n")])?;
+        assert_eq!(
+            missing.imports()[0].source(),
+            &DefaultImportCandidateSource::Missing
+        );
+        assert_eq!(
+            source_slice(
+                "import Missing from \"./missing.js\";\n",
+                missing.imports()[0].specifiers()[0].local_span()
+            ),
+            Some("Missing")
+        );
+
+        let unconfigured = TestProject::new()?;
+        let consumer_path = unconfigured.directory.join("consumer.ts");
+        fs::write(&consumer_path, "import Hidden from \"./hidden.js\";\n")?;
+        fs::write(
+            unconfigured.directory.join("hidden.ts"),
+            "export default 1;\n",
+        )?;
+        let unsupported = collect_default_module_candidates(
+            vec![FileInput {
+                name: "consumer.ts".to_owned(),
+                source: "import Hidden from \"./hidden.js\";\n".to_owned(),
+            }],
+            ProjectResolutionMode::BundlerProject {
+                project_directory: unconfigured.directory.clone(),
+                roots: vec![ProjectRoot {
+                    identity: "consumer.ts".to_owned(),
+                    path: consumer_path,
+                    exists: true,
+                }],
+            },
+        )?;
+        assert_eq!(
+            unsupported.imports()[0].source(),
+            &DefaultImportCandidateSource::UnsupportedTarget(Some("hidden.ts".to_owned()))
+        );
+
+        let named_default = TestProject::collect(&[
+            (
+                "consumer.ts",
+                "import { default as Alias } from \"./source.js\";\n",
+            ),
+            ("source.ts", source),
+        ])?;
+        assert_eq!(
+            named_default.imports()[0].disposition(),
+            DefaultImportCandidateDisposition::NamedDefaultSyntax
+        );
+        assert_eq!(
+            named_default.imports()[0].specifiers()[0].syntax(),
+            DefaultImportSpecifierSyntax::NamedDefault
+        );
+        assert_eq!(
+            named_default.imports()[0].specifiers()[0].identity(),
+            &ModuleMemberIdentity::Default
+        );
+
+        let mixed_named = TestProject::collect(&[
+            (
+                "consumer.ts",
+                "import Value, { named, type TypeOnly } from \"./source.js\";\n",
+            ),
+            ("source.ts", source),
+        ])?;
+        let mixed_named_reverse = TestProject::collect(&[
+            ("source.ts", source),
+            (
+                "consumer.ts",
+                "import Value, { named, type TypeOnly } from \"./source.js\";\n",
+            ),
+        ])?;
+        assert_eq!(mixed_named, mixed_named_reverse);
+        let import = &mixed_named.imports()[0];
+        assert_eq!(
+            import.disposition(),
+            DefaultImportCandidateDisposition::MixedDefaultNamed
+        );
+        assert_eq!(import.specifiers().len(), 3);
+        assert_eq!(import.specifiers()[0].local(), "Value");
+        assert_eq!(import.specifiers()[1].local(), "named");
+        assert_eq!(import.specifiers()[2].local(), "TypeOnly");
+        assert!(import.specifiers()[2].is_type_only());
+
+        let mixed_namespace = TestProject::collect(&[
+            (
+                "consumer.ts",
+                "import Value, * as all from \"./source.js\";\n",
+            ),
+            ("source.ts", source),
+        ])?;
+        let import = &mixed_namespace.imports()[0];
+        assert_eq!(
+            import.disposition(),
+            DefaultImportCandidateDisposition::MixedDefaultNamespace
+        );
+        assert_eq!(import.specifiers().len(), 2);
+        assert_eq!(
+            import.specifiers()[1].identity(),
+            &ModuleMemberIdentity::Namespace
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn excludes_every_member_of_a_deferred_import_from_cycle_evidence(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let a =
+            "import { default as Deferred, named } from \"./b.js\";\nexport const fromA = named;\n";
+        let b = "import FromA from \"./a.js\";\nexport default FromA;\nexport const named = 1;\n";
+        let normal = TestProject::collect(&[("a.ts", a), ("b.ts", b)])?;
+        let reverse = TestProject::collect(&[("b.ts", b), ("a.ts", a)])?;
+        assert_eq!(normal, reverse);
+        assert!(normal.first_cycle().is_none());
+        assert_eq!(normal.dependency_edge_count(), 1);
+        let edge = normal
+            .dependency_edges()
+            .first()
+            .ok_or_else(|| std::io::Error::other("admitted opposite edge was not retained"))?;
+        assert_eq!(normal.dependency_order()[edge.owner_module()], "b.ts");
+        assert_eq!(normal.dependency_order()[edge.target_module()], "a.ts");
+        let deferred = normal
+            .imports()
+            .iter()
+            .find(|import| {
+                import.disposition() == DefaultImportCandidateDisposition::NamedDefaultSyntax
+            })
+            .ok_or_else(|| std::io::Error::other("deferred import was not retained"))?;
+        assert_eq!(deferred.specifiers().len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_declarations_bypass_legacy_accounting_without_changing_frozen_mode(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let project = TestProject::new()?;
+        let sources = [
+            (
+                "consumer.ts",
+                "import { default as Alias, named } from \"./source.js\";\nimport Direct from \"./other.js\";\n",
+            ),
+            ("source.ts", "export default 1;\nexport const named = 1;\n"),
+            ("other.ts", "export default 2;\n"),
+        ];
+        let mut inputs = Vec::new();
+        let mut roots = Vec::new();
+        for (name, source) in sources {
+            let path = project.directory.join(name);
+            fs::write(&path, source)?;
+            inputs.push(FileInput {
+                name: name.to_owned(),
+                source: source.to_owned(),
+            });
+            roots.push(ProjectRoot {
+                identity: name.to_owned(),
+                path,
+                exists: true,
+            });
+        }
+        let mode = ProjectResolutionMode::BundlerProject {
+            project_directory: project.directory.clone(),
+            roots,
+        };
+        let allocators = inputs
+            .iter()
+            .map(|_| Allocator::default())
+            .collect::<Vec<_>>();
+        let parsed = inputs
+            .iter()
+            .zip(&allocators)
+            .map(|(input, allocator)| {
+                Parser::new(allocator, &input.source, SourceType::ts()).parse()
+            })
+            .collect::<Vec<_>>();
+        let programs = parsed
+            .iter()
+            .map(|result| &result.program)
+            .collect::<Vec<_>>();
+
+        let frozen = account_project_modules(
+            &inputs,
+            &programs,
+            &mode,
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::FrozenUnsupported,
+        )?;
+        assert!(frozen.default_module_authority.is_none());
+        assert_eq!(frozen.raw_imports[0].len(), 2);
+
+        let candidate = account_project_modules(
+            &inputs,
+            &programs,
+            &mode,
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::CollectCandidate,
+        )?;
+        assert!(candidate.raw_imports[0].is_empty());
+        let authority = candidate
+            .default_module_authority
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("candidate authority was not retained"))?;
+        assert_eq!(authority.imports.len(), 2);
+        let product = finalize_default_module_candidates(&inputs, candidate)?;
+        assert_eq!(product.imports().len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn phase_and_attribute_imports_remain_legacy_fail_closed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let attributes_source = "import Value from \"./source.js\" with { type: \"json\" };\n";
+        let attributes_input = FileInput {
+            name: "consumer.ts".to_owned(),
+            source: attributes_source.to_owned(),
+        };
+        let attributes_allocator = Allocator::default();
+        let attributes_parsed =
+            Parser::new(&attributes_allocator, attributes_source, SourceType::ts()).parse();
+        assert!(attributes_parsed.diagnostics.is_empty());
+        let attributes_programs = [&attributes_parsed.program];
+        let frozen_attributes = account_project_modules(
+            std::slice::from_ref(&attributes_input),
+            &attributes_programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::FrozenUnsupported,
+        )?;
+        let candidate_attributes = account_project_modules(
+            std::slice::from_ref(&attributes_input),
+            &attributes_programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::CollectCandidate,
+        )?;
+        assert_eq!(frozen_attributes.inventory, candidate_attributes.inventory);
+        assert_eq!(
+            candidate_attributes.inventory.resolutions,
+            ["consumer.ts:1:1 import-attributes ./source.js -> unsupported"]
+        );
+        assert_eq!(
+            candidate_attributes.inventory.notices,
+            ["unsupported-module-form import-attributes consumer.ts:1:1 ./source.js"]
+        );
+        assert!(candidate_attributes
+            .default_module_authority
+            .as_ref()
+            .is_some_and(|authority| authority.imports.is_empty()));
+
+        let phase_source = "import source Value from \"./source.js\";\n";
+        let phase_input = FileInput {
+            name: "consumer.ts".to_owned(),
+            source: phase_source.to_owned(),
+        };
+        let phase_allocator = Allocator::default();
+        let phase_parsed = Parser::new(&phase_allocator, phase_source, SourceType::ts()).parse();
+        assert!(phase_parsed.diagnostics.is_empty());
+        let phase_programs = [&phase_parsed.program];
+        let frozen_phase = account_project_modules(
+            std::slice::from_ref(&phase_input),
+            &phase_programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::FrozenUnsupported,
+        );
+        let candidate_phase = account_project_modules(
+            std::slice::from_ref(&phase_input),
+            &phase_programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::CollectCandidate,
+        );
+        let exact_phase_error = "unfrozen import phase surface at consumer.ts:1:1";
+        match (frozen_phase, candidate_phase) {
+            (Err(frozen), Err(candidate)) => {
+                assert_eq!(frozen.to_string(), exact_phase_error);
+                assert_eq!(candidate.to_string(), exact_phase_error);
+            }
+            _ => {
+                return Err(std::io::Error::other(
+                    "phase import did not preserve its legacy fail-closed error",
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn parsed_program_hook_rejects_truncation_and_source_mismatch(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let inputs = [
+            FileInput {
+                name: "a.ts".to_owned(),
+                source: "export default 1;\n".to_owned(),
+            },
+            FileInput {
+                name: "b.ts".to_owned(),
+                source: "export default 2;\n".to_owned(),
+            },
+        ];
+        let allocators = [Allocator::default(), Allocator::default()];
+        let parsed = inputs
+            .iter()
+            .zip(&allocators)
+            .map(|(input, allocator)| {
+                Parser::new(allocator, &input.source, SourceType::ts()).parse()
+            })
+            .collect::<Vec<_>>();
+        let programs = [&parsed[0].program, &parsed[1].program];
+        let coverage_error = "default-module parsed-program coverage changed before accounting";
+
+        let shorter = certify_default_module_candidates_from_parsed_programs(
+            &inputs,
+            &programs[..1],
+            &ProjectResolutionMode::ExplicitFileList,
+        );
+        match shorter {
+            Err(error) => assert_eq!(error.to_string(), coverage_error),
+            Ok(_) => {
+                return Err(std::io::Error::other("short parsed coverage was accepted").into());
+            }
+        }
+
+        let longer = certify_default_module_candidates_from_parsed_programs(
+            &inputs[..1],
+            &programs,
+            &ProjectResolutionMode::ExplicitFileList,
+        );
+        match longer {
+            Err(error) => assert_eq!(error.to_string(), coverage_error),
+            Ok(_) => {
+                return Err(std::io::Error::other("long parsed coverage was accepted").into());
+            }
+        }
+
+        let swapped = certify_default_module_candidates_from_parsed_programs(
+            &inputs,
+            &[programs[1], programs[0]],
+            &ProjectResolutionMode::ExplicitFileList,
+        );
+        match swapped {
+            Err(error) => assert_eq!(
+                error.to_string(),
+                "default-module parsed source changed for a.ts"
+            ),
+            Ok(_) => {
+                return Err(std::io::Error::other("swapped parsed sources were accepted").into());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn classifies_namespace_bridges_and_duplicate_producers_fail_closed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = "export const named = 1;\n";
+        let direct_merge = "export default class Merged {}\nnamespace Merged {}\n";
+        let identifier_merge =
+            "class Identifier {}\nnamespace Identifier {}\nexport default Identifier;\n";
+        let local = "const local = 1;\nexport { local as default };\n";
+        let interface = "export default interface Unsupported {}\n";
+        let source_bridge = "export { named as default } from \"./source.js\";\nexport { default as alias } from \"./missing.js\";\n";
+        let result = TestProject::collect(&[
+            ("direct.ts", direct_merge),
+            ("identifier.ts", identifier_merge),
+            ("interface.ts", interface),
+            ("local.ts", local),
+            ("source.ts", source),
+            ("bridge.ts", source_bridge),
+        ])?;
+        let reverse = TestProject::collect(&[
+            ("bridge.ts", source_bridge),
+            ("source.ts", source),
+            ("local.ts", local),
+            ("interface.ts", interface),
+            ("identifier.ts", identifier_merge),
+            ("direct.ts", direct_merge),
+        ])?;
+        assert_eq!(result, reverse);
+        let module = |path: &str| {
+            result
+                .exports()
+                .iter()
+                .find(|module| module.normalized_path() == path)
+        };
+        assert!(module("direct.ts")
+            .is_some_and(|module| module.blocks()
+                == [DefaultExportCandidateBlock::DirectNamedNamespaceMerge]));
+        assert!(module("identifier.ts").is_some_and(|module| module.blocks()
+            == [DefaultExportCandidateBlock::IdentifierNamespaceProvenance]));
+        assert!(module("interface.ts").is_some_and(
+            |module| module.blocks() == [DefaultExportCandidateBlock::DefaultInterface]
+        ));
+        assert!(module("local.ts").is_some_and(
+            |module| module.blocks() == [DefaultExportCandidateBlock::LocalExportListDefault]
+        ));
+        let bridge = module("bridge.ts").ok_or_else(|| {
+            std::io::Error::other("source default bridge evidence was not retained")
+        })?;
+        assert_eq!(bridge.occurrences().len(), 2);
+        assert_eq!(bridge.producer_count(), 1);
+        assert_eq!(
+            bridge.blocks(),
+            [DefaultExportCandidateBlock::SourceDefaultReexport]
+        );
+        assert_eq!(
+            bridge.occurrences()[0].kind(),
+            DefaultExportOccurrenceKind::SourceExportToDefault
+        );
+        assert_eq!(
+            bridge.occurrences()[1].kind(),
+            DefaultExportOccurrenceKind::SourceDefaultReexport
+        );
+
+        let duplicate = TestProject::collect(&[
+            (
+                "duplicate.ts",
+                "const local = 1;\nexport default class C {}\nexport default function f() {}\nexport default 1;\nexport { local as default };\nexport { named as default } from \"./source.js\";\n",
+            ),
+            ("source.ts", source),
+        ])?;
+        let duplicate = duplicate
+            .exports()
+            .iter()
+            .find(|module| module.normalized_path() == "duplicate.ts")
+            .ok_or_else(|| std::io::Error::other("duplicate evidence was not retained"))?;
+        assert_eq!(duplicate.producer_count(), 5);
+        assert_eq!(
+            duplicate
+                .occurrences()
+                .iter()
+                .map(DefaultExportOccurrence::kind)
+                .collect::<Vec<_>>(),
+            [
+                DefaultExportOccurrenceKind::DirectClass,
+                DefaultExportOccurrenceKind::DirectFunction,
+                DefaultExportOccurrenceKind::DefaultExpression,
+                DefaultExportOccurrenceKind::LocalExportListDefault,
+                DefaultExportOccurrenceKind::SourceExportToDefault,
+            ]
+        );
+        assert!(duplicate
+            .blocks()
+            .contains(&DefaultExportCandidateBlock::DuplicateDefault));
+        Ok(())
+    }
+
+    #[test]
+    fn corruption_controls_reject_every_certified_dimension(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = "export default class Value {}\nexport const named = 1;\nexport const other = 2;\nexport interface TypeOnly {}\n";
+        let consumer = "import Value, { named, other, type TypeOnly } from \"./source.js\";\n";
+        let admitted_files = [
+            (
+                "consumer.ts",
+                "import Value from \"./source.js\";\nimport { other } from \"./other.js\";\nexport const retained = Value;\n",
+            ),
+            ("source.ts", "export default 1;\n"),
+            ("other.ts", "export const other = 1;\n"),
+        ];
+        let invalid_target = TestProject::collect_with_mutation(&admitted_files, |candidate| {
+            let import = candidate.imports.first().ok_or_else(|| {
+                ProjectInventoryError::new("admitted target control lost its import")
+            })?;
+            let correct_target = match &import.source {
+                DefaultImportCandidateSource::Resolved(target) => *target,
+                DefaultImportCandidateSource::Missing
+                | DefaultImportCandidateSource::UnsupportedTarget(_) => {
+                    return Err(ProjectInventoryError::new(
+                        "admitted target control lost its resolved target",
+                    ));
+                }
+            };
+            let wrong_target = candidate
+                .dependency_edges
+                .iter()
+                .find(|edge| {
+                    edge.owner_module == import.owner_module && edge.target_module != correct_target
+                })
+                .map(|edge| edge.target_module)
+                .ok_or_else(|| {
+                    ProjectInventoryError::new(
+                        "target control needs an existing edge to a second target",
+                    )
+                })?;
+            candidate.imports[0].source = DefaultImportCandidateSource::Resolved(wrong_target);
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_target,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let invalid_module_specifier =
+            TestProject::collect_with_mutation(&admitted_files, |candidate| {
+                candidate.imports[0].module_specifier = "./other.js".to_owned();
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_module_specifier,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let mixed_files = [("consumer.ts", consumer), ("source.ts", source)];
+        let invalid_kind = TestProject::collect_with_mutation(&mixed_files, |candidate| {
+            candidate.imports[0].specifiers[0].syntax = DefaultImportSpecifierSyntax::Named;
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_kind,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let invalid_type_only = TestProject::collect_with_mutation(&mixed_files, |candidate| {
+            candidate.imports[0].specifiers[0].type_only = true;
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_type_only,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let invalid_inline_type_only =
+            TestProject::collect_with_mutation(&mixed_files, |candidate| {
+                candidate.imports[0].specifiers[3].inline_type_only = false;
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_inline_type_only,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let dropped_mixed_member = TestProject::collect_with_mutation(&mixed_files, |candidate| {
+            candidate.imports[0].specifiers.remove(2);
+            Ok(())
+        });
+        assert_candidate_rejected(
+            dropped_mixed_member,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let named_default_map = TestProject::collect_with_mutation(&mixed_files, |candidate| {
+            candidate.imports[0].specifiers[0].identity =
+                ModuleMemberIdentity::Named("default".to_owned());
+            Ok(())
+        });
+        assert_candidate_rejected(
+            named_default_map,
+            "default imports diverged from exact AST and resolver evidence",
+        )?;
+
+        let invalid_order = TestProject::collect_with_mutation(&mixed_files, |candidate| {
+            candidate.dependency_order.reverse();
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_order,
+            "default-module graph diverged from raw accounting evidence",
+        )?;
+
+        let invalid_edges = TestProject::collect_with_mutation(&admitted_files, |candidate| {
+            candidate.dependency_edges.clear();
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_edges,
+            "default-module graph diverged from raw accounting evidence",
+        )?;
+
+        let invalid_cycle = TestProject::collect_with_mutation(&mixed_files, |candidate| {
+            candidate.first_cycle = Some(vec!["invented.ts".to_owned()]);
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_cycle,
+            "default-module graph diverged from raw accounting evidence",
+        )?;
+
+        let duplicate_files = [(
+            "duplicate.ts",
+            "export default class First {}\nexport default class Second {}\n",
+        )];
+        let invalid_count = TestProject::collect_with_mutation(&duplicate_files, |candidate| {
+            candidate.exports[0].producer_count = 1;
+            Ok(())
+        });
+        assert_candidate_rejected(
+            invalid_count,
+            "default exports diverged from exact AST evidence",
+        )?;
+        let lost_duplicate = TestProject::collect_with_mutation(&duplicate_files, |candidate| {
+            candidate.exports[0]
+                .blocks
+                .retain(|block| *block != DefaultExportCandidateBlock::DuplicateDefault);
+            Ok(())
+        });
+        assert_candidate_rejected(
+            lost_duplicate,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let provenance_files = [(
+            "source.ts",
+            "class Merged {}\nnamespace Merged {}\nexport default Merged;\n",
+        )];
+        let invalid_provenance =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                candidate.exports[0].occurrences[0].identifier_namespace_provenance =
+                    Some(NamespaceProvenance::ProvenAbsent);
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_provenance,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let synchronized_provenance =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                candidate.exports[0].occurrences[0].identifier_namespace_provenance =
+                    Some(NamespaceProvenance::ProvenAbsent);
+                candidate.exports[0].blocks.retain(|block| {
+                    *block != DefaultExportCandidateBlock::IdentifierNamespaceProvenance
+                });
+                Ok(())
+            });
+        assert_candidate_rejected(
+            synchronized_provenance,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let invalid_occurrence_ordinal =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                candidate.exports[0].occurrences[0].id.occurrence_ordinal = 1;
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_occurrence_ordinal,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let invalid_source_key =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                let source_key = candidate.exports[0].occurrences[0].id.owner_source_key;
+                candidate.exports[0].occurrences[0].id.owner_source_key =
+                    SourceUnitKey(source_key.0.wrapping_add(1));
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_source_key,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let invalid_source_path =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                candidate.exports[0].occurrences[0].id.normalized_owner_path =
+                    "other.ts".to_owned();
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_source_path,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let invalid_declaration_span =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                candidate.exports[0].occurrences[0].declaration_span.end += 1;
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_declaration_span,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let invalid_subject_span =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                candidate.exports[0].occurrences[0].subject_span.start += 1;
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_subject_span,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let invalid_lexical_name_span =
+            TestProject::collect_with_mutation(&provenance_files, |candidate| {
+                let lexical_name_span = candidate.exports[0].occurrences[0]
+                    .lexical_name_span
+                    .as_mut()
+                    .ok_or_else(|| {
+                        ProjectInventoryError::new("identifier control lost its name span")
+                    })?;
+                lexical_name_span.start += 1;
+                Ok(())
+            });
+        assert_candidate_rejected(
+            invalid_lexical_name_span,
+            "default exports diverged from exact AST evidence",
+        )?;
+
+        let allocator = Allocator::default();
+        let parsed_import = Parser::new(
+            &allocator,
+            "import type Exact from \"./source.js\";\n",
+            SourceType::ts(),
+        )
+        .parse();
+        let mode = ProjectResolutionMode::ExplicitFileList;
+        let resolver = Resolver::default();
+        let importer_path = Path::new("/tmp/typokat-default-control/consumer.ts");
+        let explicit_paths = BTreeMap::new();
+        let configured_roots = BTreeMap::new();
+        let mut raw_import = scan_default_import_candidates(
+            0,
+            &parsed_import.program,
+            &DefaultCandidateResolution {
+                mode: &mode,
+                resolver: &resolver,
+                importer_path,
+                explicit_path_to_index: &explicit_paths,
+                configured_roots: &configured_roots,
+                canonical_project: None,
+            },
+        )?;
+        raw_import[0].declaration_type_only = false;
+        assert!(validate_raw_default_imports(&parsed_import.program, &raw_import).is_err());
+
+        let parsed = Parser::new(
+            &allocator,
+            "export default class Exact {}\n",
+            SourceType::ts(),
+        )
+        .parse();
+        let mut raw = scan_default_export_candidates(
+            0,
+            SourceUnitKey::SINGLE_SOURCE,
+            "source.ts",
+            &parsed.program,
+        );
+        raw.occurrences[0].kind = DefaultExportOccurrenceKind::DirectFunction;
+        assert!(validate_raw_default_exports(
+            &parsed.program,
+            SourceUnitKey::SINGLE_SOURCE,
+            "source.ts",
+            &raw
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_collection_does_not_change_frozen_public_inventory(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let project = TestProject::new()?;
+        let consumer = "import Value from \"./source.js\";\nexport const value = Value;\n";
+        let source = "export default 1;\n";
+        let consumer_path = project.directory.join("consumer.ts");
+        let source_path = project.directory.join("source.ts");
+        fs::write(&consumer_path, consumer)?;
+        fs::write(&source_path, source)?;
+        let inputs = vec![
+            FileInput {
+                name: "consumer.ts".to_owned(),
+                source: consumer.to_owned(),
+            },
+            FileInput {
+                name: "source.ts".to_owned(),
+                source: source.to_owned(),
+            },
+        ];
+        let roots = vec![
+            ProjectRoot {
+                identity: "consumer.ts".to_owned(),
+                path: consumer_path,
+                exists: true,
+            },
+            ProjectRoot {
+                identity: "source.ts".to_owned(),
+                path: source_path,
+                exists: true,
+            },
+        ];
+        let mode = ProjectResolutionMode::BundlerProject {
+            project_directory: project.directory.clone(),
+            roots: roots.clone(),
+        };
+        let frozen = run_clean_bundler_project_frontend_with_deferred_auxiliary(
+            inputs.clone(),
+            project.directory.clone(),
+            roots.clone(),
+            || Ok::<_, std::convert::Infallible>(Vec::new()),
+            |_, _, _, _, _, _| (),
+        );
+        let before = match frozen.product {
+            Ok(accounted) => accounted.inventory,
+            Err(_) => {
+                return Err(std::io::Error::other("frozen route failed inventory").into());
+            }
+        };
+        assert_eq!(
+            before.resolutions,
+            ["consumer.ts:1:1 default-import ./source.js -> unsupported"]
+        );
+        assert_eq!(
+            before.notices,
+            [
+                "unsupported-module-form default-import consumer.ts:1:1 ./source.js",
+                "unsupported-module-form default-export source.ts:1:1",
+            ]
+        );
+        let candidate = collect_default_module_candidates(inputs.clone(), mode.clone())?;
+        assert_eq!(candidate.imports().len(), 1);
+        let frozen = run_clean_bundler_project_frontend_with_deferred_auxiliary(
+            inputs,
+            project.directory.clone(),
+            roots,
+            || Ok::<_, std::convert::Infallible>(Vec::new()),
+            |_, _, _, _, _, _| (),
+        );
+        let after = match frozen.product {
+            Ok(accounted) => accounted.inventory,
+            Err(_) => {
+                return Err(std::io::Error::other("frozen route failed after candidate").into());
+            }
+        };
+        assert_eq!(before, after);
         Ok(())
     }
 }
