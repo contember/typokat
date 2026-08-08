@@ -8,8 +8,8 @@ use crate::span::Span;
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName, Program, Statement,
-    TSModuleReference,
+    BindingPattern, Declaration, ImportDeclarationSpecifier, ImportOrExportKind, ModuleExportName,
+    Program, Statement, TSModuleDeclarationName, TSModuleReference,
 };
 use oxc_parser::Parser;
 use oxc_resolver::{ResolveError, Resolver};
@@ -160,6 +160,206 @@ pub struct ProjectImport {
 pub enum ProjectImportSource {
     Resolved(usize),
     Missing(String),
+}
+
+/// Root-order-stable declaration identity owned by one normalized source path.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SourceReexportDeclarationId {
+    owner_source_key: SourceUnitKey,
+    normalized_owner_path: String,
+    declaration_start: u32,
+    source_ordinal: u32,
+}
+
+impl SourceReexportDeclarationId {
+    #[must_use]
+    pub const fn owner_source_key(&self) -> SourceUnitKey {
+        self.owner_source_key
+    }
+
+    #[must_use]
+    pub fn normalized_owner_path(&self) -> &str {
+        &self.normalized_owner_path
+    }
+
+    #[must_use]
+    pub const fn declaration_start(&self) -> u32 {
+        self.declaration_start
+    }
+
+    #[must_use]
+    pub const fn source_ordinal(&self) -> u32 {
+        self.source_ordinal
+    }
+}
+
+/// Frontend proof that projecting a named export cannot discard namespace meaning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamespaceProvenance {
+    ProvenAbsent,
+    PresentOrUnknown,
+}
+
+/// Resolved or missing source owned by one admitted declaration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmittedSourceReexportSource {
+    Resolved(usize),
+    Missing,
+}
+
+/// One source re-export member retained without creating a local binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmittedSourceReexportMember {
+    imported: String,
+    exported: String,
+    span: Span,
+    type_only: bool,
+    namespace_provenance: Option<NamespaceProvenance>,
+}
+
+impl AdmittedSourceReexportMember {
+    #[must_use]
+    pub fn imported(&self) -> &str {
+        &self.imported
+    }
+
+    #[must_use]
+    pub fn exported(&self) -> &str {
+        &self.exported
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    #[must_use]
+    pub const fn is_type_only(&self) -> bool {
+        self.type_only
+    }
+
+    /// Missing declarations bypass the namespace census and return `None`.
+    #[must_use]
+    pub const fn namespace_provenance(&self) -> Option<NamespaceProvenance> {
+        self.namespace_provenance
+    }
+}
+
+/// One declaration in the opaque admitted source-re-export product.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmittedSourceReexportDeclaration {
+    id: SourceReexportDeclarationId,
+    owner_module: usize,
+    source: AdmittedSourceReexportSource,
+    module_specifier: String,
+    declaration_span: Span,
+    source_span: Span,
+    owner_start: u32,
+    members: Vec<AdmittedSourceReexportMember>,
+}
+
+impl AdmittedSourceReexportDeclaration {
+    #[must_use]
+    pub const fn id(&self) -> &SourceReexportDeclarationId {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn owner_module(&self) -> usize {
+        self.owner_module
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> AdmittedSourceReexportSource {
+        self.source
+    }
+
+    #[must_use]
+    pub fn module_specifier(&self) -> &str {
+        &self.module_specifier
+    }
+
+    #[must_use]
+    pub const fn declaration_span(&self) -> Span {
+        self.declaration_span
+    }
+
+    #[must_use]
+    pub const fn source_span(&self) -> Span {
+        self.source_span
+    }
+
+    #[must_use]
+    pub const fn owner_start(&self) -> u32 {
+        self.owner_start
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[AdmittedSourceReexportMember] {
+        &self.members
+    }
+}
+
+/// Opaque frontend-owned proof product consumed by later checker integration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdmittedSourceReexports {
+    declarations: Vec<AdmittedSourceReexportDeclaration>,
+}
+
+impl AdmittedSourceReexports {
+    #[must_use]
+    pub fn declarations(&self) -> &[AdmittedSourceReexportDeclaration] {
+        &self.declarations
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.declarations.is_empty()
+    }
+}
+
+/// Read-only WU2 collector receipt. Production routes cannot construct this product yet.
+#[cfg(any(test, feature = "test-utils"))]
+pub struct SourceReexportCollectionForTest {
+    admitted: AdmittedSourceReexports,
+    dependency_order: Vec<String>,
+    dependency_edge_count: usize,
+    resolutions: Vec<String>,
+    blocked_notices: Vec<String>,
+    first_cycle: Option<Vec<String>>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl SourceReexportCollectionForTest {
+    #[must_use]
+    pub fn admitted(&self) -> &AdmittedSourceReexports {
+        &self.admitted
+    }
+
+    #[must_use]
+    pub fn dependency_order(&self) -> &[String] {
+        &self.dependency_order
+    }
+
+    #[must_use]
+    pub const fn dependency_edge_count(&self) -> usize {
+        self.dependency_edge_count
+    }
+
+    #[must_use]
+    pub fn resolutions(&self) -> &[String] {
+        &self.resolutions
+    }
+
+    #[must_use]
+    pub fn blocked_notices(&self) -> &[String] {
+        &self.blocked_notices
+    }
+
+    #[must_use]
+    pub fn first_cycle(&self) -> Option<&[String]> {
+        self.first_cycle.as_deref()
+    }
 }
 
 pub struct SourceFrontendRun<Product> {
@@ -380,7 +580,12 @@ pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
         .iter()
         .map(|parsed| &parsed.program)
         .collect::<Vec<_>>();
-    let module_plan = match account_project_modules(&inputs, &programs, &resolution_mode) {
+    let module_plan = match account_project_modules(
+        &inputs,
+        &programs,
+        &resolution_mode,
+        SourceReexportAccounting::FrozenUnsupported,
+    ) {
         Ok(plan) => plan,
         Err(error) => {
             return ProjectFrontendRun {
@@ -647,6 +852,101 @@ struct AccountedModulePlan {
     inventory: ProjectModuleInventory,
     paths: Vec<PathBuf>,
     raw_imports: Vec<Vec<RawImport>>,
+    _source_reexports: PendingSourceReexports,
+}
+
+#[derive(Clone, Copy)]
+enum SourceReexportAccounting {
+    FrozenUnsupported,
+    #[cfg(any(test, feature = "test-utils"))]
+    CollectEvidence,
+}
+
+impl SourceReexportAccounting {
+    fn collects_evidence(self) -> bool {
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            matches!(self, Self::CollectEvidence)
+        }
+        #[cfg(not(any(test, feature = "test-utils")))]
+        {
+            false
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RawSourceReexportMember {
+    imported: String,
+    exported: String,
+    span: Span,
+    type_only: bool,
+}
+
+#[derive(Clone)]
+struct RawSourceReexportDeclaration {
+    owner_module: usize,
+    source: RawImportSource,
+    module_specifier: String,
+    declaration_span: Span,
+    source_span: Span,
+    owner_start: u32,
+    members: Vec<RawSourceReexportMember>,
+}
+
+struct PendingSourceReexports {
+    declarations: Vec<RawSourceReexportDeclaration>,
+    dependency_edges: Vec<BTreeSet<usize>>,
+    namespace_provenance: BTreeMap<(usize, String), NamespaceProvenance>,
+    first_cycle: Option<Vec<String>>,
+}
+
+impl PendingSourceReexports {
+    fn validate(&self, module_count: usize) -> Result<(), ProjectInventoryError> {
+        let dependencies_valid = self.dependency_edges.len() == module_count
+            && self
+                .dependency_edges
+                .iter()
+                .all(|targets| targets.iter().all(|target| *target < module_count));
+        let declarations_valid = self.declarations.iter().all(|declaration| {
+            let resolved_valid = match declaration.source {
+                RawImportSource::Missing => true,
+                RawImportSource::Resolved(target) => {
+                    self.dependency_edges
+                        .get(declaration.owner_module)
+                        .is_some_and(|edges| edges.contains(&target))
+                        && declaration.members.iter().all(|member| {
+                            self.namespace_provenance
+                                .contains_key(&(target, member.imported.clone()))
+                        })
+                }
+            };
+            declaration.owner_module < module_count
+                && !declaration.module_specifier.is_empty()
+                && !declaration.members.is_empty()
+                && declaration.owner_start == declaration.declaration_span.start
+                && declaration.source_span.start >= declaration.declaration_span.start
+                && declaration.source_span.end <= declaration.declaration_span.end
+                && resolved_valid
+                && declaration.members.iter().all(|member| {
+                    let _retained_type_only = member.type_only;
+                    !member.imported.is_empty()
+                        && !member.exported.is_empty()
+                        && member.span.start >= declaration.declaration_span.start
+                        && member.span.end <= declaration.declaration_span.end
+                })
+        });
+        let cycle_valid = self
+            .first_cycle
+            .as_ref()
+            .is_none_or(|cycle| cycle.len() >= 2);
+        if !(dependencies_valid && declarations_valid && cycle_valid) {
+            return Err(ProjectInventoryError::new(
+                "source re-export metadata changed during accounting",
+            ));
+        }
+        Ok(())
+    }
 }
 
 struct ResolutionPaths {
@@ -698,6 +998,7 @@ fn account_project_modules(
     inputs: &[FileInput],
     programs: &[&Program<'_>],
     mode: &ProjectResolutionMode,
+    source_reexport_accounting: SourceReexportAccounting,
 ) -> Result<AccountedModulePlan, ProjectInventoryError> {
     let ResolutionPaths {
         paths,
@@ -718,6 +1019,8 @@ fn account_project_modules(
         .filter_map(|(index, path)| fs::canonicalize(path).ok().map(|path| (path, index)))
         .collect::<BTreeMap<_, _>>();
     let mut cycle_edges = vec![BTreeSet::new(); inputs.len()];
+    let mut reexport_edges = vec![BTreeSet::new(); inputs.len()];
+    let mut raw_source_reexports = Vec::new();
     let mut resolution_identities = Vec::new();
     let mut notice_identities = Vec::new();
     let mut missing_module_locations = Vec::new();
@@ -923,13 +1226,78 @@ fn account_project_modules(
                             source_location(input, &line_index, export.span.start)
                         )));
                     }
-                    let specifier = export
-                        .source
-                        .as_ref()
-                        .map(|source| source.value.as_str())
-                        .ok_or_else(|| {
-                            ProjectInventoryError::new("source re-export lost source")
-                        })?;
+                    let source_literal = export.source.as_ref().ok_or_else(|| {
+                        ProjectInventoryError::new("source re-export lost source")
+                    })?;
+                    let specifier = source_literal.value.as_str();
+                    if export.specifiers.is_empty() {
+                        record_unsupported_module_form(
+                            input,
+                            &line_index,
+                            export.span.start,
+                            "source-reexport",
+                            Some(specifier),
+                            &mut resolution_identities,
+                            &mut notice_identities,
+                        );
+                        continue;
+                    }
+                    if source_reexport_accounting.collects_evidence()
+                        && is_admitted_source_reexport_specifier(specifier)
+                        && export.specifiers.iter().all(|member| {
+                            module_export_name(&member.local).is_some()
+                                && module_export_name(&member.exported).is_some()
+                        })
+                    {
+                        let resolution = resolve_named_import(
+                            mode,
+                            &resolver,
+                            importer_path,
+                            specifier,
+                            &explicit_path_to_index,
+                            &configured_roots,
+                            canonical_project.as_deref(),
+                        )?;
+                        if let NamedImportOutcome::Source(source) = resolution {
+                            if let RawImportSource::Resolved(target) = source {
+                                reexport_edges[index].insert(target);
+                            }
+                            let outer_type_only = export.export_kind == ImportOrExportKind::Type;
+                            let members = export
+                                .specifiers
+                                .iter()
+                                .map(|member| {
+                                    let imported = module_export_name(&member.local).ok_or_else(|| {
+                                        ProjectInventoryError::new(
+                                            "classified source re-export lost its local name",
+                                        )
+                                    })?;
+                                    let exported =
+                                        module_export_name(&member.exported).ok_or_else(|| {
+                                            ProjectInventoryError::new(
+                                                "classified source re-export lost its exported name",
+                                            )
+                                        })?;
+                                    Ok(RawSourceReexportMember {
+                                        imported: imported.to_owned(),
+                                        exported: exported.to_owned(),
+                                        span: Span::from_oxc(member.span),
+                                        type_only: outer_type_only
+                                            || member.export_kind == ImportOrExportKind::Type,
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, ProjectInventoryError>>()?;
+                            raw_source_reexports.push(RawSourceReexportDeclaration {
+                                owner_module: index,
+                                source,
+                                module_specifier: specifier.to_owned(),
+                                declaration_span: Span::from_oxc(export.span),
+                                source_span: Span::from_oxc(source_literal.span),
+                                owner_start: export.span.start,
+                                members,
+                            });
+                        }
+                    }
                     record_unsupported_module_form(
                         input,
                         &line_index,
@@ -1026,6 +1394,46 @@ fn account_project_modules(
         });
     }
 
+    let source_reexports = if source_reexport_accounting.collects_evidence() {
+        let mut combined_edges = raw_imports
+            .iter()
+            .map(|imports| {
+                imports
+                    .iter()
+                    .filter_map(|import| match import.source {
+                        RawImportSource::Resolved(target) => Some(target),
+                        RawImportSource::Missing => None,
+                    })
+                    .collect::<BTreeSet<_>>()
+            })
+            .collect::<Vec<_>>();
+        for (edges, reexports) in combined_edges.iter_mut().zip(&reexport_edges) {
+            edges.extend(reexports);
+        }
+        let first_cycle = first_module_cycle(inputs, &combined_edges);
+        let namespace_provenance = source_reexport_namespace_provenance(
+            programs,
+            &raw_imports,
+            &raw_source_reexports,
+            &reexport_edges,
+            first_cycle.is_some(),
+        );
+        PendingSourceReexports {
+            declarations: raw_source_reexports,
+            dependency_edges: reexport_edges,
+            namespace_provenance,
+            first_cycle,
+        }
+    } else {
+        PendingSourceReexports {
+            declarations: Vec::new(),
+            dependency_edges: vec![BTreeSet::new(); inputs.len()],
+            namespace_provenance: BTreeMap::new(),
+            first_cycle: None,
+        }
+    };
+    source_reexports.validate(inputs.len())?;
+
     Ok(AccountedModulePlan {
         inventory: ProjectModuleInventory {
             resolutions: sorted_identities(resolution_identities),
@@ -1035,7 +1443,479 @@ fn account_project_modules(
         },
         paths,
         raw_imports,
+        _source_reexports: source_reexports,
     })
+}
+
+/// Collect WU2 evidence without changing any production project route.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn collect_admitted_source_reexports_for_test(
+    inputs: Vec<FileInput>,
+    mode: ProjectResolutionMode,
+) -> Result<SourceReexportCollectionForTest, ProjectInventoryError> {
+    let allocators = (0..inputs.len())
+        .map(|_| Allocator::default())
+        .collect::<Vec<_>>();
+    let parsed = inputs
+        .iter()
+        .zip(&allocators)
+        .map(|(input, allocator)| Parser::new(allocator, &input.source, SourceType::ts()).parse())
+        .collect::<Vec<_>>();
+    if parsed
+        .iter()
+        .any(|result| result.panicked || !result.diagnostics.is_empty())
+    {
+        return Err(ProjectInventoryError::new(
+            "source re-export test collector requires clean TypeScript input",
+        ));
+    }
+    let programs = parsed
+        .iter()
+        .map(|result| &result.program)
+        .collect::<Vec<_>>();
+    let AccountedModulePlan {
+        paths,
+        raw_imports,
+        _source_reexports: source_reexports,
+        ..
+    } = account_project_modules(
+        &inputs,
+        &programs,
+        &mode,
+        SourceReexportAccounting::CollectEvidence,
+    )?;
+    let order = dependency_order_with_reexports(&raw_imports, &source_reexports.dependency_edges);
+    let source_keys = stable_source_keys(&paths);
+    let mut ordered_index = vec![0usize; inputs.len()];
+    for (position, original) in order.iter().copied().enumerate() {
+        let Some(slot) = ordered_index.get_mut(original) else {
+            return Err(ProjectInventoryError::new(
+                "source re-export order escaped configured roots",
+            ));
+        };
+        *slot = position;
+    }
+
+    let mut declaration_ordinals = BTreeMap::<usize, u32>::new();
+    let mut admitted = Vec::new();
+    let mut resolutions = Vec::new();
+    let mut blocked_notices = Vec::new();
+    let cycle_blocks_product = source_reexports.first_cycle.is_some();
+    for declaration in &source_reexports.declarations {
+        let ordinal = declaration_ordinals
+            .entry(declaration.owner_module)
+            .or_default();
+        let owner = inputs.get(declaration.owner_module).ok_or_else(|| {
+            ProjectInventoryError::new("source re-export owner escaped configured roots")
+        })?;
+        let id = SourceReexportDeclarationId {
+            owner_source_key: source_keys
+                .get(declaration.owner_module)
+                .copied()
+                .ok_or_else(|| {
+                    ProjectInventoryError::new(
+                        "source re-export owner lost its stable source identity",
+                    )
+                })?,
+            normalized_owner_path: normalized_display_name(&owner.name),
+            declaration_start: declaration.owner_start,
+            source_ordinal: *ordinal,
+        };
+        *ordinal = ordinal.checked_add(1).ok_or_else(|| {
+            ProjectInventoryError::new("source re-export declaration identity overflow")
+        })?;
+        let line_index = crate::span::LineIndex::new(&owner.source);
+        let source = match declaration.source {
+            RawImportSource::Missing => {
+                resolutions.push(LocatedIdentity {
+                    path: normalized_display_name(&owner.name),
+                    start: declaration.owner_start,
+                    identity: format!(
+                        "{} source-reexport {} -> unresolved",
+                        source_location(owner, &line_index, declaration.owner_start),
+                        declaration.module_specifier
+                    ),
+                });
+                AdmittedSourceReexportSource::Missing
+            }
+            RawImportSource::Resolved(target) => {
+                let target_name = inputs
+                    .get(target)
+                    .map_or("<invalid-root>", |input| input.name.as_str());
+                resolutions.push(LocatedIdentity {
+                    path: normalized_display_name(&owner.name),
+                    start: declaration.owner_start,
+                    identity: format!(
+                        "{} source-reexport {} -> {}",
+                        source_location(owner, &line_index, declaration.owner_start),
+                        declaration.module_specifier,
+                        normalized_display_name(target_name)
+                    ),
+                });
+                let mut blocked = false;
+                for member in &declaration.members {
+                    let provenance = source_reexports
+                        .namespace_provenance
+                        .get(&(target, member.imported.clone()))
+                        .copied()
+                        .unwrap_or(NamespaceProvenance::PresentOrUnknown);
+                    if provenance == NamespaceProvenance::PresentOrUnknown {
+                        blocked = true;
+                        blocked_notices.push(LocatedIdentity {
+                            path: normalized_display_name(&owner.name),
+                            start: declaration.owner_start,
+                            identity: format!(
+                                "unsupported-source-reexport-namespace-provenance {} {} {}",
+                                source_location(owner, &line_index, declaration.owner_start),
+                                declaration.module_specifier,
+                                member.exported
+                            ),
+                        });
+                    }
+                }
+                if blocked {
+                    continue;
+                }
+                let Some(target) = ordered_index.get(target).copied() else {
+                    return Err(ProjectInventoryError::new(
+                        "source re-export target escaped dependency order",
+                    ));
+                };
+                AdmittedSourceReexportSource::Resolved(target)
+            }
+        };
+        if cycle_blocks_product {
+            continue;
+        }
+        let owner_module = ordered_index
+            .get(declaration.owner_module)
+            .copied()
+            .ok_or_else(|| {
+                ProjectInventoryError::new("source re-export owner escaped dependency order")
+            })?;
+        let members = declaration
+            .members
+            .iter()
+            .map(|member| AdmittedSourceReexportMember {
+                imported: member.imported.clone(),
+                exported: member.exported.clone(),
+                span: member.span,
+                type_only: member.type_only,
+                namespace_provenance: match source {
+                    AdmittedSourceReexportSource::Resolved(_) => {
+                        Some(NamespaceProvenance::ProvenAbsent)
+                    }
+                    AdmittedSourceReexportSource::Missing => None,
+                },
+            })
+            .collect();
+        admitted.push((
+            normalized_display_name(&owner.name),
+            AdmittedSourceReexportDeclaration {
+                id,
+                owner_module,
+                source,
+                module_specifier: declaration.module_specifier.clone(),
+                declaration_span: declaration.declaration_span,
+                source_span: declaration.source_span,
+                owner_start: declaration.owner_start,
+                members,
+            },
+        ));
+    }
+
+    admitted
+        .sort_by(|left, right| (&left.0, left.1.owner_start).cmp(&(&right.0, right.1.owner_start)));
+    let admitted = admitted
+        .into_iter()
+        .map(|(_, declaration)| declaration)
+        .collect();
+    let dependency_order = order
+        .iter()
+        .map(|original| normalized_display_name(&inputs[*original].name))
+        .collect();
+    let dependency_edge_count = source_reexports
+        .declarations
+        .iter()
+        .filter(|declaration| matches!(declaration.source, RawImportSource::Resolved(_)))
+        .count();
+    Ok(SourceReexportCollectionForTest {
+        admitted: AdmittedSourceReexports {
+            declarations: admitted,
+        },
+        dependency_order,
+        dependency_edge_count,
+        resolutions: sorted_identities(resolutions),
+        blocked_notices: sorted_identities(blocked_notices),
+        first_cycle: source_reexports.first_cycle,
+    })
+}
+
+fn is_admitted_source_reexport_specifier(specifier: &str) -> bool {
+    is_local_relative(specifier) && !specifier.contains(['?', '#']) && !specifier.ends_with(".ts")
+}
+
+fn source_reexport_namespace_provenance(
+    programs: &[&Program<'_>],
+    raw_imports: &[Vec<RawImport>],
+    source_reexports: &[RawSourceReexportDeclaration],
+    reexport_edges: &[BTreeSet<usize>],
+    has_cycle: bool,
+) -> BTreeMap<(usize, String), NamespaceProvenance> {
+    let requested = source_reexports
+        .iter()
+        .flat_map(|declaration| {
+            declaration.members.iter().filter_map(move |member| {
+                let RawImportSource::Resolved(target) = declaration.source else {
+                    return None;
+                };
+                Some((target, member.imported.clone()))
+            })
+        })
+        .collect::<Vec<_>>();
+    let globally_open = has_cycle
+        || programs.iter().any(|program| {
+            program.body.iter().any(|statement| {
+                matches!(
+                    statement,
+                    Statement::TSModuleDeclaration(declaration)
+                        if matches!(declaration.id, TSModuleDeclarationName::StringLiteral(_))
+                ) || matches!(
+                    statement,
+                    Statement::ExportNamedDeclaration(export)
+                        if matches!(
+                            export.declaration,
+                            Some(Declaration::TSModuleDeclaration(ref declaration))
+                                if matches!(
+                                    declaration.id,
+                                    TSModuleDeclarationName::StringLiteral(_)
+                                )
+                        )
+                )
+            })
+        });
+    if globally_open {
+        return requested
+            .into_iter()
+            .map(|key| (key, NamespaceProvenance::PresentOrUnknown))
+            .collect();
+    }
+
+    let order = dependency_order_with_reexports(raw_imports, reexport_edges);
+    let mut module_exports = vec![BTreeMap::<String, NamespaceProvenance>::new(); programs.len()];
+    let mut module_complete = vec![true; programs.len()];
+    for module in order {
+        let Some(program) = programs.get(module) else {
+            continue;
+        };
+        let mut locals = BTreeMap::new();
+        for import in raw_imports.get(module).into_iter().flatten() {
+            let provenance = namespace_from_dependency(
+                import.source,
+                &import.imported,
+                &module_exports,
+                &module_complete,
+            );
+            join_namespace(&mut locals, &import.local, provenance);
+        }
+        for statement in &program.body {
+            if let Some(declaration) = statement.as_declaration() {
+                declaration_namespace_names(declaration, |name, provenance| {
+                    join_namespace(&mut locals, name, provenance);
+                });
+            }
+            if let Statement::ExportNamedDeclaration(export) = statement {
+                if let Some(declaration) = &export.declaration {
+                    declaration_namespace_names(declaration, |name, provenance| {
+                        join_namespace(&mut locals, name, provenance);
+                    });
+                }
+            }
+        }
+
+        let mut exports = BTreeMap::new();
+        for statement in &program.body {
+            match statement {
+                Statement::ExportNamedDeclaration(export) => {
+                    if let Some(declaration) = &export.declaration {
+                        let enumerable = declaration_namespace_names(declaration, |name, _| {
+                            let provenance = locals
+                                .get(name)
+                                .copied()
+                                .unwrap_or(NamespaceProvenance::PresentOrUnknown);
+                            join_namespace(&mut exports, name, provenance);
+                        });
+                        module_complete[module] &= enumerable;
+                    } else if export.source.is_none() {
+                        for specifier in &export.specifiers {
+                            let (Some(local), Some(exported)) = (
+                                module_export_name(&specifier.local),
+                                module_export_name(&specifier.exported),
+                            ) else {
+                                module_complete[module] = false;
+                                continue;
+                            };
+                            let provenance = locals
+                                .get(local)
+                                .copied()
+                                .unwrap_or(NamespaceProvenance::PresentOrUnknown);
+                            join_namespace(&mut exports, exported, provenance);
+                        }
+                    } else if !export.specifiers.is_empty()
+                        && !source_reexports.iter().any(|declaration| {
+                            declaration.owner_module == module
+                                && declaration.owner_start == export.span.start
+                        })
+                    {
+                        module_complete[module] = false;
+                    }
+                }
+                Statement::ExportAllDeclaration(_)
+                | Statement::ExportDefaultDeclaration(_)
+                | Statement::TSExportAssignment(_)
+                | Statement::TSNamespaceExportDeclaration(_) => {
+                    module_complete[module] = false;
+                }
+                _ => {}
+            }
+        }
+        for declaration in source_reexports
+            .iter()
+            .filter(|declaration| declaration.owner_module == module)
+        {
+            for member in &declaration.members {
+                let provenance = namespace_from_dependency(
+                    declaration.source,
+                    &member.imported,
+                    &module_exports,
+                    &module_complete,
+                );
+                join_namespace(&mut exports, &member.exported, provenance);
+            }
+        }
+        if !module_complete[module] {
+            for provenance in exports.values_mut() {
+                *provenance = NamespaceProvenance::PresentOrUnknown;
+            }
+        }
+        module_exports[module] = exports;
+    }
+
+    requested
+        .into_iter()
+        .map(|(module, name)| {
+            let provenance = module_exports
+                .get(module)
+                .and_then(|exports| exports.get(&name))
+                .copied()
+                .unwrap_or_else(|| {
+                    if module_complete.get(module).copied().unwrap_or(false) {
+                        NamespaceProvenance::ProvenAbsent
+                    } else {
+                        NamespaceProvenance::PresentOrUnknown
+                    }
+                });
+            ((module, name), provenance)
+        })
+        .collect()
+}
+
+fn namespace_from_dependency(
+    source: RawImportSource,
+    name: &str,
+    module_exports: &[BTreeMap<String, NamespaceProvenance>],
+    module_complete: &[bool],
+) -> NamespaceProvenance {
+    let RawImportSource::Resolved(target) = source else {
+        return NamespaceProvenance::PresentOrUnknown;
+    };
+    module_exports
+        .get(target)
+        .and_then(|exports| exports.get(name))
+        .copied()
+        .unwrap_or_else(|| {
+            if module_complete.get(target).copied().unwrap_or(false) {
+                NamespaceProvenance::ProvenAbsent
+            } else {
+                NamespaceProvenance::PresentOrUnknown
+            }
+        })
+}
+
+fn join_namespace(
+    names: &mut BTreeMap<String, NamespaceProvenance>,
+    name: &str,
+    incoming: NamespaceProvenance,
+) {
+    names
+        .entry(name.to_owned())
+        .and_modify(|current| {
+            if incoming == NamespaceProvenance::PresentOrUnknown {
+                *current = NamespaceProvenance::PresentOrUnknown;
+            }
+        })
+        .or_insert(incoming);
+}
+
+fn declaration_namespace_names(
+    declaration: &Declaration<'_>,
+    mut record: impl FnMut(&str, NamespaceProvenance),
+) -> bool {
+    match declaration {
+        Declaration::VariableDeclaration(declaration) => {
+            let mut enumerable = true;
+            for declarator in &declaration.declarations {
+                if let BindingPattern::BindingIdentifier(identifier) = &declarator.id {
+                    record(identifier.name.as_str(), NamespaceProvenance::ProvenAbsent);
+                } else {
+                    enumerable = false;
+                }
+            }
+            enumerable
+        }
+        Declaration::FunctionDeclaration(declaration) => {
+            declaration.id.as_ref().is_some_and(|id| {
+                record(id.name.as_str(), NamespaceProvenance::ProvenAbsent);
+                true
+            })
+        }
+        Declaration::ClassDeclaration(declaration) => declaration.id.as_ref().is_some_and(|id| {
+            record(id.name.as_str(), NamespaceProvenance::ProvenAbsent);
+            true
+        }),
+        Declaration::TSTypeAliasDeclaration(declaration) => {
+            record(
+                declaration.id.name.as_str(),
+                NamespaceProvenance::ProvenAbsent,
+            );
+            true
+        }
+        Declaration::TSInterfaceDeclaration(declaration) => {
+            record(
+                declaration.id.name.as_str(),
+                NamespaceProvenance::ProvenAbsent,
+            );
+            true
+        }
+        Declaration::TSEnumDeclaration(declaration) => {
+            record(
+                declaration.id.name.as_str(),
+                NamespaceProvenance::ProvenAbsent,
+            );
+            true
+        }
+        Declaration::TSModuleDeclaration(declaration) => {
+            let TSModuleDeclarationName::Identifier(identifier) = &declaration.id else {
+                return false;
+            };
+            record(
+                identifier.name.as_str(),
+                NamespaceProvenance::PresentOrUnknown,
+            );
+            true
+        }
+        Declaration::TSGlobalDeclaration(_) | Declaration::TSImportEqualsDeclaration(_) => false,
+    }
 }
 
 fn classify_import_declaration(
@@ -1433,10 +2313,17 @@ fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast 
 }
 
 fn dependency_order(imports: &[Vec<RawImport>]) -> Vec<usize> {
+    dependency_order_with_reexports(imports, &[])
+}
+
+fn dependency_order_with_reexports(
+    imports: &[Vec<RawImport>],
+    reexport_edges: &[BTreeSet<usize>],
+) -> Vec<usize> {
     let mut state = vec![VisitState::Unseen; imports.len()];
     let mut order = Vec::with_capacity(imports.len());
     for index in 0..imports.len() {
-        visit(index, imports, &mut state, &mut order);
+        visit(index, imports, reexport_edges, &mut state, &mut order);
     }
     order
 }
@@ -1451,6 +2338,7 @@ enum VisitState {
 fn visit(
     index: usize,
     imports: &[Vec<RawImport>],
+    reexport_edges: &[BTreeSet<usize>],
     state: &mut [VisitState],
     order: &mut Vec<usize>,
 ) {
@@ -1464,8 +2352,13 @@ fn visit(
     if let Some(module_imports) = imports.get(index) {
         for import in module_imports {
             if let RawImportSource::Resolved(dep) = import.source {
-                visit(dep, imports, state, order);
+                visit(dep, imports, reexport_edges, state, order);
             }
+        }
+    }
+    if let Some(targets) = reexport_edges.get(index) {
+        for target in targets {
+            visit(*target, imports, reexport_edges, state, order);
         }
     }
     if let Some(slot) = state.get_mut(index) {
@@ -1564,5 +2457,354 @@ mod auxiliary_parse_work_tests {
                 source_reparses: 1,
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod source_reexport_collection_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
+
+    struct TestProject {
+        directory: PathBuf,
+    }
+
+    impl TestProject {
+        fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "typokat-frontend-source-reexports-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&directory)?;
+            Ok(Self { directory })
+        }
+
+        fn write(&self, name: &str, source: &str) -> Result<PathBuf, std::io::Error> {
+            let path = self.directory.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, source)?;
+            Ok(path)
+        }
+
+        fn collect(
+            files: &[(&str, &str)],
+        ) -> Result<SourceReexportCollectionForTest, Box<dyn std::error::Error>> {
+            let physical = files
+                .iter()
+                .map(|(name, source)| (*name, *name, *source))
+                .collect::<Vec<_>>();
+            Self::collect_physical(&physical)
+        }
+
+        fn collect_physical(
+            files: &[(&str, &str, &str)],
+        ) -> Result<SourceReexportCollectionForTest, Box<dyn std::error::Error>> {
+            let project = Self::new()?;
+            let mut inputs = Vec::new();
+            let mut roots = Vec::new();
+            for (identity, physical_name, source) in files {
+                let path = project.write(physical_name, source)?;
+                inputs.push(FileInput {
+                    name: (*identity).to_owned(),
+                    source: (*source).to_owned(),
+                });
+                roots.push(ProjectRoot {
+                    identity: (*identity).to_owned(),
+                    path,
+                    exists: true,
+                });
+            }
+            let result = collect_admitted_source_reexports_for_test(
+                inputs,
+                ProjectResolutionMode::BundlerProject {
+                    project_directory: project.directory.clone(),
+                    roots,
+                },
+            )?;
+            drop(project);
+            Ok(result)
+        }
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn source_slice(source: &str, span: Span) -> Option<&str> {
+        let start = usize::try_from(span.start).ok()?;
+        let end = usize::try_from(span.end).ok()?;
+        source.get(start..end)
+    }
+
+    #[test]
+    fn retains_alias_type_only_spans_and_stable_declaration_identity(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = "export const value = 1;\nexport interface Shape {}\n";
+        let barrel = "export { value as renamed, type Shape as InlineShape } from \"./source.js\";\nexport type { Shape as OuterShape } from \"./source.js\";\n";
+        let normal = TestProject::collect(&[("barrel.ts", barrel), ("source.ts", source)])?;
+        let reverse = TestProject::collect(&[("source.ts", source), ("barrel.ts", barrel)])?;
+
+        assert_eq!(normal.admitted(), reverse.admitted());
+        assert_eq!(normal.dependency_order(), ["source.ts", "barrel.ts"]);
+        assert_eq!(normal.dependency_edge_count(), 2);
+        assert_eq!(normal.admitted().declarations().len(), 2);
+        let first = &normal.admitted().declarations()[0];
+        let second = &normal.admitted().declarations()[1];
+        assert_eq!(first.id().normalized_owner_path(), "barrel.ts");
+        assert_eq!(first.id().source_ordinal(), 0);
+        assert_eq!(second.id().source_ordinal(), 1);
+        assert_eq!(first.owner_start(), 0);
+        assert_eq!(
+            source_slice(barrel, first.source_span()),
+            Some("\"./source.js\"")
+        );
+        assert_eq!(
+            source_slice(barrel, first.declaration_span()),
+            barrel.lines().next()
+        );
+        assert_eq!(first.members().len(), 2);
+        assert_eq!(first.members()[0].imported(), "value");
+        assert_eq!(first.members()[0].exported(), "renamed");
+        assert!(!first.members()[0].is_type_only());
+        assert_eq!(first.members()[1].imported(), "Shape");
+        assert_eq!(first.members()[1].exported(), "InlineShape");
+        assert!(first.members()[1].is_type_only());
+        assert!(second.members()[0].is_type_only());
+        assert_eq!(
+            first.members()[0].namespace_provenance(),
+            Some(NamespaceProvenance::ProvenAbsent)
+        );
+        assert_eq!(
+            source_slice(barrel, first.members()[0].span()),
+            Some("value as renamed")
+        );
+
+        let left = "export { value } from \"./left-missing.js\";\n";
+        let right = "export { value } from \"./right-missing.js\";\n";
+        let duplicate_names = TestProject::collect_physical(&[
+            ("same.ts", "left/same.ts", left),
+            ("same.ts", "right/same.ts", right),
+        ])?;
+        let duplicate_names_reversed = TestProject::collect_physical(&[
+            ("same.ts", "right/same.ts", right),
+            ("same.ts", "left/same.ts", left),
+        ])?;
+        let ids_by_specifier = |collection: &SourceReexportCollectionForTest| {
+            collection
+                .admitted()
+                .declarations()
+                .iter()
+                .map(|declaration| {
+                    (
+                        declaration.module_specifier().to_owned(),
+                        declaration.id().clone(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let ids = ids_by_specifier(&duplicate_names);
+        assert_eq!(ids, ids_by_specifier(&duplicate_names_reversed));
+        assert_ne!(ids.get("./left-missing.js"), ids.get("./right-missing.js"));
+
+        #[cfg(unix)]
+        {
+            let backslash = "export { value } from \"./backslash-missing.js\";\n";
+            let slash = "export { value } from \"./slash-missing.js\";\n";
+            let display_collision = TestProject::collect_physical(&[
+                ("a\\b.ts", "a\\b.ts", backslash),
+                ("a/b.ts", "a/b.ts", slash),
+            ])?;
+            let declarations = display_collision.admitted().declarations();
+            assert_eq!(declarations.len(), 2);
+            assert_eq!(
+                declarations[0].id().normalized_owner_path(),
+                declarations[1].id().normalized_owner_path()
+            );
+            assert_ne!(
+                declarations[0].id().owner_source_key(),
+                declarations[1].id().owner_source_key()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn closed_absence_missing_and_empty_are_distinct() -> Result<(), Box<dyn std::error::Error>> {
+        let closed = TestProject::collect(&[
+            ("barrel.ts", "export { absent } from \"./source.js\";\n"),
+            ("source.ts", "export const other = 1;\n"),
+        ])?;
+        assert_eq!(closed.admitted().declarations().len(), 1);
+        assert_eq!(
+            closed.admitted().declarations()[0].members()[0].namespace_provenance(),
+            Some(NamespaceProvenance::ProvenAbsent)
+        );
+
+        let barrel = "export { alpha, beta as renamed } from \"./missing.js\";\n";
+        let result = TestProject::collect(&[("barrel.ts", barrel)])?;
+
+        assert_eq!(result.dependency_edge_count(), 0);
+        assert_eq!(result.resolutions().len(), 1);
+        assert!(result.resolutions()[0].ends_with("source-reexport ./missing.js -> unresolved"));
+        let declarations = result.admitted().declarations();
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(
+            declarations[0].source(),
+            AdmittedSourceReexportSource::Missing
+        );
+        assert_eq!(declarations[0].members().len(), 2);
+        assert!(declarations[0]
+            .members()
+            .iter()
+            .all(|member| member.namespace_provenance().is_none()));
+
+        let source = "export const present = 1;\n";
+        let barrel = "export {} from \"./source.js\";\nexport type {} from \"./missing.js\";\n";
+        let empty = TestProject::collect(&[("barrel.ts", barrel), ("source.ts", source)])?;
+
+        assert!(empty.admitted().is_empty());
+        assert!(empty.resolutions().is_empty());
+        assert_eq!(empty.dependency_edge_count(), 0);
+        assert!(empty.first_cycle().is_none());
+
+        let malformed = TestProject::new()?;
+        let barrel_source = "export { value } from \"./pkg\";\n";
+        let barrel_path = malformed.write("barrel.ts", barrel_source)?;
+        malformed.write("pkg/package.json", "{")?;
+        let inputs = vec![FileInput {
+            name: "barrel.ts".to_owned(),
+            source: barrel_source.to_owned(),
+        }];
+        let mode = ProjectResolutionMode::BundlerProject {
+            project_directory: malformed.directory.clone(),
+            roots: vec![ProjectRoot {
+                identity: "barrel.ts".to_owned(),
+                path: barrel_path,
+                exists: true,
+            }],
+        };
+        let frozen = run_clean_project_frontend_with_deferred_auxiliary(
+            inputs.clone(),
+            mode.clone(),
+            || Ok::<_, std::convert::Infallible>(Vec::new()),
+            |_, _, _, _, _| (),
+        );
+        let accounted = match frozen.product {
+            Ok(accounted) => accounted,
+            Err(_) => {
+                return Err(std::io::Error::other(
+                    "frozen source re-export route invoked the resolver",
+                )
+                .into());
+            }
+        };
+        assert_eq!(
+            accounted.inventory.resolutions,
+            ["barrel.ts:1:1 source-reexport ./pkg -> unsupported"]
+        );
+        assert_eq!(
+            accounted.inventory.notices,
+            ["unsupported-module-form source-reexport barrel.ts:1:1 ./pkg"]
+        );
+        assert!(accounted.product.is_none());
+        let evidence_error = match collect_admitted_source_reexports_for_test(inputs, mode) {
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "evidence collector accepted malformed package metadata",
+                )
+                .into());
+            }
+            Err(error) => error,
+        };
+        assert!(evidence_error
+            .to_string()
+            .contains("Bundler resolver failed for ./pkg"));
+        Ok(())
+    }
+
+    #[test]
+    fn admits_only_proven_namespace_absence_and_propagates_unknown_chains(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = "export class Plain {}\nexport class Merged {}\nexport namespace Merged {}\nfunction callable() {}\nnamespace callable {}\nexport { callable };\n";
+        let first = "export { Plain } from \"./source.js\";\nexport { Merged } from \"./source.js\";\nexport { callable as First } from \"./source.js\";\n";
+        let second = "export { First as Final } from \"./first.js\";\nexport { absent } from \"./source.js\";\n";
+        let result = TestProject::collect(&[
+            ("second.ts", second),
+            ("first.ts", first),
+            ("source.ts", source),
+        ])?;
+
+        let admitted = result.admitted().declarations();
+        assert_eq!(admitted.len(), 2);
+        assert_eq!(admitted[0].members()[0].exported(), "Plain");
+        assert_eq!(admitted[1].members()[0].exported(), "absent");
+        assert_eq!(result.blocked_notices().len(), 3);
+        assert!(result
+            .blocked_notices()
+            .iter()
+            .any(|notice| notice.ends_with("./source.js Merged")));
+        assert!(result
+            .blocked_notices()
+            .iter()
+            .any(|notice| notice.ends_with("./source.js First")));
+        assert!(result
+            .blocked_notices()
+            .iter()
+            .any(|notice| notice.ends_with("./first.js Final")));
+
+        let augmented = TestProject::collect(&[
+            ("barrel.ts", "export { C } from \"./source.js\";\n"),
+            ("source.ts", "export class C {}\n"),
+            (
+                "augment.ts",
+                "export {};\ndeclare module \"./source\" { namespace C {} }\n",
+            ),
+        ])?;
+        assert!(augmented.admitted().is_empty());
+        assert_eq!(augmented.blocked_notices().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn combined_graph_accounts_for_reexport_only_and_mixed_cycles(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let chain = TestProject::collect(&[
+            ("b.ts", "export { middle as final } from \"./a.js\";\n"),
+            ("source.ts", "export const value = 1;\n"),
+            ("a.ts", "export { value as middle } from \"./source.js\";\n"),
+        ])?;
+        assert_eq!(chain.dependency_order(), ["source.ts", "a.ts", "b.ts"]);
+        assert_eq!(chain.dependency_edge_count(), 2);
+
+        let reexport_cycle = TestProject::collect(&[
+            (
+                "a.ts",
+                "export const x = 1;\nexport { y } from \"./b.js\";\n",
+            ),
+            ("b.ts", "export { x as y } from \"./a.js\";\n"),
+        ])?;
+        let cycle = reexport_cycle.first_cycle().map(|items| items.join(" -> "));
+        assert_eq!(cycle.as_deref(), Some("a.ts -> b.ts -> a.ts"));
+        assert_eq!(reexport_cycle.dependency_edge_count(), 2);
+        assert!(reexport_cycle.admitted().is_empty());
+
+        let mixed_cycle = TestProject::collect(&[
+            (
+                "a.ts",
+                "import { b } from \"./b.js\";\nexport const a = b;\n",
+            ),
+            ("b.ts", "export { a as b } from \"./a.js\";\n"),
+        ])?;
+        let cycle = mixed_cycle.first_cycle().map(|items| items.join(" -> "));
+        assert_eq!(cycle.as_deref(), Some("a.ts -> b.ts -> a.ts"));
+        assert!(mixed_cycle.admitted().is_empty());
+        Ok(())
     }
 }
