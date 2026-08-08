@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "files": [
+    "duplicate_target.ts",
+    "pair_cc.ts",
+    "pair_ce.ts",
+    "pair_cf.ts",
+    "pair_cl.ts",
+    "pair_cr.ts",
+    "pair_ec.ts",
+    "pair_ee.ts",
+    "pair_ef.ts",
+    "pair_el.ts",
+    "pair_er.ts",
+    "pair_fc.ts",
+    "pair_fe.ts",
+    "pair_ff.ts",
+    "pair_fl.ts",
+    "pair_fr.ts",
+    "pair_lc.ts",
+    "pair_le.ts",
+    "pair_lf.ts",
+    "pair_ll.ts",
+    "pair_lr.ts",
+    "pair_rc.ts",
+    "pair_re.ts",
+    "pair_rf.ts",
+    "pair_rl.ts",
+    "pair_rr.ts"
+  ]
+}

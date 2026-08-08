@@ -62,6 +62,7 @@ EOF spans.
 
 | Code | Meaning |
 |---|---|
+| `TK1192` | Resolved module has no default export (narrow Bundler default-import exception) |
 | `TK1314` | `export as namespace` appears outside a module |
 | `TK1315` | `export as namespace` appears in a non-declaration source file |
 | `TK2300` | Duplicate identifier across incompatible merged members |
@@ -287,6 +288,25 @@ test owns Bundler summaries and the separate explicit and legacy route baselines
 also corrects the planned empty-list rule: `export {} from` a missing module is clean and emits no
 `TS2307` in TypeScript 6.0.3. The production Bundler route admits the namespace-free acyclic rows;
 explicit and legacy routes remain frozen. Export attributes retain their exact exit-2 baseline.
+
+### Default module slot contract (backlog 15)
+
+`b15_default_module_slots/` is a permanently disabled raw-conformance corpus. Its machine contract
+records 31 projects and both root orders against pinned `tsc 6.0.3`. The admitted rows cover named
+and anonymous default classes and functions, literal/object/arrow expressions, namespace-free
+identifier projection, direct and type-only default imports, lexical visibility, distinct
+default/named slots, missing modules/defaults, and both wrong-space barriers. The expression-owned
+error row proves that a default expression is checked exactly once.
+
+Deferred rows stay explicit non-clean outcomes: default interfaces; namespace-bearing producers;
+local export-list and named-import spellings of `default`; source re-exports involving a default
+slot; and mixed default imports. The mixed named form retains two named specifiers, including one
+inline type-only member. Duplicate production uses five real publication paths — direct class,
+direct function, default expression, local export-list default, and source export-to-default — with
+all 15 unordered pairs plus the 10 reverse lexical orders. Exact `TS2528` and related duplicate
+diagnostic parity is not required. Star/namespace forms, cycles, packages, and CommonJS keep their
+existing exact identities in the B72 contract; this corpus references those controls instead of
+copying them. The dedicated integration test remains ignored until the atomic production cutover.
 
 ## Fixture routing
 

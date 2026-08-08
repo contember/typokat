@@ -1,0 +1,2717 @@
+{
+  "schema": 1,
+  "oracle": {
+    "binary": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc",
+    "version": "Version 6.0.3",
+    "flags": [
+      "--pretty",
+      "false",
+      "--strict",
+      "--noEmit",
+      "--module",
+      "esnext",
+      "--moduleResolution",
+      "bundler"
+    ],
+    "normalization": "replace the absolute case directory with <case:CASE_ID>",
+    "stderr_contract": "empty for all retained runs"
+  },
+  "summary": {
+    "case_count": 31,
+    "run_count": 62,
+    "root_order_byte_identical_count": 31,
+    "admitted_case_count": 17,
+    "deferred_control_case_count": 14,
+    "duplicate_producer_kind_count": 5,
+    "duplicate_unordered_pair_count": 15,
+    "duplicate_reverse_order_count": 10
+  },
+  "classifications": {
+    "admitted": [
+      "01_named_class",
+      "02_anonymous_class",
+      "03_named_function",
+      "04_anonymous_function",
+      "05_literal_expression",
+      "06_object_expression",
+      "07_arrow_expression",
+      "07b_expression_owned_diagnostic",
+      "08_identifier_value",
+      "09_identifier_class",
+      "09b_identifier_function",
+      "10_type_only_default_import",
+      "10b_type_only_value_only_default",
+      "11_missing_physical_target",
+      "12_missing_resolved_default",
+      "13_default_named_isolation",
+      "14_value_only_wrong_type"
+    ],
+    "namespace_provenance_controls": [
+      "15_named_default_class_namespace",
+      "16_named_default_function_namespace",
+      "17_namespace_identifier_default",
+      "18_class_namespace_identifier_default",
+      "19_function_namespace_identifier_default"
+    ],
+    "deferred_syntax_controls": [
+      "14b_default_interface_unsupported",
+      "20_local_export_list_default",
+      "21_named_default_import_syntax",
+      "22a_source_default_as_named",
+      "22b_source_named_as_default",
+      "22c_source_default_as_default",
+      "23_mixed_default_named_import",
+      "24_mixed_default_namespace_import"
+    ],
+    "duplicate_default_controls": [
+      "25_duplicate_default_matrix"
+    ]
+  },
+  "duplicate_default_matrix": {
+    "producer_kinds": {
+      "C": "direct-class",
+      "F": "direct-function",
+      "E": "default-expression",
+      "L": "local-export-list-default",
+      "R": "source-export-to-default"
+    },
+    "ordered_pairs": [
+      "CC",
+      "CF",
+      "CE",
+      "CL",
+      "CR",
+      "FF",
+      "FE",
+      "FL",
+      "FR",
+      "EE",
+      "EL",
+      "ER",
+      "LL",
+      "LR",
+      "RR",
+      "FC",
+      "EC",
+      "LC",
+      "RC",
+      "EF",
+      "LF",
+      "RF",
+      "LE",
+      "RE",
+      "RL"
+    ],
+    "unordered_pairs": [
+      "CC",
+      "CF",
+      "CE",
+      "CL",
+      "CR",
+      "FF",
+      "FE",
+      "FL",
+      "FR",
+      "EE",
+      "EL",
+      "ER",
+      "LL",
+      "LR",
+      "RR"
+    ],
+    "reverse_order_controls": [
+      "FC",
+      "EC",
+      "LC",
+      "RC",
+      "EF",
+      "LF",
+      "RF",
+      "LE",
+      "RE",
+      "RL"
+    ],
+    "diagnostic_parity": "tsc 6.0.3 diagnostics are oracle evidence only; TK2528/TS2323/TS2393/TS2484/TS2813/TS2814 parity is not required"
+  },
+  "frozen_b72_contract": {
+    "path": "../b72_bundler_project_tracer/contract.json",
+    "case_ids": [
+      "unsupported_star_reexport",
+      "unsupported_namespace_import",
+      "unsupported_namespace_reexport",
+      "unsupported_cycle",
+      "unsupported_bare_specifier",
+      "unsupported_export_assignment",
+      "unsupported_import_equals"
+    ]
+  },
+  "route_baseline": {
+    "case_id": "01_named_class",
+    "orders": [
+      [
+        "source.ts",
+        "consumer.ts"
+      ],
+      [
+        "consumer.ts",
+        "source.ts"
+      ]
+    ],
+    "requirement": "Bundler changes at WU6; explicit and legacy route bytes stay frozen"
+  },
+  "cases": [
+    {
+      "id": "01_named_class",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Widget from \"./source.js\";\nconst good: Widget = new Widget();\nconst bad: string = good.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default class Widget { value: number = 1; }\nconst local: Widget = new Widget();\nexport const localValue: number = local.value;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "02_anonymous_class",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Widget from \"./source.js\";\nconst good: Widget = new Widget();\nconst bad: string = good.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default class { value: number = 1; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "03_named_function",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import make from \"./source.js\";\nconst good: number = make(1);\nconst bad: string = make(1);\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default function make(value: number): number { return value; }\nconst local: number = make(1);\nexport const localValue: number = local;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "04_anonymous_function",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import make from \"./source.js\";\nconst good: number = make(1);\nconst bad: string = make(1);\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default function (value: number): number { return value; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "05_literal_expression",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import value from \"./source.js\";\nconst good: number = value;\nconst bad: string = value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "06_object_expression",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import item from \"./source.js\";\nconst good: number = item.value;\nconst bad: string = item.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default { value: 1 };\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "07_arrow_expression",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import make from \"./source.js\";\nconst good: number = make(1);\nconst bad: string = make(1);\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default (value: number): number => value;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "07b_expression_owned_diagnostic",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import make from \"./source.js\";\nconst value: string = make(1);\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default ((value: number): string => value);\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,44): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,44): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "source.ts:1:44 TK2322"
+          ]
+        },
+        "stderr": "source.ts(1,44): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "08_identifier_value",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import token from \"./source.js\";\nconst good: number = token;\nconst bad: string = token;\nlet wrongType: token;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "const token = 1;\nexport default token;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.",
+            "consumer.ts(4,16): error TS2749: 'token' refers to a value, but is being used as a type here. Did you mean 'typeof token'?"
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.",
+            "consumer.ts(4,16): error TS2749: 'token' refers to a value, but is being used as a type here. Did you mean 'typeof token'?"
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322",
+            "consumer.ts:4:16 TK2749"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\nconsumer.ts(4,16): error TK2749: 'token' refers to a value, but is being used as a type here. Did you mean 'typeof token'?\n"
+      }
+    },
+    {
+      "id": "09_identifier_class",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Token from \"./source.js\";\nconst good: Token = new Token();\nconst bad: string = good.value;\n"
+        },
+        {
+          "path": "named_consumer.ts",
+          "text": "import { Token } from \"./source.js\";\nconst value = new Token();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "class Token { value: number = 1; }\nexport default Token;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "named_consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.",
+            "named_consumer.ts(1,10): error TS2614: Module '\"./source.js\"' has no exported member 'Token'. Did you mean to use 'import Token from \"./source.js\"' instead?"
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "named_consumer.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.",
+            "named_consumer.ts(1,10): error TS2614: Module '\"./source.js\"' has no exported member 'Token'. Did you mean to use 'import Token from \"./source.js\"' instead?"
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "named_consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "named_consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts",
+            "named_consumer.ts:1:1 named-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322",
+            "named_consumer.ts:1:10 TK2305"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\nnamed_consumer.ts(1,10): error TK2305: Module './source.js' has no exported member 'Token'\n"
+      }
+    },
+    {
+      "id": "09b_identifier_function",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import make from \"./source.js\";\nconst good: number = make(1);\nconst bad: string = make(1);\nlet wrongType: make;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "function make(value: number): number { return value; }\nexport default make;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.",
+            "consumer.ts(4,16): error TS2749: 'make' refers to a value, but is being used as a type here. Did you mean 'typeof make'?"
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,7): error TS2322: Type 'number' is not assignable to type 'string'.",
+            "consumer.ts(4,16): error TS2749: 'make' refers to a value, but is being used as a type here. Did you mean 'typeof make'?"
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:7 TK2322",
+            "consumer.ts:4:16 TK2749"
+          ]
+        },
+        "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\nconsumer.ts(4,16): error TK2749: 'make' refers to a value, but is being used as a type here. Did you mean 'typeof make'?\n"
+      }
+    },
+    {
+      "id": "10_type_only_default_import",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import type Token from \"./source.js\";\nconst good: Token = { value: 1 };\nconst badValue = new Token();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default class Token { value: number = 1; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,22): error TS1361: 'Token' cannot be used as a value because it was imported using 'import type'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(3,22): error TS1361: 'Token' cannot be used as a value because it was imported using 'import type'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:3:22 TK2304"
+          ]
+        },
+        "stderr": "consumer.ts(3,22): error TK2304: Cannot find name 'Token'\n"
+      }
+    },
+    {
+      "id": "10b_type_only_value_only_default",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import type Value from \"./source.js\";\nlet item: Value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,11): error TS2749: 'Value' refers to a value, but is being used as a type here. Did you mean 'typeof Value'?"
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,11): error TS2749: 'Value' refers to a value, but is being used as a type here. Did you mean 'typeof Value'?"
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:2:11 TK2749"
+          ]
+        },
+        "stderr": "consumer.ts(2,11): error TK2749: 'Value' refers to a value, but is being used as a type here. Did you mean 'typeof Value'?\n"
+      }
+    },
+    {
+      "id": "11_missing_physical_target",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Missing from \"./missing.js\";\nconst value = Missing;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(1,21): error TS2307: Cannot find module './missing.js' or its corresponding type declarations."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(1,21): error TS2307: Cannot find module './missing.js' or its corresponding type declarations."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./missing.js -> unresolved"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:1:21 TK2307"
+          ]
+        },
+        "stderr": "consumer.ts(1,21): error TK2307: Cannot find module './missing.js'\n"
+      }
+    },
+    {
+      "id": "12_missing_resolved_default",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Missing from \"./source.js\";\nconst value = Missing;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(1,8): error TS1192: Module '\"<case:12_missing_resolved_default>/source\"' has no default export."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(1,8): error TS1192: Module '\"<case:12_missing_resolved_default>/source\"' has no default export."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:1:8 TK1192"
+          ]
+        },
+        "stderr": "consumer.ts(1,8): error TK1192: Module './source.js' has no default export\n"
+      }
+    },
+    {
+      "id": "13_default_named_isolation",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import { Hidden } from \"./source.js\";\nconst value = new Hidden();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default class Hidden { value: number = 1; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(1,10): error TS2614: Module '\"./source.js\"' has no exported member 'Hidden'. Did you mean to use 'import Hidden from \"./source.js\"' instead?"
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(1,10): error TS2614: Module '\"./source.js\"' has no exported member 'Hidden'. Did you mean to use 'import Hidden from \"./source.js\"' instead?"
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 named-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:1:10 TK2305"
+          ]
+        },
+        "stderr": "consumer.ts(1,10): error TK2305: Module './source.js' has no exported member 'Hidden'\n"
+      }
+    },
+    {
+      "id": "14_value_only_wrong_type",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import build from \"./source.js\";\nlet value: build;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default function build(): number { return 1; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,12): error TS2749: 'build' refers to a value, but is being used as a type here. Did you mean 'typeof build'?"
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,12): error TS2749: 'build' refers to a value, but is being used as a type here. Did you mean 'typeof build'?"
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "consumer.ts:2:12 TK2749"
+          ]
+        },
+        "stderr": "consumer.ts(2,12): error TK2749: 'build' refers to a value, but is being used as a type here. Did you mean 'typeof build'?\n"
+      }
+    },
+    {
+      "id": "14b_default_interface_unsupported",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import type Shape from \"./source.js\";\nconst good: Shape = { value: 1 };\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default interface Shape { value: number }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [
+            "unsupported-module-form default-interface source.ts:1:1"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-module-form default-interface source.ts:1:1\n"
+      }
+    },
+    {
+      "id": "15_named_default_class_namespace",
+      "classification": "namespace-provenance-control",
+      "files": [
+        {
+          "path": "source.ts",
+          "text": "export default class Merged { value: number = 1; }\nnamespace Merged { export const extra = 1; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,22): error TS2652: Merged declaration 'Merged' cannot include a default export declaration. Consider adding a separate 'export default Merged' declaration instead.",
+            "source.ts(2,11): error TS2652: Merged declaration 'Merged' cannot include a default export declaration. Consider adding a separate 'export default Merged' declaration instead."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,22): error TS2652: Merged declaration 'Merged' cannot include a default export declaration. Consider adding a separate 'export default Merged' declaration instead.",
+            "source.ts(2,11): error TS2652: Merged declaration 'Merged' cannot include a default export declaration. Consider adding a separate 'export default Merged' declaration instead."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [],
+          "project_notices": [
+            "unsupported-default-export-namespace-provenance source.ts:1:1 Merged"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-default-export-namespace-provenance source.ts:1:1 Merged\n"
+      }
+    },
+    {
+      "id": "16_named_default_function_namespace",
+      "classification": "namespace-provenance-control",
+      "files": [
+        {
+          "path": "source.ts",
+          "text": "export default function merged(): number { return 1; }\nnamespace merged { export const extra = 1; }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,25): error TS2652: Merged declaration 'merged' cannot include a default export declaration. Consider adding a separate 'export default merged' declaration instead.",
+            "source.ts(2,11): error TS2652: Merged declaration 'merged' cannot include a default export declaration. Consider adding a separate 'export default merged' declaration instead."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,25): error TS2652: Merged declaration 'merged' cannot include a default export declaration. Consider adding a separate 'export default merged' declaration instead.",
+            "source.ts(2,11): error TS2652: Merged declaration 'merged' cannot include a default export declaration. Consider adding a separate 'export default merged' declaration instead."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [],
+          "project_notices": [
+            "unsupported-default-export-namespace-provenance source.ts:1:1 merged"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-default-export-namespace-provenance source.ts:1:1 merged\n"
+      }
+    },
+    {
+      "id": "17_namespace_identifier_default",
+      "classification": "namespace-provenance-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Bag from \"./source.js\";\nconst good: number = Bag.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "namespace Bag { export const value = 1; }\nexport default Bag;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [
+            "unsupported-default-export-namespace-provenance source.ts:2:1 Bag"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-default-export-namespace-provenance source.ts:2:1 Bag\n"
+      }
+    },
+    {
+      "id": "18_class_namespace_identifier_default",
+      "classification": "namespace-provenance-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Merged from \"./source.js\";\nconst instance: Merged = new Merged();\nconst good: number = Merged.extra + instance.value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "class Merged { value: number = 1; }\nnamespace Merged { export const extra = 1; }\nexport default Merged;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [
+            "unsupported-default-export-namespace-provenance source.ts:3:1 Merged"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-default-export-namespace-provenance source.ts:3:1 Merged\n"
+      }
+    },
+    {
+      "id": "19_function_namespace_identifier_default",
+      "classification": "namespace-provenance-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import merged from \"./source.js\";\nconst good: number = merged() + merged.extra;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "function merged(): number { return 1; }\nnamespace merged { export const extra = 1; }\nexport default merged;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [
+            "unsupported-default-export-namespace-provenance source.ts:3:1 merged"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-default-export-namespace-provenance source.ts:3:1 merged\n"
+      }
+    },
+    {
+      "id": "20_local_export_list_default",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Local from \"./source.js\";\nconst bad: string = Local;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "const Local = 1;\nexport { Local as default };\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [
+            "unsupported-module-form local-default-export source.ts:2:1"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-module-form local-default-export source.ts:2:1\n"
+      }
+    },
+    {
+      "id": "21_named_default_import_syntax",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import { default as Value } from \"./source.js\";\nconst bad: string = Value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 named-default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [
+            "unsupported-module-form named-default-import consumer.ts:1:1 ./source.js"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-module-form named-default-import consumer.ts:1:1 ./source.js\n"
+      }
+    },
+    {
+      "id": "22a_source_default_as_named",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { default as forwarded } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { forwarded } from \"./barrel.js\";\nconst bad: string = forwarded;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "barrel.ts",
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts",
+            "barrel.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "barrel.ts",
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "barrel.ts",
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+            "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+          ],
+          "project_notices": [
+            "unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js default->forwarded"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js default->forwarded\n"
+      }
+    },
+    {
+      "id": "22b_source_named_as_default",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { value as default } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import value from \"./barrel.js\";\nconst bad: string = value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export const value = 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "barrel.ts",
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts",
+            "barrel.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "barrel.ts",
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "barrel.ts",
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+            "consumer.ts:1:1 default-import ./barrel.js -> barrel.ts"
+          ],
+          "project_notices": [
+            "unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js value->default"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js value->default\n"
+      }
+    },
+    {
+      "id": "22c_source_default_as_default",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { default } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import value from \"./barrel.js\";\nconst bad: string = value;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "barrel.ts",
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts",
+            "barrel.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "consumer.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "barrel.ts",
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "barrel.ts",
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+            "consumer.ts:1:1 default-import ./barrel.js -> barrel.ts"
+          ],
+          "project_notices": [
+            "unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js default->default"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-source-reexport-default-slot barrel.ts:1:1 ./source.js default->default\n"
+      }
+    },
+    {
+      "id": "23_mixed_default_named_import",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import value, { named, type Shape } from \"./source.js\";\nconst good: number = value + named;\nconst shape: Shape = { width: good };\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\nexport const named = 2;\nexport interface Shape { width: number }\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 mixed-default-named-import ./source.js -> source.ts [default:value,named:named,type:Shape]"
+          ],
+          "project_notices": [
+            "unsupported-module-form mixed-default-named-import consumer.ts:1:1 ./source.js [default:value,named:named,type:Shape]"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-module-form mixed-default-named-import consumer.ts:1:1 ./source.js [default:value,named:named,type:Shape]\n"
+      }
+    },
+    {
+      "id": "24_mixed_default_namespace_import",
+      "classification": "deferred-syntax-control",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import value, * as all from \"./source.js\";\nconst good: number = value + all.named;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export default 1;\nexport const named = 2;\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 mixed-default-namespace-import ./source.js -> source.ts [default:value,namespace:all]"
+          ],
+          "project_notices": [
+            "unsupported-module-form mixed-default-namespace-import consumer.ts:1:1 ./source.js [default:value,namespace:all]"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-module-form mixed-default-namespace-import consumer.ts:1:1 ./source.js [default:value,namespace:all]\n"
+      }
+    },
+    {
+      "id": "25_duplicate_default_matrix",
+      "classification": "duplicate-default-control",
+      "files": [
+        {
+          "path": "duplicate_target.ts",
+          "text": "export const value = 1;\n"
+        },
+        {
+          "path": "pair_cc.ts",
+          "text": "export default class DirectClass1 {}\nexport default class DirectClass2 {}\n"
+        },
+        {
+          "path": "pair_ce.ts",
+          "text": "export default class DirectClass1 {}\nexport default 1;\n"
+        },
+        {
+          "path": "pair_cf.ts",
+          "text": "export default class DirectClass1 {}\nexport default function directFunction2() {}\n"
+        },
+        {
+          "path": "pair_cl.ts",
+          "text": "const local = 1;\nexport default class DirectClass1 {}\nexport { local as default };\n"
+        },
+        {
+          "path": "pair_cr.ts",
+          "text": "export default class DirectClass1 {}\nexport { value as default } from \"./duplicate_target.js\";\n"
+        },
+        {
+          "path": "pair_ec.ts",
+          "text": "export default 1;\nexport default class DirectClass2 {}\n"
+        },
+        {
+          "path": "pair_ee.ts",
+          "text": "export default 1;\nexport default 1;\n"
+        },
+        {
+          "path": "pair_ef.ts",
+          "text": "export default 1;\nexport default function directFunction2() {}\n"
+        },
+        {
+          "path": "pair_el.ts",
+          "text": "const local = 1;\nexport default 1;\nexport { local as default };\n"
+        },
+        {
+          "path": "pair_er.ts",
+          "text": "export default 1;\nexport { value as default } from \"./duplicate_target.js\";\n"
+        },
+        {
+          "path": "pair_fc.ts",
+          "text": "export default function directFunction1() {}\nexport default class DirectClass2 {}\n"
+        },
+        {
+          "path": "pair_fe.ts",
+          "text": "export default function directFunction1() {}\nexport default 1;\n"
+        },
+        {
+          "path": "pair_ff.ts",
+          "text": "export default function directFunction1() {}\nexport default function directFunction2() {}\n"
+        },
+        {
+          "path": "pair_fl.ts",
+          "text": "const local = 1;\nexport default function directFunction1() {}\nexport { local as default };\n"
+        },
+        {
+          "path": "pair_fr.ts",
+          "text": "export default function directFunction1() {}\nexport { value as default } from \"./duplicate_target.js\";\n"
+        },
+        {
+          "path": "pair_lc.ts",
+          "text": "const local = 1;\nexport { local as default };\nexport default class DirectClass2 {}\n"
+        },
+        {
+          "path": "pair_le.ts",
+          "text": "const local = 1;\nexport { local as default };\nexport default 1;\n"
+        },
+        {
+          "path": "pair_lf.ts",
+          "text": "const local = 1;\nexport { local as default };\nexport default function directFunction2() {}\n"
+        },
+        {
+          "path": "pair_ll.ts",
+          "text": "const local = 1;\nexport { local as default };\nexport { local as default };\n"
+        },
+        {
+          "path": "pair_lr.ts",
+          "text": "const local = 1;\nexport { local as default };\nexport { value as default } from \"./duplicate_target.js\";\n"
+        },
+        {
+          "path": "pair_rc.ts",
+          "text": "export { value as default } from \"./duplicate_target.js\";\nexport default class DirectClass2 {}\n"
+        },
+        {
+          "path": "pair_re.ts",
+          "text": "export { value as default } from \"./duplicate_target.js\";\nexport default 1;\n"
+        },
+        {
+          "path": "pair_rf.ts",
+          "text": "export { value as default } from \"./duplicate_target.js\";\nexport default function directFunction2() {}\n"
+        },
+        {
+          "path": "pair_rl.ts",
+          "text": "const local = 1;\nexport { value as default } from \"./duplicate_target.js\";\nexport { local as default };\n"
+        },
+        {
+          "path": "pair_rr.ts",
+          "text": "export { value as default } from \"./duplicate_target.js\";\nexport { value as default } from \"./duplicate_target.js\";\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "duplicate_target.ts",
+            "pair_cc.ts",
+            "pair_ce.ts",
+            "pair_cf.ts",
+            "pair_cl.ts",
+            "pair_cr.ts",
+            "pair_ec.ts",
+            "pair_ee.ts",
+            "pair_ef.ts",
+            "pair_el.ts",
+            "pair_er.ts",
+            "pair_fc.ts",
+            "pair_fe.ts",
+            "pair_ff.ts",
+            "pair_fl.ts",
+            "pair_fr.ts",
+            "pair_lc.ts",
+            "pair_le.ts",
+            "pair_lf.ts",
+            "pair_ll.ts",
+            "pair_lr.ts",
+            "pair_rc.ts",
+            "pair_re.ts",
+            "pair_rf.ts",
+            "pair_rl.ts",
+            "pair_rr.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "pair_cc.ts(1,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_cc.ts(2,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_ce.ts(1,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_ce.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_cf.ts(1,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cf.ts(1,22): error TS2813: Class declaration cannot implement overload list for 'default'.",
+            "pair_cf.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cf.ts(2,25): error TS2814: Function with bodies can only merge with classes that are ambient.",
+            "pair_cl.ts(2,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cl.ts(3,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cl.ts(3,10): error TS2484: Export declaration conflicts with exported declaration of 'DirectClass1'.",
+            "pair_cr.ts(1,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cr.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cr.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'DirectClass1'.",
+            "pair_ec.ts(1,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ec.ts(2,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_ee.ts(1,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ee.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ef.ts(1,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ef.ts(2,25): error TS2528: A module cannot have multiple default exports.",
+            "pair_el.ts(2,1): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_el.ts(3,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_el.ts(3,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_er.ts(1,1): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_er.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_er.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_fc.ts(1,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fc.ts(1,25): error TS2814: Function with bodies can only merge with classes that are ambient.",
+            "pair_fc.ts(2,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fc.ts(2,22): error TS2813: Class declaration cannot implement overload list for 'default'.",
+            "pair_fe.ts(1,25): error TS2528: A module cannot have multiple default exports.",
+            "pair_fe.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ff.ts(1,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_ff.ts(1,25): error TS2393: Duplicate function implementation.",
+            "pair_ff.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_ff.ts(2,25): error TS2393: Duplicate function implementation.",
+            "pair_fl.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fl.ts(3,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fl.ts(3,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction1'.",
+            "pair_fr.ts(1,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fr.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fr.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction1'.",
+            "pair_lc.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_lc.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_lc.ts(3,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_le.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_le.ts(3,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_lf.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_lf.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction2'.",
+            "pair_lf.ts(3,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_ll.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_ll.ts(3,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_lr.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_lr.ts(3,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rc.ts(1,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_rc.ts(1,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_rc.ts(2,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_re.ts(1,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_re.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_rf.ts(1,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_rf.ts(1,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction2'.",
+            "pair_rf.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_rl.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rl.ts(3,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rr.ts(1,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rr.ts(2,19): error TS2528: A module cannot have multiple default exports."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "pair_rr.ts",
+            "pair_rl.ts",
+            "pair_rf.ts",
+            "pair_re.ts",
+            "pair_rc.ts",
+            "pair_lr.ts",
+            "pair_ll.ts",
+            "pair_lf.ts",
+            "pair_le.ts",
+            "pair_lc.ts",
+            "pair_fr.ts",
+            "pair_fl.ts",
+            "pair_ff.ts",
+            "pair_fe.ts",
+            "pair_fc.ts",
+            "pair_er.ts",
+            "pair_el.ts",
+            "pair_ef.ts",
+            "pair_ee.ts",
+            "pair_ec.ts",
+            "pair_cr.ts",
+            "pair_cl.ts",
+            "pair_cf.ts",
+            "pair_ce.ts",
+            "pair_cc.ts",
+            "duplicate_target.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "pair_cc.ts(1,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_cc.ts(2,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_ce.ts(1,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_ce.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_cf.ts(1,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cf.ts(1,22): error TS2813: Class declaration cannot implement overload list for 'default'.",
+            "pair_cf.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cf.ts(2,25): error TS2814: Function with bodies can only merge with classes that are ambient.",
+            "pair_cl.ts(2,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cl.ts(3,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cl.ts(3,10): error TS2484: Export declaration conflicts with exported declaration of 'DirectClass1'.",
+            "pair_cr.ts(1,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cr.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_cr.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'DirectClass1'.",
+            "pair_ec.ts(1,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ec.ts(2,22): error TS2528: A module cannot have multiple default exports.",
+            "pair_ee.ts(1,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ee.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ef.ts(1,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ef.ts(2,25): error TS2528: A module cannot have multiple default exports.",
+            "pair_el.ts(2,1): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_el.ts(3,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_el.ts(3,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_er.ts(1,1): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_er.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_er.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_fc.ts(1,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fc.ts(1,25): error TS2814: Function with bodies can only merge with classes that are ambient.",
+            "pair_fc.ts(2,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fc.ts(2,22): error TS2813: Class declaration cannot implement overload list for 'default'.",
+            "pair_fe.ts(1,25): error TS2528: A module cannot have multiple default exports.",
+            "pair_fe.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_ff.ts(1,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_ff.ts(1,25): error TS2393: Duplicate function implementation.",
+            "pair_ff.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_ff.ts(2,25): error TS2393: Duplicate function implementation.",
+            "pair_fl.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fl.ts(3,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fl.ts(3,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction1'.",
+            "pair_fr.ts(1,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fr.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_fr.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction1'.",
+            "pair_lc.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_lc.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_lc.ts(3,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_le.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_le.ts(3,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_lf.ts(2,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_lf.ts(2,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction2'.",
+            "pair_lf.ts(3,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_ll.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_ll.ts(3,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_lr.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_lr.ts(3,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rc.ts(1,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_rc.ts(1,10): error TS2484: Export declaration conflicts with exported declaration of 'default'.",
+            "pair_rc.ts(2,22): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_re.ts(1,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_re.ts(2,1): error TS2528: A module cannot have multiple default exports.",
+            "pair_rf.ts(1,10): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_rf.ts(1,10): error TS2484: Export declaration conflicts with exported declaration of 'directFunction2'.",
+            "pair_rf.ts(2,25): error TS2323: Cannot redeclare exported variable 'default'.",
+            "pair_rl.ts(2,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rl.ts(3,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rr.ts(1,19): error TS2528: A module cannot have multiple default exports.",
+            "pair_rr.ts(2,19): error TS2528: A module cannot have multiple default exports."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 3,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "duplicate_target.ts",
+            "pair_cc.ts",
+            "pair_ce.ts",
+            "pair_cf.ts",
+            "pair_cl.ts",
+            "pair_cr.ts",
+            "pair_ec.ts",
+            "pair_ee.ts",
+            "pair_ef.ts",
+            "pair_el.ts",
+            "pair_er.ts",
+            "pair_fc.ts",
+            "pair_fe.ts",
+            "pair_ff.ts",
+            "pair_fl.ts",
+            "pair_fr.ts",
+            "pair_lc.ts",
+            "pair_le.ts",
+            "pair_lf.ts",
+            "pair_ll.ts",
+            "pair_lr.ts",
+            "pair_rc.ts",
+            "pair_re.ts",
+            "pair_rf.ts",
+            "pair_rl.ts",
+            "pair_rr.ts"
+          ],
+          "files": {
+            "checked": [],
+            "skipped": [
+              "duplicate_target.ts",
+              "pair_cc.ts",
+              "pair_ce.ts",
+              "pair_cf.ts",
+              "pair_cl.ts",
+              "pair_cr.ts",
+              "pair_ec.ts",
+              "pair_ee.ts",
+              "pair_ef.ts",
+              "pair_el.ts",
+              "pair_er.ts",
+              "pair_fc.ts",
+              "pair_fe.ts",
+              "pair_ff.ts",
+              "pair_fl.ts",
+              "pair_fr.ts",
+              "pair_lc.ts",
+              "pair_le.ts",
+              "pair_lf.ts",
+              "pair_ll.ts",
+              "pair_lr.ts",
+              "pair_rc.ts",
+              "pair_re.ts",
+              "pair_rf.ts",
+              "pair_rl.ts",
+              "pair_rr.ts"
+            ],
+            "excluded": []
+          },
+          "resolutions": [
+            "pair_cr.ts:2:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_er.ts:2:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_fr.ts:2:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_lr.ts:3:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_rc.ts:1:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_re.ts:1:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_rf.ts:1:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_rl.ts:2:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_rr.ts:1:1 source-reexport ./duplicate_target.js -> duplicate_target.ts",
+            "pair_rr.ts:2:1 source-reexport ./duplicate_target.js -> duplicate_target.ts"
+          ],
+          "project_notices": [
+            "unsupported-duplicate-default-export pair_cc.ts producers=direct-class,direct-class",
+            "unsupported-duplicate-default-export pair_ce.ts producers=direct-class,default-expression",
+            "unsupported-duplicate-default-export pair_cf.ts producers=direct-class,direct-function",
+            "unsupported-duplicate-default-export pair_cl.ts producers=direct-class,local-export-list-default",
+            "unsupported-duplicate-default-export pair_cr.ts producers=direct-class,source-export-to-default",
+            "unsupported-duplicate-default-export pair_ec.ts producers=default-expression,direct-class",
+            "unsupported-duplicate-default-export pair_ee.ts producers=default-expression,default-expression",
+            "unsupported-duplicate-default-export pair_ef.ts producers=default-expression,direct-function",
+            "unsupported-duplicate-default-export pair_el.ts producers=default-expression,local-export-list-default",
+            "unsupported-duplicate-default-export pair_er.ts producers=default-expression,source-export-to-default",
+            "unsupported-duplicate-default-export pair_fc.ts producers=direct-function,direct-class",
+            "unsupported-duplicate-default-export pair_fe.ts producers=direct-function,default-expression",
+            "unsupported-duplicate-default-export pair_ff.ts producers=direct-function,direct-function",
+            "unsupported-duplicate-default-export pair_fl.ts producers=direct-function,local-export-list-default",
+            "unsupported-duplicate-default-export pair_fr.ts producers=direct-function,source-export-to-default",
+            "unsupported-duplicate-default-export pair_lc.ts producers=local-export-list-default,direct-class",
+            "unsupported-duplicate-default-export pair_le.ts producers=local-export-list-default,default-expression",
+            "unsupported-duplicate-default-export pair_lf.ts producers=local-export-list-default,direct-function",
+            "unsupported-duplicate-default-export pair_ll.ts producers=local-export-list-default,local-export-list-default",
+            "unsupported-duplicate-default-export pair_lr.ts producers=local-export-list-default,source-export-to-default",
+            "unsupported-duplicate-default-export pair_rc.ts producers=source-export-to-default,direct-class",
+            "unsupported-duplicate-default-export pair_re.ts producers=source-export-to-default,default-expression",
+            "unsupported-duplicate-default-export pair_rf.ts producers=source-export-to-default,direct-function",
+            "unsupported-duplicate-default-export pair_rl.ts producers=source-export-to-default,local-export-list-default",
+            "unsupported-duplicate-default-export pair_rr.ts producers=source-export-to-default,source-export-to-default"
+          ],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": "project: unsupported-duplicate-default-export pair_cc.ts producers=direct-class,direct-class\nproject: unsupported-duplicate-default-export pair_ce.ts producers=direct-class,default-expression\nproject: unsupported-duplicate-default-export pair_cf.ts producers=direct-class,direct-function\nproject: unsupported-duplicate-default-export pair_cl.ts producers=direct-class,local-export-list-default\nproject: unsupported-duplicate-default-export pair_cr.ts producers=direct-class,source-export-to-default\nproject: unsupported-duplicate-default-export pair_ec.ts producers=default-expression,direct-class\nproject: unsupported-duplicate-default-export pair_ee.ts producers=default-expression,default-expression\nproject: unsupported-duplicate-default-export pair_ef.ts producers=default-expression,direct-function\nproject: unsupported-duplicate-default-export pair_el.ts producers=default-expression,local-export-list-default\nproject: unsupported-duplicate-default-export pair_er.ts producers=default-expression,source-export-to-default\nproject: unsupported-duplicate-default-export pair_fc.ts producers=direct-function,direct-class\nproject: unsupported-duplicate-default-export pair_fe.ts producers=direct-function,default-expression\nproject: unsupported-duplicate-default-export pair_ff.ts producers=direct-function,direct-function\nproject: unsupported-duplicate-default-export pair_fl.ts producers=direct-function,local-export-list-default\nproject: unsupported-duplicate-default-export pair_fr.ts producers=direct-function,source-export-to-default\nproject: unsupported-duplicate-default-export pair_lc.ts producers=local-export-list-default,direct-class\nproject: unsupported-duplicate-default-export pair_le.ts producers=local-export-list-default,default-expression\nproject: unsupported-duplicate-default-export pair_lf.ts producers=local-export-list-default,direct-function\nproject: unsupported-duplicate-default-export pair_ll.ts producers=local-export-list-default,local-export-list-default\nproject: unsupported-duplicate-default-export pair_lr.ts producers=local-export-list-default,source-export-to-default\nproject: unsupported-duplicate-default-export pair_rc.ts producers=source-export-to-default,direct-class\nproject: unsupported-duplicate-default-export pair_re.ts producers=source-export-to-default,default-expression\nproject: unsupported-duplicate-default-export pair_rf.ts producers=source-export-to-default,direct-function\nproject: unsupported-duplicate-default-export pair_rl.ts producers=source-export-to-default,local-export-list-default\nproject: unsupported-duplicate-default-export pair_rr.ts producers=source-export-to-default,source-export-to-default\n"
+      }
+    }
+  ]
+}

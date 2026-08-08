@@ -233,6 +233,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 15 — named source re-exports are a config-backed project feature. The raw
     // conformance route cannot exercise resolver inventory, so this oracle corpus stays disabled.
     ("b15_acyclic_source_reexports", false),
+    // Backlog 15 distinct default slots. The raw route cannot consume its config/order and
+    // project-summary contract, so WU1 keeps the corpus disabled.
+    ("b15_default_module_slots", false),
     // Backlogs 15 + 72 — project-summary/CLI contract. This stays disabled because the raw
     // conformance route does not consume tsconfig.json or summaries; WU3 unignores its black-box
     // integration contract instead.
@@ -258,6 +261,7 @@ const PROJECT_DIRS: &[&str] = &[
     // Backlog 103 successful private-merge acceptance.
     "b103_library_merge_correctness_project",
     "b15_acyclic_source_reexports",
+    "b15_default_module_slots",
     "b72_bundler_project_tracer",
 ];
 
