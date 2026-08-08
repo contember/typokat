@@ -20,7 +20,10 @@ use crate::check::query::SemanticQueryCoordinator;
 use crate::check::query::SemanticQueryState;
 use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
-use crate::frontend::{ProjectImport, ProjectImportSource, ProjectProgram};
+use crate::frontend::{
+    AdmittedSourceReexportDeclaration, AdmittedSourceReexportSource, AdmittedSourceReexports,
+    NamespaceProvenance, ProjectImport, ProjectImportSource, ProjectProgram,
+};
 use crate::relate::RelationOutcome;
 use crate::source::{
     CompilationOrigin, LibraryFileOrdinal, ModuleOrdinal, OriginalModuleOrdinal, SourceOrdinal,
@@ -1489,6 +1492,225 @@ struct ExportedSlots {
 
 type ExportSurface = BTreeMap<String, ExportedSlots>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectSourceReexportInvariantError {
+    EmptyDeclaration,
+    InvalidModuleIndex,
+    InvalidDependencyOrder,
+    InvalidDeclarationIdentity,
+    InvalidNamespaceProvenance,
+    MissingDeclarationProvenance,
+    AstEvidenceMismatch,
+    DuplicateDeclarationEvidence,
+}
+
+impl ProjectSourceReexportInvariantError {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::EmptyDeclaration => "source re-export evidence contains an empty declaration",
+            Self::InvalidModuleIndex => "source re-export evidence escaped the project modules",
+            Self::InvalidDependencyOrder => {
+                "source re-export target is not available before its owner"
+            }
+            Self::InvalidDeclarationIdentity => {
+                "source re-export declaration identity does not match its owner"
+            }
+            Self::InvalidNamespaceProvenance => {
+                "resolved source re-export lacks proven-absent namespace evidence"
+            }
+            Self::MissingDeclarationProvenance => {
+                "missing source re-export unexpectedly carries namespace evidence"
+            }
+            Self::AstEvidenceMismatch => {
+                "source re-export evidence does not match the parsed declaration"
+            }
+            Self::DuplicateDeclarationEvidence => {
+                "source re-export evidence identifies one declaration more than once"
+            }
+        }
+    }
+}
+
+struct ValidatedSourceReexportDeclaration<'e> {
+    declaration: &'e AdmittedSourceReexportDeclaration,
+    exported_spans: Vec<Span>,
+}
+
+struct ValidatedSourceReexportPlan<'e> {
+    declarations_by_owner: Vec<BTreeMap<u32, ValidatedSourceReexportDeclaration<'e>>>,
+    #[cfg(test)]
+    syntax_statements_scanned: usize,
+    #[cfg(test)]
+    validation_lookups: usize,
+    #[cfg(test)]
+    projection_lookups: std::cell::Cell<usize>,
+}
+
+impl<'e> ValidatedSourceReexportPlan<'e> {
+    fn declaration(
+        &self,
+        owner: usize,
+        start: u32,
+    ) -> Option<&ValidatedSourceReexportDeclaration<'e>> {
+        #[cfg(test)]
+        self.projection_lookups
+            .set(self.projection_lookups.get().saturating_add(1));
+        self.declarations_by_owner
+            .get(owner)
+            .and_then(|declarations| declarations.get(&start))
+    }
+
+    #[cfg(test)]
+    fn work_for_test(&self) -> SourceReexportPlanWorkForTest {
+        SourceReexportPlanWorkForTest {
+            syntax_statements_scanned: self.syntax_statements_scanned,
+            validation_lookups: self.validation_lookups,
+            projection_lookups: self.projection_lookups.get(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SourceReexportPlanWorkForTest {
+    syntax_statements_scanned: usize,
+    validation_lookups: usize,
+    projection_lookups: usize,
+}
+
+fn build_validated_source_reexport_plan<'e>(
+    admitted: &'e AdmittedSourceReexports,
+    units: &[ProjectProgram<'_>],
+) -> Result<ValidatedSourceReexportPlan<'e>, ProjectSourceReexportInvariantError> {
+    let mut syntax_by_owner = Vec::with_capacity(units.len());
+    #[cfg(test)]
+    let mut syntax_statements_scanned = 0usize;
+    for unit in units {
+        let mut syntax = BTreeMap::new();
+        for statement in &unit.program.body {
+            #[cfg(test)]
+            {
+                syntax_statements_scanned = syntax_statements_scanned.saturating_add(1);
+            }
+            let Statement::ExportNamedDeclaration(export) = statement else {
+                continue;
+            };
+            if export.source.is_some() && syntax.insert(export.span.start, export).is_some() {
+                return Err(ProjectSourceReexportInvariantError::AstEvidenceMismatch);
+            }
+        }
+        syntax_by_owner.push(syntax);
+    }
+
+    let mut declarations_by_owner = (0..units.len())
+        .map(|_| BTreeMap::new())
+        .collect::<Vec<_>>();
+    let mut last_source_ordinal = BTreeMap::new();
+    #[cfg(test)]
+    let mut validation_lookups = 0usize;
+    for declaration in admitted.declarations() {
+        if declaration.members().is_empty() {
+            return Err(ProjectSourceReexportInvariantError::EmptyDeclaration);
+        }
+        let owner = declaration.owner_module();
+        let Some(unit) = units.get(owner) else {
+            return Err(ProjectSourceReexportInvariantError::InvalidModuleIndex);
+        };
+        let id = declaration.id();
+        let owner_path = std::path::Path::new(&unit.normalized_path);
+        let identity_path = std::path::Path::new(id.normalized_owner_path());
+        let ordinal_increases = last_source_ordinal
+            .insert(owner, id.source_ordinal())
+            .is_none_or(|previous| previous < id.source_ordinal());
+        if id.owner_source_key() != unit.compilation_unit.source
+            || !owner_path.ends_with(identity_path)
+            || id.declaration_start() != declaration.owner_start()
+            || !ordinal_increases
+        {
+            return Err(ProjectSourceReexportInvariantError::InvalidDeclarationIdentity);
+        }
+        match declaration.source() {
+            AdmittedSourceReexportSource::Resolved(target) => {
+                if target >= owner || units.get(target).is_none() {
+                    return Err(ProjectSourceReexportInvariantError::InvalidDependencyOrder);
+                }
+                if declaration.members().iter().any(|member| {
+                    member.namespace_provenance() != Some(NamespaceProvenance::ProvenAbsent)
+                }) {
+                    return Err(ProjectSourceReexportInvariantError::InvalidNamespaceProvenance);
+                }
+            }
+            AdmittedSourceReexportSource::Missing => {
+                if declaration
+                    .members()
+                    .iter()
+                    .any(|member| member.namespace_provenance().is_some())
+                {
+                    return Err(ProjectSourceReexportInvariantError::MissingDeclarationProvenance);
+                }
+            }
+        }
+        #[cfg(test)]
+        {
+            validation_lookups = validation_lookups.saturating_add(1);
+        }
+        let Some(export) = syntax_by_owner
+            .get(owner)
+            .and_then(|syntax| syntax.get(&declaration.owner_start()))
+            .copied()
+        else {
+            return Err(ProjectSourceReexportInvariantError::AstEvidenceMismatch);
+        };
+        let Some(source_literal) = export.source.as_ref() else {
+            return Err(ProjectSourceReexportInvariantError::AstEvidenceMismatch);
+        };
+        let evidence_matches =
+            Span::from_oxc(export.span) == declaration.declaration_span()
+                && Span::from_oxc(source_literal.span) == declaration.source_span()
+                && source_literal.value.as_str() == declaration.module_specifier()
+                && export.specifiers.len() == declaration.members().len()
+                && export.specifiers.iter().zip(declaration.members()).all(
+                    |(specifier, member)| {
+                        module_export_name(&specifier.local) == Some(member.imported())
+                            && module_export_name(&specifier.exported) == Some(member.exported())
+                            && Span::from_oxc(specifier.span) == member.span()
+                            && (export.export_kind == ImportOrExportKind::Type
+                                || specifier.export_kind == ImportOrExportKind::Type)
+                                == member.is_type_only()
+                    },
+                );
+        if !evidence_matches {
+            return Err(ProjectSourceReexportInvariantError::AstEvidenceMismatch);
+        }
+        let validated = ValidatedSourceReexportDeclaration {
+            declaration,
+            exported_spans: export
+                .specifiers
+                .iter()
+                .map(|specifier| Span::from_oxc(specifier.exported.span()))
+                .collect(),
+        };
+        let Some(owner_declarations) = declarations_by_owner.get_mut(owner) else {
+            return Err(ProjectSourceReexportInvariantError::InvalidModuleIndex);
+        };
+        if owner_declarations
+            .insert(declaration.owner_start(), validated)
+            .is_some()
+        {
+            return Err(ProjectSourceReexportInvariantError::DuplicateDeclarationEvidence);
+        }
+    }
+    Ok(ValidatedSourceReexportPlan {
+        declarations_by_owner,
+        #[cfg(test)]
+        syntax_statements_scanned,
+        #[cfg(test)]
+        validation_lookups,
+        #[cfg(test)]
+        projection_lookups: std::cell::Cell::new(0),
+    })
+}
+
 fn selected_library_statement_lists<'ast>(
     program: &'ast Program<'ast>,
     sites: &[replay_index::CollisionReplayOwnerSite],
@@ -1527,10 +1749,40 @@ pub(crate) fn check_project_programs<'ast>(
     check_project_programs_inner(
         interner,
         units,
+        None,
         |_, _, _| {},
         |_, _, _, _, _, _, _| {},
         |_| {},
     )
+}
+
+#[cfg(test)]
+fn check_project_programs_with_source_reexports_for_test<'ast>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    admitted: &AdmittedSourceReexports,
+) -> Result<Vec<CheckResult>, ProjectSourceReexportInvariantError> {
+    check_project_programs_with_source_reexport_work_for_test(interner, units, admitted)
+        .map(|(results, _)| results)
+}
+
+#[cfg(test)]
+fn check_project_programs_with_source_reexport_work_for_test<'ast>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    admitted: &AdmittedSourceReexports,
+) -> Result<(Vec<CheckResult>, SourceReexportPlanWorkForTest), ProjectSourceReexportInvariantError>
+{
+    let plan = build_validated_source_reexport_plan(admitted, units)?;
+    let results = check_project_programs_inner(
+        interner,
+        units,
+        Some(&plan),
+        |_, _, _| {},
+        |_, _, _, _, _, _, _| {},
+        |_| {},
+    );
+    Ok((results, plan.work_for_test()))
 }
 
 pub(in crate::check::checker) fn check_project_programs_with_owned_library<'ast, F, G>(
@@ -1543,22 +1795,73 @@ where
     F: FnOnce(&Binder, &[ScopeId]),
     G: FnOnce(&Pass<'_, 'ast, PrivateCombinedRecordTicket>, u32),
 {
-    check_project_programs_with_owned_library_inner(
+    check_project_programs_with_owned_library_admission(
         state,
         &[],
         units,
         None,
         inspect_bindings,
         inspect_final,
+    )
+    .map_err(ProjectSourceReexportCheckError::message)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectSourceReexportCheckError {
+    InvalidEvidence(ProjectSourceReexportInvariantError),
+    Checker(&'static str),
+}
+
+impl ProjectSourceReexportCheckError {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::InvalidEvidence(error) => error.message(),
+            Self::Checker(error) => error,
+        }
+    }
+}
+
+struct OwnedProjectAdmission<'p> {
+    source_reexports: Option<&'p ValidatedSourceReexportPlan<'p>>,
+    complete_binder_checkpoint: Option<crate::binder::bind::LibraryBinderCheckpoint>,
+}
+
+fn check_project_programs_with_owned_library_admission<'ast, F, G>(
+    state: library_compiler::OwnedLibraryRuntimeState,
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[ProjectProgram<'ast>],
+    admitted_source_reexports: Option<&AdmittedSourceReexports>,
+    inspect_bindings: F,
+    inspect_final: G,
+) -> Result<Vec<CheckResult>, ProjectSourceReexportCheckError>
+where
+    F: FnOnce(&Binder, &[ScopeId]),
+    G: FnOnce(&Pass<'_, 'ast, PrivateCombinedRecordTicket>, u32),
+{
+    let plan = admitted_source_reexports
+        .map(|admitted| build_validated_source_reexport_plan(admitted, units))
+        .transpose()
+        .map_err(ProjectSourceReexportCheckError::InvalidEvidence)?;
+    check_project_programs_with_owned_library_inner(
+        state,
+        library_programs,
+        units,
+        OwnedProjectAdmission {
+            source_reexports: plan.as_ref(),
+            complete_binder_checkpoint: None,
+        },
+        inspect_bindings,
+        inspect_final,
         |_| {},
     )
+    .map_err(ProjectSourceReexportCheckError::Checker)
 }
 
 fn check_project_programs_with_owned_library_inner<'ast, F, G, H>(
     state: library_compiler::OwnedLibraryRuntimeState,
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
     units: &[ProjectProgram<'ast>],
-    complete_binder_checkpoint: Option<crate::binder::bind::LibraryBinderCheckpoint>,
+    admission: OwnedProjectAdmission<'_>,
     inspect_bindings: F,
     inspect_final: G,
     inspect_records: H,
@@ -1606,6 +1909,10 @@ where
     #[cfg(any(test, feature = "test-utils"))]
     let mut disabled_library_record_owner = disabled_library_record_owner;
     let mut external_effects: BTreeMap<UserRecordTicket, CandidateEffects> = BTreeMap::new();
+    let OwnedProjectAdmission {
+        source_reexports,
+        complete_binder_checkpoint,
+    } = admission;
     let (binder, module_scopes, module_placeholders) = if let Some(checkpoint) =
         complete_binder_checkpoint
     {
@@ -1642,9 +1949,10 @@ where
                 )
                 .map_err(|_| "complete-source binding reservation failed")?;
         }
-        let mut bound = bind_authoritative_project_core(
+        let mut bound = bind_authoritative_project_core_with_source_reexports(
             builder,
             units,
+            source_reexports,
             source_offset,
             &binding_lexical_events,
             &mut external_effects,
@@ -1683,7 +1991,9 @@ where
                 .map(|(unit, compilation)| (unit.program, *compilation)),
         );
         let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
-        for (unit, compilation_unit) in units.iter().zip(continuation_units) {
+        for (unit_index, (unit, compilation_unit)) in
+            units.iter().zip(continuation_units).enumerate()
+        {
             let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects)?;
             let (scope, placeholders) =
                 builder.add_module(unit.program, &imports, compilation_unit);
@@ -1694,6 +2004,11 @@ where
                 unit.module_ordinal,
                 &lexical_events,
                 &mut external_effects,
+                SourceReexportProjectionContext {
+                    dependency_exports: &exports,
+                    source_reexports,
+                    module_index: unit_index,
+                },
             )?;
             module_scopes.push(scope);
             module_placeholders.push(placeholders);
@@ -2378,7 +2693,10 @@ pub fn check_private_project_programs_with_library<'ast>(
         state,
         library_programs,
         units,
-        None,
+        OwnedProjectAdmission {
+            source_reexports: None,
+            complete_binder_checkpoint: None,
+        },
         |_, _| {},
         |_, _| {},
         |_| {},
@@ -2395,7 +2713,10 @@ pub fn check_complete_source_project_programs_with_library<'ast>(
         state,
         library_programs,
         units,
-        Some(checkpoint),
+        OwnedProjectAdmission {
+            source_reexports: None,
+            complete_binder_checkpoint: Some(checkpoint),
+        },
         |_, _| {},
         |_, _| {},
         |_| {},
@@ -2676,7 +2997,10 @@ pub fn check_private_project_programs_with_library_evidence<'ast>(
         state,
         library_programs,
         units,
-        None,
+        OwnedProjectAdmission {
+            source_reexports: None,
+            complete_binder_checkpoint: None,
+        },
         |_, _| {},
         |pass, next_class_id| {
             evidence.replace(Some(private_project_semantic_evidence_for_test(
@@ -2724,7 +3048,10 @@ pub fn check_private_project_programs_with_scale_evidence<'ast>(
         state,
         library_programs,
         units,
-        None,
+        OwnedProjectAdmission {
+            source_reexports: None,
+            complete_binder_checkpoint: None,
+        },
         |_, _| {},
         |pass, _| {
             visible_root_members.replace(Some(private_project_visible_root_members_for_test(
@@ -2756,7 +3083,10 @@ pub fn check_complete_library_project_programs_with_evidence<'ast>(
         state,
         library_programs,
         units,
-        Some(checkpoint),
+        OwnedProjectAdmission {
+            source_reexports: None,
+            complete_binder_checkpoint: Some(checkpoint),
+        },
         |_, _| {},
         |pass, next_class_id| {
             evidence.replace(Some(private_project_semantic_evidence_for_test(
@@ -2839,7 +3169,14 @@ pub fn check_project_programs_with_binding_inspector<'ast, F>(
 where
     F: FnOnce(&Binder, &LexicalReservations, &[ScopeId]),
 {
-    check_project_programs_inner(interner, units, inspect, |_, _, _, _, _, _, _| {}, |_| {})
+    check_project_programs_inner(
+        interner,
+        units,
+        None,
+        inspect,
+        |_, _, _, _, _, _, _| {},
+        |_| {},
+    )
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -2888,6 +3225,7 @@ where
     check_project_programs_inner(
         interner,
         units,
+        None,
         |_, _, _| {},
         |binder, registry, decl_types, _, _, _, _| {
             let mut inspected = binder
@@ -2996,14 +3334,16 @@ pub(crate) fn bind_library_checkpoint_project_programs(
 fn bind_fresh_project_programs(
     prelude: &Program<'_>,
     units: &[ProjectProgram<'_>],
+    source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
     lexical_events: &LexicalReservations,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Result<BoundProjectBinder, String> {
     #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_SEEDS.set(PROJECT_BINDING_FRESH_SEEDS.get().saturating_add(1));
-    let bound = bind_authoritative_project_core(
+    let bound = bind_authoritative_project_core_with_source_reexports(
         ProjectBinderBuilder::new(prelude),
         units,
+        source_reexports,
         0,
         lexical_events,
         external_effects,
@@ -3023,8 +3363,32 @@ enum AuthoritativeProjectBinderFinish {
 }
 
 fn bind_authoritative_project_core<'ast, Ticket>(
+    builder: ProjectBinderBuilder<'ast>,
+    units: &[ProjectProgram<'ast>],
+    source_offset: u32,
+    lexical_events: &LexicalReservations<Ticket>,
+    external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+    finish: AuthoritativeProjectBinderFinish,
+) -> Result<BoundProjectBinder, String>
+where
+    Ticket: UserReportingOwner,
+    Ticket::Error: std::fmt::Display,
+{
+    bind_authoritative_project_core_with_source_reexports(
+        builder,
+        units,
+        None,
+        source_offset,
+        lexical_events,
+        external_effects,
+        finish,
+    )
+}
+
+fn bind_authoritative_project_core_with_source_reexports<'ast, Ticket>(
     mut builder: ProjectBinderBuilder<'ast>,
     units: &[ProjectProgram<'ast>],
+    source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
     source_offset: u32,
     lexical_events: &LexicalReservations<Ticket>,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
@@ -3064,7 +3428,7 @@ where
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders = Vec::with_capacity(units.len());
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
-    for unit in units {
+    for (unit_index, unit) in units.iter().enumerate() {
         let imports = imported_symbols(unit, &exports, lexical_events, external_effects)
             .map_err(|error| format!("project import reporting owner failed: {error}"))?;
         let compilation = shifted_unit(unit)?;
@@ -3076,6 +3440,11 @@ where
             unit.module_ordinal,
             lexical_events,
             external_effects,
+            SourceReexportProjectionContext {
+                dependency_exports: &exports,
+                source_reexports,
+                module_index: unit_index,
+            },
         )
         .map_err(|error| format!("project export reporting owner failed: {error}"))?;
         module_scopes.push(scope);
@@ -3255,6 +3624,7 @@ pub(crate) fn record_continuation_project_binding_consumed_for_test() {
 fn check_project_programs_inner<'ast, F, G, H>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
+    source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
     inspect_bindings: F,
     inspect_namespace_values: G,
     inspect_replay: H,
@@ -3305,9 +3675,14 @@ where
             mut next_class_id,
         },
     ) = bootstrap_test_support_prelude(interner, |prelude| {
-        let bound =
-            bind_fresh_project_programs(prelude, units, &lexical_events, &mut external_effects)
-                .expect("authoritative fresh project binding succeeds");
+        let bound = bind_fresh_project_programs(
+            prelude,
+            units,
+            source_reexports,
+            &lexical_events,
+            &mut external_effects,
+        )
+        .expect("authoritative fresh project binding succeeds");
         module_scopes = bound.module_scopes;
         module_placeholders = bound.module_placeholders;
         bound.binder
@@ -3547,30 +3922,40 @@ fn collect_exports<Ticket: UserReportingOwner>(
     module_ordinal: ModuleOrdinal,
     reservations: &LexicalReservations<Ticket>,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+    projection: SourceReexportProjectionContext<'_, '_>,
 ) -> Result<ExportSurface, Ticket::Error> {
     let mut surface = ExportSurface::new();
+    let mut groups = BTreeMap::new();
+    let mut context = ExportCollectionContext {
+        builder,
+        scope,
+        surface: &mut surface,
+        groups: &mut groups,
+        module_ordinal,
+        reservations,
+        effects,
+    };
     for stmt in &program.body {
         let Statement::ExportNamedDeclaration(export) = stmt else {
             continue;
         };
         if export.source.is_some() {
+            let Some(validated) = projection
+                .source_reexports
+                .and_then(|plan| plan.declaration(projection.module_index, export.span.start))
+            else {
+                continue;
+            };
+            collect_source_reexport(&mut context, validated, projection.dependency_exports)?;
             continue;
         }
         if let Some(decl) = &export.declaration {
-            collect_declaration_export(builder, scope, decl, &mut surface);
+            collect_declaration_export(&mut context, decl, stmt.span().start)?;
         } else {
             // `export type { x }` marks the whole statement type-only; mirror the
             // import side in `crates/typokat-frontend/src/frontend.rs`, where the
             // outer kind ORs with each specifier.
             let outer_type_only = export.export_kind == ImportOrExportKind::Type;
-            let mut context = ListExportContext {
-                builder,
-                scope,
-                surface: &mut surface,
-                module_ordinal,
-                reservations,
-                effects,
-            };
             for specifier in &export.specifiers {
                 collect_list_export(&mut context, specifier, outer_type_only, stmt.span().start)?;
             }
@@ -3579,96 +3964,144 @@ fn collect_exports<Ticket: UserReportingOwner>(
     Ok(surface)
 }
 
-fn collect_declaration_export(
-    builder: &ProjectBinderBuilder<'_>,
-    scope: ScopeId,
+struct SourceReexportProjectionContext<'a, 'e> {
+    dependency_exports: &'a [ExportSurface],
+    source_reexports: Option<&'a ValidatedSourceReexportPlan<'e>>,
+    module_index: usize,
+}
+
+fn collect_declaration_export<Ticket: UserReportingOwner>(
+    context: &mut ExportCollectionContext<'_, Ticket>,
     decl: &Declaration<'_>,
-    surface: &mut ExportSurface,
-) {
+    owner_start: u32,
+) -> Result<(), Ticket::Error> {
     match decl {
         Declaration::VariableDeclaration(var) => {
             for declarator in &var.declarations {
                 if let Some(name) = binding_name(&declarator.id) {
-                    let (value, _) = builder.local_symbol_slots(scope, name);
-                    surface.insert(
-                        name.to_string(),
+                    let (value, _) = context.builder.local_symbol_slots(context.scope, name);
+                    insert_collected_export(
+                        context,
+                        name,
                         ExportedSlots {
                             value,
                             ty: None,
                             value_erased: false,
                             type_unavailable: false,
                         },
-                    );
+                        Span::from_oxc(declarator.id.span()),
+                        owner_start,
+                        false,
+                    )?;
                 }
             }
         }
         Declaration::FunctionDeclaration(func) => {
             if let Some(id) = &func.id {
-                let (value, _) = builder.local_symbol_slots(scope, id.name.as_str());
-                surface.insert(
-                    id.name.to_string(),
+                let (value, _) = context
+                    .builder
+                    .local_symbol_slots(context.scope, id.name.as_str());
+                insert_collected_export(
+                    context,
+                    id.name.as_str(),
                     ExportedSlots {
                         value,
                         ty: None,
                         value_erased: false,
                         type_unavailable: false,
                     },
-                );
+                    Span::from_oxc(id.span),
+                    owner_start,
+                    false,
+                )?;
             }
         }
         Declaration::ClassDeclaration(class) => {
             if let Some(id) = &class.id {
-                let (value, ty) = builder.local_symbol_slots(scope, id.name.as_str());
-                surface.insert(
-                    id.name.to_string(),
+                let (value, ty) = context
+                    .builder
+                    .local_symbol_slots(context.scope, id.name.as_str());
+                insert_collected_export(
+                    context,
+                    id.name.as_str(),
                     ExportedSlots {
                         value,
                         ty,
                         value_erased: false,
                         type_unavailable: false,
                     },
-                );
+                    Span::from_oxc(id.span),
+                    owner_start,
+                    false,
+                )?;
             }
         }
         Declaration::TSTypeAliasDeclaration(alias) => {
-            let (_, ty) = builder.local_symbol_slots(scope, alias.id.name.as_str());
-            surface.insert(
-                alias.id.name.to_string(),
+            let (_, ty) = context
+                .builder
+                .local_symbol_slots(context.scope, alias.id.name.as_str());
+            insert_collected_export(
+                context,
+                alias.id.name.as_str(),
                 ExportedSlots {
                     value: None,
                     ty,
                     value_erased: false,
                     type_unavailable: false,
                 },
-            );
+                Span::from_oxc(alias.id.span),
+                owner_start,
+                false,
+            )?;
         }
         Declaration::TSInterfaceDeclaration(iface) => {
-            let (_, ty) = builder.local_symbol_slots(scope, iface.id.name.as_str());
-            surface.insert(
-                iface.id.name.to_string(),
+            let (_, ty) = context
+                .builder
+                .local_symbol_slots(context.scope, iface.id.name.as_str());
+            insert_collected_export(
+                context,
+                iface.id.name.as_str(),
                 ExportedSlots {
                     value: None,
                     ty,
                     value_erased: false,
                     type_unavailable: false,
                 },
-            );
+                Span::from_oxc(iface.id.span),
+                owner_start,
+                false,
+            )?;
         }
         _ => {}
     }
+    Ok(())
 }
 
-struct ListExportContext<'a, Ticket: UserReportingOwner> {
+#[derive(Clone, Copy)]
+struct CollectedExportSite {
+    span: Span,
+    owner_start: u32,
+}
+
+struct CollectedExportGroup {
+    first_slots: ExportedSlots,
+    sites: Vec<CollectedExportSite>,
+    has_source_reexport: bool,
+    source_collision: bool,
+}
+
+struct ExportCollectionContext<'a, Ticket: UserReportingOwner> {
     builder: &'a ProjectBinderBuilder<'a>,
     scope: ScopeId,
     surface: &'a mut ExportSurface,
+    groups: &'a mut BTreeMap<String, CollectedExportGroup>,
     module_ordinal: ModuleOrdinal,
     reservations: &'a LexicalReservations<Ticket>,
     effects: &'a mut BTreeMap<UserRecordTicket, CandidateEffects>,
 }
 
 fn collect_list_export<Ticket: UserReportingOwner>(
-    context: &mut ListExportContext<'_, Ticket>,
+    context: &mut ExportCollectionContext<'_, Ticket>,
     specifier: &ExportSpecifier<'_>,
     outer_type_only: bool,
     owner_start: u32,
@@ -3706,15 +4139,157 @@ fn collect_list_export<Ticket: UserReportingOwner>(
     if type_only {
         value = None;
     }
-    context.surface.insert(
-        exported.to_string(),
+    insert_collected_export(
+        context,
+        exported,
         ExportedSlots {
             value,
             ty,
             value_erased,
             type_unavailable: local_type_barrier,
         },
-    );
+        Span::from_oxc(specifier.exported.span()),
+        owner_start,
+        false,
+    )
+}
+
+fn collect_source_reexport<Ticket: UserReportingOwner>(
+    context: &mut ExportCollectionContext<'_, Ticket>,
+    validated: &ValidatedSourceReexportDeclaration<'_>,
+    dependency_exports: &[ExportSurface],
+) -> Result<(), Ticket::Error> {
+    let declaration = validated.declaration;
+    let target = match declaration.source() {
+        AdmittedSourceReexportSource::Missing => {
+            enqueue_external_diagnostic(
+                context.reservations,
+                context.effects,
+                context.module_ordinal,
+                declaration.owner_start(),
+                Diagnostic::cannot_find_module(
+                    declaration.source_span(),
+                    declaration.module_specifier(),
+                ),
+            )?;
+            None
+        }
+        AdmittedSourceReexportSource::Resolved(target) => dependency_exports.get(target),
+    };
+
+    for (exported_span, member) in validated
+        .exported_spans
+        .iter()
+        .copied()
+        .zip(declaration.members())
+    {
+        let projected = target
+            .and_then(|surface| surface.get(member.imported()))
+            .copied();
+        let slots = match projected {
+            Some(mut slots) => {
+                if member.is_type_only() {
+                    slots.value_erased |= slots.value.is_some();
+                    slots.value = None;
+                }
+                slots
+            }
+            None => {
+                if target.is_some() {
+                    enqueue_external_diagnostic(
+                        context.reservations,
+                        context.effects,
+                        context.module_ordinal,
+                        declaration.owner_start(),
+                        Diagnostic::no_exported_member(
+                            member.span(),
+                            declaration.module_specifier(),
+                            member.imported(),
+                        ),
+                    )?;
+                }
+                ExportedSlots {
+                    value: None,
+                    ty: None,
+                    value_erased: true,
+                    type_unavailable: true,
+                }
+            }
+        };
+        insert_collected_export(
+            context,
+            member.exported(),
+            slots,
+            exported_span,
+            declaration.owner_start(),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_collected_export<Ticket: UserReportingOwner>(
+    context: &mut ExportCollectionContext<'_, Ticket>,
+    name: &str,
+    slots: ExportedSlots,
+    span: Span,
+    owner_start: u32,
+    source_reexport: bool,
+) -> Result<(), Ticket::Error> {
+    let current = CollectedExportSite { span, owner_start };
+    let Some(group) = context.groups.get(name) else {
+        context.surface.insert(name.to_owned(), slots);
+        context.groups.insert(
+            name.to_owned(),
+            CollectedExportGroup {
+                first_slots: slots,
+                sites: vec![current],
+                has_source_reexport: source_reexport,
+                source_collision: false,
+            },
+        );
+        return Ok(());
+    };
+
+    let introduces_source_collision =
+        group.source_collision || group.has_source_reexport || source_reexport;
+    if !introduces_source_collision {
+        context.surface.insert(name.to_owned(), slots);
+        if let Some(group) = context.groups.get_mut(name) {
+            group.has_source_reexport |= source_reexport;
+            group.sites.push(current);
+        }
+        return Ok(());
+    }
+
+    let first_slots = group.first_slots;
+    let prior_sites = if group.source_collision {
+        Vec::new()
+    } else {
+        group.sites.clone()
+    };
+    for prior in prior_sites {
+        enqueue_external_diagnostic(
+            context.reservations,
+            context.effects,
+            context.module_ordinal,
+            prior.owner_start,
+            Diagnostic::duplicate_identifier(prior.span, name),
+        )?;
+    }
+    enqueue_external_diagnostic(
+        context.reservations,
+        context.effects,
+        context.module_ordinal,
+        owner_start,
+        Diagnostic::duplicate_identifier(span, name),
+    )?;
+    context.surface.insert(name.to_owned(), first_slots);
+    if let Some(group) = context.groups.get_mut(name) {
+        group.has_source_reexport |= source_reexport;
+        group.source_collision = true;
+        group.sites.push(current);
+    }
     Ok(())
 }
 
@@ -5657,6 +6232,436 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
 // ===========================================================================
 // M9: type-parameter scoping — a name → TypeParam frame stack on `Pass`.
 // ===========================================================================
+
+#[cfg(test)]
+mod source_reexport_projection_tests {
+    use super::*;
+    use crate::frontend::{
+        collect_admitted_source_reexports_for_test, run_project_frontend, FileInput,
+        ProjectResolutionMode, ProjectRoot, SourceReexportCollectionForTest,
+    };
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
+
+    struct TempProject {
+        directory: PathBuf,
+    }
+
+    impl TempProject {
+        fn new(files: &[(&str, &str)]) -> Self {
+            let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "typokat-check-source-reexports-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&directory).expect("create checker source-reexport project");
+            for (name, source) in files {
+                std::fs::write(directory.join(name), source)
+                    .expect("write checker source-reexport fixture");
+            }
+            Self { directory }
+        }
+
+        fn inputs(&self, files: &[(&str, &str)]) -> Vec<FileInput> {
+            files
+                .iter()
+                .map(|(name, source)| FileInput {
+                    name: self.directory.join(name).to_string_lossy().into_owned(),
+                    source: (*source).to_owned(),
+                })
+                .collect()
+        }
+
+        fn mode(&self, inputs: &[FileInput]) -> ProjectResolutionMode {
+            ProjectResolutionMode::BundlerProject {
+                project_directory: self.directory.clone(),
+                roots: inputs
+                    .iter()
+                    .map(|input| ProjectRoot {
+                        identity: input.name.clone(),
+                        path: PathBuf::from(&input.name),
+                        exists: true,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    struct PreparedProject {
+        _project: TempProject,
+        inputs: Vec<FileInput>,
+        collection: SourceReexportCollectionForTest,
+    }
+
+    fn prepare(files: &[(&str, &str)]) -> PreparedProject {
+        let project = TempProject::new(files);
+        let inputs = project.inputs(files);
+        let first =
+            collect_admitted_source_reexports_for_test(inputs.clone(), project.mode(&inputs))
+                .expect("collect source-reexport dependency order");
+        let mut by_name = inputs
+            .into_iter()
+            .map(|input| (input.name.clone(), input))
+            .collect::<BTreeMap<_, _>>();
+        let inputs = first
+            .dependency_order()
+            .iter()
+            .map(|name| {
+                by_name
+                    .remove(name)
+                    .expect("dependency order names one configured input")
+            })
+            .collect::<Vec<_>>();
+        assert!(by_name.is_empty());
+        let collection =
+            collect_admitted_source_reexports_for_test(inputs.clone(), project.mode(&inputs))
+                .expect("collect source-reexport evidence in dependency order");
+        assert_eq!(collection.dependency_order(), input_names(&inputs));
+        PreparedProject {
+            _project: project,
+            inputs,
+            collection,
+        }
+    }
+
+    fn input_names(inputs: &[FileInput]) -> Vec<String> {
+        inputs.iter().map(|input| input.name.clone()).collect()
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ObservedDiagnostic {
+        file: String,
+        code: String,
+        line: usize,
+        column: usize,
+        source_slice: String,
+    }
+
+    fn check(prepared: PreparedProject) -> Vec<ObservedDiagnostic> {
+        let PreparedProject {
+            _project: project,
+            inputs,
+            collection,
+        } = prepared;
+        let run = run_project_frontend(inputs, |interner, units| {
+            assert_eq!(
+                units
+                    .iter()
+                    .map(|unit| unit.normalized_path.clone())
+                    .collect::<Vec<_>>(),
+                collection.dependency_order()
+            );
+            check_project_programs_with_source_reexports_for_test(
+                interner,
+                units,
+                collection.admitted(),
+            )
+            .expect("valid frontend source-reexport evidence")
+        });
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        let inputs = run.inputs;
+        let mut observed = Vec::new();
+        for result in run.product {
+            assert!(result.incomplete.is_empty());
+            let input = &inputs[result.module_ordinal.index()];
+            let file = PathBuf::from(&input.name)
+                .file_name()
+                .expect("fixture has file name")
+                .to_string_lossy()
+                .into_owned();
+            for diagnostic in result.diagnostics {
+                let start = usize::try_from(diagnostic.span.start).expect("span start fits usize");
+                let end = usize::try_from(diagnostic.span.end).expect("span end fits usize");
+                let before = &input.source[..start];
+                let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                let column = before
+                    .rsplit_once('\n')
+                    .map_or(before.len(), |(_, tail)| tail.len())
+                    + 1;
+                observed.push(ObservedDiagnostic {
+                    file: file.clone(),
+                    code: diagnostic.code.as_str().to_owned(),
+                    line,
+                    column,
+                    source_slice: input.source[start..end].to_owned(),
+                });
+            }
+        }
+        drop(project);
+        observed
+    }
+
+    fn codes(observed: &[ObservedDiagnostic]) -> Vec<&str> {
+        observed
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn projects_value_type_class_and_chain_slots_without_a_local_binding() {
+        let observed = check(prepare(&[
+            (
+                "source.ts",
+                "export const value = 1;\nexport interface Shape { size: number }\nexport class Box {}\n",
+            ),
+            (
+                "barrel-a.ts",
+                "export { value as renamed, type Shape as RenamedShape, Box } from \"./source.js\";\nconst leak = value;\n",
+            ),
+            (
+                "barrel-b.ts",
+                "export { renamed, type RenamedShape, Box } from \"./barrel-a.js\";\n",
+            ),
+            (
+                "consumer.ts",
+                "import { renamed, RenamedShape, Box } from \"./barrel-b\";\nconst good: number = renamed;\nconst bad: string = renamed;\nconst shape: RenamedShape = { size: 1 };\nconst misuse = RenamedShape;\nconst made: Box = new Box();\n",
+            ),
+        ]));
+        assert_eq!(codes(&observed), ["TK2304", "TK2322", "TK2304"]);
+        assert_eq!(observed[0].file, "barrel-a.ts");
+        assert_eq!(observed[0].source_slice, "value");
+        assert_eq!(observed[1].file, "consumer.ts");
+        assert_eq!(observed[2].source_slice, "RenamedShape");
+    }
+
+    #[test]
+    fn outer_type_only_reexport_keeps_the_value_barrier() {
+        let observed = check(prepare(&[
+            ("source.ts", "export class Box {}\n"),
+            (
+                "barrel.ts",
+                "export type { Box as TypeBox } from \"./source.js\";\n",
+            ),
+            (
+                "consumer.ts",
+                "import { TypeBox } from \"./barrel\";\nconst typed: TypeBox = {};\nconst bad = new TypeBox();\n",
+            ),
+        ]));
+        assert_eq!(codes(&observed), ["TK2304"]);
+        assert_eq!(observed[0].source_slice, "TypeBox");
+    }
+
+    #[test]
+    fn missing_declaration_is_grouped_and_absent_member_is_distinct() {
+        let observed = check(prepare(&[
+            ("source.ts", "export const present = 1;\n"),
+            (
+                "barrel.ts",
+                "export { absent } from \"./source.js\";\nexport { alpha, beta } from \"./missing.js\";\n",
+            ),
+        ]));
+        assert_eq!(codes(&observed), ["TK2305", "TK2307"]);
+        assert_eq!(observed[0].source_slice, "absent");
+        assert_eq!(observed[1].source_slice, "\"./missing.js\"");
+    }
+
+    fn assert_duplicate_case(files: &[(&str, &str)], expected_lines: [usize; 2]) {
+        let observed = check(prepare(files));
+        assert_eq!(codes(&observed), ["TK2300", "TK2300"]);
+        assert_eq!(
+            observed
+                .iter()
+                .map(|diagnostic| diagnostic.line)
+                .collect::<Vec<_>>(),
+            expected_lines
+        );
+        assert!(observed
+            .iter()
+            .all(|diagnostic| diagnostic.source_slice == "duplicate"));
+    }
+
+    #[test]
+    fn duplicate_source_and_local_exports_report_both_sites_and_keep_the_first_surface() {
+        assert_duplicate_case(
+            &[
+                ("source.ts", "export const remote = \"remote\";\n"),
+                (
+                    "barrel.ts",
+                    "const local = 2;\nexport { local as duplicate };\nexport { remote as duplicate } from \"./source.js\";\n",
+                ),
+                (
+                    "consumer.ts",
+                    "import { duplicate } from \"./barrel\";\nconst kept: number = duplicate;\n",
+                ),
+            ],
+            [2, 3],
+        );
+        assert_duplicate_case(
+            &[
+                ("source.ts", "export const remote = \"remote\";\n"),
+                (
+                    "barrel.ts",
+                    "const local = 2;\nexport { remote as duplicate } from \"./source.js\";\nexport { local as duplicate };\n",
+                ),
+                (
+                    "consumer.ts",
+                    "import { duplicate } from \"./barrel\";\nconst kept: string = duplicate;\n",
+                ),
+            ],
+            [2, 3],
+        );
+    }
+
+    #[test]
+    fn duplicate_source_exports_report_both_sites_in_both_lexical_orders() {
+        assert_duplicate_case(
+            &[
+                ("a.ts", "export const first = 1;\n"),
+                ("b.ts", "export const second = \"second\";\n"),
+                (
+                    "barrel.ts",
+                    "export { first as duplicate } from \"./a.js\";\nexport { second as duplicate } from \"./b.js\";\n",
+                ),
+                (
+                    "consumer.ts",
+                    "import { duplicate } from \"./barrel\";\nconst kept: number = duplicate;\n",
+                ),
+            ],
+            [1, 2],
+        );
+        assert_duplicate_case(
+            &[
+                ("a.ts", "export const first = 1;\n"),
+                ("b.ts", "export const second = \"second\";\n"),
+                (
+                    "barrel.ts",
+                    "export { second as duplicate } from \"./b.js\";\nexport { first as duplicate } from \"./a.js\";\n",
+                ),
+                (
+                    "consumer.ts",
+                    "import { duplicate } from \"./barrel\";\nconst kept: string = duplicate;\n",
+                ),
+            ],
+            [1, 2],
+        );
+    }
+
+    #[test]
+    fn three_way_duplicate_reports_every_site_and_keeps_the_first_surface() {
+        let observed = check(prepare(&[
+            ("source.ts", "export const remote = \"source\";\n"),
+            (
+                "barrel.ts",
+                "const first = 1;\nexport { first as duplicate };\nexport { remote as duplicate } from \"./source.js\";\nconst last = true;\nexport { last as duplicate };\n",
+            ),
+            (
+                "consumer.ts",
+                "import { duplicate } from \"./barrel\";\nconst good: number = duplicate;\nconst badString: string = duplicate;\nconst badBoolean: boolean = duplicate;\n",
+            ),
+        ]));
+        assert_eq!(
+            codes(&observed),
+            ["TK2300", "TK2300", "TK2300", "TK2322", "TK2322"]
+        );
+        assert_eq!(
+            observed
+                .iter()
+                .map(|diagnostic| (diagnostic.file.as_str(), diagnostic.line))
+                .collect::<Vec<_>>(),
+            [
+                ("barrel.ts", 2),
+                ("barrel.ts", 3),
+                ("barrel.ts", 5),
+                ("consumer.ts", 3),
+                ("consumer.ts", 4),
+            ]
+        );
+        assert!(observed[..3]
+            .iter()
+            .all(|diagnostic| diagnostic.source_slice == "duplicate"));
+    }
+
+    #[test]
+    fn source_reexport_evidence_work_is_linear_in_declaration_count() {
+        const DECLARATIONS: usize = 48;
+        let mut source = String::new();
+        let mut barrel = String::new();
+        for index in 0..DECLARATIONS {
+            source.push_str(&format!("export const value{index} = {index};\n"));
+            barrel.push_str(&format!(
+                "export {{ value{index} }} from \"./source.js\";\n"
+            ));
+        }
+        let prepared = prepare(&[
+            ("source.ts", source.as_str()),
+            ("barrel.ts", barrel.as_str()),
+        ]);
+        let PreparedProject {
+            _project: project,
+            inputs,
+            collection,
+        } = prepared;
+        assert_eq!(collection.admitted().declarations().len(), DECLARATIONS);
+        let run = run_project_frontend(inputs, |interner, units| {
+            check_project_programs_with_source_reexport_work_for_test(
+                interner,
+                units,
+                collection.admitted(),
+            )
+        });
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        let (results, work) = run.product.expect("scale evidence stays valid");
+        assert!(results
+            .iter()
+            .all(|result| result.diagnostics.is_empty() && result.incomplete.is_empty()));
+        assert_eq!(work.syntax_statements_scanned, DECLARATIONS * 2);
+        assert_eq!(work.validation_lookups, DECLARATIONS);
+        assert_eq!(work.projection_lookups, DECLARATIONS);
+        drop(project);
+    }
+
+    #[test]
+    fn invalid_provenance_fails_before_binding_or_user_output() {
+        let mut prepared = prepare(&[
+            ("source.ts", "export const value = 1;\n"),
+            ("barrel.ts", "export { value } from \"./source.js\";\n"),
+        ]);
+        prepared
+            .collection
+            .invalidate_first_resolved_provenance_for_test()
+            .expect("corrupt one opaque frontend proof");
+        let scope = AuthoritativeProjectBindingWorkScopeForTest::start();
+        let run = run_project_frontend(prepared.inputs, |interner, units| {
+            check_project_programs_with_source_reexports_for_test(
+                interner,
+                units,
+                prepared.collection.admitted(),
+            )
+        });
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        assert!(matches!(
+            run.product,
+            Err(ProjectSourceReexportInvariantError::InvalidNamespaceProvenance)
+        ));
+        let work = scope.finish();
+        assert_eq!(work.entries, 0);
+        assert_eq!(work.bound_units, 0);
+        assert_eq!(work.typed_products_produced, 0);
+    }
+
+    #[test]
+    fn empty_source_exports_produce_no_admitted_declaration() {
+        let prepared = prepare(&[
+            (
+                "barrel.ts",
+                "export {} from \"./missing.js\";\nexport type {} from \"./source.js\";\n",
+            ),
+            ("source.ts", "export const value = 1;\n"),
+        ]);
+        assert!(prepared.collection.admitted().is_empty());
+        assert_eq!(prepared.collection.dependency_edge_count(), 0);
+        assert!(prepared.collection.resolutions().is_empty());
+    }
+}
 
 #[cfg(test)]
 mod tests;
