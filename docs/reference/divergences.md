@@ -70,9 +70,11 @@ and validated the same way.
   type parameter (tsc `TS2315`); a wrong **type-argument count** on a recognized type
   such as bare/over-applied `Array` (tsc `TS2314` — `Array` is a known built-in, not
   "cannot find name"). Qualified namespace type paths are modeled; the remaining
-  diagnosed ambient export-alias endpoint recovery is recorded separately below. M29
-  temporarily maps a type-only import/export used as a value to `TK2304` instead of
-  tsc's `TS2693`.
+  diagnosed ambient export-alias endpoint recovery is recorded separately below. M29/B38 maps a
+  type-only surface that erased a real value to `TK2304` as the local stand-in for tsc's
+  `TS1361`/`TS1362`. A pure type-only named source re-export whose source never had a value instead
+  reports exact `TK2693`; the provenance distinction prevents either case from falling through to
+  an ambient value.
   <!-- div: id=names/value-used-as-type dir=under scope=s-value-type-space owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/positions.ts -->
   <!-- div: id=names/type-args-on-type-param dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m24_generic_constraints/constraint_check_explicit.ts -->
   <!-- div: id=names/type-arg-count-on-builtin dir=under scope=a-type-argument-arity owner=../backlog/52-type-reference-tail.md witness=../../tests/cases/m22_unresolved_type/generics.ts -->
@@ -799,16 +801,21 @@ is assignable to an optional member. No new diagnostic code.
 ## Modules / imports (M29)
 
 Implemented: local relative `./` / `../` imports resolved to configured `.ts` files; named imports,
-`import type`, exported declarations, and simple local `export { x as y }` lists in one serial type
-universe. The public `check --project-summary json <directory|tsconfig.json>` route accepts the exact
-files-only strict/noEmit/ESNext/Bundler config. It uses `oxc_resolver 11.24.2` for extensionless and
+`import type`, exported declarations, simple local `export { x as y }` lists, and acyclic local
+named source re-exports over namespace-free value/type slots in one serial type universe. The
+source-re-export slice includes aliases, outer/inline type-only forms, chains,
+declaration-grouped missing-module diagnostics, per-member missing-export diagnostics, and
+empty-list erasure without creating barrel-local bindings. The
+public `check --project-summary json <directory|tsconfig.json>` route accepts the exact files-only
+strict/noEmit/ESNext/Bundler config. It uses `oxc_resolver 11.24.2` for extensionless and
 `.js`→`.ts` physical lookup, inventories every module form before filtering, and emits a
 deterministic summary. Unsupported forms are explicit non-clean project notices, not silent drops.
 
 - **Out of scope (deferred):** packages / `node_modules`, broader config/root selection, `.d.ts`,
-  default imports, namespace imports, star imports/re-exports, source re-exports, CommonJS, ambient
-  modules, cyclic module graphs, and parallel cross-file identity. The production driver supplies
-  the full default library independently of this unresolved module-resolution surface.
+  default imports/exports, namespace imports, star/namespace re-exports, namespace-bearing source
+  targets, CommonJS, ambient modules, cyclic module graphs, and parallel cross-file identity. The
+  production driver supplies the full default library independently of this unresolved
+  module-resolution surface.
   <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
 
 Backlog `15` expands this shipped Bundler substrate. Typokat retains source-root accounting, module

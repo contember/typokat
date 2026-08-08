@@ -227,11 +227,13 @@ module…* and `TK2305` *Module has no exported member…* for that slice — bo
 `crates/typokat-diagnostics/src/diagnostics/mod.rs` and the README diagnostics list.
 The public `check --project-summary json <directory|tsconfig.json>` route accepts only an exact
 files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, and local named
-imports. Extensionless and `.js`→`.ts` physical resolution use `oxc_resolver 11.24.2`. Its
-deterministic summary accounts for every root and encountered module form; unsupported config,
-specifier, or form is an explicit non-clean project notice. Packages/`node_modules`, `.d.ts`,
-default/namespace imports, source re-exports, and module cycles remain unsupported under `15` and
-`72`. Alternate profiles (including NodeNext/Node16), `TK2792`, `TK2459`, unknown-option
+imports. It also admits acyclic local named source re-exports over namespace-free value/type slots,
+including aliases, type-only forms, and chains. Extensionless and `.js`→`.ts` physical resolution
+use `oxc_resolver 11.24.2`. Its deterministic summary accounts for every root and encountered
+module form; unsupported config, specifier, or form is an explicit non-clean project notice.
+Packages/`node_modules`, `.d.ts`, default/namespace imports, star/namespace re-exports,
+namespace-bearing source targets, and module cycles remain unsupported under `15` and `72`.
+Alternate profiles (including NodeNext/Node16), `TK2792`, `TK2459`, unknown-option
 validation, and `isolatedModules`/emit-target-gated diagnostics stay OOS unless deliberately
 promoted. An unsupported profile or dependency gap is a separate explicit project outcome, not a
 clean fallback. The divergence ledger's Modules section is the authoritative current boundary.

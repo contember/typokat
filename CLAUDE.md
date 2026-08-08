@@ -69,9 +69,11 @@ diagnostics; parsing and project dependency ordering belong to
 The public project route accepts a directory or `tsconfig.json` with exactly `files`,
 `strict: true`, `noEmit: true`, `module: "ESNext"`, and `moduleResolution: "Bundler"`. Configured
 roots are local `.ts` files. Named local imports resolve extensionless and `.js`→`.ts` forms through
-`oxc_resolver 11.24.2`; every unsupported config, specifier, or module form is an explicit non-clean
-project notice in the deterministic JSON summary. Packages, default/namespace imports, source
-re-exports, and cycles remain unsupported.
+`oxc_resolver 11.24.2`. Acyclic local named source re-exports project namespace-free value/type
+slots directly, including aliases, type-only forms, and chains. Every unsupported config,
+specifier, or module form is an explicit non-clean project notice in the deterministic JSON
+summary. Packages, default/namespace imports, star/namespace re-exports, namespace-bearing source
+targets, and cycles remain unsupported.
 
 **Soundness > completeness**: when in doubt, over-report (the safe direction). Every
 deliberate `tsc` divergence is documented in

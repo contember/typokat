@@ -546,11 +546,14 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   `typokat check --project-summary json <directory|tsconfig.json>` route adds a bounded Bundler
   shell around the same semantic path: its exact config is files-only strict/noEmit/ESNext/Bundler;
   roots are configured local `.ts` files; named imports admit extensionless and `.js`→`.ts`
-  specifiers; and `oxc_resolver 11.24.2` is the sole physical lookup authority. Typokat inventories
-  every module declaration before filtering and returns a deterministic summary of roots,
-  checked/skipped files, resolutions, project notices, parse errors, incompletes, and diagnostics.
-  Unsupported configs, specifiers, and forms are explicit non-clean outcomes. General packages,
-  default/namespace imports, source re-exports, and cycles are not admitted
+  specifiers; and `oxc_resolver 11.24.2` is the sole physical lookup authority. Acyclic local named
+  source re-exports use frontend-certified dependency/provenance evidence and directly project
+  namespace-free target value/type slots without a barrel-local binding. Typokat inventories every
+  module declaration before filtering and returns a deterministic summary of roots, checked/skipped
+  files, resolutions, project notices, parse errors, incompletes, and diagnostics. Unsupported
+  configs, specifiers, and forms are explicit non-clean outcomes. General packages,
+  default/namespace imports, star/namespace re-exports, namespace-bearing source targets, and
+  cycles are not admitted
   ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
 - **Stage 1 — shared *read-only* default-library base (shipped).**
   `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
@@ -683,9 +686,10 @@ measured.
    largest type-level gains — *in the tree-walker*. A bytecode VM (§7.1) is a **deferred,
    profiling-gated refactor**, not part of this phase (ADR-0001).
 5. **Phase 4 — Real-project scale.** Full `lib.d.ts`, parallelism Stage 1, and the bounded
-   files-only Bundler project route are shipped. The remaining modules/imports rollout first adds
-   source re-exports and default exports, then package/`.d.ts`/config breadth while retaining
-   `oxc_resolver` as the physical lookup authority and module semantics locally. The cross-file
+   files-only Bundler project route are shipped, including acyclic local named source re-exports
+   over existing namespace-free value/type slots. The remaining modules/imports rollout next adds
+   default exports/imports, then package/`.d.ts`/config breadth while retaining `oxc_resolver` as
+   the physical lookup authority and module semantics locally. The cross-file
    type-identity strategy (stable structural hash or a shared growing interner) then enables
    parallel Stage 2. NodeNext and alternate host profiles are outside the required 1.0 ladder
    (ADR-0007).

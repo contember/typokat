@@ -8,10 +8,11 @@ blocked-by: []
 
 **Summary.** Expand the shipped bounded Bundler project route into complete module/import/export
 coverage in one **serial** type universe. `oxc_resolver 11.24.2` is already the sole physical
-authority for the admitted files-only project profile. The active
-[`2026-08-08 sprint`](../sprints/sprint-2026-08-08-acyclic-source-reexports.md) schedules only
-acyclic local named source re-exports over the existing value/type slots. Default exports/imports,
-namespace/star forms, cycles, and package/declaration breadth follow in later slices. Per
+authority for the admitted files-only project profile. The archived
+[`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) shipped acyclic
+local named source re-exports over the existing namespace-free value/type slots. Default
+declarations/expressions and default imports are the next independent slice; namespace/star forms,
+cycles, and package/declaration breadth follow later. Per
 [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), this item does not reimplement
 filesystem/package/tsconfig resolution and does not require NodeNext parity. Parallel cross-file
 type identity (Stage 2) remains solely backlog [`16`](./16-parallelism-type-universe.md). The pinned
@@ -26,13 +27,13 @@ strict/noEmit/ESNext/Bundler config, resolves configured local `.ts` roots and e
 filtering, and returns a deterministic complete summary. Unsupported forms are explicit non-clean
 notices.
 
-The six-candidate WU4 screen showed the immediate practical gap: five projects first failed on
-source re-exports or default exports, while the sixth used NodeNext-only explicit `.ts` specifiers.
-The active slice implements acyclic named source re-export publication first, including aliases,
-outer/inline type-only forms, chains, and a class's existing value/type pair. It explicitly does
-not promise namespace-bearing targets. Default export/import semantics remain the next independent
-spec-first slice. Keep both source orders and exact missing/export-space diagnostics in every
-slice; do not pull package loading into them.
+The six-candidate WU4 screen showed the practical gap before this slice: five projects first failed
+on source re-exports or default exports, while the sixth used NodeNext-only explicit `.ts`
+specifiers. Acyclic named source re-export publication is now shipped, including aliases,
+outer/inline type-only forms, chains, and a class's existing value/type pair. Namespace-bearing
+targets remain unsupported. Default declaration/expression export plus default-import semantics are
+the next independent spec-first slice. Keep both source orders and exact missing/export-space
+diagnostics in every slice; do not pull package loading into them.
 
 Later Bundler-profile breadth still needs declaration-aware extension substitution,
 `node_modules`/`@types`, package `exports`/`imports` and `types`, path aliases, tsconfig inheritance
@@ -64,11 +65,11 @@ Extend the serial `check_project` path with a single explicit dependency boundar
 - **Shipped substrate:** local named imports/exports run serially; the public exact files-only
   Bundler route discovers roots, delegates physical lookup to `oxc_resolver 11.24.2`, accounts for
   every form, and fails closed on unsupported input.
-- **Scheduled breadth — acyclic named source re-exports:** the active
-  [`2026-08-08 sprint`](../sprints/sprint-2026-08-08-acyclic-source-reexports.md) publishes
+- **Shipped breadth — acyclic named source re-exports:** the archived
+  [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) publishes
   `export { x } from` plus aliases, outer/inline type-only variants, and chains by directly
-  projecting existing value/type slots. It must preserve missing-export diagnostics,
-  deterministic order, and the rule that the re-export does not create a local barrel binding.
+  projecting existing value/type slots. It preserves missing-export diagnostics, deterministic
+  order, and the rule that the re-export does not create a local barrel binding.
   Namespace-bearing targets remain explicit unsupported input. The public summary classifies an
   admitted re-export as resolved only after both frontend and checker semantics run.
 - **Next breadth — default exports/imports:** add declaration and expression default exports plus
@@ -124,8 +125,8 @@ lands with `16`.
 
 ## Touch points
 
-Source re-export and default-slot binding; later `oxc_resolver` option mapping, broader
-project/config root enumeration, deterministic module graph, package/declaration loading,
+Default-slot binding; later namespace/star source publication, `oxc_resolver` option mapping,
+broader project/config root enumeration, deterministic module graph, package/declaration loading,
 `.d.ts` checking, the serial `check_project` path, and project accounting. Cross-file identity and
 `driver::check_files` are backlog `16`.
 

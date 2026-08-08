@@ -1,3 +1,19 @@
+> **OUTCOME — shipped 2026-08-08.** The production Bundler route now admits acyclic local named
+> source re-exports, including aliases, outer and inline type-only forms, chains, and existing
+> value/type class slots. The frontend alone constructs the opaque admission product after
+> resolution, namespace-provenance classification, and combined dependency ordering; the checker
+> validates that evidence and projects target slots without creating barrel-local bindings.
+> Explicit-file and legacy routes retain their frozen results. Missing modules and members remain
+> `TK2307`/`TK2305`; empty lists are erased; namespace-bearing targets and cycles remain explicit
+> non-clean outcomes. Commit map: plan/oracle → `c46ce6a`, `f29d687`; WU1 → `9125dd9`; WU2/WU3 →
+> `b2c1923`, `2de3905`; WU4/WU5 → `b0a6fa2`, `273a1cd`; WU6/WU7 → `daaad0c`.
+> Verification: exact `tsc 6.0.3` replay passed 60/60, source projection 13/13, replay access audit
+> 6/6, B15 6/6, B72 6/6, and full workspace tests including conformance and checker 944/944 passed.
+> Formatting and all-target clippy with warnings denied passed. Independent review ended PASS with
+> no HIGH/MEDIUM/LOW findings and 7/7 negative controls firing.
+> Backlog `15` remains open for default, namespace/star, package/config, declaration-file, and cycle
+> breadth. Backlog `72` still owns the public-project witness, mutation pack, ratchet, and CI gate.
+
 # Sprint — acyclic named source re-exports (2026-08-08)
 
 **Goal.** Admit acyclic local named source re-exports on the production Bundler project route,
@@ -524,3 +540,12 @@ Stop and re-plan instead of expanding scope if any of these occurs:
 
 <!-- Append discoveries/blockers here. Graduate changed rationale to an ADR and future work to the
      backlog; leave transient execution notes here until archive. -->
+
+- The exact `tsc 6.0.3` oracle proved that `export {} from` is erased even for a missing target;
+  `f29d687` corrected the plan before implementation.
+- The first WU6 candidate changed seven B38 diagnostics from the existing `TK2304` stand-in to
+  `TK2693`. Exact TS1361/TS1362 replay rejected that rebaseline, so `daaad0c` carries explicit
+  provenance for “never had a value” versus “a real value was erased.”
+- Independent review passed the frozen candidate, but the leader's complete workspace gate then
+  caught one raw type lookup rejected by the replay-index audit. The final candidate uses the
+  replay-aware lookup, passed a second independent review, and then passed the complete gate.

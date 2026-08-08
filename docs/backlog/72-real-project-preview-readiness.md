@@ -14,16 +14,19 @@ already shipped. General module breadth remains backlog [`15`](./15-modules-impo
 ## Problem
 
 The public command now accepts a directory or `tsconfig.json`, but its exact supported profile is
-deliberately small: files-only strict/noEmit/ESNext/Bundler, configured local `.ts` roots, and local
-named imports. `oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts` physical resolution.
-The deterministic JSON summary accounts for every root, resolution, unsupported form, parse error,
-incomplete surface, and diagnostic. Unsupported input is non-clean rather than silently filtered.
+deliberately small: files-only strict/noEmit/ESNext/Bundler, configured local `.ts` roots, local
+named imports, and acyclic local named source re-exports over namespace-free value/type slots.
+`oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts` physical resolution. The deterministic
+JSON summary accounts for every root, resolution, unsupported form, parse error, incomplete surface,
+and diagnostic. Unsupported input is non-clean rather than silently filtered.
 
 Two bounded screening sprints failed the unchanged witness gate. The latest shipped the substrate
 first, then screened six immutable public projects. None qualified: common first failures were
 source re-exports and default exports; one used explicit `.ts` specifiers under NodeNext; others
 required Node ambient types or non-equivalent config/test exclusions. Every candidate failed before
-the mutation gate. There is still no pinned public baseline, mutation pack, ratchet, or CI promise.
+the mutation gate. The named source-re-export blocker is now removed for the shipped bounded form,
+but the six candidates have not been re-screened against that expanded surface. There is still no
+pinned public baseline, mutation pack, ratchet, or CI promise.
 
 ## Approach / acceptance
 

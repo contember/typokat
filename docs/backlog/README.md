@@ -13,8 +13,9 @@ This **is** the roadmap. Shipped so far: items `01`–`04` (current-impl bugs), 
 signatures, F1), `06`+`20` (class completeness + ctor accessibility), `07` (unstructured-flow
 narrowing, M23), `08`–`12` (constraints M24 → utility types M28: the type-level evaluation phase,
 complete), `28`–`29` (soundness warm-ups), `31` (M30 contextual literals), backlog `15` slice 1
-(M29 local-relative modules) plus its bounded files-only Bundler project route and deterministic
-accounting substrate, `53` `55` `57` `58` `61` (the five HIGH silent-FN fixes,
+(M29 local-relative modules) plus its bounded files-only Bundler project route, deterministic
+accounting substrate, and acyclic named source-re-export slice, `53` `55` `57` `58` `61` (the five
+HIGH silent-FN fixes,
 sprint-2026-07-07), `25` (M31 intersection types, sprint-2026-07-07), `33` `34`
 `54` `59` `64` (soundness-tail quick wins, sprint-2026-07-08), `24` `39`
 (M32 signature shape, sprint-2026-07-09), `65` (inference candidate policy,
@@ -178,8 +179,8 @@ Checker scaling (from sprint-2026-07-25):
 - **L** · [`72`](72-real-project-preview-readiness.md) — select a zero-clean public project atop the
   shipped CLI, then land its mutation pack and differential CI ratchet.
 - **XL** · [`15`](15-modules-imports.md) — remaining Bundler module semantics and resolver breadth;
-  the active [`2026-08-08 sprint`](../sprints/sprint-2026-08-08-acyclic-source-reexports.md) owns
-  only acyclic named source re-exports; default exports/imports and packages remain later slices.
+  the archived [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md)
+  shipped acyclic named source re-exports; default exports/imports are next, with packages later.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
@@ -198,17 +199,18 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Ship the active acyclic named source-re-export slice.** The archived
+1. **Re-screen and close `72` on a zero-clean public witness.** The archived
    [`2026-08-07 sprint`](../archive/sprint-2026-08-07-bundler-project-tracer.md) shipped the exact
    files-only Bundler CLI and complete accounting, then terminated incomplete because all six
-   public candidates failed before mutations. The
-   [`2026-08-08 sprint`](../sprints/sprint-2026-08-08-acyclic-source-reexports.md) admits only
-   acyclic local named source re-exports over existing value/type slots. Keep defaults,
-   namespace/star forms, cycles, package loading, and checker-model fixes out of this slice; default
-   exports/imports remain the next separately specified breadth.
-2. **Close `72` on a zero-clean public witness.** Re-screen against the expanded shipped surface,
-   then pin the first qualifying project, three exact TS/TK mutations, the deterministic fresh-cache
-   runner, fault controls, and the CI identity ratchet. Do not relax a threshold or add a shim.
+   public candidates failed before mutations. The archived
+   [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) removed the
+   bounded acyclic named source-re-export blocker. Re-screen the unchanged candidates, then pin the
+   first qualifying project, three exact TS/TK mutations, the deterministic fresh-cache runner,
+   fault controls, and the CI identity ratchet. Do not relax a threshold or add a shim.
+2. **If the witness still stops, specify the next `15` slice.** Add default declaration/expression
+   exports and default imports without conflating the default slot with named exports. Keep
+   namespace/star forms, cycles, package loading, and checker-model fixes in their own later slices;
+   do not broaden production semantics inside the witness sprint.
 3. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
    `17`), finishing the A/B/C remainder along the way. After `15` ships, it and the shipped
    production work of `14` must graduate a pinned Bundler-compatible full-stack witness (deptective

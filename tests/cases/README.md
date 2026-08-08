@@ -266,9 +266,10 @@ modules remain ordinary `TK2307` diagnostics. Missing/empty/invalid `files`, roo
 project, unsupported root extensions, `include`/`exclude`, `extends`, `references`, `lib` and other
 unconsumed compiler options, bare
 specifiers, default/namespace/side-effect/import-equals imports, default/export-assignment/
-namespace exports, every source re-export shape, non-Bundler profiles, and module cycles are
-explicit project-level non-clean identities. Unsupported projects stop semantic checking. No
-listed form may disappear before accounting or fall through an error type.
+namespace/star exports, namespace-bearing named source re-exports, non-Bundler profiles, and module
+cycles are explicit project-level non-clean identities. Acyclic local named source re-exports are
+admitted by the separate B15 contract below. Unsupported projects stop semantic checking. No listed
+form may disappear before accounting or fall through an error type.
 
 Both directory and explicit-config invocations must produce the same normalized summary. Every
 array is ordered by normalized relative path, then source position, then identity. The corpus is a
@@ -284,8 +285,8 @@ provenance, cycles, and deferred syntax. `contract.json` records the exact `tsc 
 --noEmit --module esnext --moduleResolution bundler` result. The dedicated black-box integration
 test owns Bundler summaries and the separate explicit and legacy route baselines. The exact oracle
 also corrects the planned empty-list rule: `export {} from` a missing module is clean and emits no
-`TS2307` in TypeScript 6.0.3. Its enabled pre-change record freezes export attributes at their
-existing exit 2; that deferred form does not move in this sprint.
+`TS2307` in TypeScript 6.0.3. The production Bundler route admits the namespace-free acyclic rows;
+explicit and legacy routes remain frozen. Export attributes retain their exact exit-2 baseline.
 
 ## Fixture routing
 

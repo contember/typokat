@@ -69,7 +69,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, the pinned TypeScript 6.0.3 ES2025 full-host default library, and the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports, and the bounded files-only Bundler project route |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports and acyclic named source re-exports, and the bounded files-only Bundler project route |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
@@ -85,7 +85,8 @@ non-contiguous function implementation), `TK2394` (overload incompatible with im
 `TK2515`/`TK2654` (abstract member not implemented), `TK2540` (assign read-only),
 `TK2554`/`TK2555` (arity), `TK2558` (wrong explicit type-argument count), `TK2589`
 (instantiation excessively deep), `TK2673`/`TK2674` (private/protected constructor), `TK2684`
-(invalid explicit receiver), `TK2707` (generic arity range), `TK2741` (missing property), `TK2744`
+(invalid explicit receiver), `TK2693` (type used as value), `TK2707` (generic arity range),
+`TK2741` (missing property), `TK2744`
 (invalid type-parameter default reference), and `TK2769` (no overload matches).
 
 ## Architecture
@@ -194,10 +195,12 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   The public `check --project-summary json <directory|tsconfig.json>` route accepts only the exact
   files-only strict/noEmit/ESNext/Bundler config and configured local `.ts` roots. It resolves local
   named imports, including extensionless and `.js`→`.ts` forms, through `oxc_resolver 11.24.2` and
-  emits deterministic complete accounting. Every unsupported form is an explicit non-clean
-  notice. Still deferred: packages / `node_modules`, broader config/root selection, `.d.ts`,
-  default/namespace/star imports, source re-exports, CommonJS, ambient modules, cyclic module
-  graphs, and parallel cross-file type identity. An **unresolved type name** in type position is
+  admits acyclic local named source re-exports over namespace-free value/type slots, including
+  aliases, type-only forms, and chains. It emits deterministic complete accounting. Every
+  unsupported form is an explicit non-clean notice. Still deferred: packages / `node_modules`,
+  broader config/root selection, `.d.ts`, default/namespace/star imports, star/namespace
+  re-exports, namespace-bearing source targets, CommonJS, ambient modules, cyclic module graphs,
+  and parallel cross-file type identity. An **unresolved type name** in type position is
   `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
   args on a type parameter (`TS2315`) and a wrong type-argument count such as bare `Array`
   (`TS2314`). Qualified namespace types `A.B` and standalone instantiated namespace values are
@@ -216,8 +219,8 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   pinned public witness, mutation ratchet, or preview CI gate. The full default-library production
   cutover is shipped and archived after WU7
   independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
-  Source re-exports and default exports are the next module-breadth targets in `15`; package breadth
-  follows later. A clean
+  Acyclic local named source re-exports are shipped; default exports/imports are the next
+  module-breadth target in `15`, followed by package breadth. A clean
   result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
