@@ -115,23 +115,27 @@ thresholds; it removes the circular sequencing.
   duplicate and reordered roots, missing/malformed config, unsupported resolver profile, and the
   exact unchanged explicit-file invocation.
 - **Scope.** Pin `oxc_resolver` and use its config discovery/parsing facilities behind a narrow
-  internal project-orchestration boundary outside the checker core; do not add a local tsconfig
-  parser. Resolve a directory or explicit `tsconfig.json`, consume only the root-selection shape
-  admitted by WU1, and normalize/sort selected roots. Keep this component unreachable from the
-  public CLI and production driver until WU3 atomically adds complete module accounting. Preserve
-  explicit file-list mode. Unknown or unconsumed config forms are typed project notices in the
-  internal result; they must not be silently ignored.
-- **Stop / falsifier.** Stop if the admitted slice requires a general compiler-option model, a
-  second checker/type universe, changes to scope/type identity, or silent fallback for a config
-  field.
+  internal project-orchestration boundary outside the checker core. Its public `TsConfig` model
+  drops `noEmit`, `moduleResolution`, `lib`, and unknown keys, so one authorized second JSONC pass
+  audits only the root document's complete top-level and `compilerOptions` key/value set. It does
+  not discover configs, compose inheritance, enumerate roots, or resolve paths; `oxc_resolver`
+  remains authoritative for those operations, and WU1 rejects `extends`. Resolve a directory or
+  explicit `tsconfig.json`, consume only the shape admitted by WU1, and normalize/sort selected
+  roots. Keep this component unreachable from the public CLI and production driver until WU3
+  atomically adds complete module accounting. Preserve explicit file-list mode. Unknown or
+  unconsumed config forms are typed project notices in the internal result; they must not be
+  silently ignored.
+- **Stop / falsifier.** Stop if the audit grows into a general compiler-option model, accepts or
+  composes inheritance, influences filesystem/resolver decisions, creates a second checker/type
+  universe, changes scope/type identity, or silently falls back for a config field.
 - **Acceptance / witness.** Focused unit tests prove exact root coverage, deterministic ordering,
   and malformed/unsupported reporting. Black-box guards prove directory/config input is still
   rejected by the public CLI and explicit file-list behavior is byte-identical. Removing or
   duplicating a configured root breaks the internal witness; a source-level reachability guard
   fails if production dispatch exposes the substrate before WU3.
-- **Touch points.** `Cargo.toml`, `Cargo.lock`, `crates/typokat-frontend/Cargo.toml`, `src/main.rs`,
-  a focused frontend-owned project/config module, `crates/typokat-driver/src/driver.rs`, CLI tests,
-  and `tests/workspace_layout.rs` if source ownership changes.
+- **Touch points.** `Cargo.toml`, `Cargo.lock`, `crates/typokat-frontend/Cargo.toml`, a focused
+  frontend-owned project/config module and its unit tests, plus `tests/workspace_layout.rs` only if
+  source ownership changes. Public CLI and driver dispatch stay untouched in WU2.
 
 ### WU3 — atomic public Bundler route and module accounting (effort L)
 
@@ -281,6 +285,9 @@ thresholds; it removes the circular sequencing.
   universe. The complete-source production library route remains unchanged.
 - Project discovery may land internally in WU2, but the public directory/config route remains
   unavailable until WU3 atomically ships pre-filter module accounting and resolver classification.
+- `oxc_resolver 11.24.2` discards several WU1-required and unknown config keys. WU2 therefore uses
+  one fail-closed raw JSONC audit pass for exhaustive root-document consumption. This is not a
+  second discovery or resolution authority; it cannot expand the admitted config or affect a path.
 - Every configured root and encountered module form has one explicit identity and outcome. A form
   filtered before accounting is a soundness failure, not an unsupported convenience.
 - WU1-WU3 are useful backlog-15 progress even if WU4 finds no qualifying public project. In that
@@ -316,6 +323,11 @@ ratchets twice from a fresh cache; fresh official-suite `run --check`; docs lint
 
 ## Run log
 
+- 2026-08-08 — WU2 verify-first hit its config-API falsifier before edits. Two independent audits
+  confirmed that `oxc_resolver 11.24.2` exposes neither `noEmit`, `moduleResolution`, `lib`, nor
+  unknown keys after parsing. The user authorized the bounded raw JSONC audit above; contract
+  narrowing and a local resolver fork were rejected. The implementation restarts from clean
+  `36d833b` with public dispatch still unavailable.
 - 2026-08-07 — WU1 PASS. The behavior-neutral spec commit pins 25 synthetic projects, 22 exact
   config-boundary cases, every OXC module-declaration form outside the admitted named-import slice,
   four-way exit precedence, normalized line/column identities, and directory/config equivalence.
