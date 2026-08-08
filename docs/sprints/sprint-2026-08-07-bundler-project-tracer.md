@@ -323,6 +323,15 @@ ratchets twice from a fresh cache; fresh official-suite `run --check`; docs lint
 
 ## Run log
 
+- 2026-08-08 — WU2 PASS. Exact-pinned `oxc_resolver 11.24.2` owns config decoding and
+  root enumeration; the bounded `jsonc-parser 0.33.1` pass audits every root-document key and
+  fails closed on unsupported forms. Discovery accepts only a directory or an explicit
+  `tsconfig.json`, publishes deterministic normalized `files` roots, never composes `extends` or
+  `references`, and remains unreachable from CLI/driver dispatch. Independent review initially
+  rejected arbitrary-file admission and a non-falsifiable inheritance guard; both were corrected
+  and the same reviewer returned PASS. Leader verification passed 11 frontend tests, the two active
+  B72 black-box guards, both workspace-layout tests, frontend all-target clippy with warnings
+  denied, formatting, and diff checks.
 - 2026-08-08 — WU2 verify-first hit its config-API falsifier before edits. Two independent audits
   confirmed that `oxc_resolver 11.24.2` exposes neither `noEmit`, `moduleResolution`, `lib`, nor
   unknown keys after parsing. The user authorized the bounded raw JSONC audit above; contract
