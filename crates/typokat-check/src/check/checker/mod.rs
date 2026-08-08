@@ -1483,9 +1483,10 @@ pub fn merge_project_binding_thread_receipt_for_test(
 struct ExportedSlots {
     value: Option<ValueStorageId>,
     ty: Option<TypeGroupId>,
-    /// A type-only export hid a real local value slot. Imports must keep its
-    /// runtime barrier even though no value declaration crosses the boundary.
+    /// A type-only export blocks value lookup even when no value slot existed.
     value_erased: bool,
+    /// The type-only surface blocked value lookup without erasing a value slot.
+    type_only_value_absence: bool,
     /// Missing imported/re-exported types hide ambient names without a fake group.
     type_unavailable: bool,
 }
@@ -3877,11 +3878,14 @@ fn imported_symbols<Ticket: UserReportingOwner>(
                         let value_barrier =
                             slots.value_erased || (import.type_only && slots.value.is_some());
                         let value = if import.type_only { None } else { slots.value };
+                        let type_only_value_absence =
+                            value_barrier && slots.type_only_value_absence;
                         imports.push(ImportedSymbol::new(
                             import.local.clone(),
                             value,
                             slots.ty,
                             value_barrier,
+                            type_only_value_absence,
                             slots.type_unavailable,
                             import.local_span,
                         ));
@@ -3987,6 +3991,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                             value,
                             ty: None,
                             value_erased: false,
+                            type_only_value_absence: false,
                             type_unavailable: false,
                         },
                         Span::from_oxc(declarator.id.span()),
@@ -4008,6 +4013,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                         value,
                         ty: None,
                         value_erased: false,
+                        type_only_value_absence: false,
                         type_unavailable: false,
                     },
                     Span::from_oxc(id.span),
@@ -4028,6 +4034,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                         value,
                         ty,
                         value_erased: false,
+                        type_only_value_absence: false,
                         type_unavailable: false,
                     },
                     Span::from_oxc(id.span),
@@ -4047,6 +4054,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                     value: None,
                     ty,
                     value_erased: false,
+                    type_only_value_absence: false,
                     type_unavailable: false,
                 },
                 Span::from_oxc(alias.id.span),
@@ -4065,6 +4073,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                     value: None,
                     ty,
                     value_erased: false,
+                    type_only_value_absence: false,
                     type_unavailable: false,
                 },
                 Span::from_oxc(iface.id.span),
@@ -4116,6 +4125,9 @@ fn collect_list_export<Ticket: UserReportingOwner>(
     let local_value_barrier = context
         .builder
         .local_value_lookup_barrier(context.scope, local);
+    let local_type_only_value_absence = context
+        .builder
+        .local_type_only_value_absence(context.scope, local);
     let local_type_barrier = context
         .builder
         .local_type_lookup_barrier(context.scope, local);
@@ -4132,10 +4144,20 @@ fn collect_list_export<Ticket: UserReportingOwner>(
         return Ok(());
     }
     // A type-only specifier (`export type { x }` or `export { type x }`) must not
-    // supply a runtime value — suppress the value slot so a non-type-only import
-    // cannot use it as a value (tsc TS1362; M29 stand-in is TK2304 on the importer).
+    // supply a runtime value; exact provenance below selects the value-use diagnostic.
     let type_only = outer_type_only || specifier.export_kind == ImportOrExportKind::Type;
-    let value_erased = local_value_barrier || (type_only && value.is_some());
+    let value_erased = local_value_barrier || type_only;
+    let type_only_value_absence = if type_only {
+        if value.is_some() {
+            false
+        } else if local_value_barrier {
+            local_type_only_value_absence
+        } else {
+            ty.is_some()
+        }
+    } else {
+        local_type_only_value_absence
+    };
     if type_only {
         value = None;
     }
@@ -4146,6 +4168,7 @@ fn collect_list_export<Ticket: UserReportingOwner>(
             value,
             ty,
             value_erased,
+            type_only_value_absence,
             type_unavailable: local_type_barrier,
         },
         Span::from_oxc(specifier.exported.span()),
@@ -4189,7 +4212,14 @@ fn collect_source_reexport<Ticket: UserReportingOwner>(
         let slots = match projected {
             Some(mut slots) => {
                 if member.is_type_only() {
-                    slots.value_erased |= slots.value.is_some();
+                    slots.type_only_value_absence = if slots.value.is_some() {
+                        false
+                    } else if slots.value_erased {
+                        slots.type_only_value_absence
+                    } else {
+                        slots.ty.is_some()
+                    };
+                    slots.value_erased = true;
                     slots.value = None;
                 }
                 slots
@@ -4212,6 +4242,7 @@ fn collect_source_reexport<Ticket: UserReportingOwner>(
                     value: None,
                     ty: None,
                     value_erased: true,
+                    type_only_value_absence: false,
                     type_unavailable: true,
                 }
             }
@@ -6426,7 +6457,7 @@ mod source_reexport_projection_tests {
                 "import { renamed, RenamedShape, Box } from \"./barrel-b\";\nconst good: number = renamed;\nconst bad: string = renamed;\nconst shape: RenamedShape = { size: 1 };\nconst misuse = RenamedShape;\nconst made: Box = new Box();\n",
             ),
         ]));
-        assert_eq!(codes(&observed), ["TK2304", "TK2322", "TK2304"]);
+        assert_eq!(codes(&observed), ["TK2304", "TK2322", "TK2693"]);
         assert_eq!(observed[0].file, "barrel-a.ts");
         assert_eq!(observed[0].source_slice, "value");
         assert_eq!(observed[1].file, "consumer.ts");
@@ -6448,6 +6479,62 @@ mod source_reexport_projection_tests {
         ]));
         assert_eq!(codes(&observed), ["TK2304"]);
         assert_eq!(observed[0].source_slice, "TypeBox");
+    }
+
+    #[test]
+    fn type_only_interface_surface_reports_type_used_as_value_and_blocks_ambient_value() {
+        let observed = check(prepare(&[
+            ("source.ts", "export interface Math { marker: true }\n"),
+            (
+                "barrel.ts",
+                "export type { Math } from \"./source.js\";\n",
+            ),
+            (
+                "consumer.ts",
+                "import { Math } from \"./barrel\";\nconst typed: Math = { marker: true };\nMath.abs(1);\n",
+            ),
+        ]));
+        assert_eq!(codes(&observed), ["TK2693"]);
+        assert_eq!(observed[0].source_slice, "Math");
+    }
+
+    #[test]
+    fn direct_type_only_interface_import_keeps_cross_space_ambient_fallback() {
+        let observed = check(prepare(&[
+            ("source.ts", "export interface Math { marker: true }\n"),
+            (
+                "consumer.ts",
+                "import type { Math } from \"./source\";\nconst typed: Math = { marker: true };\nMath.abs(1);\n",
+            ),
+        ]));
+        assert!(observed.is_empty());
+    }
+
+    #[test]
+    fn type_only_reexport_of_a_real_value_keeps_tk2304_and_blocks_ambient_value() {
+        let observed = check(prepare(&[
+            (
+                "source.ts",
+                "export class Math { static abs(value: string): string { return value; } }\n",
+            ),
+            ("barrel.ts", "export type { Math } from \"./source.js\";\n"),
+            (
+                "consumer.ts",
+                "import { Math } from \"./barrel\";\nconst typed: Math = {};\nMath.abs(1);\n",
+            ),
+        ]));
+        assert_eq!(codes(&observed), ["TK2304"]);
+        assert_eq!(observed[0].source_slice, "Math");
+    }
+
+    #[test]
+    fn ordinary_type_declaration_value_use_keeps_the_deferred_code() {
+        let observed = check(prepare(&[(
+            "plain.ts",
+            "interface Shape {}\nconst misuse = Shape;\n",
+        )]));
+        assert_eq!(codes(&observed), ["TK2304"]);
+        assert_eq!(observed[0].source_slice, "Shape");
     }
 
     #[test]

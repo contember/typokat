@@ -121,6 +121,8 @@ pub enum DiagnosticCode {
     /// The call receiver is not assignable to an explicit `this` parameter.
     TK2684,
     TK2687,
+    /// A type-only name is used as a value.
+    TK2693,
     /// Namespace has no exported member.
     TK2694,
     /// A type-only name is used as a namespace.
@@ -211,6 +213,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2674 => "TK2674",
             DiagnosticCode::TK2684 => "TK2684",
             DiagnosticCode::TK2687 => "TK2687",
+            DiagnosticCode::TK2693 => "TK2693",
             DiagnosticCode::TK2694 => "TK2694",
             DiagnosticCode::TK2702 => "TK2702",
             DiagnosticCode::TK2706 => "TK2706",
@@ -543,6 +546,17 @@ impl Diagnostic {
             code: DiagnosticCode::TK2304,
             severity: Severity::Error,
             message: format!("Cannot find name '{name}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK2693` type-only name used in value position error.
+    pub fn type_used_as_value(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2693,
+            severity: Severity::Error,
+            message: format!("'{name}' only refers to a type, but is being used as a value here."),
             span,
             elaboration: Vec::new(),
         }
@@ -1267,6 +1281,12 @@ mod qualified_name_tests {
             Span::new(7, 8),
         );
         assert_diagnostic(
+            Diagnostic::type_used_as_value(Span::new(2, 6), "OnlyType"),
+            DiagnosticCode::TK2693,
+            "'OnlyType' only refers to a type, but is being used as a value here.",
+            Span::new(2, 6),
+        );
+        assert_diagnostic(
             Diagnostic::namespace_has_no_exported_member(Span::new(8, 14), "Root.Child", "Hidden"),
             DiagnosticCode::TK2694,
             "Namespace 'Root.Child' has no exported member 'Hidden'.",
@@ -1300,6 +1320,7 @@ mod qualified_name_tests {
     fn qualified_name_codes_render_with_tk_prefix() {
         assert_eq!(DiagnosticCode::TK2503.as_str(), "TK2503");
         assert_eq!(DiagnosticCode::TK2661.as_str(), "TK2661");
+        assert_eq!(DiagnosticCode::TK2693.as_str(), "TK2693");
         assert_eq!(DiagnosticCode::TK2694.as_str(), "TK2694");
         assert_eq!(DiagnosticCode::TK2702.as_str(), "TK2702");
         assert_eq!(DiagnosticCode::TK2713.as_str(), "TK2713");

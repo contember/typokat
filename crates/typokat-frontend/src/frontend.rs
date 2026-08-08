@@ -318,7 +318,7 @@ impl AdmittedSourceReexports {
     }
 }
 
-/// Read-only WU2 collector receipt. Production routes cannot construct this product yet.
+/// Read-only receipt for the frontend source re-export evidence tests.
 #[cfg(any(test, feature = "test-utils"))]
 pub struct SourceReexportCollectionForTest {
     admitted: AdmittedSourceReexports,
@@ -574,6 +574,90 @@ pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
     ) -> Product,
 ) -> ProjectFrontendRun<Result<AccountedProjectProduct<Product>, DeferredProjectFrontendError<Error>>>
 {
+    run_clean_project_frontend_with_deferred_auxiliary_control(
+        inputs,
+        resolution_mode,
+        SourceReexportAccounting::FrozenUnsupported,
+        load_auxiliary,
+        move |interner,
+              source_specs,
+              auxiliary_units,
+              project_units,
+              parse_work,
+              _source_reexports| {
+            Ok(consume(
+                interner,
+                source_specs,
+                auxiliary_units,
+                project_units,
+                parse_work,
+            ))
+        },
+    )
+}
+
+/// Parse and account one Bundler project, then expose its admitted named source re-exports.
+pub fn run_clean_bundler_project_frontend_with_deferred_auxiliary<Product, Error>(
+    inputs: Vec<FileInput>,
+    project_directory: PathBuf,
+    roots: Vec<ProjectRoot>,
+    load_auxiliary: impl FnOnce() -> Result<Vec<AuxiliarySourceInput>, Error>,
+    consume: impl for<'ast> FnOnce(
+        &mut Interner,
+        &[AuxiliarySourceInput],
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+        &AdmittedSourceReexports,
+        AuxiliaryParseWork,
+    ) -> Product,
+) -> ProjectFrontendRun<Result<AccountedProjectProduct<Product>, DeferredProjectFrontendError<Error>>>
+{
+    run_clean_project_frontend_with_deferred_auxiliary_control(
+        inputs,
+        ProjectResolutionMode::BundlerProject {
+            project_directory,
+            roots,
+        },
+        SourceReexportAccounting::AdmitBundler,
+        load_auxiliary,
+        move |interner,
+              source_specs,
+              auxiliary_units,
+              project_units,
+              parse_work,
+              source_reexports| {
+            let source_reexports = source_reexports.ok_or_else(|| {
+                ProjectInventoryError::new(
+                    "Bundler source re-export accounting lost its admitted product",
+                )
+            })?;
+            Ok(consume(
+                interner,
+                source_specs,
+                auxiliary_units,
+                project_units,
+                source_reexports,
+                parse_work,
+            ))
+        },
+    )
+}
+
+fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
+    inputs: Vec<FileInput>,
+    resolution_mode: ProjectResolutionMode,
+    source_reexport_accounting: SourceReexportAccounting,
+    load_auxiliary: impl FnOnce() -> Result<Vec<AuxiliarySourceInput>, Error>,
+    consume: impl for<'ast> FnOnce(
+        &mut Interner,
+        &[AuxiliarySourceInput],
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+        AuxiliaryParseWork,
+        Option<&AdmittedSourceReexports>,
+    ) -> Result<Product, ProjectInventoryError>,
+) -> ProjectFrontendRun<Result<AccountedProjectProduct<Product>, DeferredProjectFrontendError<Error>>>
+{
     let user_allocators = (0..inputs.len())
         .map(|_| Allocator::default())
         .collect::<Vec<_>>();
@@ -609,7 +693,7 @@ pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
         &inputs,
         &programs,
         &resolution_mode,
-        SourceReexportAccounting::FrozenUnsupported,
+        source_reexport_accounting,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -668,12 +752,39 @@ pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
     let auxiliary_parse_work = auxiliary_parse_work(&auxiliary_parse_invocations);
     #[cfg(not(any(test, feature = "test-utils")))]
     let auxiliary_parse_work = AuxiliaryParseWork::default();
-    let project_units = project_programs_from_accounted_imports(
-        &inputs,
-        &programs,
-        module_plan.paths,
-        module_plan.raw_imports,
-    );
+    let AccountedModulePlan {
+        inventory,
+        paths,
+        raw_imports,
+        source_reexports,
+        admitted_source_reexports,
+    } = module_plan;
+    let (admitted_source_reexports, admitted_dependency_order) = admitted_source_reexports
+        .map(|product| {
+            (
+                Some(AdmittedSourceReexports {
+                    declarations: product.declarations,
+                }),
+                Some(product.dependency_order),
+            )
+        })
+        .unwrap_or((None, None));
+    let project_units = match admitted_dependency_order {
+        Some(order) => project_programs_from_accounted_imports_in_order(
+            &inputs,
+            &programs,
+            paths,
+            raw_imports,
+            &order,
+        ),
+        None => project_programs_from_accounted_imports_with_reexports(
+            &inputs,
+            &programs,
+            paths,
+            raw_imports,
+            &source_reexports.dependency_edges,
+        ),
+    };
     let auxiliary_units = auxiliary
         .iter()
         .zip(&auxiliary_parsed)
@@ -701,18 +812,28 @@ pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
         })
         .collect::<Vec<_>>();
     let mut interner = Interner::with_intrinsics();
-    let product = consume(
+    let product = match consume(
         &mut interner,
         &auxiliary,
         &auxiliary_units,
         &project_units,
         auxiliary_parse_work,
-    );
+        admitted_source_reexports.as_ref(),
+    ) {
+        Ok(product) => product,
+        Err(error) => {
+            return ProjectFrontendRun {
+                inputs,
+                parse_errors,
+                product: Err(DeferredProjectFrontendError::Inventory(error)),
+            };
+        }
+    };
     ProjectFrontendRun {
         inputs,
         parse_errors,
         product: Ok(AccountedProjectProduct {
-            inventory: module_plan.inventory,
+            inventory,
             product: Some(product),
         }),
     }
@@ -824,8 +945,34 @@ fn project_programs_from_accounted_imports<'ast>(
     paths: Vec<PathBuf>,
     raw_imports: Vec<Vec<RawImport>>,
 ) -> Vec<ProjectProgram<'ast>> {
+    project_programs_from_accounted_imports_with_reexports(
+        inputs,
+        programs,
+        paths,
+        raw_imports,
+        &[],
+    )
+}
+
+fn project_programs_from_accounted_imports_with_reexports<'ast>(
+    inputs: &[FileInput],
+    programs: &[&'ast Program<'ast>],
+    paths: Vec<PathBuf>,
+    raw_imports: Vec<Vec<RawImport>>,
+    reexport_edges: &[BTreeSet<usize>],
+) -> Vec<ProjectProgram<'ast>> {
+    let order = dependency_order_with_reexports(&raw_imports, reexport_edges);
+    project_programs_from_accounted_imports_in_order(inputs, programs, paths, raw_imports, &order)
+}
+
+fn project_programs_from_accounted_imports_in_order<'ast>(
+    inputs: &[FileInput],
+    programs: &[&'ast Program<'ast>],
+    paths: Vec<PathBuf>,
+    raw_imports: Vec<Vec<RawImport>>,
+    order: &[usize],
+) -> Vec<ProjectProgram<'ast>> {
     let source_keys = stable_source_keys(&paths);
-    let order = dependency_order(&raw_imports);
     let mut ordered_index = vec![0usize; inputs.len()];
     for (position, &original) in order.iter().enumerate() {
         if let Some(slot) = ordered_index.get_mut(original) {
@@ -877,12 +1024,19 @@ struct AccountedModulePlan {
     inventory: ProjectModuleInventory,
     paths: Vec<PathBuf>,
     raw_imports: Vec<Vec<RawImport>>,
-    _source_reexports: PendingSourceReexports,
+    source_reexports: PendingSourceReexports,
+    admitted_source_reexports: Option<AdmittedSourceReexportProduct>,
+}
+
+struct AdmittedSourceReexportProduct {
+    declarations: Vec<AdmittedSourceReexportDeclaration>,
+    dependency_order: Vec<usize>,
 }
 
 #[derive(Clone, Copy)]
 enum SourceReexportAccounting {
     FrozenUnsupported,
+    AdmitBundler,
     #[cfg(any(test, feature = "test-utils"))]
     CollectEvidence,
 }
@@ -891,12 +1045,16 @@ impl SourceReexportAccounting {
     fn collects_evidence(self) -> bool {
         #[cfg(any(test, feature = "test-utils"))]
         {
-            matches!(self, Self::CollectEvidence)
+            matches!(self, Self::AdmitBundler | Self::CollectEvidence)
         }
         #[cfg(not(any(test, feature = "test-utils")))]
         {
-            false
+            matches!(self, Self::AdmitBundler)
         }
+    }
+
+    fn admits_product(self) -> bool {
+        matches!(self, Self::AdmitBundler)
     }
 }
 
@@ -1256,6 +1414,9 @@ fn account_project_modules(
                     })?;
                     let specifier = source_literal.value.as_str();
                     if export.specifiers.is_empty() {
+                        if source_reexport_accounting.collects_evidence() {
+                            continue;
+                        }
                         record_unsupported_module_form(
                             input,
                             &line_index,
@@ -1321,6 +1482,9 @@ fn account_project_modules(
                                 owner_start: export.span.start,
                                 members,
                             });
+                            if source_reexport_accounting.admits_product() {
+                                continue;
+                            }
                         }
                     }
                     record_unsupported_module_form(
@@ -1411,7 +1575,8 @@ fn account_project_modules(
         }
     }
 
-    if let Some(cycle) = first_module_cycle(inputs, &cycle_edges) {
+    let import_cycle = first_module_cycle(inputs, &cycle_edges);
+    if let Some(cycle) = &import_cycle {
         notice_identities.push(LocatedIdentity {
             path: cycle.first().cloned().unwrap_or_default(),
             start: 0,
@@ -1459,6 +1624,35 @@ fn account_project_modules(
     };
     source_reexports.validate(inputs.len())?;
 
+    let admitted_source_reexports = if source_reexport_accounting.admits_product() {
+        let finalized =
+            finalize_admitted_source_reexports(inputs, &paths, &raw_imports, &source_reexports)?;
+        let FinalizedSourceReexports {
+            admitted,
+            order,
+            resolutions,
+            blocked_notices,
+            first_cycle,
+        } = finalized;
+        resolution_identities.extend(resolutions);
+        notice_identities.extend(blocked_notices);
+        if import_cycle.is_none() {
+            if let Some(cycle) = &first_cycle {
+                notice_identities.push(LocatedIdentity {
+                    path: cycle.first().cloned().unwrap_or_default(),
+                    start: 0,
+                    identity: format!("unsupported-module-cycle {}", cycle.join(" -> ")),
+                });
+            }
+        }
+        Some(AdmittedSourceReexportProduct {
+            declarations: admitted,
+            dependency_order: order,
+        })
+    } else {
+        None
+    };
+
     Ok(AccountedModulePlan {
         inventory: ProjectModuleInventory {
             resolutions: sorted_identities(resolution_identities),
@@ -1468,7 +1662,8 @@ fn account_project_modules(
         },
         paths,
         raw_imports,
-        _source_reexports: source_reexports,
+        source_reexports,
+        admitted_source_reexports,
     })
 }
 
@@ -1501,7 +1696,7 @@ pub fn collect_admitted_source_reexports_for_test(
     let AccountedModulePlan {
         paths,
         raw_imports,
-        _source_reexports: source_reexports,
+        source_reexports,
         ..
     } = account_project_modules(
         &inputs,
@@ -1509,8 +1704,46 @@ pub fn collect_admitted_source_reexports_for_test(
         &mode,
         SourceReexportAccounting::CollectEvidence,
     )?;
-    let order = dependency_order_with_reexports(&raw_imports, &source_reexports.dependency_edges);
-    let source_keys = stable_source_keys(&paths);
+    let finalized =
+        finalize_admitted_source_reexports(&inputs, &paths, &raw_imports, &source_reexports)?;
+    let dependency_edge_count = source_reexports
+        .declarations
+        .iter()
+        .filter(|declaration| matches!(declaration.source, RawImportSource::Resolved(_)))
+        .count();
+    let dependency_order = finalized
+        .order
+        .iter()
+        .map(|original| normalized_display_name(&inputs[*original].name))
+        .collect();
+    Ok(SourceReexportCollectionForTest {
+        admitted: AdmittedSourceReexports {
+            declarations: finalized.admitted,
+        },
+        dependency_order,
+        dependency_edge_count,
+        resolutions: sorted_identities(finalized.resolutions),
+        blocked_notices: sorted_identities(finalized.blocked_notices),
+        first_cycle: finalized.first_cycle,
+    })
+}
+
+struct FinalizedSourceReexports {
+    admitted: Vec<AdmittedSourceReexportDeclaration>,
+    order: Vec<usize>,
+    resolutions: Vec<LocatedIdentity>,
+    blocked_notices: Vec<LocatedIdentity>,
+    first_cycle: Option<Vec<String>>,
+}
+
+fn finalize_admitted_source_reexports(
+    inputs: &[FileInput],
+    paths: &[PathBuf],
+    raw_imports: &[Vec<RawImport>],
+    source_reexports: &PendingSourceReexports,
+) -> Result<FinalizedSourceReexports, ProjectInventoryError> {
+    let order = dependency_order_with_reexports(raw_imports, &source_reexports.dependency_edges);
+    let source_keys = stable_source_keys(paths);
     let mut ordered_index = vec![0usize; inputs.len()];
     for (position, original) in order.iter().copied().enumerate() {
         let Some(slot) = ordered_index.get_mut(original) else {
@@ -1578,24 +1811,26 @@ pub fn collect_admitted_source_reexports_for_test(
                     ),
                 });
                 let mut blocked = false;
-                for member in &declaration.members {
-                    let provenance = source_reexports
-                        .namespace_provenance
-                        .get(&(target, member.imported.clone()))
-                        .copied()
-                        .unwrap_or(NamespaceProvenance::PresentOrUnknown);
-                    if provenance == NamespaceProvenance::PresentOrUnknown {
-                        blocked = true;
-                        blocked_notices.push(LocatedIdentity {
-                            path: normalized_display_name(&owner.name),
-                            start: declaration.owner_start,
-                            identity: format!(
-                                "unsupported-source-reexport-namespace-provenance {} {} {}",
-                                source_location(owner, &line_index, declaration.owner_start),
-                                declaration.module_specifier,
-                                member.exported
-                            ),
-                        });
+                if !cycle_blocks_product {
+                    for member in &declaration.members {
+                        let provenance = source_reexports
+                            .namespace_provenance
+                            .get(&(target, member.imported.clone()))
+                            .copied()
+                            .unwrap_or(NamespaceProvenance::PresentOrUnknown);
+                        if provenance == NamespaceProvenance::PresentOrUnknown {
+                            blocked = true;
+                            blocked_notices.push(LocatedIdentity {
+                                path: normalized_display_name(&owner.name),
+                                start: declaration.owner_start,
+                                identity: format!(
+                                    "unsupported-source-reexport-namespace-provenance {} {} {}",
+                                    source_location(owner, &line_index, declaration.owner_start),
+                                    declaration.module_specifier,
+                                    member.exported
+                                ),
+                            });
+                        }
                     }
                 }
                 if blocked {
@@ -1655,24 +1890,12 @@ pub fn collect_admitted_source_reexports_for_test(
         .into_iter()
         .map(|(_, declaration)| declaration)
         .collect();
-    let dependency_order = order
-        .iter()
-        .map(|original| normalized_display_name(&inputs[*original].name))
-        .collect();
-    let dependency_edge_count = source_reexports
-        .declarations
-        .iter()
-        .filter(|declaration| matches!(declaration.source, RawImportSource::Resolved(_)))
-        .count();
-    Ok(SourceReexportCollectionForTest {
-        admitted: AdmittedSourceReexports {
-            declarations: admitted,
-        },
-        dependency_order,
-        dependency_edge_count,
-        resolutions: sorted_identities(resolutions),
-        blocked_notices: sorted_identities(blocked_notices),
-        first_cycle: source_reexports.first_cycle,
+    Ok(FinalizedSourceReexports {
+        admitted,
+        order,
+        resolutions,
+        blocked_notices,
+        first_cycle: source_reexports.first_cycle.clone(),
     })
 }
 
@@ -2335,10 +2558,6 @@ fn module_export_name<'ast>(name: &'ast ModuleExportName<'ast>) -> Option<&'ast 
         ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
         ModuleExportName::StringLiteral(_) => None,
     }
-}
-
-fn dependency_order(imports: &[Vec<RawImport>]) -> Vec<usize> {
-    dependency_order_with_reexports(imports, &[])
 }
 
 fn dependency_order_with_reexports(

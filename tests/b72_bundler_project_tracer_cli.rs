@@ -171,7 +171,6 @@ fn unsupported_projects_fail_closed_with_complete_identities() {
         "unsupported_profile",
         "unsupported_root_globs",
         "unsupported_side_effect_import",
-        "unsupported_source_reexport",
         "unsupported_star_reexport",
         "unsupported_with_diagnostic",
     ] {

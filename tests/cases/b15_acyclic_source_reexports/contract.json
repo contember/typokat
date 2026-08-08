@@ -2810,12 +2810,28 @@
       }
     ]
   },
+  "post_wu6": {
+    "bundler_source_reexport": {
+      "exit": 0,
+      "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[\"barrel.ts\",\"source.ts\"],\"skipped\":[],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> source.ts\"],\"project_notices\":[],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+      "stderr": "",
+      "resolution": "barrel.ts:1:1 source-reexport ./source.js -> source.ts"
+    }
+  },
   "lifecycle": {
     "wu6_unignores_exactly": [
       "admitted_bundler_projects_match_oracle_in_both_root_orders",
       "namespace_provenance_fails_closed_with_exact_identities",
       "source_reexport_cycles_keep_the_exact_cycle_identity"
     ],
-    "deferred_freeze": "Every classifications.deferred case, including 13e_export_attributes at exit 2, remains covered by pre_change_bundler_results_are_byte_exact and does not move in this sprint."
+    "frozen_pre_change_case_ids": [
+      "13a_default_import_export",
+      "13b_star_reexport",
+      "13c_namespace_reexport",
+      "13d_string_literal_export_name",
+      "13e_export_attributes",
+      "13f_bare_package_specifier"
+    ],
+    "deferred_freeze": "Every deferred form outside the two exact cycle controls, including 13e_export_attributes at exit 2, remains covered by deferred_bundler_results_retain_pre_change_bytes and does not move in this sprint."
   }
 }

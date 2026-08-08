@@ -1,4 +1,4 @@
-//! Disabled RED acceptance plus enabled pre-change route guards for source re-exports.
+//! Public Bundler acceptance plus frozen explicit and legacy route guards.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -218,13 +218,19 @@ fn oracle_contract_is_machine_complete_and_matches_fixtures() {
 }
 
 #[test]
-fn pre_change_bundler_results_are_byte_exact() {
+fn deferred_bundler_results_retain_pre_change_bytes() {
     let contract = contract();
-    for expected in contract["pre_change"]["cases"]
+    for id in contract["lifecycle"]["frozen_pre_change_case_ids"]
         .as_array()
-        .expect("pre-change cases")
+        .expect("frozen pre-change case ids")
     {
-        let id = expected["id"].as_str().expect("pre-change id");
+        let id = id.as_str().expect("pre-change id");
+        let expected = contract["pre_change"]["cases"]
+            .as_array()
+            .expect("pre-change cases")
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap_or_else(|| panic!("missing frozen pre-change entry {id}"));
         let output = run(&project_args(&corpus_root().join(id)));
         assert_eq!(
             output.status.code(),
@@ -245,57 +251,21 @@ fn pre_change_bundler_results_are_byte_exact() {
 }
 
 #[test]
-fn exact_pre_change_guard_distinguishes_a_removed_reexport() {
-    let contract = contract();
-    let case = case_by_id(&contract, "01_basic_alias_mismatch");
-    let project = TempProject::from_case(case, "normal");
-    std::fs::write(
-        project.root.join("barrel.ts"),
-        "export const renamed = 1;\n",
-    )
-    .expect("write known-broken negative control");
-    let output = run(&project_args(&project.root));
-    let expected = contract["pre_change"]["cases"]
-        .as_array()
-        .expect("pre-change cases")
-        .iter()
-        .find(|entry| entry["id"] == "01_basic_alias_mismatch")
-        .expect("alias pre-change entry");
-    assert_ne!(
-        (
-            output.status.code(),
-            String::from_utf8_lossy(&output.stdout).as_ref(),
-            String::from_utf8_lossy(&output.stderr).as_ref(),
-        ),
-        (
-            expected["exit"].as_i64().map(|code| code as i32),
-            expected["stdout"].as_str().expect("pre-change stdout"),
-            expected["stderr"].as_str().expect("pre-change stderr"),
-        )
-    );
-}
-
-#[test]
-fn pre_change_route_matrix_is_byte_exact_in_both_caller_orders() {
+fn bundler_cutover_preserves_explicit_and_legacy_route_bytes() {
     let contract = contract();
     let project = corpus_root().join("route_baseline");
-    let expected = &contract["pre_change"]["bundler_source_reexport"];
-    let notice = expected["notice"].as_str().expect("baseline notice");
-    let resolution = expected["resolution"]
-        .as_str()
-        .expect("baseline resolution");
+    let frozen = &contract["pre_change"]["bundler_source_reexport"];
+    let admitted = &contract["post_wu6"]["bundler_source_reexport"];
+    let notice = frozen["notice"].as_str().expect("baseline notice");
 
     for input in [&project, &project.join("tsconfig.json")] {
         let cli = run(&project_args(input));
-        assert_eq!(cli.status.code(), Some(3));
+        assert_eq!(cli.status.code(), Some(0));
         assert_eq!(
             String::from_utf8_lossy(&cli.stdout),
-            expected["stdout"].as_str().expect("baseline stdout")
+            admitted["stdout"].as_str().expect("admitted stdout")
         );
-        assert_eq!(
-            String::from_utf8_lossy(&cli.stderr),
-            expected["stderr"].as_str().expect("baseline stderr")
-        );
+        assert!(cli.stderr.is_empty());
     }
 
     for names in [["barrel.ts", "source.ts"], ["source.ts", "barrel.ts"]] {
@@ -316,12 +286,17 @@ fn pre_change_route_matrix_is_byte_exact_in_both_caller_orders() {
             route_roots(&project, &names),
         )
         .expect("Bundler baseline runs");
-        assert_eq!(bundler.inventory.resolutions, [resolution]);
-        assert_eq!(bundler.inventory.notices, [notice]);
+        assert_eq!(
+            bundler.inventory.resolutions,
+            [admitted["resolution"]
+                .as_str()
+                .expect("admitted resolution")]
+        );
+        assert!(bundler.inventory.notices.is_empty());
         assert!(bundler.inventory.parse_errors.is_empty());
         assert!(bundler.inventory.missing_module_locations.is_empty());
         assert_eq!(bundler.reports.len(), 2);
-        assert_report(&bundler.reports[0], &project, names[0], &[notice]);
+        assert_report(&bundler.reports[0], &project, names[0], &[]);
         assert_report(&bundler.reports[1], &project, names[1], &[]);
 
         let explicit =
@@ -338,7 +313,6 @@ fn pre_change_route_matrix_is_byte_exact_in_both_caller_orders() {
 }
 
 #[test]
-#[ignore = "RED until WU6 admits acyclic named source re-exports on the Bundler route"]
 fn admitted_bundler_projects_match_oracle_in_both_root_orders() {
     let contract = contract();
     let mut ids = contract["classifications"]["admitted"]
@@ -392,7 +366,6 @@ fn admitted_bundler_projects_match_oracle_in_both_root_orders() {
 }
 
 #[test]
-#[ignore = "RED until namespace provenance replaces the generic source-reexport refusal"]
 fn namespace_provenance_fails_closed_with_exact_identities() {
     let contract = contract();
     let matrix: [(&str, &[&str]); 5] = [
@@ -456,7 +429,6 @@ fn namespace_provenance_fails_closed_with_exact_identities() {
 }
 
 #[test]
-#[ignore = "RED until source re-export edges participate in cycle accounting"]
 fn source_reexport_cycles_keep_the_exact_cycle_identity() {
     let contract = contract();
     let expected_notice = "unsupported-module-cycle a.ts -> b.ts -> a.ts";

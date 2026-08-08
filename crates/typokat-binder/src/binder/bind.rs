@@ -926,6 +926,7 @@ pub struct ImportedSymbol {
     value: Option<ImportedValueSlot>,
     ty: Option<ImportedTypeSlot>,
     value_barrier: bool,
+    type_only_value_absence: bool,
     type_barrier: bool,
     site: Span,
 }
@@ -936,6 +937,7 @@ impl ImportedSymbol {
         value: Option<ValueStorageId>,
         ty: Option<TypeGroupId>,
         value_barrier: bool,
+        type_only_value_absence: bool,
         type_barrier: bool,
         site: Span,
     ) -> Self {
@@ -944,6 +946,7 @@ impl ImportedSymbol {
             value: value.map(ImportedValueSlot::Existing),
             ty: ty.map(ImportedTypeSlot::Existing),
             value_barrier,
+            type_only_value_absence,
             type_barrier,
             site,
         }
@@ -955,6 +958,7 @@ impl ImportedSymbol {
             value: None,
             ty: None,
             value_barrier: false,
+            type_only_value_absence: false,
             type_barrier: true,
             site,
         }
@@ -966,6 +970,7 @@ impl ImportedSymbol {
             value: Some(ImportedValueSlot::Placeholder),
             ty: None,
             value_barrier: false,
+            type_only_value_absence: false,
             type_barrier: true,
             site,
         }
@@ -1996,6 +2001,16 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .is_some_and(|symbol| symbol.blocks_value_lookup)
     }
 
+    /// Whether a local barrier represents a type-only surface that never had a value.
+    pub fn local_type_only_value_absence(&self, scope: ScopeId, name: &str) -> bool {
+        self.state
+            .graph
+            .get(scope)
+            .and_then(|scope| scope.lookup_local(name))
+            .and_then(|symbol_id| self.state.symbols.get(symbol_id))
+            .is_some_and(|symbol| symbol.type_only_value_absence)
+    }
+
     pub fn local_type_lookup_barrier(&self, scope: ScopeId, name: &str) -> bool {
         self.state
             .graph
@@ -2864,6 +2879,7 @@ fn declare_import(
                 symbol.ty = type_group;
                 symbol.owns_type_group = false;
                 symbol.blocks_value_lookup = import.value_barrier;
+                symbol.type_only_value_absence = import.type_only_value_absence;
                 symbol.blocks_type_lookup = import.type_barrier;
             }
             None => state
@@ -2879,6 +2895,7 @@ fn declare_import(
     symbol.ty = type_group;
     symbol.owns_type_group = false;
     symbol.blocks_value_lookup = import.value_barrier;
+    symbol.type_only_value_absence = import.type_only_value_absence;
     symbol.blocks_type_lookup = import.type_barrier;
     let symbol_id: SymbolId = state.symbols.push(symbol);
     if state.graph.declare(scope, &import.name, symbol_id).is_err() {
@@ -2963,6 +2980,59 @@ mod tests {
                     .expect("canonical declaration module has source ownership")
             })
             .collect()
+    }
+
+    #[test]
+    fn imported_value_barriers_preserve_exact_type_only_absence_provenance() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude =
+            Parser::new(&prelude_allocator, "interface Shape {}", SourceType::d_ts()).parse();
+        let source = Parser::new(
+            &source_allocator,
+            "import { NeverValue, ErasedValue } from \"./source\";",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(prelude.diagnostics.is_empty());
+        assert!(source.diagnostics.is_empty());
+
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let (_, ty) = builder.local_symbol_slots(builder.prelude_module, "Shape");
+        let imports = [
+            ImportedSymbol::new(
+                "NeverValue".to_owned(),
+                None,
+                ty,
+                true,
+                true,
+                false,
+                Span::new(9, 19),
+            ),
+            ImportedSymbol::new(
+                "ErasedValue".to_owned(),
+                None,
+                ty,
+                true,
+                false,
+                false,
+                Span::new(21, 32),
+            ),
+        ];
+        let unit = CompilationUnit::implementation(SourceUnitKey(1), &source.program);
+        let (module, _) = builder.add_module(&source.program, &imports, unit);
+
+        for (name, expected_absence) in [("NeverValue", true), ("ErasedValue", false)] {
+            let symbol = builder
+                .state
+                .graph
+                .get(module)
+                .and_then(|scope| scope.lookup_local(name))
+                .and_then(|symbol| builder.state.symbols.get(symbol))
+                .expect("imported barrier symbol");
+            assert!(symbol.blocks_value_lookup);
+            assert_eq!(symbol.type_only_value_absence, expected_absence);
+        }
     }
 
     #[test]

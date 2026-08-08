@@ -3343,6 +3343,7 @@ pub enum InjectedProfileError {
     Reporting(LibraryEventLedgerError),
     ReplayIndex(ReplayIndexGenerationError),
     ReplayIndexAdmission(ReplayIndexAdmissionError),
+    SourceReexportEvidence(&'static str),
     CanonicalProjection(String),
 }
 
@@ -6008,7 +6009,32 @@ pub fn compile_complete_source_project_programs<'ast>(
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
     units: &[crate::frontend::ProjectProgram<'ast>],
 ) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
-    let frontend = complete_source_project_frontend(sources, library_programs, units)?;
+    compile_complete_source_project_programs_core(sources, library_programs, units, None)
+}
+
+/// Compile one Bundler project with frontend-certified named source re-exports.
+pub fn compile_complete_source_project_programs_with_source_reexports<'ast>(
+    sources: &[InjectedLibrarySource<'_>],
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[crate::frontend::ProjectProgram<'ast>],
+    source_reexports: &crate::frontend::AdmittedSourceReexports,
+) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
+    compile_complete_source_project_programs_core(
+        sources,
+        library_programs,
+        units,
+        Some(source_reexports),
+    )
+}
+
+fn compile_complete_source_project_programs_core<'ast>(
+    sources: &[InjectedLibrarySource<'_>],
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[crate::frontend::ProjectProgram<'ast>],
+    source_reexports: Option<&crate::frontend::AdmittedSourceReexports>,
+) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
+    let frontend =
+        complete_source_project_frontend(sources, library_programs, units, source_reexports)?;
     let (run, _runtime, replay_plan) = compile_owned_injected_frontend(
         frontend,
         ReplayIndexPlan::None,
@@ -6029,7 +6055,12 @@ fn complete_source_project_frontend<'source, 'ast>(
     sources: &[InjectedLibrarySource<'source>],
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
     units: &[crate::frontend::ProjectProgram<'ast>],
+    source_reexports: Option<&crate::frontend::AdmittedSourceReexports>,
 ) -> Result<CanonicalLibraryFrontend<'source, 'ast>, InjectedProfileError> {
+    let source_reexport_plan = source_reexports
+        .map(|admitted| super::build_validated_source_reexport_plan(admitted, units))
+        .transpose()
+        .map_err(|error| InjectedProfileError::SourceReexportEvidence(error.message()))?;
     let mut canonical = canonical_inputs(sources)?;
     if canonical.len() != library_programs.len() {
         return Err(InjectedProfileError::CanonicalProjection(
@@ -6153,9 +6184,10 @@ fn complete_source_project_frontend<'source, 'ast>(
             .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
     }
     let mut external_effects = BTreeMap::new();
-    let bound = super::bind_authoritative_project_core(
+    let bound = super::bind_authoritative_project_core_with_source_reexports(
         builder,
         units,
+        source_reexport_plan.as_ref(),
         source_offset,
         &combined_lexical_events,
         &mut external_effects,

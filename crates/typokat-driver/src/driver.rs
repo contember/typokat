@@ -11,7 +11,8 @@ use crate::check::checker::{
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
-    parse_source_errors, run_clean_project_frontend_with_deferred_auxiliary, run_project_frontend,
+    parse_source_errors, run_clean_bundler_project_frontend_with_deferred_auxiliary,
+    run_clean_project_frontend_with_deferred_auxiliary, run_project_frontend,
     run_project_frontend_with_auxiliary, run_project_parse_only, run_source_frontend,
     AccountedProjectProduct, AuxiliarySourceInput, DeferredProjectFrontendError, FileInput,
     ProjectFrontendRun, ProjectModuleInventory, ProjectProgram, ProjectResolutionMode, ProjectRoot,
@@ -305,35 +306,43 @@ fn check_project_once_inner(
     inputs: Vec<FileInput>,
     resolution_mode: ProjectResolutionMode,
 ) -> Result<ProjectCheckRun, CompleteSourceCheckError> {
-    let run = run_clean_project_frontend_with_deferred_auxiliary(
-        inputs,
-        resolution_mode,
-        crate::library::packaged_library_source_inputs,
-        move |_, source_specs, library_programs, units, _parse_work| {
-            #[cfg(test)]
-            crate::check::checker::library_compiler::record_complete_source_auxiliary_parse_work_for_test(
-                _parse_work.parser_invocations,
-                _parse_work.source_reparses,
-            );
-            let injected = source_specs
-                .iter()
-                .map(
-                    |source| crate::check::checker::library_compiler::InjectedLibrarySource {
-                        file_ordinal: crate::library::LibraryFileOrdinal::new(
-                            source.source_ordinal,
-                        ),
-                        name: &source.name,
-                        source: &source.source,
-                    },
-                )
-                .collect::<Vec<_>>();
-            crate::check::checker::library_compiler::compile_complete_source_project_programs(
-                &injected,
-                library_programs,
-                units,
+    let run = match resolution_mode {
+        ProjectResolutionMode::ExplicitFileList => {
+            run_clean_project_frontend_with_deferred_auxiliary(
+                inputs,
+                ProjectResolutionMode::ExplicitFileList,
+                crate::library::packaged_library_source_inputs,
+                move |_, source_specs, library_programs, units, _parse_work| {
+                    record_complete_source_parse_work(_parse_work);
+                    let injected = injected_library_sources(source_specs);
+                    crate::check::checker::library_compiler::compile_complete_source_project_programs(
+                        &injected,
+                        library_programs,
+                        units,
+                    )
+                },
             )
-        },
-    );
+        }
+        ProjectResolutionMode::BundlerProject {
+            project_directory,
+            roots,
+        } => run_clean_bundler_project_frontend_with_deferred_auxiliary(
+            inputs,
+            project_directory,
+            roots,
+            crate::library::packaged_library_source_inputs,
+            move |_, source_specs, library_programs, units, source_reexports, _parse_work| {
+                record_complete_source_parse_work(_parse_work);
+                let injected = injected_library_sources(source_specs);
+                crate::check::checker::library_compiler::compile_complete_source_project_programs_with_source_reexports(
+                    &injected,
+                    library_programs,
+                    units,
+                    source_reexports,
+                )
+            },
+        ),
+    };
     match run.product {
         Err(DeferredProjectFrontendError::Auxiliary(error)) => {
             Err(CompleteSourceCheckError::Library(error))
@@ -375,6 +384,29 @@ fn check_project_once_inner(
             Ok(ProjectCheckRun { reports, inventory })
         }
     }
+}
+
+fn injected_library_sources(
+    source_specs: &[AuxiliarySourceInput],
+) -> Vec<crate::check::checker::library_compiler::InjectedLibrarySource<'_>> {
+    source_specs
+        .iter()
+        .map(
+            |source| crate::check::checker::library_compiler::InjectedLibrarySource {
+                file_ordinal: crate::library::LibraryFileOrdinal::new(source.source_ordinal),
+                name: &source.name,
+                source: &source.source,
+            },
+        )
+        .collect()
+}
+
+fn record_complete_source_parse_work(_parse_work: crate::frontend::AuxiliaryParseWork) {
+    #[cfg(test)]
+    crate::check::checker::library_compiler::record_complete_source_auxiliary_parse_work_for_test(
+        _parse_work.parser_invocations,
+        _parse_work.source_reparses,
+    );
 }
 
 fn attach_project_notices(reports: &mut [FileReport], notices: &[String]) {

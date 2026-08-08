@@ -486,7 +486,7 @@
     {
       "id": "unsupported_source_reexport",
       "tsc": {"exit": 0, "diagnostics": []},
-      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["barrel.ts", "source.ts"], "files": {"checked": [], "skipped": ["barrel.ts", "source.ts"], "excluded": []}, "resolutions": ["barrel.ts:1:1 source-reexport ./source.js -> unsupported"], "project_notices": ["unsupported-module-form source-reexport barrel.ts:1:1 ./source.js"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
+      "typokat": {"exit": 0, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["barrel.ts", "source.ts"], "files": {"checked": ["barrel.ts", "source.ts"], "skipped": [], "excluded": []}, "resolutions": ["barrel.ts:1:1 source-reexport ./source.js -> source.ts"], "project_notices": [], "parse_errors": [], "incomplete": [], "diagnostics": []}}
     },
     {
       "id": "unsupported_star_reexport",

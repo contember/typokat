@@ -30,6 +30,8 @@ pub struct Symbol {
     /// An import whose source value is erased must hide parent value slots. Ordinary
     /// type-only declarations leave this false, so cross-space lookup still falls through.
     pub blocks_value_lookup: bool,
+    /// The blocked import surface never had a value slot, so value use reports TK2693.
+    pub type_only_value_absence: bool,
     /// Function declarations for this value symbol, in source order.
     ///
     /// Empty for non-function values. Overload checking uses this ordered list to
@@ -59,6 +61,7 @@ impl Symbol {
             name: name.into(),
             value: None,
             blocks_value_lookup: false,
+            type_only_value_absence: false,
             function_values: Vec::new(),
             ty: None,
             owns_type_group: false,

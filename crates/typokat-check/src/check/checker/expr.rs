@@ -203,6 +203,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         }
                     }
                     ValueResolution::Missing => {
+                        let type_only_import = self
+                            .resolve_type_replay(scope, name)
+                            .and_then(|symbol| self.binder.symbols.get(symbol))
+                            .is_some_and(|symbol| symbol.type_only_value_absence);
+                        if type_only_import {
+                            self.emit_diagnostic(Diagnostic::type_used_as_value(span, name));
+                            return Some((well_known.error, span));
+                        }
                         // These built-ins are synthetic globals, after lexical lookup.
                         if name == "undefined" {
                             return Some((well_known.undefined, span));
