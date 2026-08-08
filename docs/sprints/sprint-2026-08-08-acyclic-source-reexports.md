@@ -58,6 +58,11 @@ checked production behavior while every deferred form remains explicit and non-c
 - ✔ The semantic oracle available at planning time reports `Version 6.0.3`. Every fixture below
   must be run with `--strict --noEmit --module esnext --moduleResolution bundler`; exact output is
   recorded before implementation.
+- ⚠ The exact oracle falsified the initial empty-list design. For both an existing and absent source,
+  `/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext
+  --moduleResolution bundler -p tsconfig.normal.json` reports exit `0` and no diagnostics for
+  `export {} from "<source>"`; the same command with `tsconfig.reverse.json` is byte-identical.
+  This syntax is erased before module resolution; it is not an admitted empty re-export.
 
 ## Admission and namespace-safety contract
 
@@ -68,9 +73,9 @@ There is one cross-crate evidence boundary: opaque frontend-owned
   carries `NamespaceProvenance::ProvenAbsent` evidence. A requested name may still be absent from
   the target surface; the evidence proves only that no hidden namespace meaning can be dropped, so
   checker lookup may then emit `TK2305`.
-- `Missing` bypasses namespace census because no target exists. It retains declaration identity,
-  module/source span, `owner_start`, and the complete member list, including an empty list, so the
-  checker can emit exactly one declaration-owned `TK2307`.
+- `Missing` bypasses namespace census because no target exists. For a non-empty named list, it
+  retains declaration identity, module/source span, `owner_start`, and the complete member list so
+  the checker can emit exactly one declaration-owned `TK2307`.
 
 The checker receives and consumes this product but cannot construct or mutate it. Production
 construction stays a private frontend operation after Bundler
@@ -107,8 +112,9 @@ aliases, and acyclic re-export chains and assigns
 `NamespaceProvenance::{ProvenAbsent, PresentOrUnknown}`. The default is `PresentOrUnknown`; aliases
 and chains propagate it without narrowing. For a resolved target, `PresentOrUnknown` adds an exact
 project notice, makes `blocks_semantics` true, and emits no `Resolved` admitted declaration. Only
-structurally proved `ProvenAbsent` requested names enter that variant. A missing target enters
-`Missing` without namespace evidence. A namespace-only export, class+namespace merge,
+structurally proved `ProvenAbsent` requested names enter that variant. A non-empty list with a
+missing target enters `Missing` without namespace evidence. An empty list is erased before either
+path. A namespace-only export, class+namespace merge,
 function+namespace merge, or unresolved provenance therefore remains frontend-owned explicit
 unsupported input. It must not become `TK2305`, project only the visible value/type pair, or
 disappear through an error type.
@@ -156,9 +162,9 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
      grouped `TK2307`, with one deterministic resolution-summary owner rather than one record per
      member. The missing declaration uses the opaque `Missing` variant and bypasses namespace
      census. Neither path may fall through an error type and appear clean.
-  8. An explicit `export {} from "./source.js"` disposition. A resolved target is an admitted empty
-     projection that still resolves and contributes a dependency edge; a missing target emits the
-     same single declaration-owned `TK2307`. It creates no local or exported slot.
+  8. An explicit `export {} from "./source.js"` disposition against both an existing and missing
+     source. Both are clean erased syntax: no resolver invocation, resolution-summary row,
+     dependency/cycle edge, opaque admitted declaration, `TK2307`, local binding, or exported slot.
   9. Duplicate output names in a complete matrix: source/source and source/local, each in both
      declaration orders. For source/source, record the exact `tsc 6.0.3` `TS2300` on both source
      declarations. Pin the exact source/local sites as well. The implementation may not rely on
@@ -207,13 +213,15 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   declaration identity, module/source span, declaration `owner_start`, resolved/missing target,
   and member rows that retain imported name, exported name, member span, and type-only bit. The
   declaration identity groups missing-module reporting and summary ownership, including
-  `export { a, b } from "./missing.js"`. An empty member list remains a real declaration/graph edge.
+  `export { a, b } from "./missing.js"`. An empty member list is erased before resolution and creates
+  no typed declaration or graph edge.
   Reuse the existing `oxc_resolver` call and configured-root policy. Add resolved re-export targets
   to dependency ordering and cycle accounting. Before deciding `blocks_semantics`, run the bounded
   syntax/provenance census and propagate `PresentOrUnknown` through local aliases and source chains.
   For resolved targets it emits the exact WU1 notice and no `Resolved` variant for any requested
-  name that is not `ProvenAbsent`. A missing target instead creates one `Missing` declaration with
-  all declaration/member metadata and bypasses namespace census. String-literal names,
+  name that is not `ProvenAbsent`. A non-empty list with a missing target instead creates one
+  `Missing` declaration with all declaration/member metadata and bypasses namespace census.
+  String-literal names,
   attributes, default/star/namespace forms, namespace-bearing or unknown targets, bare packages,
   unconfigured targets, and cycles stay unsupported. Land the opaque
   `AdmittedSourceReexports` type, private fields/accessors, and collector, but leave its private
@@ -221,8 +229,9 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   constructor. Bundler, explicit accounted, and legacy route baselines remain byte-identical.
 - **Acceptance / witness.** Focused frontend tests prove exact row extraction, aliasing, outer/inline
   type-only bits, both spans, declaration identity/owner, grouped missing resolution, empty-list
-  edges, `.js` substitution, stable order, namespace provenance propagation, and re-export cycle
-  edges. The always-enabled WU1 guard proves each distinct route still reports its exact pre-change
+  erasure with zero resolution/edge/product rows, `.js` substitution, stable order, namespace
+  provenance propagation, and non-empty re-export cycle edges. The always-enabled WU1 guard proves
+  each distinct route still reports its exact pre-change
   result. No filesystem fallback, second semantic export graph, or second resolver is introduced.
 - **Touch points / ownership.** The implementation agent owns only
   `crates/typokat-frontend/src/frontend.rs`, focused frontend tests, and
@@ -238,7 +247,7 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   the live resolver path, and the pre-change contract. It does not edit files.
 - **Scope.** Hunt missing syntax branches, duplicate rows, unstable ordering, lost source/member
   spans, forged or unstable declaration identity, per-member `TK2307`, resolver drift, empty-list
-  edge loss, namespace-provenance narrowing, a forgeable opaque-product field/constructor, a census
+  resolution/admission, namespace-provenance narrowing, a forgeable opaque-product field/constructor, a census
   that duplicates semantic export publication, re-export-only cycles, and any movement on the three
   frozen route families. Require a concrete falsifier for each claimed invariant.
 - **Acceptance / witness.** Reviewer returns PASS with no unresolved HIGH/MEDIUM findings. On FAIL,
@@ -261,11 +270,11 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   `Resolved` declaration, it projects the target `ExportedSlots` directly into the current module's
   `ExportSurface` under the exported name.
   Outer or inline type-only syntax removes the value slot and preserves `value_erased` and
-  `type_unavailable` barriers. A `Missing` declaration emits exactly one `TK2307` at its source span
-  before member iteration; its declaration identity supplies one summary owner regardless of member
-  count, including `export {} from missing`. A `Resolved` declaration may emit `TK2305` for an absent
-  requested member only after validating that member's `ProvenAbsent` evidence. Resolved
-  `export {} from` performs no insertion but keeps its dependency/result disposition. Chained
+  `type_unavailable` barriers. A non-empty `Missing` declaration emits exactly one `TK2307` at its
+  source span before member iteration; its declaration identity supplies one summary owner
+  regardless of member count. A `Resolved` declaration may emit `TK2305` for an absent requested
+  member only after validating that member's `ProvenAbsent` evidence. `export {} from` never reaches
+  the checker. Chained
   surfaces reuse the same projection. Duplicate source/source
   and source/local output names follow the exact WU1 oracle in both orders and never silently
   overwrite. The checker does not reclassify namespace provenance: the opaque product certifies
@@ -276,8 +285,9 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   synthetic error type, second capability, or manual production constructor is created. Internal
   tests receive products only from the frontend's existing-`test-utils` constructor. All three
   public route families remain at their frozen WU1 baselines.
-- **Acceptance / witness.** Internal checker tests pass the WU1 slot, chain, class, missing, duplicate,
-  empty-list, and no-local-name cases while every production route remains fail-closed pending WU6.
+- **Acceptance / witness.** Internal checker tests pass the WU1 slot, chain, class, non-empty
+  missing, duplicate, and no-local-name cases while every production route remains fail-closed
+  pending WU6. The enabled route guard proves empty lists never reach the checker.
   The namespace-only, class+namespace, function+namespace, and aliased-chain controls are stopped by
   the frontend and never reach the checker. A deliberate fake-local-binding mutant makes the
   `TK2304` falsifier fail. A
@@ -296,7 +306,7 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
 - **Verify first.** A different reviewer receives only the WU1 oracle, exact WU4 diff, live
   `ExportedSlots` consumers, and the no-local-name and duplicate falsifiers. It does not edit files.
 - **Scope.** Hunt false negatives, order dependence, span/owner mistakes, local-binding leakage,
-  grouped-diagnostic splits, empty-list edge loss, barrier loss, namespace-provenance narrowing,
+  grouped-diagnostic splits, accidental empty-list resolution/admission, barrier loss, namespace-provenance narrowing,
   confusion between `Resolved` and `Missing`, opaque-product forgery, namespace leakage, and
   last-write behavior. Re-run the three distinct WU1
   route baselines: Bundler, explicit accounted, and legacy. Cross-check disputed cases with exact
@@ -324,14 +334,15 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   Only the intended Bundler files move from skipped to checked; resolved/missing specifiers remain
   accounted; diagnostics retain stable declaration ownership and order. Resolved namespace-bearing
   or unknown targets emit their exact frontend notice, block semantics, and produce no `Resolved`
-  declaration; missing targets still produce the diagnostic-only `Missing` variant. Every other
+  declaration; non-empty missing targets still produce the diagnostic-only `Missing` variant.
+  Empty named source exports are erased before resolution and produce neither variant. Every other
   deferred-form contract row remains byte-identical. Update the old B72 Bundler source-re-export
   row so it no longer contradicts the admitted form, without changing the explicit or legacy
   baselines or rebaselining unrelated rows.
 - **Acceptance / witness.** Directory and `tsconfig.json` invocations agree. Both caller root orders
   in `tsconfig.files` are byte-identical. `.js` substitution, chains, class slots, type-only barriers, `TK2307`,
-  grouped multi-member `TK2307`, `TK2305`, empty lists, both duplicate matrices, and the no-local-name
-  `TK2304` pass through the admitted real CLI route. Namespace provenance controls, re-export-only
+  grouped multi-member `TK2307`, `TK2305`, clean zero-accounting empty lists, both duplicate
+  matrices, and the no-local-name `TK2304` pass through the real CLI route. Namespace provenance controls, re-export-only
   cycles, and mixed cycles still exit `3`. A summary diff contains only the planned Bundler
   source-re-export movements. Always-enabled guards prove explicit-file CLI/`check_project_once`
   and legacy `check_project` remain byte-for-byte/result-for-result at their distinct frozen
@@ -351,15 +362,16 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   publication all use the same admitted route.
 - **Verify first.** Freeze the exact WU6 diff. Build a pre-change `5c15154` binary in an isolated
   scratch worktree and confirm it fires on the positive source-re-export corpus while current code
-  passes. Also run deliberate broken variants: omit the re-export graph/empty-list edge, create a
+  passes. Also run deliberate broken variants: omit a non-empty re-export graph edge, resolve or
+  admit an empty list, create a
   local barrel binding, collapse class slots, erase the type-only barrier, split one missing module
-  into per-member diagnostics, incorrectly block a missing target in namespace census, admit a
+  into per-member diagnostics, incorrectly block a non-empty missing target in namespace census, admit a
   resolved missing member without `ProvenAbsent`, drop namespace provenance across an alias, restore
   silent last-write, and forge an opaque product or route one through explicit/legacy entry points.
 - **Scope.** A new read-only reviewer hunts false negatives and cross-checks every semantic case
   against exact `tsc 6.0.3`. Review public CLI output, both `tsconfig.files` orders, grouped
   declaration diagnostics/summary ownership, empty lists, duplicate output names, namespace
-  provenance, and all unsupported controls. Prove only the Bundler frontend constructs the opaque
+  provenance, empty-list erasure, and all unsupported controls. Prove only the Bundler frontend constructs the opaque
   product and that explicit accounted and legacy results remain at their distinct WU1 baselines.
   Inspect the full diff for
   accidental default, namespace, package, cycle, resolver, or type-model breadth.
@@ -419,8 +431,12 @@ provenance inside a `Resolved` declaration, that is a typed internal invariant f
   identities and their barriers. An ordinary class is admitted because it is a proven value/type
   pair; a class+namespace or function+namespace merge is not. Conservative provenance survives
   aliases and chains. For resolved targets, `PresentOrUnknown` remains unsupported until a
-  separately specified namespace surface exists. Missing targets use the opaque diagnostic-only
-  `Missing` variant and do not pretend to have namespace provenance.
+  separately specified namespace surface exists. Non-empty missing targets use the opaque
+  diagnostic-only `Missing` variant and do not pretend to have namespace provenance.
+- **Erase empty named source exports before resolution.** Exact `tsc 6.0.3` accepts
+  `export {} from "<source>"` even when the source is absent. The frontend therefore creates no
+  resolution, dependency/cycle edge, summary row, admitted declaration, or diagnostic. This is
+  erased syntax, not an empty `Resolved`/`Missing` admission.
 - **Cycles stay fail-closed.** Re-export edges participate in cycle detection and dependency order,
   but this sprint does not publish cyclic surfaces.
 - **Public admission is opaque-product-gated and atomic.** The frontend owns one
@@ -494,10 +510,12 @@ Stop and re-plan instead of expanding scope if any of these occurs:
 - The checker converts impossible unknown provenance in a `Resolved` declaration into `TK2305` or an
   exit-3 notice instead of a typed internal invariant failure.
 - A missing module/member becomes clean through an error type or loses `TK2307`/`TK2305`.
-- A missing target is blocked by namespace census, fails to produce a `Missing` variant, or an absent
-  member on a resolved target reaches `TK2305` without per-name `ProvenAbsent` evidence.
-- One missing source declaration emits one `TK2307` per member, loses its declaration/source span,
+- A non-empty missing target is blocked by namespace census, fails to produce a `Missing` variant,
+  or an absent member on a resolved target reaches `TK2305` without per-name `ProvenAbsent` evidence.
+- A non-empty missing source declaration emits one `TK2307` per member, loses its declaration/source span,
   or produces multiple summary owners.
+- An empty named source export invokes resolution, contributes a dependency/cycle edge or summary
+  row, constructs an admitted variant, or emits `TK2307`/`TK2305`.
 - The implementation needs default/star/namespace/package/config/resolver breadth, changes the
   checker type model, or touches inference/contextual typing/argument walking/overload resolution.
 - A candidate screen becomes an argument to add unrelated syntax or model fixes to this sprint.
