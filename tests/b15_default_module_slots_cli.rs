@@ -157,11 +157,11 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
     let contract = contract();
     assert_eq!(contract["schema"], 1);
     assert_eq!(contract["oracle"]["version"], "Version 6.0.3");
-    assert_eq!(contract["summary"]["case_count"], 31);
-    assert_eq!(contract["summary"]["run_count"], 62);
-    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 31);
-    assert_eq!(contract["summary"]["admitted_case_count"], 17);
-    assert_eq!(contract["summary"]["deferred_control_case_count"], 14);
+    assert_eq!(contract["summary"]["case_count"], 33);
+    assert_eq!(contract["summary"]["run_count"], 66);
+    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 33);
+    assert_eq!(contract["summary"]["admitted_case_count"], 18);
+    assert_eq!(contract["summary"]["deferred_control_case_count"], 15);
 
     let admitted = [
         "01_named_class",
@@ -181,6 +181,7 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
         "12_missing_resolved_default",
         "13_default_named_isolation",
         "14_value_only_wrong_type",
+        "24c_identifier_interface",
     ];
     let namespace_controls = [
         "15_named_default_class_namespace",
@@ -188,6 +189,7 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
         "17_namespace_identifier_default",
         "18_class_namespace_identifier_default",
         "19_function_namespace_identifier_default",
+        "24d_identifier_enum_unsupported",
     ];
     let syntax_controls = [
         "14b_default_interface_unsupported",

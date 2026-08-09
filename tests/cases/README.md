@@ -292,13 +292,15 @@ explicit and legacy routes remain frozen. Export attributes retain their exact e
 ### Default module slot contract (backlog 15)
 
 `b15_default_module_slots/` is a permanently disabled raw-conformance corpus. Its machine contract
-records 31 projects and both root orders against pinned `tsc 6.0.3`. The admitted rows cover named
+records 33 projects and both root orders against pinned `tsc 6.0.3`. The admitted rows cover named
 and anonymous default classes and functions, literal/object/arrow expressions, namespace-free
-identifier projection, direct and type-only default imports, lexical visibility, distinct
+identifier projection including a type-only interface slot, direct and type-only default imports,
+lexical visibility, distinct
 default/named slots, missing modules/defaults, and both wrong-space barriers. The expression-owned
 error row proves that a default expression is checked exactly once.
 
-Deferred rows stay explicit non-clean outcomes: default interfaces; namespace-bearing producers;
+Deferred rows stay explicit non-clean outcomes: default interfaces; namespace-bearing producers,
+including enum-backed identifiers whose qualified surface is not modeled;
 local export-list and named-import spellings of `default`; source re-exports involving a default
 slot; and mixed default imports. The mixed named form retains two named specifiers, including one
 inline type-only member. Duplicate production uses five real publication paths — direct class,
