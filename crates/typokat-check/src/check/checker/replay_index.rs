@@ -248,6 +248,7 @@ const fn declaration_kind_tag(kind: DeclarationKind) -> u8 {
         DeclarationKind::ImportEquals => 10,
         DeclarationKind::NamespaceExport => 11,
         DeclarationKind::Global => 12,
+        DeclarationKind::DefaultExportExpression => 13,
     }
 }
 
@@ -3627,6 +3628,89 @@ mod tests {
                 dependency,
                 consumer
             }]
+        );
+    }
+
+    #[test]
+    fn copied_default_function_publication_is_owned_by_its_implementation() {
+        fn publish_copy(trace: &ReplayDependencyTrace, default_value: ReplayOwner) {
+            let producer = trace.current_owner();
+            if producer.is_some() {
+                trace.demand(default_value);
+            }
+            trace.enter(default_value);
+            if let Some(producer) = producer {
+                trace.demand(producer);
+            }
+            trace.leave(default_value);
+        }
+
+        fn finish_copy(reenter_implementation: bool) -> CollisionReplayIndex {
+            let implementation = ReplayOwner::Value(ValueStorageId(1));
+            let default_value = ReplayOwner::Value(ValueStorageId(2));
+            let trace = ReplayDependencyTrace::default();
+            if reenter_implementation {
+                trace.enter(implementation);
+            }
+            publish_copy(&trace, default_value);
+            if reenter_implementation {
+                trace.leave(implementation);
+            }
+            let owners = vec![implementation, default_value];
+            trace
+                .finish(
+                    owners.clone(),
+                    Vec::new(),
+                    owners.iter().copied().map(site).collect(),
+                    baselines(&owners),
+                    0,
+                )
+                .unwrap()
+        }
+
+        let implementation = ReplayOwner::Value(ValueStorageId(1));
+        let default_value = ReplayOwner::Value(ValueStorageId(2));
+        let owned = finish_copy(true);
+        assert_eq!(
+            owned.reverse_edges,
+            [
+                ReplayReverseEdge {
+                    dependency: implementation,
+                    consumer: default_value,
+                },
+                ReplayReverseEdge {
+                    dependency: default_value,
+                    consumer: implementation,
+                },
+            ]
+        );
+        assert_eq!(owned.scc_membership.len(), 1);
+
+        let no_owner = finish_copy(false);
+        assert!(no_owner.reverse_edges.is_empty());
+        assert_eq!(no_owner.scc_membership.len(), 2);
+
+        let statements = include_str!("statements.rs");
+        let helper = statements
+            .split_once("    fn publish_default_function_value_copy(")
+            .and_then(|(_, suffix)| suffix.split_once("\n    fn "))
+            .map(|(body, _)| body)
+            .expect("central default-function copy helper");
+        let compact = helper
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        assert!(compact.contains(
+            "with_replay_owner(super::replay_index::ReplayOwner::Value(implementation_value),"
+        ));
+        assert!(compact
+            .contains("|pass|pass.publish_copied_decl_type_replay(default_value,function_ty)"));
+        assert_eq!(
+            statements
+                .matches("publish_default_function_value_copy(")
+                .count(),
+            4,
+            "standalone and both overload publications use the central helper"
         );
     }
 

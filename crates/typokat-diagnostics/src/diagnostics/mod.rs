@@ -23,6 +23,8 @@ use crate::span::Span;
 /// listed; later milestones add variants.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum DiagnosticCode {
+    /// Resolved module has no default export.
+    TK1192,
     /// `export as namespace` appears outside an external module.
     TK1314,
     /// `export as namespace` appears in a non-declaration source file.
@@ -72,6 +74,8 @@ pub enum DiagnosticCode {
     TK2365,
     /// Function implementation is missing or not immediately following the declaration.
     TK2391,
+    /// Overload signatures disagree on whether they are exported.
+    TK2383,
     /// Overload signatures disagree on public/private/protected accessibility.
     TK2385,
     /// Overload signature is not compatible with its implementation signature.
@@ -163,6 +167,7 @@ impl DiagnosticCode {
     /// The rendered code string, e.g. `"TK2322"`.
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagnosticCode::TK1192 => "TK1192",
             DiagnosticCode::TK1314 => "TK1314",
             DiagnosticCode::TK1315 => "TK1315",
             DiagnosticCode::TK1545 => "TK1545",
@@ -188,6 +193,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2362 => "TK2362",
             DiagnosticCode::TK2363 => "TK2363",
             DiagnosticCode::TK2365 => "TK2365",
+            DiagnosticCode::TK2383 => "TK2383",
             DiagnosticCode::TK2385 => "TK2385",
             DiagnosticCode::TK2391 => "TK2391",
             DiagnosticCode::TK2394 => "TK2394",
@@ -463,6 +469,14 @@ impl Diagnostic {
         )
     }
 
+    pub fn overload_signatures_same_export_status(span: Span) -> Self {
+        Self::declaration_merge(
+            DiagnosticCode::TK2383,
+            span,
+            "Overload signatures must all be exported or non-exported.".to_string(),
+        )
+    }
+
     pub fn duplicate_index_signature(span: Span, key: &str) -> Self {
         Self::declaration_merge(
             DiagnosticCode::TK2374,
@@ -642,6 +656,17 @@ impl Diagnostic {
             code: DiagnosticCode::TK2305,
             severity: Severity::Error,
             message: format!("Module '{module}' has no exported member '{name}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK1192` resolved-module missing-default error.
+    pub fn no_default_export(span: Span, module: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK1192,
+            severity: Severity::Error,
+            message: format!("Module '{module}' has no default export"),
             span,
             elaboration: Vec::new(),
         }
@@ -1254,6 +1279,26 @@ impl Diagnostic {
 mod tests;
 
 #[cfg(test)]
+mod default_module_diagnostic_tests {
+    use super::{Diagnostic, DiagnosticCode};
+    use crate::span::Span;
+
+    #[test]
+    fn missing_default_uses_tk1192_at_the_local_binding() {
+        let span = Span::new(7, 12);
+        let diagnostic = Diagnostic::no_default_export(span, "./source.js");
+
+        assert_eq!(DiagnosticCode::TK1192.as_str(), "TK1192");
+        assert_eq!(diagnostic.code, DiagnosticCode::TK1192);
+        assert_eq!(
+            diagnostic.message,
+            "Module './source.js' has no default export"
+        );
+        assert_eq!(diagnostic.span, span);
+    }
+}
+
+#[cfg(test)]
 mod qualified_name_tests {
     use super::{qualified_type_incomplete, Diagnostic, DiagnosticCode, QualifiedTypeIncomplete};
     use crate::binder::declaration::TypeGroupId;
@@ -1361,6 +1406,18 @@ mod qualified_name_tests {
             span,
         );
         assert_eq!(DiagnosticCode::TK2385.as_str(), "TK2385");
+    }
+
+    #[test]
+    fn overload_export_status_diagnostic_matches_tsc() {
+        let span = Span::new(13, 27);
+        assert_diagnostic(
+            Diagnostic::overload_signatures_same_export_status(span),
+            DiagnosticCode::TK2383,
+            "Overload signatures must all be exported or non-exported.",
+            span,
+        );
+        assert_eq!(DiagnosticCode::TK2383.as_str(), "TK2383");
     }
 
     #[test]

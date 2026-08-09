@@ -583,7 +583,11 @@ fn candidate_channels(case: &Value, order: &str) -> (Vec<String>, Vec<String>) {
     let ordered = candidates
         .dependency_order()
         .iter()
-        .map(|name| by_name.remove(name).expect("candidate order names an input"))
+        .map(|name| {
+            by_name
+                .remove(name)
+                .expect("candidate order names an input")
+        })
         .collect::<Vec<_>>();
     assert!(by_name.is_empty());
     let run = run_project_frontend(ordered, |interner, units| {
@@ -606,7 +610,6 @@ fn candidate_channels(case: &Value, order: &str) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-#[ignore = "RED until anonymous default classes keep abstract-completeness diagnostics"]
 fn candidate_anonymous_default_class_completeness_matches_the_oracle() {
     let contract = contract();
     let observed = [
@@ -621,9 +624,14 @@ fn candidate_anonymous_default_class_completeness_matches_the_oracle() {
         })
     })
     .collect::<Vec<_>>();
-    assert!(observed.iter().all(|(_, _, diagnostics, incomplete, expected)| {
-        diagnostics == &[*expected] && incomplete.is_empty()
-    }), "{observed:#?}");
+    assert!(
+        observed
+            .iter()
+            .all(|(_, _, diagnostics, incomplete, expected)| {
+                diagnostics == &[*expected] && incomplete.is_empty()
+            }),
+        "{observed:#?}"
+    );
 }
 
 #[test]

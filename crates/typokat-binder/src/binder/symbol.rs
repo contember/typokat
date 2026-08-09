@@ -45,6 +45,8 @@ pub struct Symbol {
     pub owns_type_group: bool,
     /// An unavailable import must hide matching type slots in parent scopes.
     pub blocks_type_lookup: bool,
+    /// This import's unavailable type slot came from an exported value-only default.
+    pub type_unavailable_from_value: bool,
     /// An unavailable namespace root must hide matching parent namespace slots.
     pub blocks_namespace_lookup: bool,
     /// Namespace-space declaration (`namespace`/module).
@@ -66,6 +68,7 @@ impl Symbol {
             ty: None,
             owns_type_group: false,
             blocks_type_lookup: false,
+            type_unavailable_from_value: false,
             blocks_namespace_lookup: false,
             ns: None,
             declarations: Vec::new(),

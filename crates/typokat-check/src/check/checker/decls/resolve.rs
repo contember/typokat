@@ -306,17 +306,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return Some(self.interner.well_known().error);
         }
 
-        let decl_id = match self
-            .resolve_type_replay(scope, name)
+        let resolved_type_symbol = self.resolve_type_replay(scope, name);
+        let decl_id = match resolved_type_symbol
             .and_then(|symbol| self.binder.symbols.get(symbol))
             .and_then(|symbol| symbol.ty)
         {
             Some(id) => id,
             None => {
+                let type_unavailable_from_value = resolved_type_symbol
+                    .and_then(|symbol| self.binder.symbols.get(symbol))
+                    .is_some_and(|symbol| symbol.type_unavailable_from_value);
+                if type_unavailable_from_value {
+                    self.emit_diagnostic(Diagnostic::value_used_as_type(
+                        Span::from_oxc(ident.span),
+                        name,
+                    ));
+                }
                 // Report `TK2304` only for truly undeclared names. Value-as-type,
                 // applied type parameters, and qualified names are found/deferred cases,
                 // not "cannot find name".
-                let found_in_some_space = self.resolve_type_replay(scope, name).is_some()
+                let found_in_some_space = resolved_type_symbol.is_some()
                     || self.resolve_value_replay(scope, name).is_some()
                     || self.lookup_type_param(name).is_some();
                 if !found_in_some_space {

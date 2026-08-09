@@ -61,6 +61,8 @@ pub enum DeclarationKind {
     ImportEquals,
     NamespaceExport,
     Global,
+    /// Candidate-only identity for an authenticated `export default <expression>` site.
+    DefaultExportExpression,
 }
 
 /// Exact AST node and binding-leaf site of one source declaration occurrence.

@@ -20,7 +20,7 @@ use oxc_ast::ast::{
     TSModuleDeclarationBody, TSSignature, VariableDeclaration,
 };
 use oxc_span::GetSpan;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -277,6 +277,8 @@ pub enum ReservationStateError {
     UnknownClass(ClassSiteId),
     DuplicateClassBinding(ClassSiteId),
     DuplicateCallableBinding(CallableSiteId),
+    MissingCandidateDeclarationOwner(DeclarationKind, Span),
+    DuplicateCandidateDeclarationOwner(DeclarationKind, Span),
     MissingDeclarationOwner(DeclId),
 }
 
@@ -316,6 +318,8 @@ pub struct LexicalReservations<Ticket: Copy = UserRecordTicket> {
     expression_sources: Vec<SourceSite>,
     source_anchors: Vec<SourceAnchorReservation<Ticket>>,
     declarations: Vec<DeclarationReservation<Ticket>>,
+    /// Candidate-only declaration rows reuse structural tickets already enumerated elsewhere.
+    reused_declaration_tickets: FxHashSet<usize>,
     export_aliases: Vec<ExportAliasReservation<Ticket>>,
     interface_occurrences: Vec<InterfaceOccurrenceReservation<Ticket>>,
     interface_occurrences_by_source:
@@ -348,6 +352,7 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
             expression_sources: Vec::new(),
             source_anchors: Vec::new(),
             declarations: Vec::new(),
+            reused_declaration_tickets: FxHashSet::default(),
             export_aliases: Vec::new(),
             interface_occurrences: Vec::new(),
             interface_occurrences_by_source: FxHashMap::default(),
@@ -1349,6 +1354,54 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Ok(())
     }
 
+    /// Attach one authenticated default declaration to its existing source owner.
+    pub fn attach_candidate_declaration_source(
+        &mut self,
+        source: SourceOrdinal,
+        kind: DeclarationKind,
+        span: Span,
+    ) -> Result<(), ReservationStateError> {
+        let (unit, owner) = match kind {
+            DeclarationKind::Class => self
+                .class_at(source, span.start)
+                .and_then(|id| self.class(id))
+                .map(|reservation| (reservation.source.unit, reservation.tickets.immediate)),
+            DeclarationKind::Function => self
+                .callable_at(source, span.start)
+                .and_then(|id| self.callable(id))
+                .map(|reservation| (reservation.source.unit, reservation.tickets.signature)),
+            DeclarationKind::DefaultExportExpression => self
+                .top_level_by_source
+                .get(&(source, span.start))
+                .and_then(|index| self.top_level.get(*index))
+                .map(|reservation| (reservation.source.unit, reservation.tickets.immediate)),
+            _ => None,
+        }
+        .ok_or(ReservationStateError::MissingCandidateDeclarationOwner(
+            kind, span,
+        ))?;
+        let key = (source, span.start, span.end);
+        if self.declarations_by_binding.contains_key(&key) {
+            return Err(ReservationStateError::DuplicateCandidateDeclarationOwner(
+                kind, span,
+            ));
+        }
+        let index = self.declarations.len();
+        self.declarations.push(DeclarationReservation {
+            source: SourceSite {
+                unit,
+                source_start: span.start,
+            },
+            kind,
+            declaration_span: span,
+            binding_span: span,
+            owner,
+        });
+        self.reused_declaration_tickets.insert(index);
+        self.declarations_by_binding.insert(key, index);
+        Ok(())
+    }
+
     pub(in crate::check::checker) fn attach_collision_declaration_site(
         &mut self,
         owner: ReplayOwner,
@@ -1530,7 +1583,9 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         tickets.extend(
             self.declarations
                 .iter()
-                .map(|declaration| declaration.owner),
+                .enumerate()
+                .filter(|(index, _)| !self.reused_declaration_tickets.contains(index))
+                .map(|(_, declaration)| declaration.owner),
         );
         tickets.extend(self.export_aliases.iter().map(|alias| alias.owner));
         tickets.extend(
@@ -2585,6 +2640,72 @@ class Container {
             store.complete(ticket, Vec::new()).unwrap();
         }
         assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn candidate_declarations_reuse_exact_class_and_callable_events() {
+        for (source, kind) in [
+            ("export default class {}", DeclarationKind::Class),
+            ("export default function () {}", DeclarationKind::Function),
+        ] {
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+            assert!(parsed.diagnostics.is_empty());
+            let module = ModuleOrdinal::new(3);
+            let ordinal = SourceOrdinal::User(module);
+            let span = match &parsed.program.body[0] {
+                Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                    ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                        Span::from_oxc(class.span)
+                    }
+                    ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                        Span::from_oxc(function.span)
+                    }
+                    _ => panic!("fixture has a direct declaration"),
+                },
+                _ => panic!("fixture has a default export"),
+            };
+            let mut store = EventStore::default();
+            let mut reservations = LexicalReservations::default();
+            reservations
+                .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+                .unwrap();
+            let event_count = store.event_count();
+            let record_count = store.record_count();
+
+            reservations
+                .attach_candidate_declaration_source(ordinal, kind, span)
+                .unwrap();
+            assert_eq!(store.event_count(), event_count);
+            assert_eq!(store.record_count(), record_count);
+            assert!(matches!(
+                reservations.attach_candidate_declaration_source(ordinal, kind, span),
+                Err(ReservationStateError::DuplicateCandidateDeclarationOwner(
+                    duplicate_kind,
+                    duplicate_span,
+                )) if duplicate_kind == kind && duplicate_span == span
+            ));
+            let wrong_kind = if kind == DeclarationKind::Class {
+                DeclarationKind::Function
+            } else {
+                DeclarationKind::Class
+            };
+            assert!(matches!(
+                reservations.attach_candidate_declaration_source(ordinal, wrong_kind, span),
+                Err(ReservationStateError::MissingCandidateDeclarationOwner(
+                    missing_kind,
+                    missing_span,
+                )) if missing_kind == wrong_kind && missing_span == span
+            ));
+            let wrong_span = Span::new(span.start.saturating_add(1), span.end);
+            assert!(matches!(
+                reservations.attach_candidate_declaration_source(ordinal, kind, wrong_span),
+                Err(ReservationStateError::MissingCandidateDeclarationOwner(
+                    missing_kind,
+                    missing_span,
+                )) if missing_kind == kind && missing_span == wrong_span
+            ));
+        }
     }
 
     #[test]

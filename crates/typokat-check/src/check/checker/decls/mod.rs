@@ -19,10 +19,10 @@ use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
-    Class, ClassElement, Declaration, Expression, ForStatementInit, ForStatementLeft, Function,
-    ObjectPropertyKind, Program, Statement, TSInterfaceDeclaration, TSInterfaceHeritage,
-    TSModuleDeclaration, TSModuleDeclarationBody, TSType, TSTypeAliasDeclaration, TSTypeName,
-    TSTypeParameterDeclaration, TSTypeParameterInstantiation,
+    Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
+    ForStatementLeft, Function, ObjectPropertyKind, Program, Statement, TSInterfaceDeclaration,
+    TSInterfaceHeritage, TSModuleDeclaration, TSModuleDeclarationBody, TSType,
+    TSTypeAliasDeclaration, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -4217,10 +4217,7 @@ fn reserve_type_decls_with_selection<'ast>(
                         (alias.id.span.start, BinderDeclarationKind::TypeAlias)
                     }
                     TopTypeDecl::Class(class) => {
-                        let Some(id) = class.id.as_ref() else {
-                            return;
-                        };
-                        (id.span.start, BinderDeclarationKind::Class)
+                        (class_binding_start(class), BinderDeclarationKind::Class)
                     }
                 };
                 let Some(exact) = binder.exact_declaration_at(module, binding_start, kind) else {
@@ -4523,14 +4520,14 @@ fn reserve_type_decls_with_selection<'ast>(
                 }
                 // Named classes reserve only a stable nominal identity. Their immutable
                 // instance/static templates are constructed by class publication.
-                TopTypeDecl::Class(class) if class.id.is_some() => {
+                TopTypeDecl::Class(class) => {
                     // M13: a fresh stable `ClassId` for this declaration (source order),
                     // stamped onto its members during class publication.
                     let class_id = reserve_class_id(next_class_id);
-                    if let Some(id) = &class.id {
+                    {
                         let exact = binder.exact_declaration_at(
                             module,
-                            id.span.start,
+                            class_binding_start(class),
                             BinderDeclarationKind::Class,
                         );
                         let (group, declaration, scope) = match exact {
@@ -4712,7 +4709,6 @@ fn reserve_type_decls_with_selection<'ast>(
                         }
                     }
                 }
-                _ => {}
             }
         },
     );
@@ -4938,6 +4934,51 @@ fn walk_type_decl_statement<'ast>(
                 _ => {}
             }
         }
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                if binder
+                    .exact_declaration_at(
+                        module,
+                        class_binding_start(class),
+                        BinderDeclarationKind::Class,
+                    )
+                    .is_none()
+                {
+                    return;
+                }
+                visit_bound_type(
+                    binder,
+                    module,
+                    scope,
+                    export.span.start,
+                    BinderDeclarationKind::Class,
+                    class_binding_start(class),
+                    TopTypeDecl::Class(class),
+                    visit,
+                );
+                walk_type_decl_class(binder, module, scope, class, visit);
+            }
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                if !binder
+                    .fn_decl_ids
+                    .contains_key(&(module, function.span.start))
+                {
+                    return;
+                }
+                walk_type_decl_function(binder, module, function, visit);
+            }
+            declaration => {
+                if let Some(expression) = declaration.as_expression() {
+                    if binder
+                        .default_export_value(module, export.span.start)
+                        .is_none()
+                    {
+                        return;
+                    }
+                    walk_type_decl_expression(binder, module, scope, expression, visit);
+                }
+            }
+        },
         Statement::VariableDeclaration(declaration) => {
             walk_type_decl_variable(binder, module, scope, declaration, visit);
         }
@@ -5051,6 +5092,13 @@ fn walk_type_decl_statement<'ast>(
         }
         _ => {}
     }
+}
+
+pub(in crate::check::checker) fn class_binding_start(class: &Class<'_>) -> u32 {
+    class
+        .id
+        .as_ref()
+        .map_or(class.span.start, |identifier| identifier.span.start)
 }
 
 #[allow(clippy::too_many_arguments)]

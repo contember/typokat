@@ -2763,7 +2763,7 @@ fn scan_default_export_candidates(
     normalized_owner_path: &str,
     program: &Program<'_>,
 ) -> RawDefaultExportCandidateModule {
-    let local_names = local_namespace_provenance(program);
+    let local_names = default_candidate_local_namespace_provenance(program);
     let mut occurrences = Vec::new();
     for statement in &program.body {
         match statement {
@@ -3002,11 +3002,13 @@ fn default_export_blocks(
     blocks
 }
 
-fn local_namespace_provenance(program: &Program<'_>) -> BTreeMap<String, NamespaceProvenance> {
+fn default_candidate_local_namespace_provenance(
+    program: &Program<'_>,
+) -> BTreeMap<String, NamespaceProvenance> {
     let mut names = BTreeMap::new();
     for statement in &program.body {
         if let Some(declaration) = statement.as_declaration() {
-            declaration_namespace_names(declaration, |name, provenance| {
+            default_candidate_declaration_namespace_names(declaration, |name, provenance| {
                 join_namespace(&mut names, name, provenance);
             });
         }
@@ -3031,9 +3033,12 @@ fn local_namespace_provenance(program: &Program<'_>) -> BTreeMap<String, Namespa
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(declaration) = &export.declaration {
-                    declaration_namespace_names(declaration, |name, provenance| {
-                        join_namespace(&mut names, name, provenance);
-                    });
+                    default_candidate_declaration_namespace_names(
+                        declaration,
+                        |name, provenance| {
+                            join_namespace(&mut names, name, provenance);
+                        },
+                    );
                 }
             }
             Statement::ExportDefaultDeclaration(export) => match &export.declaration {
@@ -3757,6 +3762,20 @@ fn declaration_namespace_names(
         }
         Declaration::TSGlobalDeclaration(_) | Declaration::TSImportEqualsDeclaration(_) => false,
     }
+}
+
+fn default_candidate_declaration_namespace_names(
+    declaration: &Declaration<'_>,
+    mut record: impl FnMut(&str, NamespaceProvenance),
+) -> bool {
+    if let Declaration::TSEnumDeclaration(declaration) = declaration {
+        record(
+            declaration.id.name.as_str(),
+            NamespaceProvenance::PresentOrUnknown,
+        );
+        return true;
+    }
+    declaration_namespace_names(declaration, record)
 }
 
 fn classify_import_declaration(

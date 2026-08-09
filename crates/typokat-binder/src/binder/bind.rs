@@ -24,9 +24,9 @@ use crate::span::Span;
 use crate::types::layered::LayeredMap;
 use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
-    Expression, ForStatement, ForStatementInit, ForStatementLeft, FormalParameters, Function,
-    FunctionBody, FunctionType, Program, Statement, SwitchStatement, TSModuleDeclarationName,
-    TryStatement, VariableDeclarationKind, VariableDeclarator,
+    ExportDefaultDeclarationKind, Expression, ForStatement, ForStatementInit, ForStatementLeft,
+    FormalParameters, Function, FunctionBody, FunctionType, Program, Statement, SwitchStatement,
+    TSModuleDeclarationName, TryStatement, VariableDeclarationKind, VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 use std::fmt;
@@ -225,6 +225,8 @@ pub struct Binder {
     pub fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// Maps function declarations to their value declaration id.
     pub fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
+    /// Candidate-only default slots for direct function declarations.
+    default_function_values: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Maps a `{ … }` block to its lexical scope (M7), keyed like `fn_scopes` so
     /// branch-local declarations stay local and cross-file offsets do not collide.
     pub block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
@@ -444,6 +446,7 @@ impl LibraryBinderCheckpoint {
             prelude_type_group_count,
             fn_scopes,
             fn_decl_ids,
+            default_function_values,
             block_scopes,
             module_sources,
             next_source_key,
@@ -470,6 +473,7 @@ impl LibraryBinderCheckpoint {
                     type_group_library_ordinals,
                     fn_scopes,
                     fn_decl_ids,
+                    default_function_values,
                     block_scopes,
                     global_overlay_scopes: FxHashMap::default(),
                     placement_syntax: FxHashMap::default(),
@@ -590,6 +594,7 @@ impl Binder {
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
+            default_function_values: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             module_sources: self.module_sources.fork_delta()?,
             next_source_key: self.next_source_key,
@@ -613,6 +618,7 @@ impl Binder {
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
+            default_function_values: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             module_sources: self.module_sources.fork_delta()?,
             next_source_key: self.next_source_key,
@@ -748,6 +754,7 @@ impl Binder {
             prelude_type_group_count,
             fn_scopes,
             fn_decl_ids,
+            default_function_values: FxHashMap::default(),
             block_scopes,
             module_sources: {
                 let mut layered = LayeredMap::default();
@@ -771,6 +778,31 @@ impl Binder {
         self.declarations
             .declaration_at_site(syntax_module, binding_start, kind)
             .filter(|declaration| declaration.site.scope.is_some())
+    }
+
+    /// Return the declaration-site storage for one ordinary default expression.
+    pub fn default_export_value(
+        &self,
+        syntax_module: ScopeId,
+        owner_start: u32,
+    ) -> Option<ValueStorageId> {
+        self.exact_declaration_at(
+            syntax_module,
+            owner_start,
+            DeclarationKind::DefaultExportExpression,
+        )
+        .and_then(|declaration| declaration.value_storage)
+    }
+
+    /// Return a candidate-authenticated direct default function slot.
+    pub fn default_function_value(
+        &self,
+        syntax_module: ScopeId,
+        function_start: u32,
+    ) -> Option<ValueStorageId> {
+        self.default_function_values
+            .get(&(syntax_module, function_start))
+            .copied()
     }
 
     /// Resolve a value binding and its namespace provenance in one scope walk.
@@ -928,7 +960,16 @@ pub struct ImportedSymbol {
     value_barrier: bool,
     type_only_value_absence: bool,
     type_barrier: bool,
+    type_unavailable_from_value: bool,
     site: Span,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImportedSymbolProvenance {
+    pub value_barrier: bool,
+    pub type_only_value_absence: bool,
+    pub type_barrier: bool,
+    pub type_unavailable_from_value: bool,
 }
 
 impl ImportedSymbol {
@@ -936,18 +977,17 @@ impl ImportedSymbol {
         name: String,
         value: Option<ValueStorageId>,
         ty: Option<TypeGroupId>,
-        value_barrier: bool,
-        type_only_value_absence: bool,
-        type_barrier: bool,
+        provenance: ImportedSymbolProvenance,
         site: Span,
     ) -> Self {
         ImportedSymbol {
             name,
             value: value.map(ImportedValueSlot::Existing),
             ty: ty.map(ImportedTypeSlot::Existing),
-            value_barrier,
-            type_only_value_absence,
-            type_barrier,
+            value_barrier: provenance.value_barrier,
+            type_only_value_absence: provenance.type_only_value_absence,
+            type_barrier: provenance.type_barrier,
+            type_unavailable_from_value: provenance.type_unavailable_from_value,
             site,
         }
     }
@@ -960,6 +1000,7 @@ impl ImportedSymbol {
             value_barrier: false,
             type_only_value_absence: false,
             type_barrier: true,
+            type_unavailable_from_value: false,
             site,
         }
     }
@@ -972,6 +1013,7 @@ impl ImportedSymbol {
             value_barrier: false,
             type_only_value_absence: false,
             type_barrier: true,
+            type_unavailable_from_value: false,
             site,
         }
     }
@@ -1004,6 +1046,7 @@ pub(crate) struct BindState {
     type_group_library_ordinals: FxHashMap<ScopeId, LibraryFileOrdinal>,
     fn_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     fn_decl_ids: FxHashMap<(ScopeId, u32), ValueStorageId>,
+    default_function_values: FxHashMap<(ScopeId, u32), ValueStorageId>,
     /// Per-block lexical scopes (M7), keyed by `(module scope, block span start)`.
     block_scopes: FxHashMap<(ScopeId, u32), ScopeId>,
     /// Per-augmentation lexical overlays, shared by the declaration and metadata passes.
@@ -1411,6 +1454,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             type_group_library_ordinals: FxHashMap::default(),
             fn_scopes: FxHashMap::default(),
             fn_decl_ids: FxHashMap::default(),
+            default_function_values: FxHashMap::default(),
             block_scopes: FxHashMap::default(),
             global_overlay_scopes: FxHashMap::default(),
             placement_syntax: FxHashMap::default(),
@@ -1668,6 +1712,59 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         (module, placeholders)
     }
 
+    /// Bind one frontend-certified default producer without creating a lexical alias.
+    pub fn bind_default_export(&mut self, module: ScopeId, statement: &Statement<'ast>) -> bool {
+        let Statement::ExportDefaultDeclaration(export) = statement else {
+            return false;
+        };
+        self.state.current_module = module;
+        match &export.declaration {
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                if class.id.is_none()
+                    && !reserve_anonymous_default_declaration(
+                        &mut self.state,
+                        module,
+                        Span::from_oxc(class.span),
+                        DeclarationKind::Class,
+                    )
+                {
+                    return false;
+                }
+                if !bind_default_class_type(&mut self.state, module, class) {
+                    return false;
+                }
+                bind_default_class_declaration(&mut self.state, module, class);
+            }
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                if function.id.is_none()
+                    && !reserve_anonymous_default_declaration(
+                        &mut self.state,
+                        module,
+                        Span::from_oxc(function.span),
+                        DeclarationKind::Function,
+                    )
+                {
+                    return false;
+                }
+                bind_default_function_declaration(&mut self.state, module, function);
+            }
+            declaration => {
+                let Some(expression) = declaration.as_expression() else {
+                    return false;
+                };
+                if !reserve_default_export_expression(
+                    &mut self.state,
+                    module,
+                    Span::from_oxc(export.span),
+                ) {
+                    return false;
+                }
+                bind_expression(&mut self.state, module, expression);
+            }
+        }
+        true
+    }
+
     /// Classify the accumulated project once, plan its value attachments once, then fill the
     /// ones each module declares — the shape `try_add_library_modules` already uses. Draining
     /// here is what makes a missed classification impossible: `Binder` is only reachable
@@ -1848,6 +1945,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: self.state.fn_scopes,
             fn_decl_ids: self.state.fn_decl_ids,
+            default_function_values: self.state.default_function_values,
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
             next_source_key: self.state.next_source_key,
@@ -1873,6 +1971,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             prelude_type_group_count: _,
             fn_scopes: _,
             fn_decl_ids: _,
+            default_function_values: _,
             block_scopes: _,
             module_sources,
             next_source_key,
@@ -1903,6 +2002,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                     type_group_library_ordinals: FxHashMap::default(),
                     fn_scopes: FxHashMap::default(),
                     fn_decl_ids: FxHashMap::default(),
+                    default_function_values: FxHashMap::default(),
                     block_scopes: FxHashMap::default(),
                     global_overlay_scopes: FxHashMap::default(),
                     placement_syntax: FxHashMap::default(),
@@ -1967,6 +2067,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             prelude_type_group_count: self.prelude_type_group_count,
             fn_scopes: self.state.fn_scopes,
             fn_decl_ids: self.state.fn_decl_ids,
+            default_function_values: self.state.default_function_values,
             block_scopes: self.state.block_scopes,
             module_sources: self.state.module_sources,
             next_source_key: self.state.next_source_key,
@@ -1988,6 +2089,49 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .and_then(|symbol_id| self.state.symbols.get(symbol_id))
             .map(|symbol| (symbol.value, symbol.ty))
             .unwrap_or((None, None))
+    }
+
+    /// Return one exact declaration owned by the module being assembled.
+    pub fn exact_declaration_at(
+        &self,
+        scope: ScopeId,
+        binding_start: u32,
+        kind: DeclarationKind,
+    ) -> Option<&LexicalDeclaration> {
+        self.state
+            .declarations
+            .declaration_at_site(scope, binding_start, kind)
+            .filter(|declaration| declaration.site.scope.is_some())
+    }
+
+    /// Return a named or anonymous function declaration's site-owned value storage.
+    pub fn function_declaration_value(
+        &self,
+        scope: ScopeId,
+        function_start: u32,
+    ) -> Option<ValueStorageId> {
+        self.state
+            .fn_decl_ids
+            .get(&(scope, function_start))
+            .copied()
+    }
+
+    /// Return a candidate-authenticated direct default function slot.
+    pub fn default_function_value(
+        &self,
+        scope: ScopeId,
+        function_start: u32,
+    ) -> Option<ValueStorageId> {
+        self.state
+            .default_function_values
+            .get(&(scope, function_start))
+            .copied()
+    }
+
+    /// Return an ordinary default expression's site-owned value storage.
+    pub fn default_export_value(&self, scope: ScopeId, owner_start: u32) -> Option<ValueStorageId> {
+        self.exact_declaration_at(scope, owner_start, DeclarationKind::DefaultExportExpression)
+            .and_then(|declaration| declaration.value_storage)
     }
 
     /// Whether a local imported name blocks parent value lookup after its source
@@ -2101,6 +2245,92 @@ fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: 
         }
         _ => {}
     }
+}
+
+fn reserve_anonymous_default_declaration(
+    state: &mut BindState,
+    module: ScopeId,
+    span: Span,
+    kind: DeclarationKind,
+) -> bool {
+    if state
+        .declarations
+        .declaration_at_site(module, span.start, kind)
+        .is_some()
+    {
+        return false;
+    }
+    state.declarations.push(
+        kind,
+        DeclarationSite {
+            module,
+            scope: None,
+            declaration_span: span,
+            binding_span: span,
+        },
+    );
+    true
+}
+
+fn reserve_default_export_expression(state: &mut BindState, module: ScopeId, span: Span) -> bool {
+    if state
+        .declarations
+        .declaration_at_site(module, span.start, DeclarationKind::DefaultExportExpression)
+        .is_some()
+    {
+        return false;
+    }
+    let declaration = state.declarations.push(
+        DeclarationKind::DefaultExportExpression,
+        DeclarationSite {
+            module,
+            scope: Some(module),
+            declaration_span: span,
+            binding_span: span,
+        },
+    );
+    let storage = state.fresh_value_storage();
+    state.attach_value_storage(declaration, storage);
+    true
+}
+
+fn bind_default_class_type(state: &mut BindState, scope: ScopeId, class: &Class<'_>) -> bool {
+    if let Some(id) = &class.id {
+        bind_source_type(
+            state,
+            scope,
+            id.name.as_str(),
+            id.span.start,
+            DeclarationKind::Class,
+            TypeFragmentKind::Class,
+        );
+        return true;
+    }
+    let declaration =
+        state.attach_declaration_scope(class.span.start, DeclarationKind::Class, scope);
+    let Some(source) = state.module_sources.get(&state.current_module).copied() else {
+        return false;
+    };
+    let Some(site) = state
+        .declarations
+        .get(declaration)
+        .map(|declaration| declaration.site)
+    else {
+        return false;
+    };
+    let fragment = TypeGroupFragment {
+        declaration,
+        source,
+        scope,
+        site,
+        kind: TypeFragmentKind::Class,
+    };
+    let group = state.type_groups.append_fragment(None, "", fragment).group;
+    let Some(declaration) = state.declarations.get_mut(declaration) else {
+        return false;
+    };
+    declaration.type_group = Some(group);
+    true
 }
 
 fn bind_type_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_>) {
@@ -2467,6 +2697,26 @@ pub(super) fn bind_function_declaration(
     bind_function(state, scope, func);
 }
 
+fn bind_default_function_declaration(state: &mut BindState, scope: ScopeId, func: &Function<'_>) {
+    if func.id.is_some() {
+        bind_function_declaration(state, scope, func);
+        let storage = state.fresh_value_storage();
+        state
+            .default_function_values
+            .insert((state.current_module, func.span.start), storage);
+        return;
+    }
+    let (_, storage) =
+        bind_source_value(state, scope, "", func.span.start, DeclarationKind::Function);
+    state
+        .fn_decl_ids
+        .insert((state.current_module, func.span.start), storage);
+    state
+        .default_function_values
+        .insert((state.current_module, func.span.start), storage);
+    bind_function(state, scope, func);
+}
+
 /// Bind a class declaration: declare the constructor-side value name, then bind
 /// the body. Anonymous class bodies are still walked for nested scopes.
 pub(super) fn bind_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
@@ -2477,6 +2727,18 @@ pub(super) fn bind_class_declaration(state: &mut BindState, scope: ScopeId, clas
         state.attach_value_storage(declaration, storage);
         declare_value(state, scope, id.name.as_str(), storage, declaration);
     }
+    bind_class(state, scope, class);
+}
+
+fn bind_default_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {
+    if class.id.is_some() {
+        bind_class_declaration(state, scope, class);
+        return;
+    }
+    let declaration =
+        state.attach_declaration_scope(class.span.start, DeclarationKind::Class, scope);
+    let storage = state.fresh_value_storage();
+    state.attach_value_storage(declaration, storage);
     bind_class(state, scope, class);
 }
 
@@ -2881,6 +3143,7 @@ fn declare_import(
                 symbol.blocks_value_lookup = import.value_barrier;
                 symbol.type_only_value_absence = import.type_only_value_absence;
                 symbol.blocks_type_lookup = import.type_barrier;
+                symbol.type_unavailable_from_value = import.type_unavailable_from_value;
             }
             None => state
                 .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ImportSlot),
@@ -2897,6 +3160,7 @@ fn declare_import(
     symbol.blocks_value_lookup = import.value_barrier;
     symbol.type_only_value_absence = import.type_only_value_absence;
     symbol.blocks_type_lookup = import.type_barrier;
+    symbol.type_unavailable_from_value = import.type_unavailable_from_value;
     let symbol_id: SymbolId = state.symbols.push(symbol);
     if state.graph.declare(scope, &import.name, symbol_id).is_err() {
         state
@@ -2983,6 +3247,67 @@ mod tests {
     }
 
     #[test]
+    fn anonymous_default_declarations_have_site_storage_without_lexical_symbols() {
+        for source in ["export default class {};", "export default function () {}"] {
+            let prelude_allocator = Allocator::default();
+            let source_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let parsed = Parser::new(&source_allocator, source, SourceType::ts()).parse();
+            assert!(parsed.diagnostics.is_empty(), "fixture parses: {source}");
+
+            let mut builder = ProjectBinderBuilder::new(&prelude.program);
+            let unit =
+                CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+            let (module, _) = builder.add_module(&parsed.program, &[], unit);
+            assert!(builder.bind_default_export(module, &parsed.program.body[0]));
+            let binder = builder.finish(module);
+            let module_scope = binder.graph.get(module).expect("module scope exists");
+
+            assert_eq!(module_scope.symbols.iter().count(), 0, "{source}");
+            assert!(module_scope.lookup_local("").is_none(), "{source}");
+            assert!(module_scope.lookup_local("default").is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn named_default_function_uses_a_distinct_candidate_slot() {
+        let prelude_allocator = Allocator::default();
+        let source_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let parsed = Parser::new(
+            &source_allocator,
+            "export function local(value: number): number; export default function local(value: number): number { return value; }",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(parsed.diagnostics.is_empty());
+
+        let mut builder = ProjectBinderBuilder::new(&prelude.program);
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) = builder.add_module(&parsed.program, &[], unit);
+        let Statement::ExportDefaultDeclaration(export) = &parsed.program.body[1] else {
+            panic!("fixture has a direct default function");
+        };
+        let ExportDefaultDeclarationKind::FunctionDeclaration(function) = &export.declaration
+        else {
+            panic!("fixture has a direct default function");
+        };
+        assert!(builder.bind_default_export(module, &parsed.program.body[1]));
+
+        let declaration = builder
+            .function_declaration_value(module, function.span.start)
+            .expect("named declaration storage");
+        let default = builder
+            .default_function_value(module, function.span.start)
+            .expect("default candidate storage");
+        assert_ne!(declaration, default);
+        assert_eq!(
+            builder.local_symbol_slots(module, "local").0,
+            Some(declaration)
+        );
+    }
+
+    #[test]
     fn imported_value_barriers_preserve_exact_type_only_absence_provenance() {
         let prelude_allocator = Allocator::default();
         let source_allocator = Allocator::default();
@@ -3004,18 +3329,24 @@ mod tests {
                 "NeverValue".to_owned(),
                 None,
                 ty,
-                true,
-                true,
-                false,
+                ImportedSymbolProvenance {
+                    value_barrier: true,
+                    type_only_value_absence: true,
+                    type_barrier: false,
+                    type_unavailable_from_value: false,
+                },
                 Span::new(9, 19),
             ),
             ImportedSymbol::new(
                 "ErasedValue".to_owned(),
                 None,
                 ty,
-                true,
-                false,
-                false,
+                ImportedSymbolProvenance {
+                    value_barrier: true,
+                    type_only_value_absence: false,
+                    type_barrier: false,
+                    type_unavailable_from_value: false,
+                },
                 Span::new(21, 32),
             ),
         ];

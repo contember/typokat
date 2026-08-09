@@ -2990,6 +2990,8 @@ fn collect_static_class_parameter_diagnostics(
 struct AbstractClassInfo<'ast, Ticket: Copy> {
     class: &'ast Class<'ast>,
     owner: Ticket,
+    statement_start: u32,
+    direct_top_level_declaration: bool,
 }
 
 fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
@@ -2998,6 +3000,11 @@ fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
     parents: &LayeredMap<ClassId, ClassId>,
 ) -> Vec<TicketRecord<Ticket>> {
     let mut classes = FxHashMap::default();
+    let top_level_classes = reservations
+        .top_level()
+        .iter()
+        .filter_map(|reservation| reservation.class)
+        .collect::<BTreeSet<_>>();
     for reservation in reservations.classes() {
         let Some(binding) = reservation.binding.as_ref() else {
             continue;
@@ -3013,6 +3020,8 @@ fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
             AbstractClassInfo {
                 class,
                 owner: reservation.tickets.deferred,
+                statement_start: reservation.source.source_start,
+                direct_top_level_declaration: top_level_classes.contains(&reservation.id),
             },
         );
     }
@@ -3060,7 +3069,14 @@ fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
             continue;
         }
         let pending = pending_for(class_id, &classes, parents, &mut BTreeSet::new(), &mut memo);
-        let Some(name) = info.class.id.as_ref() else {
+        let (diagnostic_span, display_name) = if let Some(name) = info.class.id.as_ref() {
+            (CheckSpan::from_oxc(name.span), name.name.as_str())
+        } else if info.direct_top_level_declaration {
+            (
+                CheckSpan::new(info.statement_start, info.statement_start),
+                "default",
+            )
+        } else {
             continue;
         };
         let Some(base_name) = info.class.super_class.as_ref().and_then(|base| match base {
@@ -3072,14 +3088,14 @@ fn abstract_completeness_records<'ast, Ticket: Copy + PartialEq>(
         let diagnostic = match pending.as_slice() {
             [] => continue,
             [member] => Diagnostic::missing_abstract_member(
-                CheckSpan::from_oxc(name.span),
-                name.name.as_str(),
+                diagnostic_span,
+                display_name,
                 member,
                 base_name,
             ),
             members => Diagnostic::missing_abstract_members(
-                CheckSpan::from_oxc(name.span),
-                name.name.as_str(),
+                diagnostic_span,
+                display_name,
                 members,
                 base_name,
             ),

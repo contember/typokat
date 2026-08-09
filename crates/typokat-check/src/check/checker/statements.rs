@@ -20,10 +20,11 @@ use crate::span::Span;
 use crate::types::repr::{FunctionType, ObjectType};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
-    BindingPattern, BlockStatement, Declaration, Expression, ForInStatement, ForOfStatement,
-    ForStatement, ForStatementInit, ForStatementLeft, Function, ObjectPropertyKind, Statement,
-    TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName, TSType, TSTypeName,
-    TryStatement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, BlockStatement, Declaration, ExportDefaultDeclarationKind, Expression,
+    ForInStatement, ForOfStatement, ForStatement, ForStatementInit, ForStatementLeft, Function,
+    ObjectPropertyKind, Statement, TSModuleDeclaration, TSModuleDeclarationBody,
+    TSModuleDeclarationName, TSType, TSTypeName, TryStatement, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -450,7 +451,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 index += 1;
                 continue;
             }
-            if let Some((name, end)) = function_overload_group(statements, index) {
+            if let Some((name, end)) = self.function_overload_group(statements, index) {
                 for statement in &statements[index..end] {
                     self.emit_direct_script_global_this_conflicts_with_owner(statement);
                 }
@@ -479,6 +480,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 index += 1;
                 continue;
             }
+            if let Some(func) = default_function_decl_from_statement(&statements[index]) {
+                if self.default_function_value(func).is_some() {
+                    self.finalize_function_declaration_with_ambient(scope, func, surfaces, ambient);
+                    self.publish_completed_default_function_value(func);
+                    index += 1;
+                    continue;
+                }
+            }
             self.check_stmt(scope, &statements[index], declared_ret, inferred);
             index += 1;
         }
@@ -504,6 +513,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.check_class(scope, class);
                 return;
             }
+            Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                ExportDefaultDeclarationKind::ClassDeclaration(class)
+                    if self
+                        .binder
+                        .exact_declaration_at(
+                            self.current_module,
+                            super::decls::class_binding_start(class),
+                            DeclarationKind::Class,
+                        )
+                        .is_some() =>
+                {
+                    self.check_class(scope, class);
+                    return;
+                }
+                ExportDefaultDeclarationKind::FunctionDeclaration(function)
+                    if self.default_function_value(function).is_some() =>
+                {
+                    self.check_function_declaration(scope, function);
+                    self.publish_completed_default_function_value(function);
+                    return;
+                }
+                _ => {}
+            },
             _ => {}
         }
         self.with_lexical_effects(stmt.span().start, LexicalOwnerPhase::Immediate, |pass| {
@@ -775,18 +807,50 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     "export * not modeled",
                 );
             }
-            Statement::ExportDefaultDeclaration(_) => {
+            Statement::ExportDefaultDeclaration(export) => {
                 if self
                     .binder
                     .library_export_default_reporting_owns(self.current_module, stmt.span().start)
                 {
                     return;
                 }
-                self.record_incomplete(
-                    "decl/export-default/self",
-                    Span::from_oxc(stmt.span()),
-                    "export default not modeled",
-                );
+                if let Some(storage) = self
+                    .binder
+                    .default_export_value(self.current_module, export.span.start)
+                {
+                    let Some(expression) = export.declaration.as_expression() else {
+                        self.record_incomplete(
+                            "decl/export-default/self",
+                            Span::from_oxc(stmt.span()),
+                            "export default not modeled",
+                        );
+                        return;
+                    };
+                    let type_only_identifier = match expression {
+                        Expression::Identifier(identifier) => self
+                            .binder
+                            .graph
+                            .get(self.current_module)
+                            .and_then(|scope| scope.lookup_local(identifier.name.as_str()))
+                            .and_then(|symbol| self.binder.symbols.get(symbol))
+                            .is_some_and(|symbol| symbol.value.is_none() && symbol.ty.is_some()),
+                        _ => false,
+                    };
+                    let ty = if type_only_identifier {
+                        self.interner.well_known().error
+                    } else {
+                        self.infer_expr(scope, expression)
+                            .map(|(ty, _)| ty)
+                            .unwrap_or(self.interner.well_known().error)
+                    };
+                    self.publish_copied_decl_type_replay(storage, ty);
+                } else {
+                    self.record_incomplete(
+                        "decl/export-default/self",
+                        Span::from_oxc(stmt.span()),
+                        "export default not modeled",
+                    );
+                }
             }
             Statement::TSExportAssignment(_) => {
                 self.record_incomplete(
@@ -1732,6 +1796,46 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         surfaces
     }
 
+    fn authenticated_default_overload_implementation<'stmt, 'source>(
+        &self,
+        statement: &'stmt Statement<'source>,
+    ) -> Option<&'stmt Function<'source>> {
+        let function = default_function_decl_from_statement(statement)?;
+        function.id.as_ref()?;
+        function.body.as_ref()?;
+        self.default_function_value(function)?;
+        self.function_decl_id(function)?;
+        Some(function)
+    }
+
+    fn function_overload_group<'stmt>(
+        &self,
+        statements: &'stmt [Statement<'_>],
+        index: usize,
+    ) -> Option<(&'stmt str, usize)> {
+        let first = function_decl_from_statement(statements.get(index)?)?;
+        let name = first.id.as_ref()?.name.as_str();
+        let mut end = index + 1;
+        while let Some(statement) = statements.get(end) {
+            if let Some(next) = function_decl_from_statement(statement) {
+                if next.id.as_ref().map(|id| id.name.as_str()) != Some(name) {
+                    break;
+                }
+                end += 1;
+                continue;
+            }
+            if self
+                .authenticated_default_overload_implementation(statement)
+                .and_then(|function| function.id.as_ref())
+                .is_some_and(|id| id.name == name)
+            {
+                end += 1;
+            }
+            break;
+        }
+        (end - index > 1).then_some((name, end))
+    }
+
     fn reserve_function_surfaces_into(
         &mut self,
         scope: ScopeId,
@@ -1740,10 +1844,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         let mut index = 0;
         while index < statements.len() {
-            if let Some((name, end)) = function_overload_group(statements, index) {
+            if let Some((name, end)) = self.function_overload_group(statements, index) {
                 let group = self.register_function_group(scope, name);
                 for stmt in &statements[index..end] {
-                    let Some(func) = function_decl_from_statement(stmt) else {
+                    let Some(func) = overload_function_decl_from_statement(stmt) else {
                         continue;
                     };
                     self.reserve_function_surface(scope, func, surfaces, false);
@@ -1775,6 +1879,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.reserve_function_surface(scope, func, surfaces, group.is_none());
                 if let Some(group) = group {
                     self.reserve_ordinary_function_group_row(group, func, surfaces);
+                }
+            }
+            if let Some(func) = default_function_decl_from_statement(&statements[index]) {
+                if self.default_function_value(func).is_some() {
+                    self.reserve_function_surface(scope, func, surfaces, true);
                 }
             }
             index += 1;
@@ -1884,7 +1993,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         statements: &[Statement<'_>],
         surfaces: &FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
-        for func in statements.iter().filter_map(function_decl_from_statement) {
+        for func in statements
+            .iter()
+            .filter_map(overload_function_decl_from_statement)
+        {
             let Some(declaration) = self.function_decl_id(func) else {
                 continue;
             };
@@ -2236,6 +2348,38 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             })
     }
 
+    fn default_function_value(&self, func: &Function<'_>) -> Option<ValueStorageId> {
+        self.binder
+            .default_function_value(self.current_module, func.span.start)
+    }
+
+    fn publish_completed_default_function_value(&mut self, func: &Function<'_>) {
+        let Some(default_value) = self.default_function_value(func) else {
+            return;
+        };
+        let Some(declaration_value) = self.function_decl_id(func) else {
+            return;
+        };
+        if let Some(function_ty) = self.decl_type_replay(declaration_value) {
+            self.publish_default_function_value_copy(default_value, declaration_value, function_ty);
+        }
+    }
+
+    fn publish_default_function_value_copy(
+        &mut self,
+        default_value: ValueStorageId,
+        implementation_value: ValueStorageId,
+        function_ty: TypeId,
+    ) {
+        if default_value == implementation_value {
+            return;
+        }
+        self.with_replay_owner(
+            super::replay_index::ReplayOwner::Value(implementation_value),
+            |pass| pass.publish_copied_decl_type_replay(default_value, function_ty),
+        );
+    }
+
     fn publish_reserved_overload_group(
         &mut self,
         scope: ScopeId,
@@ -2244,7 +2388,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         surfaces: &FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
         let mut signatures = Vec::new();
-        for func in statements.iter().filter_map(function_decl_from_statement) {
+        for func in statements
+            .iter()
+            .filter_map(overload_function_decl_from_statement)
+        {
             let Some(surface) = surfaces.get(&func.span.start) else {
                 return;
             };
@@ -2264,7 +2411,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         });
         let implementation_decl = statements
             .iter()
-            .filter_map(function_decl_from_statement)
+            .filter_map(overload_function_decl_from_statement)
             .filter(|func| func.body.is_some())
             .filter_map(|func| self.function_decl_id(func))
             .next_back();
@@ -2384,11 +2531,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .binder
             .resolve_value(scope, name)
             .filter(|symbol| self.function_groups.contains_symbol(*symbol));
+        let authenticated_default_value = statements
+            .iter()
+            .find_map(|statement| self.authenticated_default_overload_implementation(statement))
+            .and_then(|function| self.default_function_value(function));
         let mut signatures = Vec::new();
         let mut implementation: Option<(TypeId, ValueStorageId)> = None;
         let mut unavailable = false;
         for stmt in statements {
-            let Some(func) = function_decl_from_statement(stmt) else {
+            let Some(func) = overload_function_decl_from_statement(stmt) else {
                 continue;
             };
             self.fill_reserved_function_body(scope, func, surfaces, false);
@@ -2413,6 +2564,36 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
 
+        if authenticated_default_value.is_some() {
+            for statement in statements {
+                let Some(function) = overload_function_decl_from_statement(statement) else {
+                    continue;
+                };
+                if function.body.is_some() || function_statement_is_exported(statement) {
+                    continue;
+                }
+                let Some(identifier) = function.id.as_ref() else {
+                    continue;
+                };
+                let diagnostic = Diagnostic::overload_signatures_same_export_status(
+                    Span::from_oxc(identifier.span),
+                );
+                let ticket = surfaces
+                    .get(&function.span.start)
+                    .and_then(|surface| match surface {
+                        FunctionReservation::Ready(surface) => surface.tickets,
+                        FunctionReservation::Unavailable(surface) => surface.tickets,
+                    })
+                    .map(|tickets| tickets.deferred);
+                match ticket {
+                    Some(ticket) => self.with_ticket_effects(ticket, |pass| {
+                        pass.emit_diagnostic(diagnostic);
+                    }),
+                    None => self.emit_diagnostic(diagnostic),
+                }
+            }
+        }
+
         // Compatibility diagnostics belong to each ready overload row, even when a
         // different row is unavailable and therefore withholds the whole group.
         if let Some((implementation_ty, _)) = implementation {
@@ -2426,7 +2607,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 && implementation.is_none()
                 && statements
                     .iter()
-                    .filter_map(function_decl_from_statement)
+                    .filter_map(overload_function_decl_from_statement)
                     .any(|func| !func.declare)
             {
                 if let Some((_, span, ticket)) = signatures.last() {
@@ -2450,7 +2631,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 && implementation.is_none()
                 && statements
                     .iter()
-                    .filter_map(function_decl_from_statement)
+                    .filter_map(overload_function_decl_from_statement)
                     .any(|func| !func.declare)
             {
                 if let Some((_, span, ticket)) = signatures.last() {
@@ -2465,6 +2646,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         }
                     }
                 }
+            }
+            if let (Some(default_value), Some((implementation_ty, implementation_value))) =
+                (authenticated_default_value, implementation)
+            {
+                self.publish_default_function_value_copy(
+                    default_value,
+                    implementation_value,
+                    implementation_ty,
+                );
             }
             return;
         }
@@ -2488,7 +2678,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     if !ambient
                         && statements
                             .iter()
-                            .filter_map(function_decl_from_statement)
+                            .filter_map(overload_function_decl_from_statement)
                             .any(|func| !func.declare)
                     {
                         match ticket {
@@ -2516,6 +2706,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return;
         };
         self.expose_overload_value(scope, name, Some(implementation_decl), overload_ty);
+        if let Some(default_value) = authenticated_default_value {
+            self.publish_default_function_value_copy(
+                default_value,
+                implementation_decl,
+                implementation_ty,
+            );
+        }
     }
 
     fn expose_overload_value(
@@ -2718,6 +2915,32 @@ pub(in crate::check::checker) fn function_decl_from_statement<'stmt, 'ast>(
         },
         _ => None,
     }
+}
+
+fn default_function_decl_from_statement<'stmt, 'ast>(
+    stmt: &'stmt Statement<'ast>,
+) -> Option<&'stmt Function<'ast>> {
+    let Statement::ExportDefaultDeclaration(export) = stmt else {
+        return None;
+    };
+    match &export.declaration {
+        ExportDefaultDeclarationKind::FunctionDeclaration(function) => Some(function),
+        _ => None,
+    }
+}
+
+fn function_statement_is_exported(statement: &Statement<'_>) -> bool {
+    matches!(
+        statement,
+        Statement::ExportNamedDeclaration(_) | Statement::ExportDefaultDeclaration(_)
+    )
+}
+
+fn overload_function_decl_from_statement<'stmt, 'ast>(
+    statement: &'stmt Statement<'ast>,
+) -> Option<&'stmt Function<'ast>> {
+    function_decl_from_statement(statement)
+        .or_else(|| default_function_decl_from_statement(statement))
 }
 
 /// Recognize only the exact unconditional recursion that TypeScript settles as

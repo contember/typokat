@@ -3,7 +3,9 @@
 //! and relation phase. Keep durable design notes in `docs/reference/architecture.md`
 //! (§5.2) and soundness rules in `docs/reference/invariants.md`.
 
-use crate::binder::bind::{ImportPlaceholder, ImportedSymbol, ProjectBinderBuilder};
+use crate::binder::bind::{
+    ImportPlaceholder, ImportedSymbol, ImportedSymbolProvenance, ProjectBinderBuilder,
+};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::source_global_binding_census;
@@ -22,7 +24,14 @@ use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
 use crate::frontend::{
     AdmittedSourceReexportDeclaration, AdmittedSourceReexportSource, AdmittedSourceReexports,
-    NamespaceProvenance, ProjectImport, ProjectImportSource, ProjectProgram,
+    DefaultExportOccurrence, DefaultImportCandidate, DefaultImportCandidateSource,
+    DefaultImportCandidateSpecifier, NamespaceProvenance, ProjectImport, ProjectImportSource,
+    ProjectProgram,
+};
+#[cfg(any(test, feature = "test-utils"))]
+use crate::frontend::{
+    DefaultExportOccurrenceKind, DefaultImportCandidateDisposition, DefaultImportSpecifierSyntax,
+    DefaultModuleCandidates, ModuleMemberIdentity,
 };
 use crate::relate::RelationOutcome;
 use crate::source::{
@@ -94,7 +103,7 @@ use context::{
 #[cfg(any(test, feature = "test-utils"))]
 use decls::type_decl_id;
 use decls::{
-    reserve_type_decls, reserve_type_decls_for_combined_library,
+    class_binding_start, reserve_type_decls, reserve_type_decls_for_combined_library,
     reserve_type_decls_for_combined_user, reserve_type_decls_selected, walk_type_decls,
     TopTypeDecl,
 };
@@ -729,6 +738,19 @@ fn bootstrap_test_support_prelude(
     interner: &mut Interner,
     bind: impl FnOnce(&Program<'_>) -> Binder,
 ) -> (Binder, TrustedPreludeHandoff) {
+    match try_bootstrap_test_support_prelude(interner, |program| {
+        Ok::<Binder, std::convert::Infallible>(bind(program))
+    }) {
+        Ok(output) => output,
+        Err(never) => match never {},
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn try_bootstrap_test_support_prelude<Error>(
+    interner: &mut Interner,
+    bind: impl FnOnce(&Program<'_>) -> Result<Binder, Error>,
+) -> Result<(Binder, TrustedPreludeHandoff), Error> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, TEST_AMBIENT_SOURCE, SourceType::ts()).parse();
     debug_assert!(
@@ -737,7 +759,7 @@ fn bootstrap_test_support_prelude(
         parsed.diagnostics
     );
 
-    let binder = bind(&parsed.program);
+    let binder = bind(&parsed.program)?;
     let mut next_type_param = 0;
     let mut next_class_id = 0;
     let mut type_resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
@@ -823,7 +845,7 @@ fn bootstrap_test_support_prelude(
     );
     let lexical_array_alias = selected.array_group();
     let library_semantic_identities = selected.all_ready().then_some(selected);
-    (
+    Ok((
         binder,
         TrustedPreludeHandoff {
             published_types,
@@ -833,7 +855,7 @@ fn bootstrap_test_support_prelude(
             next_type_param,
             next_class_id,
         },
-    )
+    ))
 }
 
 /// The structured outcome of checking one module: type diagnostics plus the third
@@ -1491,7 +1513,267 @@ struct ExportedSlots {
     type_unavailable: bool,
 }
 
-type ExportSurface = BTreeMap<String, ExportedSlots>;
+#[derive(Default)]
+struct ExportSurface {
+    default: Option<ExportedSlots>,
+    named: BTreeMap<String, ExportedSlots>,
+}
+
+struct ValidatedDefaultImport<'e> {
+    declaration: &'e DefaultImportCandidate,
+    specifier: &'e DefaultImportCandidateSpecifier,
+}
+
+struct ValidatedDefaultModulePlan<'e> {
+    imports_by_owner: Vec<Vec<ValidatedDefaultImport<'e>>>,
+    exports_by_owner: Vec<Option<&'e DefaultExportOccurrence>>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectDefaultInvariantError {
+    Coverage,
+    DependencyOrder,
+    UnsupportedCandidate,
+    AstEvidenceMismatch,
+    DuplicateEvidence,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl ProjectDefaultInvariantError {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::Coverage => "default-module evidence does not cover the project exactly",
+            Self::DependencyOrder => "default-module dependency order is invalid",
+            Self::UnsupportedCandidate => "unsupported default-module evidence reached checking",
+            Self::AstEvidenceMismatch => "default-module evidence does not match the parsed AST",
+            Self::DuplicateEvidence => "duplicate default evidence reached slot publication",
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn build_validated_default_module_plan<'e>(
+    candidates: &'e DefaultModuleCandidates,
+    units: &[ProjectProgram<'_>],
+) -> Result<ValidatedDefaultModulePlan<'e>, ProjectDefaultInvariantError> {
+    if candidates.first_cycle().is_some()
+        || candidates.dependency_order().len() != units.len()
+        || candidates
+            .dependency_order()
+            .iter()
+            .zip(units)
+            .any(|(path, unit)| path != &unit.normalized_path)
+    {
+        return Err(ProjectDefaultInvariantError::Coverage);
+    }
+    if candidates.dependency_edges().iter().any(|edge| {
+        edge.owner_module() >= units.len()
+            || edge.target_module() >= edge.owner_module()
+            || edge.target_module() >= units.len()
+    }) {
+        return Err(ProjectDefaultInvariantError::DependencyOrder);
+    }
+
+    let mut imports_by_owner = (0..units.len()).map(|_| Vec::new()).collect::<Vec<_>>();
+    for declaration in candidates.imports() {
+        if declaration.disposition() != DefaultImportCandidateDisposition::Admitted {
+            return Err(ProjectDefaultInvariantError::UnsupportedCandidate);
+        }
+        let [specifier] = declaration.specifiers() else {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        };
+        if specifier.identity() != &ModuleMemberIdentity::Default
+            || specifier.syntax() != DefaultImportSpecifierSyntax::DirectDefault
+            || specifier.is_type_only() != declaration.is_declaration_type_only()
+            || specifier.is_inline_type_only()
+        {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        }
+        if matches!(
+            declaration.source(),
+            DefaultImportCandidateSource::UnsupportedTarget(_)
+        ) {
+            return Err(ProjectDefaultInvariantError::UnsupportedCandidate);
+        }
+        if matches!(declaration.source(), DefaultImportCandidateSource::Resolved(target) if *target >= declaration.owner_module())
+        {
+            return Err(ProjectDefaultInvariantError::DependencyOrder);
+        }
+        let Some(unit) = units.get(declaration.owner_module()) else {
+            return Err(ProjectDefaultInvariantError::Coverage);
+        };
+        let Some(import) = unit.program.body.iter().find_map(|statement| {
+            let Statement::ImportDeclaration(import) = statement else {
+                return None;
+            };
+            (import.span.start == declaration.owner_start()).then_some(import)
+        }) else {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        };
+        let ast_matches = Span::from_oxc(import.span) == declaration.declaration_span()
+            && Span::from_oxc(import.source.span) == declaration.source_span()
+            && import.source.value.as_str() == declaration.module_specifier()
+            && (import.import_kind == ImportOrExportKind::Type)
+                == declaration.is_declaration_type_only()
+            && import
+                .specifiers
+                .as_ref()
+                .is_some_and(|specifiers| specifiers.len() == 1)
+            && import
+                .specifiers
+                .as_ref()
+                .and_then(|specifiers| specifiers.first())
+                .is_some_and(|ast| match ast {
+                    oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
+                        default.local.name.as_str() == specifier.local()
+                            && Span::from_oxc(default.local.span) == specifier.local_span()
+                            && Span::from_oxc(default.span) == specifier.span()
+                    }
+                    _ => false,
+                });
+        if !ast_matches {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        }
+        imports_by_owner[declaration.owner_module()].push(ValidatedDefaultImport {
+            declaration,
+            specifier,
+        });
+    }
+
+    let mut exports_by_owner = vec![None; units.len()];
+    for module in candidates.exports() {
+        if !module.is_admitted() || module.producer_count() != 1 {
+            return Err(ProjectDefaultInvariantError::UnsupportedCandidate);
+        }
+        let mut producers = module
+            .occurrences()
+            .iter()
+            .filter(|occurrence| occurrence.produces_default());
+        let Some(occurrence) = producers.next() else {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        };
+        if producers.next().is_some() {
+            return Err(ProjectDefaultInvariantError::DuplicateEvidence);
+        }
+        let Some(unit) = units.get(module.owner_module()) else {
+            return Err(ProjectDefaultInvariantError::Coverage);
+        };
+        if module.normalized_path() != unit.normalized_path
+            || occurrence.id().owner_source_key() != unit.compilation_unit.source
+            || occurrence.id().normalized_owner_path() != unit.normalized_path
+            || occurrence.id().declaration_start() != occurrence.declaration_span().start
+            || occurrence.exported() != &ModuleMemberIdentity::Default
+            || occurrence.imported().is_some()
+            || occurrence.is_type_only()
+        {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        }
+        if occurrence.lexical_name().is_some()
+            && occurrence.identifier_namespace_provenance()
+                != Some(NamespaceProvenance::ProvenAbsent)
+        {
+            return Err(ProjectDefaultInvariantError::UnsupportedCandidate);
+        }
+        let Some(statement) = unit.program.body.iter().find(|statement| {
+            matches!(statement, Statement::ExportDefaultDeclaration(export) if export.span.start == occurrence.declaration_span().start)
+        }) else {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        };
+        let Statement::ExportDefaultDeclaration(export) = statement else {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        };
+        let evidence_matches = match (&export.declaration, occurrence.kind()) {
+            (
+                oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(class),
+                DefaultExportOccurrenceKind::DirectClass,
+            ) => {
+                occurrence.subject_span() == Span::from_oxc(class.span)
+                    && occurrence.lexical_name() == class.id.as_ref().map(|id| id.name.as_str())
+                    && occurrence.lexical_name_span()
+                        == class.id.as_ref().map(|id| Span::from_oxc(id.span))
+                    && occurrence.declaration_anonymous() == Some(class.id.is_none())
+                    && occurrence.identifier_namespace_provenance()
+                        == class.id.as_ref().map(|_| NamespaceProvenance::ProvenAbsent)
+            }
+            (
+                oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(function),
+                DefaultExportOccurrenceKind::DirectFunction,
+            ) => {
+                occurrence.subject_span() == Span::from_oxc(function.span)
+                    && occurrence.lexical_name() == function.id.as_ref().map(|id| id.name.as_str())
+                    && occurrence.lexical_name_span()
+                        == function.id.as_ref().map(|id| Span::from_oxc(id.span))
+                    && occurrence.declaration_anonymous() == Some(function.id.is_none())
+                    && occurrence.identifier_namespace_provenance()
+                        == function
+                            .id
+                            .as_ref()
+                            .map(|_| NamespaceProvenance::ProvenAbsent)
+            }
+            (declaration, DefaultExportOccurrenceKind::DefaultExpression) => {
+                declaration.as_expression().is_some_and(|expression| {
+                    let identifier = match expression {
+                        oxc_ast::ast::Expression::Identifier(identifier) => Some(identifier),
+                        _ => None,
+                    };
+                    occurrence.subject_span() == Span::from_oxc(expression.span())
+                        && occurrence.lexical_name()
+                            == identifier.map(|identifier| identifier.name.as_str())
+                        && occurrence.lexical_name_span()
+                            == identifier.map(|identifier| Span::from_oxc(identifier.span))
+                        && occurrence.declaration_anonymous().is_none()
+                        && occurrence.identifier_namespace_provenance()
+                            == identifier.map(|_| NamespaceProvenance::ProvenAbsent)
+                })
+            }
+            _ => false,
+        };
+        if !evidence_matches || Span::from_oxc(export.span) != occurrence.declaration_span() {
+            return Err(ProjectDefaultInvariantError::AstEvidenceMismatch);
+        }
+        if exports_by_owner[module.owner_module()]
+            .replace(occurrence)
+            .is_some()
+        {
+            return Err(ProjectDefaultInvariantError::DuplicateEvidence);
+        }
+    }
+    for (index, unit) in units.iter().enumerate() {
+        let import_syntax_count = unit
+            .program
+            .body
+            .iter()
+            .filter(|statement| {
+                let Statement::ImportDeclaration(import) = statement else {
+                    return false;
+                };
+                import.specifiers.as_ref().is_some_and(|specifiers| {
+                    matches!(
+                        specifiers.as_slice(),
+                        [oxc_ast::ast::ImportDeclarationSpecifier::ImportDefaultSpecifier(_)]
+                    )
+                })
+            })
+            .count();
+        if import_syntax_count != imports_by_owner[index].len() {
+            return Err(ProjectDefaultInvariantError::Coverage);
+        }
+        let syntax_count = unit
+            .program
+            .body
+            .iter()
+            .filter(|statement| matches!(statement, Statement::ExportDefaultDeclaration(_)))
+            .count();
+        if syntax_count != usize::from(exports_by_owner[index].is_some()) {
+            return Err(ProjectDefaultInvariantError::Coverage);
+        }
+    }
+    Ok(ValidatedDefaultModulePlan {
+        imports_by_owner,
+        exports_by_owner,
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectSourceReexportInvariantError {
@@ -1751,10 +2033,12 @@ pub(crate) fn check_project_programs<'ast>(
         interner,
         units,
         None,
+        None,
         |_, _, _| {},
         |_, _, _, _, _, _, _| {},
         |_| {},
     )
+    .expect("ordinary project checking has no candidate default refusal")
 }
 
 #[cfg(test)]
@@ -1779,11 +2063,32 @@ fn check_project_programs_with_source_reexport_work_for_test<'ast>(
         interner,
         units,
         Some(&plan),
+        None,
         |_, _, _| {},
         |_, _, _, _, _, _, _| {},
         |_| {},
-    );
+    )
+    .expect("source-reexport checking has no candidate default refusal");
     Ok((results, plan.work_for_test()))
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_project_programs_with_default_candidates<'ast>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    candidates: &DefaultModuleCandidates,
+) -> Result<Vec<CheckResult>, &'static str> {
+    let plan = build_validated_default_module_plan(candidates, units)
+        .map_err(ProjectDefaultInvariantError::message)?;
+    check_project_programs_inner(
+        interner,
+        units,
+        None,
+        Some(&plan),
+        |_, _, _| {},
+        |_, _, _, _, _, _, _| {},
+        |_| {},
+    )
 }
 
 pub(in crate::check::checker) fn check_project_programs_with_owned_library<'ast, F, G>(
@@ -1824,6 +2129,7 @@ impl ProjectSourceReexportCheckError {
 
 struct OwnedProjectAdmission<'p> {
     source_reexports: Option<&'p ValidatedSourceReexportPlan<'p>>,
+    default_module: Option<&'p ValidatedDefaultModulePlan<'p>>,
     complete_binder_checkpoint: Option<crate::binder::bind::LibraryBinderCheckpoint>,
 }
 
@@ -1849,6 +2155,7 @@ where
         units,
         OwnedProjectAdmission {
             source_reexports: plan.as_ref(),
+            default_module: None,
             complete_binder_checkpoint: None,
         },
         inspect_bindings,
@@ -1912,6 +2219,7 @@ where
     let mut external_effects: BTreeMap<UserRecordTicket, CandidateEffects> = BTreeMap::new();
     let OwnedProjectAdmission {
         source_reexports,
+        default_module,
         complete_binder_checkpoint,
     } = admission;
     let (binder, module_scopes, module_placeholders) = if let Some(checkpoint) =
@@ -1950,10 +2258,13 @@ where
                 )
                 .map_err(|_| "complete-source binding reservation failed")?;
         }
-        let mut bound = bind_authoritative_project_core_with_source_reexports(
+        let mut bound = bind_authoritative_project_core_with_module_admission(
             builder,
             units,
-            source_reexports,
+            ProjectModuleAdmission {
+                source_reexports,
+                default_module,
+            },
             source_offset,
             &binding_lexical_events,
             &mut external_effects,
@@ -1995,10 +2306,25 @@ where
         for (unit_index, (unit, compilation_unit)) in
             units.iter().zip(continuation_units).enumerate()
         {
-            let imports = imported_symbols(unit, &exports, &lexical_events, &mut external_effects)?;
+            let imports = imported_symbols(
+                unit,
+                &exports,
+                default_module
+                    .and_then(|plan| plan.imports_by_owner.get(unit_index))
+                    .map(Vec::as_slice),
+                &lexical_events,
+                &mut external_effects,
+            )?;
             let (scope, placeholders) =
                 builder.add_module(unit.program, &imports, compilation_unit);
-            let surface = collect_exports(
+            if let Some(default_export) = default_module
+                .and_then(|plan| plan.exports_by_owner.get(unit_index))
+                .copied()
+                .flatten()
+            {
+                bind_validated_default_export(&mut builder, scope, unit.program, default_export)?;
+            }
+            let mut surface = collect_exports(
                 &builder,
                 scope,
                 unit.program,
@@ -2011,6 +2337,18 @@ where
                     module_index: unit_index,
                 },
             )?;
+            if let Some(default_export) = default_module
+                .and_then(|plan| plan.exports_by_owner.get(unit_index))
+                .copied()
+                .flatten()
+            {
+                surface.default = Some(collect_default_export(
+                    &builder,
+                    scope,
+                    unit.program,
+                    default_export,
+                )?);
+            }
             module_scopes.push(scope);
             module_placeholders.push(placeholders);
             exports.push(surface);
@@ -2696,6 +3034,7 @@ pub fn check_private_project_programs_with_library<'ast>(
         units,
         OwnedProjectAdmission {
             source_reexports: None,
+            default_module: None,
             complete_binder_checkpoint: None,
         },
         |_, _| {},
@@ -2716,6 +3055,7 @@ pub fn check_complete_source_project_programs_with_library<'ast>(
         units,
         OwnedProjectAdmission {
             source_reexports: None,
+            default_module: None,
             complete_binder_checkpoint: Some(checkpoint),
         },
         |_, _| {},
@@ -3000,6 +3340,7 @@ pub fn check_private_project_programs_with_library_evidence<'ast>(
         units,
         OwnedProjectAdmission {
             source_reexports: None,
+            default_module: None,
             complete_binder_checkpoint: None,
         },
         |_, _| {},
@@ -3051,6 +3392,7 @@ pub fn check_private_project_programs_with_scale_evidence<'ast>(
         units,
         OwnedProjectAdmission {
             source_reexports: None,
+            default_module: None,
             complete_binder_checkpoint: None,
         },
         |_, _| {},
@@ -3086,6 +3428,7 @@ pub fn check_complete_library_project_programs_with_evidence<'ast>(
         units,
         OwnedProjectAdmission {
             source_reexports: None,
+            default_module: None,
             complete_binder_checkpoint: Some(checkpoint),
         },
         |_, _| {},
@@ -3174,10 +3517,12 @@ where
         interner,
         units,
         None,
+        None,
         inspect,
         |_, _, _, _, _, _, _| {},
         |_| {},
     )
+    .expect("binding inspection has no candidate default refusal")
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -3226,6 +3571,7 @@ where
     check_project_programs_inner(
         interner,
         units,
+        None,
         None,
         |_, _, _| {},
         |binder, registry, decl_types, _, _, _, _| {
@@ -3283,6 +3629,7 @@ where
             });
         },
     )
+    .expect("namespace inspection has no candidate default refusal")
 }
 
 pub(crate) fn bind_library_checkpoint_project_programs(
@@ -3336,15 +3683,19 @@ fn bind_fresh_project_programs(
     prelude: &Program<'_>,
     units: &[ProjectProgram<'_>],
     source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
+    default_module: Option<&ValidatedDefaultModulePlan<'_>>,
     lexical_events: &LexicalReservations,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Result<BoundProjectBinder, String> {
     #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_SEEDS.set(PROJECT_BINDING_FRESH_SEEDS.get().saturating_add(1));
-    let bound = bind_authoritative_project_core_with_source_reexports(
+    let bound = bind_authoritative_project_core_with_module_admission(
         ProjectBinderBuilder::new(prelude),
         units,
-        source_reexports,
+        ProjectModuleAdmission {
+            source_reexports,
+            default_module,
+        },
         0,
         lexical_events,
         external_effects,
@@ -3361,6 +3712,12 @@ enum AuthoritativeProjectBinderFinish {
     #[cfg(any(test, feature = "test-utils"))]
     Fresh,
     Continuation,
+}
+
+#[derive(Clone, Copy)]
+struct ProjectModuleAdmission<'p> {
+    source_reexports: Option<&'p ValidatedSourceReexportPlan<'p>>,
+    default_module: Option<&'p ValidatedDefaultModulePlan<'p>>,
 }
 
 fn bind_authoritative_project_core<'ast, Ticket>(
@@ -3387,7 +3744,7 @@ where
 }
 
 fn bind_authoritative_project_core_with_source_reexports<'ast, Ticket>(
-    mut builder: ProjectBinderBuilder<'ast>,
+    builder: ProjectBinderBuilder<'ast>,
     units: &[ProjectProgram<'ast>],
     source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
     source_offset: u32,
@@ -3399,6 +3756,37 @@ where
     Ticket: UserReportingOwner,
     Ticket::Error: std::fmt::Display,
 {
+    bind_authoritative_project_core_with_module_admission(
+        builder,
+        units,
+        ProjectModuleAdmission {
+            source_reexports,
+            default_module: None,
+        },
+        source_offset,
+        lexical_events,
+        external_effects,
+        finish,
+    )
+}
+
+fn bind_authoritative_project_core_with_module_admission<'ast, Ticket>(
+    mut builder: ProjectBinderBuilder<'ast>,
+    units: &[ProjectProgram<'ast>],
+    admission: ProjectModuleAdmission<'_>,
+    source_offset: u32,
+    lexical_events: &LexicalReservations<Ticket>,
+    external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+    finish: AuthoritativeProjectBinderFinish,
+) -> Result<BoundProjectBinder, String>
+where
+    Ticket: UserReportingOwner,
+    Ticket::Error: std::fmt::Display,
+{
+    let ProjectModuleAdmission {
+        source_reexports,
+        default_module,
+    } = admission;
     #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECT_BINDING_ENTRIES.set(PROJECT_BINDING_ENTRIES.get().saturating_add(1));
@@ -3430,11 +3818,27 @@ where
     let mut module_placeholders = Vec::with_capacity(units.len());
     let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
     for (unit_index, unit) in units.iter().enumerate() {
-        let imports = imported_symbols(unit, &exports, lexical_events, external_effects)
-            .map_err(|error| format!("project import reporting owner failed: {error}"))?;
+        let imports = imported_symbols(
+            unit,
+            &exports,
+            default_module
+                .and_then(|plan| plan.imports_by_owner.get(unit_index))
+                .map(Vec::as_slice),
+            lexical_events,
+            external_effects,
+        )
+        .map_err(|error| format!("project import reporting owner failed: {error}"))?;
         let compilation = shifted_unit(unit)?;
         let (scope, placeholders) = builder.add_module(unit.program, &imports, compilation);
-        let surface = collect_exports(
+        if let Some(default_export) = default_module
+            .and_then(|plan| plan.exports_by_owner.get(unit_index))
+            .copied()
+            .flatten()
+        {
+            bind_validated_default_export(&mut builder, scope, unit.program, default_export)
+                .map_err(str::to_owned)?;
+        }
+        let mut surface = collect_exports(
             &builder,
             scope,
             unit.program,
@@ -3448,6 +3852,16 @@ where
             },
         )
         .map_err(|error| format!("project export reporting owner failed: {error}"))?;
+        if let Some(default_export) = default_module
+            .and_then(|plan| plan.exports_by_owner.get(unit_index))
+            .copied()
+            .flatten()
+        {
+            surface.default = Some(
+                collect_default_export(&builder, scope, unit.program, default_export)
+                    .map_err(str::to_owned)?,
+            );
+        }
         module_scopes.push(scope);
         module_placeholders.push(placeholders);
         exports.push(surface);
@@ -3626,10 +4040,11 @@ fn check_project_programs_inner<'ast, F, G, H>(
     interner: &mut Interner,
     units: &[ProjectProgram<'ast>],
     source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
+    default_module: Option<&ValidatedDefaultModulePlan<'_>>,
     inspect_bindings: F,
     inspect_namespace_values: G,
     inspect_replay: H,
-) -> Vec<CheckResult>
+) -> Result<Vec<CheckResult>, &'static str>
 where
     F: FnOnce(&Binder, &LexicalReservations, &[ScopeId]),
     G: FnOnce(
@@ -3644,7 +4059,7 @@ where
     H: FnOnce(&[(events::EventKey, CheckerRecord)]),
 {
     if units.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut event_store = EventStore::default();
@@ -3661,6 +4076,37 @@ where
             )
             .expect("lexical event reservation must reference valid events");
     }
+    if let Some(plan) = default_module {
+        for (unit, occurrence) in units.iter().zip(&plan.exports_by_owner) {
+            let Some(occurrence) = occurrence else {
+                continue;
+            };
+            let (kind, span) = match occurrence.kind() {
+                DefaultExportOccurrenceKind::DirectClass
+                    if occurrence.declaration_anonymous() == Some(true) =>
+                {
+                    (DeclarationKind::Class, occurrence.subject_span())
+                }
+                DefaultExportOccurrenceKind::DirectFunction
+                    if occurrence.declaration_anonymous() == Some(true) =>
+                {
+                    (DeclarationKind::Function, occurrence.subject_span())
+                }
+                DefaultExportOccurrenceKind::DefaultExpression => (
+                    DeclarationKind::DefaultExportExpression,
+                    occurrence.declaration_span(),
+                ),
+                _ => continue,
+            };
+            lexical_events
+                .attach_candidate_declaration_source(
+                    SourceOrdinal::User(unit.module_ordinal),
+                    kind,
+                    span,
+                )
+                .map_err(|_| "validated default has no exact lexical owner")?;
+        }
+    }
 
     let mut module_scopes = Vec::with_capacity(units.len());
     let mut module_placeholders: Vec<Vec<ImportPlaceholder>> = Vec::with_capacity(units.len());
@@ -3675,19 +4121,20 @@ where
             mut next_type_param,
             mut next_class_id,
         },
-    ) = bootstrap_test_support_prelude(interner, |prelude| {
+    ) = try_bootstrap_test_support_prelude(interner, |prelude| {
         let bound = bind_fresh_project_programs(
             prelude,
             units,
             source_reexports,
+            default_module,
             &lexical_events,
             &mut external_effects,
         )
-        .expect("authoritative fresh project binding succeeds");
+        .map_err(|_| "authoritative fresh project binding failed")?;
         module_scopes = bound.module_scopes;
         module_placeholders = bound.module_placeholders;
-        bound.binder
-    });
+        Ok::<Binder, &'static str>(bound.binder)
+    })?;
     #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_ORDINARY_CONSUMERS
         .set(PROJECT_BINDING_ORDINARY_CONSUMERS.get().saturating_add(1));
@@ -3833,7 +4280,7 @@ where
         UserReportingAdapter { event_store },
         inspect_replay,
     );
-    units
+    Ok(units
         .iter()
         .map(|unit| {
             let (mut diagnostics, mut incomplete) =
@@ -3846,12 +4293,13 @@ where
                 incomplete,
             }
         })
-        .collect()
+        .collect())
 }
 
 fn imported_symbols<Ticket: UserReportingOwner>(
     unit: &ProjectProgram<'_>,
     exports: &[ExportSurface],
+    default_imports: Option<&[ValidatedDefaultImport<'_>]>,
     reservations: &LexicalReservations<Ticket>,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Result<Vec<ImportedSymbol>, Ticket::Error> {
@@ -3871,7 +4319,7 @@ fn imported_symbols<Ticket: UserReportingOwner>(
             ProjectImportSource::Resolved(module_index) => {
                 let slots = exports
                     .get(*module_index)
-                    .and_then(|surface| surface.get(&import.imported))
+                    .and_then(|surface| surface.named.get(&import.imported))
                     .copied();
                 match slots {
                     Some(slots) => {
@@ -3884,9 +4332,12 @@ fn imported_symbols<Ticket: UserReportingOwner>(
                             import.local.clone(),
                             value,
                             slots.ty,
-                            value_barrier,
-                            type_only_value_absence,
-                            slots.type_unavailable,
+                            ImportedSymbolProvenance {
+                                value_barrier,
+                                type_only_value_absence,
+                                type_barrier: slots.type_unavailable,
+                                type_unavailable_from_value: false,
+                            },
                             import.local_span,
                         ));
                     }
@@ -3908,7 +4359,81 @@ fn imported_symbols<Ticket: UserReportingOwner>(
             }
         }
     }
+    for import in default_imports.into_iter().flatten() {
+        match import.declaration.source() {
+            DefaultImportCandidateSource::Missing => {
+                enqueue_external_diagnostic(
+                    reservations,
+                    effects,
+                    unit.module_ordinal,
+                    import.declaration.owner_start(),
+                    Diagnostic::cannot_find_module(
+                        import.declaration.source_span(),
+                        import.declaration.module_specifier(),
+                    ),
+                )?;
+                imports.push(placeholder_default_import(import));
+            }
+            DefaultImportCandidateSource::Resolved(module_index) => {
+                let slots = exports
+                    .get(*module_index)
+                    .and_then(|surface| surface.default);
+                match slots {
+                    Some(slots) => {
+                        let type_only = import.specifier.is_type_only();
+                        let value_barrier =
+                            slots.value_erased || (type_only && slots.value.is_some());
+                        let type_unavailable_from_value =
+                            slots.value.is_some() && slots.ty.is_none();
+                        imports.push(ImportedSymbol::new(
+                            import.specifier.local().to_owned(),
+                            if type_only { None } else { slots.value },
+                            slots.ty,
+                            ImportedSymbolProvenance {
+                                value_barrier,
+                                type_only_value_absence: value_barrier
+                                    && slots.type_only_value_absence,
+                                type_barrier: slots.type_unavailable || type_unavailable_from_value,
+                                type_unavailable_from_value,
+                            },
+                            import.specifier.local_span(),
+                        ));
+                    }
+                    None => {
+                        enqueue_external_diagnostic(
+                            reservations,
+                            effects,
+                            unit.module_ordinal,
+                            import.declaration.owner_start(),
+                            Diagnostic::no_default_export(
+                                import.specifier.local_span(),
+                                import.declaration.module_specifier(),
+                            ),
+                        )?;
+                        imports.push(placeholder_default_import(import));
+                    }
+                }
+            }
+            DefaultImportCandidateSource::UnsupportedTarget(_) => {
+                imports.push(placeholder_default_import(import));
+            }
+        }
+    }
     Ok(imports)
+}
+
+fn placeholder_default_import(import: &ValidatedDefaultImport<'_>) -> ImportedSymbol {
+    if import.specifier.is_type_only() {
+        ImportedSymbol::placeholder_type(
+            import.specifier.local().to_owned(),
+            import.specifier.local_span(),
+        )
+    } else {
+        ImportedSymbol::placeholder_value_and_type(
+            import.specifier.local().to_owned(),
+            import.specifier.local_span(),
+        )
+    }
 }
 
 fn placeholder_import(import: &ProjectImport) -> ImportedSymbol {
@@ -3928,12 +4453,12 @@ fn collect_exports<Ticket: UserReportingOwner>(
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
     projection: SourceReexportProjectionContext<'_, '_>,
 ) -> Result<ExportSurface, Ticket::Error> {
-    let mut surface = ExportSurface::new();
+    let mut surface = ExportSurface::default();
     let mut groups = BTreeMap::new();
     let mut context = ExportCollectionContext {
         builder,
         scope,
-        surface: &mut surface,
+        surface: &mut surface.named,
         groups: &mut groups,
         module_ordinal,
         reservations,
@@ -3966,6 +4491,90 @@ fn collect_exports<Ticket: UserReportingOwner>(
         }
     }
     Ok(surface)
+}
+
+fn collect_default_export(
+    builder: &ProjectBinderBuilder<'_>,
+    scope: ScopeId,
+    program: &Program<'_>,
+    occurrence: &DefaultExportOccurrence,
+) -> Result<ExportedSlots, &'static str> {
+    let statement = program.body.iter().find(|statement| {
+        matches!(statement, Statement::ExportDefaultDeclaration(export) if export.span.start == occurrence.declaration_span().start)
+    })
+    .ok_or("validated default producer is absent from its module")?;
+    let Statement::ExportDefaultDeclaration(export) = statement else {
+        return Err("validated default producer changed syntax kind");
+    };
+    let (value, ty, value_erased, type_only_value_absence) = match &export.declaration {
+        oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+            let declaration = builder
+                .exact_declaration_at(scope, class_binding_start(class), DeclarationKind::Class)
+                .ok_or("validated default class has no declaration storage")?;
+            if declaration.value_storage.is_none() || declaration.type_group.is_none() {
+                return Err("validated default class has an incomplete value/type slot pair");
+            }
+            (
+                declaration.value_storage,
+                declaration.type_group,
+                false,
+                false,
+            )
+        }
+        oxc_ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+            let value = builder.default_function_value(scope, function.span.start);
+            if value.is_none() {
+                return Err("validated default function has no value storage");
+            }
+            (value, None, false, false)
+        }
+        declaration => {
+            let expression = declaration
+                .as_expression()
+                .ok_or("validated default expression changed syntax kind")?;
+            let value = builder.default_export_value(scope, export.span.start);
+            if value.is_none() {
+                return Err("validated default expression has no value storage");
+            }
+            if let oxc_ast::ast::Expression::Identifier(identifier) = expression {
+                let (referenced_value, referenced_type) =
+                    builder.local_symbol_slots(scope, identifier.name.as_str());
+                if referenced_value.is_none() && referenced_type.is_none() {
+                    return Err("validated default identifier has no exact local slot");
+                }
+                let type_only = referenced_value.is_none() && referenced_type.is_some();
+                (referenced_value, referenced_type, type_only, type_only)
+            } else {
+                (value, None, false, false)
+            }
+        }
+    };
+    Ok(ExportedSlots {
+        value,
+        ty,
+        value_erased,
+        type_only_value_absence,
+        type_unavailable: value.is_some() && ty.is_none(),
+    })
+}
+
+fn bind_validated_default_export<'ast>(
+    builder: &mut ProjectBinderBuilder<'ast>,
+    scope: ScopeId,
+    program: &'ast Program<'ast>,
+    occurrence: &DefaultExportOccurrence,
+) -> Result<(), &'static str> {
+    let statement = program
+        .body
+        .iter()
+        .find(|statement| {
+            matches!(statement, Statement::ExportDefaultDeclaration(export) if export.span.start == occurrence.declaration_span().start)
+        })
+        .ok_or("validated default producer is absent during binding")?;
+    if !builder.bind_default_export(scope, statement) {
+        return Err("validated default producer could not allocate declaration storage");
+    }
+    Ok(())
 }
 
 struct SourceReexportProjectionContext<'a, 'e> {
@@ -4102,7 +4711,7 @@ struct CollectedExportGroup {
 struct ExportCollectionContext<'a, Ticket: UserReportingOwner> {
     builder: &'a ProjectBinderBuilder<'a>,
     scope: ScopeId,
-    surface: &'a mut ExportSurface,
+    surface: &'a mut BTreeMap<String, ExportedSlots>,
     groups: &'a mut BTreeMap<String, CollectedExportGroup>,
     module_ordinal: ModuleOrdinal,
     reservations: &'a LexicalReservations<Ticket>,
@@ -4207,7 +4816,7 @@ fn collect_source_reexport<Ticket: UserReportingOwner>(
         .zip(declaration.members())
     {
         let projected = target
-            .and_then(|surface| surface.get(member.imported()))
+            .and_then(|surface| surface.named.get(member.imported()))
             .copied();
         let slots = match projected {
             Some(mut slots) => {
@@ -4698,14 +5307,11 @@ fn attach_class_bindings<Ticket: Copy + PartialEq>(
         let TopTypeDecl::Class(class) = declaration else {
             return;
         };
-        let Some(binding) = class.id.as_ref() else {
-            return;
-        };
         let Some(site) = reservations.class_at(source_ordinal, class.span.start) else {
             return;
         };
         let Some(declaration) =
-            binder.exact_declaration_at(scope, binding.span.start, DeclarationKind::Class)
+            binder.exact_declaration_at(scope, class_binding_start(class), DeclarationKind::Class)
         else {
             return;
         };
@@ -6747,6 +7353,656 @@ mod source_reexport_projection_tests {
         assert!(prepared.collection.admitted().is_empty());
         assert_eq!(prepared.collection.dependency_edge_count(), 0);
         assert!(prepared.collection.resolutions().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod default_module_slot_tests {
+    use super::*;
+    use crate::frontend::{
+        collect_default_module_candidates, run_project_frontend, FileInput, ProjectResolutionMode,
+        ProjectRoot,
+    };
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
+
+    fn check_with_work(
+        files: &[(&str, &str)],
+    ) -> (
+        Result<Vec<CheckResult>, &'static str>,
+        AuthoritativeProjectBindingWorkForTest,
+    ) {
+        let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "typokat-check-default-modules-{}-{sequence}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create default-module project");
+        let inputs = files
+            .iter()
+            .map(|(name, source)| {
+                let path = directory.join(name);
+                std::fs::write(&path, source).expect("write default-module source");
+                FileInput {
+                    name: path.to_string_lossy().into_owned(),
+                    source: (*source).to_owned(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mode = ProjectResolutionMode::BundlerProject {
+            project_directory: directory.clone(),
+            roots: inputs
+                .iter()
+                .map(|input| ProjectRoot {
+                    identity: input.name.clone(),
+                    path: PathBuf::from(&input.name),
+                    exists: true,
+                })
+                .collect(),
+        };
+        let candidates = collect_default_module_candidates(inputs.clone(), mode)
+            .expect("collect default-module candidates");
+        let mut by_name = inputs
+            .into_iter()
+            .map(|input| (input.name.clone(), input))
+            .collect::<BTreeMap<_, _>>();
+        let ordered = candidates
+            .dependency_order()
+            .iter()
+            .map(|name| {
+                by_name
+                    .remove(name)
+                    .expect("candidate order names one input")
+            })
+            .collect::<Vec<_>>();
+        assert!(by_name.is_empty());
+        let run = run_project_frontend(ordered, |interner, units| {
+            let work = AuthoritativeProjectBindingWorkScopeForTest::start();
+            let result =
+                check_project_programs_with_default_candidates(interner, units, &candidates);
+            (result, work.finish())
+        });
+        std::fs::remove_dir_all(directory).expect("remove default-module project");
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        run.product
+    }
+
+    fn check(files: &[(&str, &str)]) -> Result<Vec<CheckResult>, &'static str> {
+        check_with_work(files).0
+    }
+
+    fn check_both_orders(files: &[(&str, &str)]) -> Result<[Vec<CheckResult>; 2], &'static str> {
+        let reversed = files.iter().rev().copied().collect::<Vec<_>>();
+        Ok([check(files)?, check(&reversed)?])
+    }
+
+    fn codes(results: &[CheckResult]) -> Vec<&'static str> {
+        results
+            .iter()
+            .flat_map(|result| &result.diagnostics)
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect()
+    }
+
+    fn corrupt_candidate_owner(
+        evidence_source: &str,
+        corrupt_source: &str,
+    ) -> (
+        Result<Vec<CheckResult>, &'static str>,
+        AuthoritativeProjectBindingWorkForTest,
+    ) {
+        let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "typokat-check-default-owner-corruption-{}-{sequence}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create corruption project");
+        let path = directory.join("source.ts");
+        std::fs::write(&path, evidence_source).expect("write candidate evidence");
+        let input = FileInput {
+            name: path.to_string_lossy().into_owned(),
+            source: evidence_source.to_owned(),
+        };
+        let mode = ProjectResolutionMode::BundlerProject {
+            project_directory: directory.clone(),
+            roots: vec![ProjectRoot {
+                identity: input.name.clone(),
+                path,
+                exists: true,
+            }],
+        };
+        let candidates = collect_default_module_candidates(vec![input.clone()], mode)
+            .expect("collect corruption evidence");
+        let run = run_project_frontend(vec![input], |interner, units| {
+            let plan = build_validated_default_module_plan(&candidates, units)
+                .expect("candidate evidence authenticates before corruption");
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, corrupt_source, SourceType::ts()).parse();
+            assert!(parsed.diagnostics.is_empty());
+            let original = &units[0];
+            let corrupt_units = [ProjectProgram {
+                module_ordinal: original.module_ordinal,
+                unit_slot: original.unit_slot,
+                normalized_path: original.normalized_path.clone(),
+                program: &parsed.program,
+                compilation_unit: original.compilation_unit,
+                imports: Vec::new(),
+            }];
+            let work = AuthoritativeProjectBindingWorkScopeForTest::start();
+            let result = check_project_programs_inner(
+                interner,
+                &corrupt_units,
+                None,
+                Some(&plan),
+                |_, _, _| {},
+                |_, _, _, _, _, _, _| {},
+                |_| {},
+            );
+            (result, work.finish())
+        });
+        std::fs::remove_dir_all(directory).expect("remove corruption project");
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        run.product
+    }
+
+    #[test]
+    fn named_default_class_is_checked_once_and_is_not_a_named_export() {
+        let orders = check_both_orders(&[
+            (
+                "source.ts",
+                "export default class Hidden { method(): string { return 1; } } new Hidden();",
+            ),
+            (
+                "consumer.ts",
+                "import { Hidden } from './source'; import D from './source.js'; const value: D = new D(); Hidden; value;",
+            ),
+        ])
+        .expect("default class candidates are admitted");
+        for results in orders {
+            assert_eq!(codes(&results), vec!["TK2322", "TK2305"]);
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn anonymous_default_class_keeps_value_and_type_without_a_local_name() {
+        let orders = check_both_orders(&[
+            (
+                "source.ts",
+                "export default class { method(): string { return 1; } }",
+            ),
+            (
+                "consumer.ts",
+                "import D from './source.js'; const value: D = new D(); value;",
+            ),
+        ])
+        .expect("anonymous class candidates are admitted");
+        for results in orders {
+            assert_eq!(codes(&results), vec!["TK2322"]);
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn default_class_abstract_completeness_keeps_anonymous_and_named_identity() {
+        let cases = [
+            (
+                "abstract class Base {\n  abstract go(): void;\n}\nexport default class extends Base {}\n",
+                "TK2515",
+                "Non-abstract class 'default' does not implement inherited abstract member go from class 'Base'.",
+                "export default",
+                0,
+            ),
+            (
+                "abstract class Base {\n  abstract go(): void;\n  abstract value: number;\n}\nexport default class extends Base {}\n",
+                "TK2654",
+                "Non-abstract class 'default' is missing implementations for the following members of 'Base': 'go', 'value'.",
+                "export default",
+                0,
+            ),
+            (
+                "abstract class Base {\n  abstract go(): void;\n}\nexport default class Derived extends Base {}\n",
+                "TK2515",
+                "Non-abstract class 'Derived' does not implement inherited abstract member go from class 'Base'.",
+                "Derived",
+                "Derived".len(),
+            ),
+            (
+                "abstract class Base {\n  abstract go(): void;\n  abstract value: number;\n}\nexport default class Derived extends Base {}\n",
+                "TK2654",
+                "Non-abstract class 'Derived' is missing implementations for the following members of 'Base': 'go', 'value'.",
+                "Derived",
+                "Derived".len(),
+            ),
+        ];
+        for (source, expected_code, expected_message, span_needle, span_width) in cases {
+            let span_start = u32::try_from(source.find(span_needle).expect("diagnostic anchor"))
+                .expect("fixture span fits u32");
+            let orders = check_both_orders(&[
+                ("source.ts", source),
+                (
+                    "consumer.ts",
+                    "import Derived from './source.js';\nnew Derived();\n",
+                ),
+            ])
+            .expect("default subclass candidates are admitted");
+            for results in orders {
+                let diagnostics = results
+                    .iter()
+                    .flat_map(|result| &result.diagnostics)
+                    .collect::<Vec<_>>();
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(diagnostics[0].code.as_str(), expected_code);
+                assert_eq!(
+                    diagnostics[0].span,
+                    Span::new(
+                        span_start,
+                        span_start + u32::try_from(span_width).expect("span width fits u32")
+                    )
+                );
+                assert_eq!(diagnostics[0].message, expected_message);
+                assert!(results.iter().all(|result| result.incomplete.is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn anonymous_class_expression_does_not_use_default_declaration_identity() {
+        let results = check(&[(
+            "source.ts",
+            "abstract class Base { abstract go(): void; }\nconst C = class extends Base {};\nnew C();\n",
+        )])
+        .expect("ordinary anonymous class expression stays outside default candidates");
+        assert!(codes(&results).is_empty());
+        assert_eq!(
+            results
+                .iter()
+                .flat_map(|result| &result.incomplete)
+                .map(|incomplete| incomplete.id.as_str())
+                .collect::<Vec<_>>(),
+            ["expr-infer/class-expression/self"]
+        );
+    }
+
+    #[test]
+    fn default_functions_and_expression_publish_only_values_and_check_once() {
+        for (producer, expected) in [
+            (
+                "export default function named(x: number): string { return x; } named(1);",
+                vec!["TK2322", "TK2749"],
+            ),
+            (
+                "export default function (x: number): string { return x; }",
+                vec!["TK2322", "TK2749"],
+            ),
+            (
+                "export default ((x: number): string => x);",
+                vec!["TK2322", "TK2749"],
+            ),
+        ] {
+            let orders = check_both_orders(&[
+                ("source.ts", producer),
+                (
+                    "consumer.ts",
+                    "import D from './source.js'; D(1); let wrong: D; wrong;",
+                ),
+            ])
+            .expect("value-only default candidate is admitted");
+            for results in orders {
+                let observed = codes(&results);
+                assert_eq!(observed, expected);
+                assert!(!observed.contains(&"TK2349"));
+                assert!(results.iter().all(|result| result.incomplete.is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn named_default_function_closes_adjacent_overloads_in_both_orders() {
+        for (consumer, expected) in [
+            (
+                "import D from './source.js'; const good: number = D(1); good;",
+                Vec::new(),
+            ),
+            ("import D from './source.js'; D('wrong');", vec!["TK2345"]),
+        ] {
+            let orders = check_both_orders(&[
+                (
+                    "source.ts",
+                    "export function local(value: number): number; export default function local(value: number): number { return value; }",
+                ),
+                ("consumer.ts", consumer),
+            ])
+            .expect("named default overload candidates are admitted");
+            for results in orders {
+                assert_eq!(codes(&results), expected);
+                assert!(results.iter().all(|result| result.incomplete.is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn named_default_overload_reports_export_mismatch_in_both_orders() {
+        let source = "function local(value: number): number;\nexport default function local(value: number): number {\n  return value;\n}\n";
+        let orders = check_both_orders(&[
+            ("source.ts", source),
+            (
+                "consumer.ts",
+                "import local from './source.js';\nlocal(1);\n",
+            ),
+        ])
+        .expect("named default overload export mismatch is admitted");
+        for results in orders {
+            let diagnostics = results
+                .iter()
+                .flat_map(|result| &result.diagnostics)
+                .collect::<Vec<_>>();
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(
+                diagnostics[0].code,
+                crate::diagnostics::DiagnosticCode::TK2383
+            );
+            assert_eq!(diagnostics[0].span, Span::new(9, 14));
+            assert_eq!(
+                diagnostics[0].message,
+                "Overload signatures must all be exported or non-exported."
+            );
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+
+        let ordinary = check(&[(
+            "source.ts",
+            "function local(value: number): number; function local(value: number): number { return value; }",
+        )])
+        .expect("ordinary overload remains admitted");
+        assert!(!codes(&ordinary).contains(&"TK2383"));
+    }
+
+    #[test]
+    fn named_default_overload_body_is_checked_once_and_stays_default_only() {
+        let body_orders = check_both_orders(&[
+            (
+                "source.ts",
+                "export function local(value: number): number; export default function local(value: number): number { return 'wrong'; }",
+            ),
+            ("consumer.ts", "import D from './source.js'; D(1);"),
+        ])
+        .expect("named default overload body is admitted");
+        for results in body_orders {
+            assert_eq!(codes(&results), vec!["TK2322"]);
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+
+        let isolation_orders = check_both_orders(&[
+            (
+                "source.ts",
+                "export default function local(value: number): number { return value; }",
+            ),
+            (
+                "consumer.ts",
+                "import D from './source.js'; import { local } from './source'; D(1); local;",
+            ),
+        ])
+        .expect("named default function candidate is admitted");
+        for results in isolation_orders {
+            assert_eq!(codes(&results), vec!["TK2305"]);
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn named_default_overloads_keep_the_implementation_surface_in_both_orders() {
+        let orders = check_both_orders(&[
+            (
+                "source.ts",
+                "export function local(value: number): number; export function local(value: string): string; export default function local(value: number | string): number | string { return value; }",
+            ),
+            (
+                "consumer.ts",
+                "import D from './source.js'; import { local as Named } from './source'; const numeric: number = D(1); const textual: string = D('x'); D(true); const namedNumber: number = Named(1); const namedString: string = Named('x'); Named(true);",
+            ),
+        ])
+        .expect("multi-signature named default overload is admitted");
+        for results in orders {
+            assert_eq!(
+                codes(&results),
+                vec!["TK2322", "TK2322", "TK2345", "TK2769"]
+            );
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn anonymous_and_nonadjacent_defaults_do_not_close_overload_groups() {
+        for producer in [
+            "export function local(value: number): number; export default function (value: number): number { return value; }",
+            "export function local(value: number): number; const separator = 0; export default function local(value: number): number { return value; } separator;",
+        ] {
+            let orders = check_both_orders(&[
+                ("source.ts", producer),
+                ("consumer.ts", "import D from './source.js'; D(1);"),
+            ])
+            .expect("isolated default function candidate is admitted");
+            for results in orders {
+                assert_eq!(codes(&results), vec!["TK2391"]);
+                assert!(results.iter().all(|result| result.incomplete.is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn identifier_default_preserves_class_slots_and_type_only_import_blocks_values() {
+        let orders = check_both_orders(&[
+            (
+                "source.ts",
+                "class Local {} export default Local;",
+            ),
+            (
+                "consumer.ts",
+                "import { Local } from './source'; import type D from './source.js'; let value: D; new D(); Local; value;",
+            ),
+        ])
+        .expect("identifier default candidate is admitted");
+        for results in orders {
+            assert_eq!(codes(&results), vec!["TK2305", "TK2304"]);
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn interface_identifier_default_projects_only_the_exact_type_slot() {
+        for files in [
+            vec![
+                ("source.ts", "interface Local { value: number; } export default Local;"),
+                (
+                    "consumer.ts",
+                    "import Local from './source.js'; const good: Local = { value: 1 }; Local; good;",
+                ),
+            ],
+            vec![
+                ("global.ts", "var Local = { leaked: true };"),
+                ("source.ts", "interface Local { value: number; } export default Local;"),
+                (
+                    "consumer.ts",
+                    "import Local from './source.js'; const good: Local = { value: 1 }; Local; good;",
+                ),
+            ],
+        ] {
+            let orders = check_both_orders(&files)
+                .expect("interface identifier default candidate is admitted");
+            for results in orders {
+                assert_eq!(codes(&results), vec!["TK2693"]);
+                assert!(results.iter().all(|result| result.incomplete.is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn enum_identifier_default_is_refused_before_binding_in_both_orders() {
+        let files = [
+            ("source.ts", "enum Local { A } export default Local;"),
+            (
+                "consumer.ts",
+                "import Local from './source.js'; const good = Local.A; good;",
+            ),
+        ];
+        for order in [files.to_vec(), files.into_iter().rev().collect()] {
+            let (result, work) = check_with_work(&order);
+            assert_eq!(
+                result.expect_err("enum default candidate must be refused"),
+                ProjectDefaultInvariantError::UnsupportedCandidate.message()
+            );
+            assert_eq!(work.entries, 0);
+            assert_eq!(work.fresh_project_seed_entries, 0);
+            assert_eq!(work.bound_units, 0);
+            assert_eq!(work.typed_products_produced, 0);
+            assert_eq!(work.ordinary_check_products_consumed, 0);
+        }
+    }
+
+    #[test]
+    fn type_only_value_default_reports_tk2749_without_changing_local_value_as_type() {
+        let orders = check_both_orders(&[
+            (
+                "source.ts",
+                "const ordinary = 1; let unchanged: ordinary; export default 1; unchanged;",
+            ),
+            (
+                "consumer.ts",
+                "import type D from './source.js'; let wrong: D; wrong;",
+            ),
+        ])
+        .expect("type-only value default candidates are admitted");
+        for results in orders {
+            assert_eq!(codes(&results), vec!["TK2749"]);
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn object_and_identifier_defaults_project_exact_value_only_slots() {
+        for (producer, consumer_use) in [
+            ("export default { value: 1 };", "const good: number = D.value;"),
+            (
+                "const local = 1; export default local;",
+                "const good: number = D;",
+            ),
+            (
+                "function local(value: number): number { return value; } export default local; local(1);",
+                "const good: number = D(1);",
+            ),
+        ] {
+            let consumer = format!(
+                "import D from './source.js'; {consumer_use} let wrong: D; good; wrong;"
+            );
+            let orders = check_both_orders(&[
+                ("source.ts", producer),
+                ("consumer.ts", consumer.as_str()),
+            ])
+            .expect("value-only default candidate is admitted");
+            for results in orders {
+                assert_eq!(codes(&results), vec!["TK2749"]);
+                assert!(results.iter().all(|result| result.incomplete.is_empty()));
+            }
+        }
+    }
+
+    #[test]
+    fn missing_default_and_missing_module_keep_distinct_diagnostics() {
+        let missing_default_orders = check_both_orders(&[
+            ("source.ts", "export const named = 1;"),
+            ("consumer.ts", "import D from './source.js'; D;"),
+        ])
+        .expect("resolved missing default reaches semantic checking");
+        for results in missing_default_orders {
+            assert_eq!(codes(&results), vec!["TK1192"]);
+        }
+
+        let missing_module = check(&[("consumer.ts", "import D from './missing.js'; D;")])
+            .expect("missing module reaches semantic checking");
+        assert_eq!(codes(&missing_module), vec!["TK2307"]);
+    }
+
+    #[test]
+    fn namespace_bearing_and_duplicate_defaults_fail_before_binding() {
+        for files in [
+            vec![(
+                "source.ts",
+                "class Local {} namespace Local { export const x = 1; } export default Local;",
+            )],
+            vec![("source.ts", "export default 1; export default 2;")],
+        ] {
+            let error = check(&files).expect_err("blocked candidate must not bind");
+            assert_eq!(
+                error,
+                ProjectDefaultInvariantError::UnsupportedCandidate.message()
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_wrong_candidate_owner_fails_before_binding() {
+        for (evidence, corrupt) in [
+            ("export default 1;", ""),
+            ("export default class {}", "export default function () {}"),
+        ] {
+            let (result, work) = corrupt_candidate_owner(evidence, corrupt);
+            assert_eq!(
+                result.expect_err("corrupt owner must refuse the candidate route"),
+                "validated default has no exact lexical owner"
+            );
+            assert_eq!(work.entries, 0);
+            assert_eq!(work.fresh_project_seed_entries, 0);
+            assert_eq!(work.bound_units, 0);
+            assert_eq!(work.typed_products_produced, 0);
+            assert_eq!(work.ordinary_check_products_consumed, 0);
+        }
+    }
+
+    #[test]
+    fn candidate_storage_failure_returns_err_before_semantic_output() {
+        let (result, work) = corrupt_candidate_owner(
+            "const local = 1; export default local;",
+            "const other = 1; export default local;",
+        );
+        assert_eq!(
+            result.expect_err("missing exact producer storage must refuse checking"),
+            "authoritative fresh project binding failed"
+        );
+        assert_eq!(work.entries, 1);
+        assert_eq!(work.fresh_project_seed_entries, 1);
+        assert_eq!(work.bound_units, 1);
+        assert_eq!(work.typed_products_produced, 0);
+        assert_eq!(work.ordinary_check_products_consumed, 0);
+    }
+
+    #[test]
+    fn existing_project_route_keeps_default_exports_semantically_deferred() {
+        let run = run_project_frontend(
+            vec![FileInput {
+                name: "source.ts".to_owned(),
+                source: "export default ((value: string) => value)(1);".to_owned(),
+            }],
+            check_project_programs,
+        );
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        assert!(run
+            .product
+            .iter()
+            .all(|result| result.diagnostics.is_empty()));
+        let incomplete = run
+            .product
+            .iter()
+            .flat_map(|result| &result.incomplete)
+            .collect::<Vec<_>>();
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].id, "decl/export-default/self");
+        assert_eq!(incomplete[0].context, "export default not modeled");
     }
 }
 
