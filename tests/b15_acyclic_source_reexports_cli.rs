@@ -170,11 +170,11 @@ fn parse_summary(output: &Output, label: &str) -> Value {
 fn oracle_contract_is_machine_complete_and_matches_fixtures() {
     let contract = contract();
     assert_eq!(contract["oracle"]["version"], "Version 6.0.3");
-    assert_eq!(contract["summary"]["case_count"], 30);
-    assert_eq!(contract["summary"]["run_count"], 60);
-    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 30);
-    assert_eq!(contract["summary"]["post_wu6_exact_summary_case_count"], 17);
-    assert_eq!(contract["summary"]["post_wu6_exact_summary_run_count"], 34);
+    assert_eq!(contract["summary"]["case_count"], 31);
+    assert_eq!(contract["summary"]["run_count"], 62);
+    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 31);
+    assert_eq!(contract["summary"]["post_wu6_exact_summary_case_count"], 18);
+    assert_eq!(contract["summary"]["post_wu6_exact_summary_run_count"], 36);
     for case in contract["cases"].as_array().expect("contract cases") {
         let id = case["id"].as_str().expect("case id");
         let project = corpus_root().join(id);

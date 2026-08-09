@@ -13,15 +13,15 @@
     ],
     "command_cwd": "<case-directory>",
     "output_channel": "stdout",
-    "stderr_contract": "empty for all 60 runs"
+    "stderr_contract": "empty for all 62 runs"
   },
   "summary": {
-    "case_count": 30,
-    "run_count": 60,
-    "root_order_byte_identical_count": 30,
+    "case_count": 31,
+    "run_count": 62,
+    "root_order_byte_identical_count": 31,
     "empty_missing_oracle_correction": "export {} from a missing local module is clean in TypeScript 6.0.3; no TS2307",
-    "post_wu6_exact_summary_case_count": 17,
-    "post_wu6_exact_summary_run_count": 34,
+    "post_wu6_exact_summary_case_count": 18,
+    "post_wu6_exact_summary_run_count": 36,
     "grouped_missing_resolution_contract": {
       "single": "barrel.ts:1:1 source-reexport ./missing.js -> unresolved",
       "multi": "barrel.ts:1:1 source-reexport ./missing.js -> unresolved",
@@ -763,6 +763,121 @@
               "diagnostics": [
                 "consumer.ts:3:7 TK2322"
               ]
+            }
+          }
+        ],
+        "root_order_byte_identical": true
+      }
+    },
+    {
+      "id": "05b_enum_value_reexport",
+      "files": [
+        {
+          "path": "barrel.ts",
+          "text": "export { Local } from \"./source.js\";\n"
+        },
+        {
+          "path": "consumer.ts",
+          "text": "import { Local } from \"./barrel.js\";\nconst value = Local.A;\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export enum Local { A }\n"
+        }
+      ],
+      "runs": [
+        {
+          "order": "normal",
+          "config": {
+            "files": [
+              "source.ts",
+              "barrel.ts",
+              "consumer.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.normal.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "config": {
+            "files": [
+              "consumer.ts",
+              "barrel.ts",
+              "source.ts"
+            ]
+          },
+          "command": "/run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc --strict --noEmit --module esnext --moduleResolution bundler -p tsconfig.reverse.json",
+          "exit": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "runs": [
+          {
+            "order": "normal",
+            "exit": 0,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": []
+            }
+          },
+          {
+            "order": "reverse",
+            "exit": 0,
+            "summary": {
+              "schema": 1,
+              "profile": "bundler",
+              "config": "tsconfig.json",
+              "roots": [
+                "barrel.ts",
+                "consumer.ts",
+                "source.ts"
+              ],
+              "files": {
+                "checked": [
+                  "barrel.ts",
+                  "consumer.ts",
+                  "source.ts"
+                ],
+                "skipped": [],
+                "excluded": []
+              },
+              "resolutions": [
+                "barrel.ts:1:1 source-reexport ./source.js -> source.ts",
+                "consumer.ts:1:1 named-import ./barrel.js -> barrel.ts"
+              ],
+              "project_notices": [],
+              "parse_errors": [],
+              "incomplete": [],
+              "diagnostics": []
             }
           }
         ],
@@ -2587,6 +2702,7 @@
       "03_mixed_value_type_only",
       "04_two_barrel_chain",
       "05_class_value_type_chain",
+      "05b_enum_value_reexport",
       "06_no_local_binding",
       "07a_missing_module_single",
       "07b_missing_member",

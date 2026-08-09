@@ -19,3 +19,6 @@ WU6 unignores exactly three RED acceptances: admitted/empty summaries, namespace
 cycle accounting. The admitted contract compares the complete intended summary for both root
 orders, including exact checked/skipped files, target-bearing resolution rows, grouped missing
 owners, diagnostics, and all empty channels.
+
+The admitted enum row pins the existing named source re-export route: default-slot candidate
+classification must not turn an enum into namespace-bearing public input.
