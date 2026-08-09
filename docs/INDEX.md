@@ -141,9 +141,12 @@ decisions → reference → archive.
   WU0 after all six immutable candidates still failed the unchanged zero threshold. No witness
   tooling or production broadening started. The archived
   [`default-slot sprint`](archive/sprint-2026-08-08-default-module-slots.md) removed `placetext`'s
-  historical default-export route blocker, but a fresh re-screen must establish the new first
-  blocker and target/library equivalence before any witness claim. Package breadth remains later
-  work under `15`.
+  historical default-export route blocker. The fresh
+  [`placetext re-screen`](archive/real-project-rescreen-2026-08-09/README.md) now proves the route
+  complete for its 9 roots and 13 local resolutions, but stops before witness work on general
+  checker gaps: object-destructuring publication first, then independent enum, computed-key,
+  template-interpolation, and predicate-bearing array surfaces. Target/library meaning equivalence
+  also remains unproved. Package breadth remains later work under `15`.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic

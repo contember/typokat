@@ -30,8 +30,17 @@ A follow-up immutable re-screen at `659e30e` still found no qualifier: `jabr` st
 bare `..`, and a default export; `placetext` stopped on one default-export route notice before
 semantic checking; `lite-fp`, `un-jinja`, and `south-african-id` reached checker model or diagnostic
 failures; and `deco` retained explicit-`.ts` specifier incompatibility. The shipped direct
-default-slot slice removes `placetext`'s historical route blocker, but qualification and the new
-first blocker are unknown until the mandated fresh re-screen. The transparent
+default-slot slice removes `placetext`'s historical route blocker. A fresh read-only re-screen at
+`ca13c30` now admits and checks all 9 roots with all 13 local resolutions and no route, parse,
+skipped-root, or excluded-root record. It still fails the zero-clean gate with 7 incomplete records
+and 27 diagnostics. The first blocker is unpublished object-destructuring bindings (`seed` first at
+`src/core/generator.ts:36:48`); 22 of 23 `TK2304` records are that one cascade. Independent blockers
+remain for enums, computed object keys, template interpolation, and the predicate-bearing
+`Array.filter` / `Array.isArray` surface. The pinned native and overlay `tsc 6.0.3` runs are both
+clean, but their ES2020-versus-full-ES2025 library meaning is not proved equivalent. The hard stop
+therefore correctly prevented a second cache, mutations, witness files, or CI work. Exact evidence
+and independent PASS are retained in the
+[`2026-08-09 placetext re-screen`](../archive/real-project-rescreen-2026-08-09/README.md). The transparent
 `un-jinja` and `south-african-id` production-subtree overlays exclude native tooling/tests that
 consume `@types/node`, so they are not exact native programs. Exact evidence is retained in the
 [`re-screen archive`](../archive/real-project-rescreen-2026-08-08/README.md). There is still no
