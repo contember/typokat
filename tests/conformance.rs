@@ -230,6 +230,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 103 correctness tier — collisions route through one sparse private epoch.
     ("b103_library_merge_correctness", true),
     ("b103_library_merge_correctness_project", true),
+    // Backlog 48 flat object variable binding publication. WU0 commits the
+    // acceptance corpus disabled; WU1 enables it with per-leaf identities.
+    ("b48_object_binding_publication", false),
     // Backlog 15 — named source re-exports are a config-backed project feature. The raw
     // conformance route cannot exercise resolver inventory, so this oracle corpus stays disabled.
     ("b15_acyclic_source_reexports", false),

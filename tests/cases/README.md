@@ -87,6 +87,7 @@ EOF spans.
 | `TK2451` | Cannot redeclare a block-scoped variable |
 | `TK2454` | Variable is used before being assigned |
 | `TK2456` | Type alias circularly references itself |
+| `TK2491` | A `for...in` left-hand side cannot be a destructuring pattern |
 | `TK2416` | Property in derived type not assignable to the same property in base type (override compatibility) |
 | `TK2511` | Cannot create an instance of an abstract class |
 | `TK2515` | Non-abstract class does not implement inherited abstract member (exactly one missing) |
@@ -399,6 +400,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b102_frozen_prefix_writes_project/` | shipped backlog `102` project regression net | cross-file script globals in both input orders; module-scope declarations keep shadowing instead of publishing |
 | `b103_library_merge_correctness/` | shipped backlog `103` correctness tier | successful library interface/namespace/function/cross-slot merges, illegal-collision controls, and unchanged shared-route behavior |
 | `b103_library_merge_correctness_project/` | shipped backlog `103` project correctness tier | both input orders, whole-body `declare global` lexical scope, `globalThis`, UMD, destructuring, slot matrix, benchmark collision, classifier mutation input, controls, and cross-project isolation |
+| `b48_object_binding_publication/` | backlog `48` (disabled) | flat object variable binding leaves: independent types and storage, defaults, static keys, scope/order, missing-property accounting, plus explicit excluded-shape guards |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 
