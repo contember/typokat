@@ -292,14 +292,15 @@ explicit and legacy routes remain frozen. Export attributes retain their exact e
 ### Default module slot contract (backlog 15)
 
 `b15_default_module_slots/` is a permanently disabled raw-conformance corpus. Its machine contract
-records 35 projects and both root orders against pinned `tsc 6.0.3`. The admitted rows cover named
+records 38 projects and both root orders against pinned `tsc 6.0.3`. The admitted rows cover named
 and anonymous default classes and functions, literal/object/arrow expressions, namespace-free
 identifier projection including a type-only interface slot, direct and type-only default imports,
 lexical visibility, distinct
 default/named slots, and named default functions that close adjacent overload groups without
 replacing their implementation-signature default surfaces while named imports retain the overload
 surface and mismatched exported/non-exported rows report `TK2383`, missing modules/defaults, and
-both wrong-space barriers. The expression-owned
+both wrong-space barriers. Anonymous default subclasses retain abstract-completeness diagnostics
+with the display name `default` (`TK2515` for one member and aggregated `TK2654` for several). The expression-owned
 error row proves that a default expression is checked exactly once.
 
 Deferred rows stay explicit non-clean outcomes: default interfaces; namespace-bearing producers,

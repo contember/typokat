@@ -7,7 +7,11 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use typokat::diagnostics::{self, DiagnosticFormat, Severity};
 use typokat::driver::{check_project, check_project_once};
-use typokat::frontend::FileInput;
+use typokat::frontend::{
+    collect_default_module_candidates, run_project_frontend, FileInput, ProjectResolutionMode,
+    ProjectRoot,
+};
+use typokat_check::check::checker::check_project_programs_with_default_candidates;
 
 const CONTRACT: &str = include_str!("cases/b15_default_module_slots/contract.json");
 const B72_CONTRACT: &str = include_str!("cases/b72_bundler_project_tracer/contract.json");
@@ -157,15 +161,17 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
     let contract = contract();
     assert_eq!(contract["schema"], 1);
     assert_eq!(contract["oracle"]["version"], "Version 6.0.3");
-    assert_eq!(contract["summary"]["case_count"], 36);
-    assert_eq!(contract["summary"]["run_count"], 72);
-    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 36);
-    assert_eq!(contract["summary"]["admitted_case_count"], 21);
+    assert_eq!(contract["summary"]["case_count"], 38);
+    assert_eq!(contract["summary"]["run_count"], 76);
+    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 38);
+    assert_eq!(contract["summary"]["admitted_case_count"], 23);
     assert_eq!(contract["summary"]["deferred_control_case_count"], 15);
 
     let admitted = [
         "01_named_class",
         "02_anonymous_class",
+        "02b_anonymous_class_abstract_single",
+        "02c_anonymous_class_abstract_multiple",
         "03_named_function",
         "04_anonymous_function",
         "05_literal_expression",
@@ -540,6 +546,84 @@ fn pinned_tsc_oracle_matches_every_fixture_in_both_orders() {
             );
         }
     }
+}
+
+fn candidate_channels(case: &Value, order: &str) -> (Vec<String>, Vec<String>) {
+    let project = TempProject::from_case(case, order);
+    let inputs = oracle_run(case, order)["files"]
+        .as_array()
+        .expect("oracle files")
+        .iter()
+        .map(|name| {
+            let name = name.as_str().expect("file name");
+            let path = project.root.join(name);
+            FileInput {
+                name: path.to_string_lossy().into_owned(),
+                source: std::fs::read_to_string(&path).expect("read candidate fixture"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let mode = ProjectResolutionMode::BundlerProject {
+        project_directory: project.root.clone(),
+        roots: inputs
+            .iter()
+            .map(|input| ProjectRoot {
+                identity: input.name.clone(),
+                path: PathBuf::from(&input.name),
+                exists: true,
+            })
+            .collect(),
+    };
+    let candidates = collect_default_module_candidates(inputs.clone(), mode)
+        .expect("collect default-module candidates");
+    let mut by_name = inputs
+        .into_iter()
+        .map(|input| (input.name.clone(), input))
+        .collect::<BTreeMap<_, _>>();
+    let ordered = candidates
+        .dependency_order()
+        .iter()
+        .map(|name| by_name.remove(name).expect("candidate order names an input"))
+        .collect::<Vec<_>>();
+    assert!(by_name.is_empty());
+    let run = run_project_frontend(ordered, |interner, units| {
+        check_project_programs_with_default_candidates(interner, units, &candidates)
+    });
+    assert!(run.parse_errors.iter().all(Vec::is_empty));
+    let results = run.product.expect("candidate route accepts fixture");
+    (
+        results
+            .iter()
+            .flat_map(|result| &result.diagnostics)
+            .map(|diagnostic| diagnostic.code.as_str().to_owned())
+            .collect(),
+        results
+            .iter()
+            .flat_map(|result| &result.incomplete)
+            .map(|incomplete| incomplete.id.clone())
+            .collect(),
+    )
+}
+
+#[test]
+#[ignore = "RED until anonymous default classes keep abstract-completeness diagnostics"]
+fn candidate_anonymous_default_class_completeness_matches_the_oracle() {
+    let contract = contract();
+    let observed = [
+        ("02b_anonymous_class_abstract_single", "TK2515"),
+        ("02c_anonymous_class_abstract_multiple", "TK2654"),
+    ]
+    .into_iter()
+    .flat_map(|(id, expected)| {
+        ["normal", "reverse"].map(|order| {
+            let (diagnostics, incomplete) = candidate_channels(case_by_id(&contract, id), order);
+            (id, order, diagnostics, incomplete, expected)
+        })
+    })
+    .collect::<Vec<_>>();
+    assert!(observed.iter().all(|(_, _, diagnostics, incomplete, expected)| {
+        diagnostics == &[*expected] && incomplete.is_empty()
+    }), "{observed:#?}");
 }
 
 #[test]

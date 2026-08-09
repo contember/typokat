@@ -17,10 +17,10 @@
     "stderr_contract": "empty for all retained runs"
   },
   "summary": {
-    "case_count": 36,
-    "run_count": 72,
-    "root_order_byte_identical_count": 36,
-    "admitted_case_count": 21,
+    "case_count": 38,
+    "run_count": 76,
+    "root_order_byte_identical_count": 38,
+    "admitted_case_count": 23,
     "deferred_control_case_count": 15,
     "duplicate_producer_kind_count": 5,
     "duplicate_unordered_pair_count": 15,
@@ -30,6 +30,8 @@
     "admitted": [
       "01_named_class",
       "02_anonymous_class",
+      "02b_anonymous_class_abstract_single",
+      "02c_anonymous_class_abstract_multiple",
       "03_named_function",
       "04_anonymous_function",
       "05_literal_expression",
@@ -305,6 +307,148 @@
           ]
         },
         "stderr": "consumer.ts(3,7): error TK2322: Type 'number' is not assignable to type 'string'\n"
+      }
+    },
+    {
+      "id": "02b_anonymous_class_abstract_single",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Derived from \"./source.js\";\nnew Derived();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "abstract class Base {\n  abstract go(): void;\n}\nexport default class extends Base {}\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(4,1): error TS2515: Non-abstract class 'default' does not implement inherited abstract member go from class 'Base'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(4,1): error TS2515: Non-abstract class 'default' does not implement inherited abstract member go from class 'Base'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "source.ts:4:1 TK2515"
+          ]
+        },
+        "stderr": "source.ts(4,1): error TK2515: Non-abstract class 'default' does not implement inherited abstract member go from class 'Base'\n"
+      }
+    },
+    {
+      "id": "02c_anonymous_class_abstract_multiple",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import Derived from \"./source.js\";\nnew Derived();\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "abstract class Base {\n  abstract go(): void;\n  abstract value: number;\n}\nexport default class extends Base {}\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(5,1): error TS2654: Non-abstract class 'default' is missing implementations for the following members of 'Base': 'go', 'value'."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(5,1): error TS2654: Non-abstract class 'default' is missing implementations for the following members of 'Base': 'go', 'value'."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "source.ts:5:1 TK2654"
+          ]
+        },
+        "stderr": "source.ts(5,1): error TK2654: Non-abstract class 'default' is missing implementations for the following members of 'Base': 'go', 'value'\n"
       }
     },
     {
