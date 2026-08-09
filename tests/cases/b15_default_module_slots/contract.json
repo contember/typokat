@@ -17,10 +17,10 @@
     "stderr_contract": "empty for all retained runs"
   },
   "summary": {
-    "case_count": 35,
-    "run_count": 70,
-    "root_order_byte_identical_count": 35,
-    "admitted_case_count": 20,
+    "case_count": 36,
+    "run_count": 72,
+    "root_order_byte_identical_count": 36,
+    "admitted_case_count": 21,
     "deferred_control_case_count": 15,
     "duplicate_producer_kind_count": 5,
     "duplicate_unordered_pair_count": 15,
@@ -47,7 +47,8 @@
       "14_value_only_wrong_type",
       "24c_identifier_interface",
       "24e_default_function_overload",
-      "24f_default_function_overload_surface"
+      "24f_default_function_overload_surface",
+      "24g_default_function_export_mismatch"
     ],
     "namespace_provenance_controls": [
       "15_named_default_class_namespace",
@@ -2585,6 +2586,77 @@
           ]
         },
         "stderr": "consumer.ts(3,7): error TK2322: Type 'string | number' is not assignable to type 'number'\nconsumer.ts(4,7): error TK2322: Type 'string | number' is not assignable to type 'string'\nconsumer.ts(5,7): error TK2345: Argument of type 'boolean' is not assignable to parameter of type 'string | number'\nconsumer.ts(8,7): error TK2769: No overload matches this call\n"
+      }
+    },
+    {
+      "id": "24g_default_function_export_mismatch",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import local from \"./source.js\";\nlocal(1);\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "function local(value: number): number;\nexport default function local(value: number): number {\n  return value;\n}\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,10): error TS2383: Overload signatures must all be exported or non-exported."
+          ],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 2,
+          "ordered_normalized_diagnostics": [
+            "source.ts(1,10): error TS2383: Overload signatures must all be exported or non-exported."
+          ],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 1,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": [
+            "source.ts:1:10 TK2383"
+          ]
+        },
+        "stderr": "source.ts(1,10): error TK2383: Overload signatures must all be exported or non-exported\n"
       }
     },
     {
