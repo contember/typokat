@@ -959,13 +959,15 @@ pub fn run_clean_project_frontend_with_deferred_auxiliary<Product, Error>(
         inputs,
         resolution_mode,
         SourceReexportAccounting::FrozenUnsupported,
+        DefaultCandidateAccounting::FrozenUnsupported,
         load_auxiliary,
         move |interner,
               source_specs,
               auxiliary_units,
               project_units,
               parse_work,
-              _source_reexports| {
+              _source_reexports,
+              _default_modules| {
             Ok(consume(
                 interner,
                 source_specs,
@@ -1000,13 +1002,15 @@ pub fn run_clean_bundler_project_frontend_with_deferred_auxiliary<Product, Error
             roots,
         },
         SourceReexportAccounting::AdmitBundler,
+        DefaultCandidateAccounting::FrozenUnsupported,
         load_auxiliary,
         move |interner,
               source_specs,
               auxiliary_units,
               project_units,
               parse_work,
-              source_reexports| {
+              source_reexports,
+              _default_modules| {
             let source_reexports = source_reexports.ok_or_else(|| {
                 ProjectInventoryError::new(
                     "Bundler source re-export accounting lost its admitted product",
@@ -1024,10 +1028,67 @@ pub fn run_clean_bundler_project_frontend_with_deferred_auxiliary<Product, Error
     )
 }
 
+/// Parse and account one Bundler project through the certified default-slot product.
+pub fn run_clean_bundler_project_frontend_with_default_modules<Product, Error>(
+    inputs: Vec<FileInput>,
+    project_directory: PathBuf,
+    roots: Vec<ProjectRoot>,
+    load_auxiliary: impl FnOnce() -> Result<Vec<AuxiliarySourceInput>, Error>,
+    consume: impl for<'ast> FnOnce(
+        &mut Interner,
+        &[AuxiliarySourceInput],
+        &[AuxiliaryProgram<'ast>],
+        &[ProjectProgram<'ast>],
+        &AdmittedSourceReexports,
+        &DefaultModuleCandidates,
+        AuxiliaryParseWork,
+    ) -> Product,
+) -> ProjectFrontendRun<Result<AccountedProjectProduct<Product>, DeferredProjectFrontendError<Error>>>
+{
+    run_clean_project_frontend_with_deferred_auxiliary_control(
+        inputs,
+        ProjectResolutionMode::BundlerProject {
+            project_directory,
+            roots,
+        },
+        SourceReexportAccounting::AdmitBundler,
+        DefaultCandidateAccounting::CollectCandidate,
+        load_auxiliary,
+        move |interner,
+              source_specs,
+              auxiliary_units,
+              project_units,
+              parse_work,
+              source_reexports,
+              default_modules| {
+            let source_reexports = source_reexports.ok_or_else(|| {
+                ProjectInventoryError::new(
+                    "Bundler source re-export accounting lost its admitted product",
+                )
+            })?;
+            let default_modules = default_modules.ok_or_else(|| {
+                ProjectInventoryError::new(
+                    "Bundler default-module accounting lost its certified product",
+                )
+            })?;
+            Ok(consume(
+                interner,
+                source_specs,
+                auxiliary_units,
+                project_units,
+                source_reexports,
+                default_modules,
+                parse_work,
+            ))
+        },
+    )
+}
+
 fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
     inputs: Vec<FileInput>,
     resolution_mode: ProjectResolutionMode,
     source_reexport_accounting: SourceReexportAccounting,
+    default_candidate_accounting: DefaultCandidateAccounting,
     load_auxiliary: impl FnOnce() -> Result<Vec<AuxiliarySourceInput>, Error>,
     consume: impl for<'ast> FnOnce(
         &mut Interner,
@@ -1036,6 +1097,7 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
         &[ProjectProgram<'ast>],
         AuxiliaryParseWork,
         Option<&AdmittedSourceReexports>,
+        Option<&DefaultModuleCandidates>,
     ) -> Result<Product, ProjectInventoryError>,
 ) -> ProjectFrontendRun<Result<AccountedProjectProduct<Product>, DeferredProjectFrontendError<Error>>>
 {
@@ -1070,12 +1132,12 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
         .iter()
         .map(|parsed| &parsed.program)
         .collect::<Vec<_>>();
-    let module_plan = match account_project_modules(
+    let mut module_plan = match account_project_modules(
         &inputs,
         &programs,
         &resolution_mode,
         source_reexport_accounting,
-        DefaultCandidateAccounting::FrozenUnsupported,
+        default_candidate_accounting,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -1085,6 +1147,37 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
                 product: Err(DeferredProjectFrontendError::Inventory(error)),
             };
         }
+    };
+    let default_modules = if matches!(
+        default_candidate_accounting,
+        DefaultCandidateAccounting::CollectCandidate
+    ) {
+        match certified_default_module_candidates(&inputs, &module_plan) {
+            Ok(candidates) => {
+                if let Err(error) = activate_default_module_inventory(
+                    &inputs,
+                    &module_plan.source_reexports,
+                    &candidates,
+                    &mut module_plan.inventory,
+                ) {
+                    return ProjectFrontendRun {
+                        inputs,
+                        parse_errors,
+                        product: Err(DeferredProjectFrontendError::Inventory(error)),
+                    };
+                }
+                Some(candidates)
+            }
+            Err(error) => {
+                return ProjectFrontendRun {
+                    inputs,
+                    parse_errors,
+                    product: Err(DeferredProjectFrontendError::Inventory(error)),
+                };
+            }
+        }
+    } else {
+        None
     };
     if matches!(
         resolution_mode,
@@ -1134,6 +1227,20 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
     let auxiliary_parse_work = auxiliary_parse_work(&auxiliary_parse_invocations);
     #[cfg(not(any(test, feature = "test-utils")))]
     let auxiliary_parse_work = AuxiliaryParseWork::default();
+    let default_dependency_order = default_modules
+        .as_ref()
+        .map(|candidates| candidate_original_order(&inputs, candidates))
+        .transpose();
+    let default_dependency_order = match default_dependency_order {
+        Ok(order) => order,
+        Err(error) => {
+            return ProjectFrontendRun {
+                inputs,
+                parse_errors,
+                product: Err(DeferredProjectFrontendError::Inventory(error)),
+            };
+        }
+    };
     let AccountedModulePlan {
         inventory,
         paths,
@@ -1152,7 +1259,7 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
             )
         })
         .unwrap_or((None, None));
-    let project_units = match admitted_dependency_order {
+    let mut project_units = match default_dependency_order.or(admitted_dependency_order) {
         Some(order) => project_programs_from_accounted_imports_in_order(
             &inputs,
             &programs,
@@ -1168,6 +1275,11 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
             &source_reexports.dependency_edges,
         ),
     };
+    if let Some(candidates) = &default_modules {
+        for (unit, path) in project_units.iter_mut().zip(&candidates.dependency_order) {
+            unit.normalized_path.clone_from(path);
+        }
+    }
     let auxiliary_units = auxiliary
         .iter()
         .zip(&auxiliary_parsed)
@@ -1202,6 +1314,7 @@ fn run_clean_project_frontend_with_deferred_auxiliary_control<Product, Error>(
         &project_units,
         auxiliary_parse_work,
         admitted_source_reexports.as_ref(),
+        default_modules.as_ref(),
     ) {
         Ok(product) => product,
         Err(error) => {
@@ -2039,15 +2152,20 @@ fn account_project_modules(
                     );
                 }
                 Statement::ExportDefaultDeclaration(export) => {
-                    record_unsupported_module_form(
-                        input,
-                        &line_index,
-                        export.span.start,
-                        "default-export",
-                        None,
-                        &mut resolution_identities,
-                        &mut notice_identities,
-                    );
+                    if matches!(
+                        default_candidate_accounting,
+                        DefaultCandidateAccounting::FrozenUnsupported
+                    ) {
+                        record_unsupported_module_form(
+                            input,
+                            &line_index,
+                            export.span.start,
+                            "default-export",
+                            None,
+                            &mut resolution_identities,
+                            &mut notice_identities,
+                        );
+                    }
                 }
                 Statement::TSImportEqualsDeclaration(import) => {
                     let specifier = match &import.module_reference {
@@ -2350,15 +2468,7 @@ fn finalize_default_module_candidates(
     inputs: &[FileInput],
     plan: AccountedModulePlan,
 ) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
-    let validation = prepare_default_module_candidate_validation(inputs, plan)?;
-    validate_default_module_candidates(
-        inputs,
-        &validation.raw_imports,
-        &validation.source_reexports,
-        &validation.authority,
-        &validation.product,
-    )?;
-    Ok(validation.product)
+    certified_default_module_candidates(inputs, &plan)
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -2367,46 +2477,41 @@ fn finalize_default_module_candidates_with_mutation(
     plan: AccountedModulePlan,
     mutate: impl FnOnce(&mut DefaultModuleCandidates) -> Result<(), ProjectInventoryError>,
 ) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
-    let mut validation = prepare_default_module_candidate_validation(inputs, plan)?;
-    mutate(&mut validation.product)?;
-    validate_default_module_candidates(
-        inputs,
-        &validation.raw_imports,
-        &validation.source_reexports,
-        &validation.authority,
-        &validation.product,
-    )?;
-    Ok(validation.product)
-}
-
-struct DefaultModuleCandidateValidation {
-    raw_imports: Vec<Vec<RawImport>>,
-    source_reexports: PendingSourceReexports,
-    authority: DefaultModuleAuthority,
-    product: DefaultModuleCandidates,
-}
-
-fn prepare_default_module_candidate_validation(
-    inputs: &[FileInput],
-    plan: AccountedModulePlan,
-) -> Result<DefaultModuleCandidateValidation, ProjectInventoryError> {
-    let AccountedModulePlan {
-        raw_imports,
-        source_reexports,
-        default_module_authority,
-        ..
-    } = plan;
-    let authority = default_module_authority.ok_or_else(|| {
+    let authority = plan.default_module_authority.as_ref().ok_or_else(|| {
         ProjectInventoryError::new("default-module accounting lost its raw authority")
     })?;
-    let graph = default_candidate_graph(inputs, &raw_imports, &source_reexports, &authority)?;
-    let product = derive_default_module_candidates(inputs, &authority, &graph)?;
-    Ok(DefaultModuleCandidateValidation {
-        raw_imports,
-        source_reexports,
+    let graph =
+        default_candidate_graph(inputs, &plan.raw_imports, &plan.source_reexports, authority)?;
+    let mut product = derive_default_module_candidates(inputs, authority, &graph)?;
+    mutate(&mut product)?;
+    validate_default_module_candidates(
+        inputs,
+        &plan.raw_imports,
+        &plan.source_reexports,
         authority,
-        product,
-    })
+        &product,
+    )?;
+    Ok(product)
+}
+
+fn certified_default_module_candidates(
+    inputs: &[FileInput],
+    plan: &AccountedModulePlan,
+) -> Result<DefaultModuleCandidates, ProjectInventoryError> {
+    let authority = plan.default_module_authority.as_ref().ok_or_else(|| {
+        ProjectInventoryError::new("default-module accounting lost its raw authority")
+    })?;
+    let graph =
+        default_candidate_graph(inputs, &plan.raw_imports, &plan.source_reexports, authority)?;
+    let product = derive_default_module_candidates(inputs, authority, &graph)?;
+    validate_default_module_candidates(
+        inputs,
+        &plan.raw_imports,
+        &plan.source_reexports,
+        authority,
+        &product,
+    )?;
+    Ok(product)
 }
 
 struct DefaultCandidateGraph {
@@ -2598,6 +2703,292 @@ fn derive_default_module_candidates(
         dependency_edges,
         first_cycle: graph.first_cycle.clone(),
     })
+}
+
+fn candidate_original_order(
+    inputs: &[FileInput],
+    candidates: &DefaultModuleCandidates,
+) -> Result<Vec<usize>, ProjectInventoryError> {
+    let by_path = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| (normalized_display_name(&input.name), index))
+        .collect::<BTreeMap<_, _>>();
+    let order = candidates
+        .dependency_order
+        .iter()
+        .map(|path| {
+            by_path.get(path).copied().ok_or_else(|| {
+                ProjectInventoryError::new(
+                    "default-module dependency order names an unknown project root",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if order.len() != inputs.len()
+        || order.iter().copied().collect::<BTreeSet<_>>().len() != inputs.len()
+    {
+        return Err(ProjectInventoryError::new(
+            "default-module dependency order does not cover the project exactly",
+        ));
+    }
+    Ok(order)
+}
+
+fn default_import_specifier_inventory(import: &DefaultImportCandidate) -> String {
+    import
+        .specifiers
+        .iter()
+        .map(|specifier| {
+            let kind = match specifier.identity {
+                ModuleMemberIdentity::Default => "default",
+                ModuleMemberIdentity::Named(_) if specifier.type_only => "type",
+                ModuleMemberIdentity::Named(_) => "named",
+                ModuleMemberIdentity::Namespace => "namespace",
+            };
+            format!("{kind}:{}", specifier.local)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn default_member_name(identity: &ModuleMemberIdentity) -> &str {
+    match identity {
+        ModuleMemberIdentity::Default => "default",
+        ModuleMemberIdentity::Named(name) => name,
+        ModuleMemberIdentity::Namespace => "namespace",
+    }
+}
+
+fn default_producer_name(kind: DefaultExportOccurrenceKind) -> &'static str {
+    match kind {
+        DefaultExportOccurrenceKind::DirectClass => "direct-class",
+        DefaultExportOccurrenceKind::DirectFunction => "direct-function",
+        DefaultExportOccurrenceKind::DefaultExpression => "default-expression",
+        DefaultExportOccurrenceKind::DefaultInterface => "default-interface",
+        DefaultExportOccurrenceKind::LocalExportListDefault => "local-export-list-default",
+        DefaultExportOccurrenceKind::SourceExportToDefault => "source-export-to-default",
+        DefaultExportOccurrenceKind::SourceDefaultReexport => "source-default-reexport",
+    }
+}
+
+fn activate_default_module_inventory(
+    inputs: &[FileInput],
+    source_reexports: &PendingSourceReexports,
+    candidates: &DefaultModuleCandidates,
+    inventory: &mut ProjectModuleInventory,
+) -> Result<(), ProjectInventoryError> {
+    let original_order = candidate_original_order(inputs, candidates)?;
+    let input_for_module = |module: usize| {
+        original_order
+            .get(module)
+            .and_then(|original| inputs.get(*original).map(|input| (*original, input)))
+            .ok_or_else(|| {
+                ProjectInventoryError::new("default-module owner escaped the certified order")
+            })
+    };
+    let mut resolutions = Vec::new();
+    let mut notices = Vec::new();
+
+    for import in &candidates.imports {
+        let (_, owner) = input_for_module(import.owner_module)?;
+        let line_index = crate::span::LineIndex::new(&owner.source);
+        let location = source_location(owner, &line_index, import.owner_start);
+        let outcome = match &import.source {
+            DefaultImportCandidateSource::Resolved(target) => candidates
+                .dependency_order
+                .get(*target)
+                .cloned()
+                .ok_or_else(|| {
+                    ProjectInventoryError::new(
+                        "default import target escaped the certified dependency order",
+                    )
+                })?,
+            DefaultImportCandidateSource::Missing => "unresolved".to_owned(),
+            DefaultImportCandidateSource::UnsupportedTarget(_) => "unsupported".to_owned(),
+        };
+        let (form, inventory_suffix) = match import.disposition {
+            DefaultImportCandidateDisposition::Admitted => ("default-import", String::new()),
+            DefaultImportCandidateDisposition::NamedDefaultSyntax => {
+                ("named-default-import", String::new())
+            }
+            DefaultImportCandidateDisposition::MixedDefaultNamed => (
+                "mixed-default-named-import",
+                format!(" [{}]", default_import_specifier_inventory(import)),
+            ),
+            DefaultImportCandidateDisposition::MixedDefaultNamespace => (
+                "mixed-default-namespace-import",
+                format!(" [{}]", default_import_specifier_inventory(import)),
+            ),
+        };
+        resolutions.push(LocatedIdentity {
+            path: normalized_display_name(&owner.name),
+            start: import.owner_start,
+            identity: format!(
+                "{location} {form} {} -> {outcome}{inventory_suffix}",
+                import.module_specifier
+            ),
+        });
+        match import.disposition {
+            DefaultImportCandidateDisposition::Admitted => match &import.source {
+                DefaultImportCandidateSource::Missing => {
+                    let specifier = import.specifiers.first().ok_or_else(|| {
+                        ProjectInventoryError::new("admitted default import lost its specifier")
+                    })?;
+                    inventory
+                        .missing_module_locations
+                        .push(ProjectMissingModuleLocation {
+                            file: normalized_display_name(&owner.name),
+                            diagnostic_span: specifier.local_span,
+                            summary_start: import.source_span.start,
+                        });
+                }
+                DefaultImportCandidateSource::UnsupportedTarget(target) => {
+                    notices.push(LocatedIdentity {
+                        path: normalized_display_name(&owner.name),
+                        start: import.owner_start,
+                        identity: match target {
+                            Some(target) => format!(
+                                "unsupported-module-target unconfigured {location} {} -> {target}",
+                                import.module_specifier
+                            ),
+                            None => format!(
+                                "unsupported-module-form default-import {location} {}",
+                                import.module_specifier
+                            ),
+                        },
+                    });
+                }
+                DefaultImportCandidateSource::Resolved(_) => {}
+            },
+            DefaultImportCandidateDisposition::NamedDefaultSyntax
+            | DefaultImportCandidateDisposition::MixedDefaultNamed
+            | DefaultImportCandidateDisposition::MixedDefaultNamespace => {
+                notices.push(LocatedIdentity {
+                    path: normalized_display_name(&owner.name),
+                    start: import.owner_start,
+                    identity: format!(
+                        "unsupported-module-form {form} {location} {}{inventory_suffix}",
+                        import.module_specifier
+                    ),
+                });
+            }
+        }
+    }
+
+    for module in &candidates.exports {
+        let (original_owner, owner) = input_for_module(module.owner_module)?;
+        if module.producer_count > 1 {
+            let producers = module
+                .occurrences
+                .iter()
+                .filter(|occurrence| occurrence.produces_default)
+                .map(|occurrence| default_producer_name(occurrence.kind))
+                .collect::<Vec<_>>()
+                .join(",");
+            notices.push(LocatedIdentity {
+                path: module.normalized_path.clone(),
+                start: 0,
+                identity: format!(
+                    "unsupported-duplicate-default-export {} producers={producers}",
+                    module.normalized_path
+                ),
+            });
+            continue;
+        }
+        for block in &module.blocks {
+            let occurrence = module.occurrences.first().ok_or_else(|| {
+                ProjectInventoryError::new("blocked default export lost its occurrence")
+            })?;
+            let line_index = crate::span::LineIndex::new(&owner.source);
+            let location = source_location(owner, &line_index, occurrence.declaration_span.start);
+            let identity = match block {
+                DefaultExportCandidateBlock::DefaultInterface => {
+                    format!("unsupported-module-form default-interface {location}")
+                }
+                DefaultExportCandidateBlock::DirectNamedNamespaceMerge
+                | DefaultExportCandidateBlock::IdentifierNamespaceProvenance => format!(
+                    "unsupported-default-export-namespace-provenance {location} {}",
+                    occurrence.lexical_name.as_deref().unwrap_or("<unknown>")
+                ),
+                DefaultExportCandidateBlock::LocalExportListDefault => {
+                    format!("unsupported-module-form local-default-export {location}")
+                }
+                DefaultExportCandidateBlock::SourceDefaultReexport => {
+                    let declaration = source_reexports
+                        .declarations
+                        .iter()
+                        .find(|declaration| {
+                            declaration.owner_module == original_owner
+                                && declaration.owner_start == occurrence.declaration_span.start
+                        })
+                        .ok_or_else(|| {
+                            ProjectInventoryError::new(
+                                "source default re-export lost its resolver evidence",
+                            )
+                        })?;
+                    let imported = occurrence.imported.as_ref().ok_or_else(|| {
+                        ProjectInventoryError::new(
+                            "source default re-export lost its imported identity",
+                        )
+                    })?;
+                    format!(
+                        "unsupported-source-reexport-default-slot {location} {} {}->{}",
+                        declaration.module_specifier,
+                        default_member_name(imported),
+                        default_member_name(&occurrence.exported)
+                    )
+                }
+                DefaultExportCandidateBlock::DuplicateDefault => continue,
+            };
+            notices.push(LocatedIdentity {
+                path: module.normalized_path.clone(),
+                start: occurrence.declaration_span.start,
+                identity,
+            });
+        }
+    }
+
+    for declaration in &source_reexports.declarations {
+        if !declaration
+            .members
+            .iter()
+            .any(|member| member.imported == "default" || member.exported == "default")
+        {
+            continue;
+        }
+        let Some(owner) = inputs.get(declaration.owner_module) else {
+            continue;
+        };
+        let line_index = crate::span::LineIndex::new(&owner.source);
+        let location = source_location(owner, &line_index, declaration.owner_start);
+        for member in &declaration.members {
+            let stale = format!(
+                "unsupported-source-reexport-namespace-provenance {location} {} {}",
+                declaration.module_specifier, member.exported
+            );
+            inventory.notices.retain(|notice| notice != &stale);
+        }
+    }
+    if let Some(cycle) = &candidates.first_cycle {
+        let identity = format!("unsupported-module-cycle {}", cycle.join(" -> "));
+        if !inventory.notices.contains(&identity) {
+            notices.push(LocatedIdentity {
+                path: cycle.first().cloned().unwrap_or_default(),
+                start: 0,
+                identity,
+            });
+        }
+    }
+
+    inventory.resolutions.extend(sorted_identities(resolutions));
+    inventory.resolutions.sort();
+    inventory.notices.extend(sorted_identities(notices));
+    inventory.notices.sort();
+    inventory.missing_module_locations.sort_by(|left, right| {
+        (&left.file, left.summary_start).cmp(&(&right.file, right.summary_start))
+    });
+    Ok(())
 }
 
 fn scan_default_import_candidates(

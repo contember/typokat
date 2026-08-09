@@ -24,14 +24,10 @@ use crate::class_semantics::{DemandOutcome, Exhaustion};
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic, IncompleteSurface};
 use crate::frontend::{
     AdmittedSourceReexportDeclaration, AdmittedSourceReexportSource, AdmittedSourceReexports,
-    DefaultExportOccurrence, DefaultImportCandidate, DefaultImportCandidateSource,
-    DefaultImportCandidateSpecifier, NamespaceProvenance, ProjectImport, ProjectImportSource,
-    ProjectProgram,
-};
-#[cfg(any(test, feature = "test-utils"))]
-use crate::frontend::{
-    DefaultExportOccurrenceKind, DefaultImportCandidateDisposition, DefaultImportSpecifierSyntax,
-    DefaultModuleCandidates, ModuleMemberIdentity,
+    DefaultExportOccurrence, DefaultExportOccurrenceKind, DefaultImportCandidate,
+    DefaultImportCandidateDisposition, DefaultImportCandidateSource,
+    DefaultImportCandidateSpecifier, DefaultImportSpecifierSyntax, DefaultModuleCandidates,
+    ModuleMemberIdentity, NamespaceProvenance, ProjectImport, ProjectImportSource, ProjectProgram,
 };
 use crate::relate::RelationOutcome;
 use crate::source::{
@@ -1529,7 +1525,6 @@ struct ValidatedDefaultModulePlan<'e> {
     exports_by_owner: Vec<Option<&'e DefaultExportOccurrence>>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectDefaultInvariantError {
     Coverage,
@@ -1539,7 +1534,6 @@ enum ProjectDefaultInvariantError {
     DuplicateEvidence,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 impl ProjectDefaultInvariantError {
     const fn message(self) -> &'static str {
         match self {
@@ -1552,7 +1546,6 @@ impl ProjectDefaultInvariantError {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 fn build_validated_default_module_plan<'e>(
     candidates: &'e DefaultModuleCandidates,
     units: &[ProjectProgram<'_>],

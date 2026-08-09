@@ -724,7 +724,6 @@ fn assert_post_wu6_public_inputs(case: &Value, order: &str) -> (Vec<u8>, Vec<u8>
 }
 
 #[test]
-#[ignore = "RED until WU6 atomically activates default module slots"]
 fn post_wu6_admitted_projects_match_exact_summaries_in_both_orders() {
     let contract = contract();
     for id in contract["classifications"]["admitted"]
@@ -742,7 +741,6 @@ fn post_wu6_admitted_projects_match_exact_summaries_in_both_orders() {
 }
 
 #[test]
-#[ignore = "RED until WU6 activates exact fail-closed default controls"]
 fn post_wu6_deferred_forms_keep_exact_non_clean_identities() {
     let contract = contract();
     for case in contract["cases"].as_array().expect("contract cases") {
@@ -904,7 +902,6 @@ fn assert_frozen_route_report(report: &typokat::driver::FileReport, name: &str) 
 }
 
 #[test]
-#[ignore = "enabled with the WU6 public cutover; explicit and legacy bytes stay frozen"]
 fn explicit_and_legacy_routes_retain_the_pre_cutover_baseline() {
     let project = corpus_root().join("01_named_class");
     for names in [["source.ts", "consumer.ts"], ["consumer.ts", "source.ts"]] {

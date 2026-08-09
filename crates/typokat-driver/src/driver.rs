@@ -11,7 +11,7 @@ use crate::check::checker::{
 };
 use crate::diagnostics::{Diagnostic, IncompleteSurface};
 use crate::frontend::{
-    parse_source_errors, run_clean_bundler_project_frontend_with_deferred_auxiliary,
+    parse_source_errors, run_clean_bundler_project_frontend_with_default_modules,
     run_clean_project_frontend_with_deferred_auxiliary, run_project_frontend,
     run_project_frontend_with_auxiliary, run_project_parse_only, run_source_frontend,
     AccountedProjectProduct, AuxiliarySourceInput, DeferredProjectFrontendError, FileInput,
@@ -326,19 +326,26 @@ fn check_project_once_inner(
         ProjectResolutionMode::BundlerProject {
             project_directory,
             roots,
-        } => run_clean_bundler_project_frontend_with_deferred_auxiliary(
+        } => run_clean_bundler_project_frontend_with_default_modules(
             inputs,
             project_directory,
             roots,
             crate::library::packaged_library_source_inputs,
-            move |_, source_specs, library_programs, units, source_reexports, _parse_work| {
+            move |_,
+                  source_specs,
+                  library_programs,
+                  units,
+                  source_reexports,
+                  default_modules,
+                  _parse_work| {
                 record_complete_source_parse_work(_parse_work);
                 let injected = injected_library_sources(source_specs);
-                crate::check::checker::library_compiler::compile_complete_source_project_programs_with_source_reexports(
+                crate::check::checker::library_compiler::compile_complete_source_project_programs_with_default_modules(
                     &injected,
                     library_programs,
                     units,
                     source_reexports,
+                    default_modules,
                 )
             },
         ),

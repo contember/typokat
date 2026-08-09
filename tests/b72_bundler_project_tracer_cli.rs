@@ -160,7 +160,6 @@ fn unsupported_projects_fail_closed_with_complete_identities() {
         "unsupported_bare_specifier",
         "unsupported_cycle",
         "unsupported_default_import",
-        "unsupported_default_export",
         "unsupported_export_as_namespace",
         "unsupported_export_assignment",
         "unsupported_import_equals",

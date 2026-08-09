@@ -466,12 +466,12 @@
     {
       "id": "unsupported_default_import",
       "tsc": {"exit": 0, "diagnostics": []},
-      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts", "source.ts"], "files": {"checked": [], "skipped": ["main.ts", "source.ts"], "excluded": []}, "resolutions": ["main.ts:1:1 default-import ./source.js -> unsupported"], "project_notices": ["unsupported-module-form default-import main.ts:1:1 ./source.js"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
+      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts", "source.ts"], "files": {"checked": [], "skipped": ["main.ts", "source.ts"], "excluded": []}, "resolutions": ["main.ts:1:1 default-import ./source.js -> source.ts"], "project_notices": ["unsupported-module-form local-default-export source.ts:2:1"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
     },
     {
       "id": "unsupported_default_export",
       "tsc": {"exit": 0, "diagnostics": []},
-      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts"], "files": {"checked": [], "skipped": ["main.ts"], "excluded": []}, "resolutions": [], "project_notices": ["unsupported-module-form default-export main.ts:2:1"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
+      "typokat": {"exit": 0, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts"], "files": {"checked": ["main.ts"], "skipped": [], "excluded": []}, "resolutions": [], "project_notices": [], "parse_errors": [], "incomplete": [], "diagnostics": []}}
     },
     {
       "id": "unsupported_namespace_import",
@@ -501,12 +501,12 @@
     {
       "id": "unsupported_mixed_default_named",
       "tsc": {"exit": 0, "diagnostics": []},
-      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts", "source.ts"], "files": {"checked": [], "skipped": ["main.ts", "source.ts"], "excluded": []}, "resolutions": ["main.ts:1:1 default-import ./source.js -> unsupported"], "project_notices": ["unsupported-module-form default-import main.ts:1:1 ./source.js"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
+      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts", "source.ts"], "files": {"checked": [], "skipped": ["main.ts", "source.ts"], "excluded": []}, "resolutions": ["main.ts:1:1 mixed-default-named-import ./source.js -> source.ts [default:primary,named:value]"], "project_notices": ["unsupported-module-form local-default-export source.ts:2:1", "unsupported-module-form mixed-default-named-import main.ts:1:1 ./source.js [default:primary,named:value]"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
     },
     {
       "id": "unsupported_mixed_default_namespace",
       "tsc": {"exit": 0, "diagnostics": []},
-      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts", "source.ts"], "files": {"checked": [], "skipped": ["main.ts", "source.ts"], "excluded": []}, "resolutions": ["main.ts:1:1 default-import ./source.js -> unsupported"], "project_notices": ["unsupported-module-form default-import main.ts:1:1 ./source.js"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
+      "typokat": {"exit": 3, "summary": {"schema": 1, "profile": "bundler", "config": "tsconfig.json", "roots": ["main.ts", "source.ts"], "files": {"checked": [], "skipped": ["main.ts", "source.ts"], "excluded": []}, "resolutions": ["main.ts:1:1 mixed-default-namespace-import ./source.js -> source.ts [default:primary,namespace:values]"], "project_notices": ["unsupported-module-form local-default-export source.ts:2:1", "unsupported-module-form mixed-default-namespace-import main.ts:1:1 ./source.js [default:primary,namespace:values]"], "parse_errors": [], "incomplete": [], "diagnostics": []}}
     },
     {
       "id": "unsupported_bare_specifier",

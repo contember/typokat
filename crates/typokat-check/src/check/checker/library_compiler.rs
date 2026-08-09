@@ -6009,7 +6009,7 @@ pub fn compile_complete_source_project_programs<'ast>(
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
     units: &[crate::frontend::ProjectProgram<'ast>],
 ) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
-    compile_complete_source_project_programs_core(sources, library_programs, units, None)
+    compile_complete_source_project_programs_core(sources, library_programs, units, None, None)
 }
 
 /// Compile one Bundler project with frontend-certified named source re-exports.
@@ -6024,6 +6024,24 @@ pub fn compile_complete_source_project_programs_with_source_reexports<'ast>(
         library_programs,
         units,
         Some(source_reexports),
+        None,
+    )
+}
+
+/// Compile one Bundler project with certified named and default module surfaces.
+pub fn compile_complete_source_project_programs_with_default_modules<'ast>(
+    sources: &[InjectedLibrarySource<'_>],
+    library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
+    units: &[crate::frontend::ProjectProgram<'ast>],
+    source_reexports: &crate::frontend::AdmittedSourceReexports,
+    default_modules: &crate::frontend::DefaultModuleCandidates,
+) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
+    compile_complete_source_project_programs_core(
+        sources,
+        library_programs,
+        units,
+        Some(source_reexports),
+        Some(default_modules),
     )
 }
 
@@ -6032,9 +6050,19 @@ fn compile_complete_source_project_programs_core<'ast>(
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
     units: &[crate::frontend::ProjectProgram<'ast>],
     source_reexports: Option<&crate::frontend::AdmittedSourceReexports>,
+    default_modules: Option<&crate::frontend::DefaultModuleCandidates>,
 ) -> Result<Vec<super::CheckResult>, InjectedProfileError> {
-    let frontend =
-        complete_source_project_frontend(sources, library_programs, units, source_reexports)?;
+    let default_module_plan = default_modules
+        .map(|candidates| super::build_validated_default_module_plan(candidates, units))
+        .transpose()
+        .map_err(|error| InjectedProfileError::CanonicalProjection(error.message().to_owned()))?;
+    let frontend = complete_source_project_frontend(
+        sources,
+        library_programs,
+        units,
+        source_reexports,
+        default_module_plan.as_ref(),
+    )?;
     let (run, _runtime, replay_plan) = compile_owned_injected_frontend(
         frontend,
         ReplayIndexPlan::None,
@@ -6056,6 +6084,7 @@ fn complete_source_project_frontend<'source, 'ast>(
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
     units: &[crate::frontend::ProjectProgram<'ast>],
     source_reexports: Option<&crate::frontend::AdmittedSourceReexports>,
+    default_module: Option<&super::ValidatedDefaultModulePlan<'_>>,
 ) -> Result<CanonicalLibraryFrontend<'source, 'ast>, InjectedProfileError> {
     let source_reexport_plan = source_reexports
         .map(|admitted| super::build_validated_source_reexport_plan(admitted, units))
@@ -6183,11 +6212,55 @@ fn complete_source_project_frontend<'source, 'ast>(
             )
             .map_err(|error| InjectedProfileError::Reservation(format!("{error:?}")))?;
     }
+    if let Some(plan) = default_module {
+        for (unit, occurrence) in units.iter().zip(&plan.exports_by_owner) {
+            let Some(occurrence) = occurrence else {
+                continue;
+            };
+            let (kind, span) = match occurrence.kind() {
+                crate::frontend::DefaultExportOccurrenceKind::DirectClass
+                    if occurrence.declaration_anonymous() == Some(true) =>
+                {
+                    (
+                        crate::binder::declaration::DeclarationKind::Class,
+                        occurrence.subject_span(),
+                    )
+                }
+                crate::frontend::DefaultExportOccurrenceKind::DirectFunction
+                    if occurrence.declaration_anonymous() == Some(true) =>
+                {
+                    (
+                        crate::binder::declaration::DeclarationKind::Function,
+                        occurrence.subject_span(),
+                    )
+                }
+                crate::frontend::DefaultExportOccurrenceKind::DefaultExpression => (
+                    crate::binder::declaration::DeclarationKind::DefaultExportExpression,
+                    occurrence.declaration_span(),
+                ),
+                _ => continue,
+            };
+            combined_lexical_events
+                .attach_candidate_declaration_source(
+                    SourceOrdinal::User(unit.module_ordinal),
+                    kind,
+                    span,
+                )
+                .map_err(|_| {
+                    InjectedProfileError::Reservation(
+                        "validated default has no exact lexical owner".to_owned(),
+                    )
+                })?;
+        }
+    }
     let mut external_effects = BTreeMap::new();
-    let bound = super::bind_authoritative_project_core_with_source_reexports(
+    let bound = super::bind_authoritative_project_core_with_module_admission(
         builder,
         units,
-        source_reexport_plan.as_ref(),
+        super::ProjectModuleAdmission {
+            source_reexports: source_reexport_plan.as_ref(),
+            default_module,
+        },
         source_offset,
         &combined_lexical_events,
         &mut external_effects,

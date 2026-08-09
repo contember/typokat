@@ -2942,6 +2942,12 @@
       "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"barrel.ts\",\"source.ts\"],\"files\":{\"checked\":[\"barrel.ts\",\"source.ts\"],\"skipped\":[],\"excluded\":[]},\"resolutions\":[\"barrel.ts:1:1 source-reexport ./source.js -> source.ts\"],\"project_notices\":[],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
       "stderr": "",
       "resolution": "barrel.ts:1:1 source-reexport ./source.js -> source.ts"
+    },
+    "default_import_export": {
+      "exit": 0,
+      "stdout": "{\"schema\":1,\"profile\":\"bundler\",\"config\":\"tsconfig.json\",\"roots\":[\"consumer.ts\",\"source.ts\"],\"files\":{\"checked\":[\"consumer.ts\",\"source.ts\"],\"skipped\":[],\"excluded\":[]},\"resolutions\":[\"consumer.ts:1:1 default-import ./source.js -> source.ts\"],\"project_notices\":[],\"parse_errors\":[],\"incomplete\":[],\"diagnostics\":[]}\n",
+      "stderr": "",
+      "resolution": "consumer.ts:1:1 default-import ./source.js -> source.ts"
     }
   },
   "lifecycle": {
@@ -2951,13 +2957,12 @@
       "source_reexport_cycles_keep_the_exact_cycle_identity"
     ],
     "frozen_pre_change_case_ids": [
-      "13a_default_import_export",
       "13b_star_reexport",
       "13c_namespace_reexport",
       "13d_string_literal_export_name",
       "13e_export_attributes",
       "13f_bare_package_specifier"
     ],
-    "deferred_freeze": "Every deferred form outside the two exact cycle controls, including 13e_export_attributes at exit 2, remains covered by deferred_bundler_results_retain_pre_change_bytes and does not move in this sprint."
+    "deferred_freeze": "Every remaining deferred form outside the two exact cycle controls, including 13e_export_attributes at exit 2, remains covered by deferred_bundler_results_retain_pre_change_bytes; 13a_default_import_export moves with the default-module cutover."
   }
 }

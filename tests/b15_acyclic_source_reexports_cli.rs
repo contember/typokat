@@ -251,6 +251,56 @@ fn deferred_bundler_results_retain_pre_change_bytes() {
 }
 
 #[test]
+fn default_import_export_moves_to_exact_clean_wu6_output_in_both_root_orders() {
+    let contract = contract();
+    let case = case_by_id(&contract, "13a_default_import_export");
+    let expected = &contract["post_wu6"]["default_import_export"];
+    let mut outputs = Vec::new();
+
+    for order in ["normal", "reverse"] {
+        let oracle = oracle_run(case, order);
+        assert_eq!(oracle["exit"], 0, "{order} pinned tsc exit");
+        assert_eq!(oracle["stdout"], "", "{order} pinned tsc stdout");
+        assert_eq!(oracle["stderr"], "", "{order} pinned tsc stderr");
+
+        let project = TempProject::from_case(case, order);
+        let output = run(&project_args(&project.root));
+        assert_eq!(
+            output.status.code(),
+            expected["exit"].as_i64().map(|code| code as i32),
+            "{order} typokat exit"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected["stdout"].as_str().expect("post-WU6 stdout"),
+            "{order} typokat stdout"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            expected["stderr"].as_str().expect("post-WU6 stderr"),
+            "{order} typokat stderr"
+        );
+
+        let summary = parse_summary(&output, &format!("13a_default_import_export/{order}"));
+        assert_eq!(
+            summary["resolutions"],
+            json!([expected["resolution"]]),
+            "{order} admitted default resolution"
+        );
+        assert_eq!(
+            summary["files"]["checked"],
+            json!(["consumer.ts", "source.ts"])
+        );
+        assert_eq!(summary["files"]["skipped"], json!([]));
+        assert_eq!(summary["project_notices"], json!([]));
+        assert_eq!(summary["diagnostics"], json!([]));
+        outputs.push((output.stdout, output.stderr));
+    }
+
+    assert_eq!(outputs[0], outputs[1], "13a root-order bytes");
+}
+
+#[test]
 fn bundler_cutover_preserves_explicit_and_legacy_route_bytes() {
     let contract = contract();
     let project = corpus_root().join("route_baseline");
