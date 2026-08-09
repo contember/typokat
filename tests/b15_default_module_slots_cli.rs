@@ -157,10 +157,10 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
     let contract = contract();
     assert_eq!(contract["schema"], 1);
     assert_eq!(contract["oracle"]["version"], "Version 6.0.3");
-    assert_eq!(contract["summary"]["case_count"], 33);
-    assert_eq!(contract["summary"]["run_count"], 66);
-    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 33);
-    assert_eq!(contract["summary"]["admitted_case_count"], 18);
+    assert_eq!(contract["summary"]["case_count"], 34);
+    assert_eq!(contract["summary"]["run_count"], 68);
+    assert_eq!(contract["summary"]["root_order_byte_identical_count"], 34);
+    assert_eq!(contract["summary"]["admitted_case_count"], 19);
     assert_eq!(contract["summary"]["deferred_control_case_count"], 15);
 
     let admitted = [
@@ -182,6 +182,7 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
         "13_default_named_isolation",
         "14_value_only_wrong_type",
         "24c_identifier_interface",
+        "24e_default_function_overload",
     ];
     let namespace_controls = [
         "15_named_default_class_namespace",

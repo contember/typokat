@@ -17,10 +17,10 @@
     "stderr_contract": "empty for all retained runs"
   },
   "summary": {
-    "case_count": 33,
-    "run_count": 66,
-    "root_order_byte_identical_count": 33,
-    "admitted_case_count": 18,
+    "case_count": 34,
+    "run_count": 68,
+    "root_order_byte_identical_count": 34,
+    "admitted_case_count": 19,
     "deferred_control_case_count": 15,
     "duplicate_producer_kind_count": 5,
     "duplicate_unordered_pair_count": 15,
@@ -45,7 +45,8 @@
       "12_missing_resolved_default",
       "13_default_named_isolation",
       "14_value_only_wrong_type",
-      "24c_identifier_interface"
+      "24c_identifier_interface",
+      "24e_default_function_overload"
     ],
     "namespace_provenance_controls": [
       "15_named_default_class_namespace",
@@ -2425,6 +2426,71 @@
           "diagnostics": []
         },
         "stderr": "project: unsupported-default-export-namespace-provenance source.ts:2:1 Local\n"
+      }
+    },
+    {
+      "id": "24e_default_function_overload",
+      "classification": "admitted",
+      "files": [
+        {
+          "path": "consumer.ts",
+          "text": "import local from \"./source.js\";\nconst good = local(1);\n"
+        },
+        {
+          "path": "source.ts",
+          "text": "export function local(value: number): number;\nexport default function local(value: number): number {\n  return value;\n}\n"
+        }
+      ],
+      "oracle_runs": [
+        {
+          "order": "normal",
+          "files": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        },
+        {
+          "order": "reverse",
+          "files": [
+            "source.ts",
+            "consumer.ts"
+          ],
+          "exit": 0,
+          "ordered_normalized_diagnostics": [],
+          "stderr": ""
+        }
+      ],
+      "root_order_byte_identical": true,
+      "typokat_after_wu6": {
+        "exit": 0,
+        "summary": {
+          "schema": 1,
+          "profile": "bundler",
+          "config": "tsconfig.json",
+          "roots": [
+            "consumer.ts",
+            "source.ts"
+          ],
+          "files": {
+            "checked": [
+              "consumer.ts",
+              "source.ts"
+            ],
+            "skipped": [],
+            "excluded": []
+          },
+          "resolutions": [
+            "consumer.ts:1:1 default-import ./source.js -> source.ts"
+          ],
+          "project_notices": [],
+          "parse_errors": [],
+          "incomplete": [],
+          "diagnostics": []
+        },
+        "stderr": ""
       }
     },
     {
