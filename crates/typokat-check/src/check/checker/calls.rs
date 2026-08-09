@@ -1977,6 +1977,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         let mut arity_failures: Vec<CallArity> = Vec::new();
         let mut saw_non_arity_failure = false;
+        let mut failure_location = OverloadFailureLocation::default();
         let mut first_constraint_failure: Option<CheckerEffects<Ticket>> = None;
         let mut first_other_failure: Option<CheckerEffects<Ticket>> = None;
 
@@ -2011,6 +2012,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         first_constraint_failure = Some(effects);
                     }
                     saw_non_arity_failure = true;
+                    failure_location.record_non_argument();
                     continue;
                 }
                 Err(CandidateBuildFailure::Unavailable) => {
@@ -2018,11 +2020,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         first_other_failure = Some(effects);
                     }
                     saw_non_arity_failure = true;
+                    failure_location.record_non_argument();
                     continue;
                 }
                 Err(CandidateBuildFailure::InferredConstraint) => {
                     effects.records.discard();
                     saw_non_arity_failure = true;
+                    failure_location.record_non_argument();
                     continue;
                 }
                 Err(CandidateBuildFailure::Exhausted(exhaustion)) => {
@@ -2078,8 +2082,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         }
                     };
                 }
-                CandidateTrial::Arity(arity) => arity_failures.push(arity),
-                CandidateTrial::Mismatch => saw_non_arity_failure = true,
+                CandidateTrial::Arity(arity) => {
+                    failure_location.record_arity();
+                    arity_failures.push(arity);
+                }
+                CandidateTrial::Mismatch(argument_span) => {
+                    saw_non_arity_failure = true;
+                    failure_location.record_mismatch(argument_span);
+                }
                 CandidateTrial::Exhausted(exhaustion) => {
                     return DemandOutcome::Exhausted(exhaustion)
                 }
@@ -2094,7 +2104,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(effects) = first_other_failure {
                 self.merge_candidate_effects(effects);
             }
-            self.emit_diagnostic(Diagnostic::no_overload_matches(span));
+            self.emit_diagnostic(Diagnostic::no_overload_matches(
+                failure_location.diagnostic_span(span),
+            ));
         }
         DemandOutcome::Ready(None)
     }
@@ -2409,7 +2421,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             RelationOutcome::No(_) => {
                 #[cfg(test)]
                 measure_call(|measure| measure.candidate_mismatches += 1);
-                return CandidateTrial::Mismatch;
+                return CandidateTrial::Mismatch(None);
             }
             RelationOutcome::Exhausted(exhaustion) => return CandidateTrial::Exhausted(exhaustion),
         }
@@ -2424,7 +2436,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if alternatives.is_empty() {
             #[cfg(test)]
             measure_call(|measure| measure.candidate_mismatches += 1);
-            return CandidateTrial::Mismatch;
+            return CandidateTrial::Mismatch(None);
         }
         if alternatives.len() > 1 {
             #[cfg(test)]
@@ -2444,7 +2456,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 DemandOutcome::Ready(None) => {
                     #[cfg(test)]
                     measure_call(|measure| measure.candidate_mismatches += 1);
-                    CandidateTrial::Mismatch
+                    CandidateTrial::Mismatch(None)
                 }
                 DemandOutcome::Exhausted(exhaustion) => CandidateTrial::Exhausted(exhaustion),
             };
@@ -2483,14 +2495,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     measure.speculative_diagnostics_removed +=
                         u64::try_from(diagnostics.len()).expect("diagnostic count fits u64");
                 });
-                return CandidateTrial::Mismatch;
+                return CandidateTrial::Mismatch(Some(*arg_span));
             }
             match self.with_semantic_query(|query| query.is_assignable(src, param_ty)) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(_) => {
                     #[cfg(test)]
                     measure_call(|measure| measure.candidate_mismatches += 1);
-                    return CandidateTrial::Mismatch;
+                    return CandidateTrial::Mismatch(Some(*arg_span));
                 }
                 RelationOutcome::Exhausted(exhaustion) => {
                     return CandidateTrial::Exhausted(exhaustion)
@@ -4660,8 +4672,90 @@ struct SignatureCandidateRequest<'a, 'ast> {
 enum CandidateTrial {
     Match,
     Arity(CallArity),
-    Mismatch,
+    Mismatch(Option<Span>),
     Exhausted(Exhaustion),
+}
+
+#[derive(Default)]
+struct OverloadFailureLocation {
+    common_argument: Option<Span>,
+    conflicting_arguments: bool,
+    saw_arity: bool,
+    saw_non_argument: bool,
+}
+
+impl OverloadFailureLocation {
+    fn record_arity(&mut self) {
+        self.saw_arity = true;
+    }
+
+    fn record_non_argument(&mut self) {
+        self.saw_non_argument = true;
+    }
+
+    fn record_mismatch(&mut self, argument: Option<Span>) {
+        let Some(argument) = argument else {
+            self.record_non_argument();
+            return;
+        };
+        if self.conflicting_arguments {
+            return;
+        }
+        match self.common_argument {
+            None => self.common_argument = Some(argument),
+            Some(common) if common == argument => {}
+            Some(_) => {
+                self.common_argument = None;
+                self.conflicting_arguments = true;
+            }
+        }
+    }
+
+    fn diagnostic_span(&self, invocation: Span) -> Span {
+        if self.saw_arity || self.saw_non_argument || self.conflicting_arguments {
+            invocation
+        } else {
+            self.common_argument.unwrap_or(invocation)
+        }
+    }
+}
+
+#[cfg(test)]
+mod overload_failure_location_tests {
+    use super::{OverloadFailureLocation, Span};
+
+    #[test]
+    fn common_argument_mismatch_uses_the_argument_span() {
+        let invocation = Span::new(10, 30);
+        let argument = Span::new(22, 26);
+        let mut failures = OverloadFailureLocation::default();
+        failures.record_mismatch(Some(argument));
+        failures.record_mismatch(Some(argument));
+        assert_eq!(failures.diagnostic_span(invocation), argument);
+    }
+
+    #[test]
+    fn mixed_arity_and_argument_mismatch_keeps_the_invocation_span() {
+        let invocation = Span::new(10, 30);
+        let mut failures = OverloadFailureLocation::default();
+        failures.record_mismatch(Some(Span::new(22, 26)));
+        failures.record_arity();
+        assert_eq!(failures.diagnostic_span(invocation), invocation);
+    }
+
+    #[test]
+    fn conflicting_argument_order_does_not_select_the_first_failure() {
+        let invocation = Span::new(10, 30);
+        let first = Span::new(15, 18);
+        let second = Span::new(22, 26);
+        for order in [[first, second], [second, first]] {
+            let mut failures = OverloadFailureLocation::default();
+            for argument in order {
+                failures.record_mismatch(Some(argument));
+            }
+            assert_eq!(failures.diagnostic_span(invocation), invocation);
+        }
+    }
 }
 
 enum CandidateBuildFailure {
