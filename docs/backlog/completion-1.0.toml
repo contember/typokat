@@ -658,12 +658,12 @@ deps = []
 [[criterion]]
 id = "D-module-resolver-breadth"
 track = "D"
-title = "Bundler module resolution via oxc_resolver + module semantics — serial; slice 1 shipped as M29"
+title = "Bundler module resolution via oxc_resolver + module semantics — serial; named re-export and direct-default slices shipped"
 state = "incomplete"
 blocks_release = "true"
 owner = "./15-modules-imports.md"
-witness = "multi-file Bundler fixtures resolve through pinned oxc_resolver and check vs tsc 6.0.3 in one serial universe; unsupported dependency/profile gaps are explicit"
-links = ["../decisions/0007-bundler-resolution-via-oxc-resolver.md"]
+witness = "multi-file Bundler fixtures resolve through pinned oxc_resolver and check named re-exports plus structurally distinct direct default slots vs tsc 6.0.3 in one serial universe; unsupported dependency/profile gaps are explicit"
+links = ["../decisions/0007-bundler-resolution-via-oxc-resolver.md", "../archive/sprint-2026-08-08-acyclic-source-reexports.md", "../archive/sprint-2026-08-08-default-module-slots.md"]
 deps = []
 
 [[criterion]]

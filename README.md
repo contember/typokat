@@ -18,13 +18,13 @@ model** faithfully; when in doubt it *over-reports* (the safe direction). Full d
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
   <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-702%20unit%20%2B%20403%20conformance-blue">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1539%20unit%20%2B%20585%20conformance-blue">
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-By the numbers: **83,195 lines of Rust** (78,888 nonblank), **702 unit tests**
-(696 passing plus 6 ignored release measurements), and **403 enabled conformance source files** with
-1,910 expected diagnostic markers plus 234 explicit incomplete-surface markers. `clippy -D warnings` is
+By the numbers: **197,700 lines of Rust** (187,184 nonblank), **1,539 unit tests**
+(1,528 passing plus 11 ignored measurements), and **585 enabled conformance source files** with
+1,967 expected diagnostic markers plus 197 explicit incomplete-surface markers. `clippy -D warnings` is
 clean, and **every milestone is cross-checked against real `tsc 6.0.3 --strict`**.
 
 ## Quick start
@@ -36,9 +36,11 @@ cargo run -- check --project-summary json path/to/project
 
 The project form accepts a directory containing `tsconfig.json` or the config path itself. Its
 exact admitted config is `files` plus `strict: true`, `noEmit: true`, `module: "ESNext"`, and
-`moduleResolution: "Bundler"`. Every configured root must be a local `.ts` file. Local named
-imports may be extensionless or use `.js`→`.ts` substitution; `oxc_resolver 11.24.2` performs the
-physical lookup. The JSON summary deterministically accounts for roots, checked/skipped files,
+`moduleResolution: "Bundler"`. Every configured root must be a local `.ts` file. Local named and
+regular direct default imports may be extensionless or use `.js`→`.ts` substitution;
+`oxc_resolver 11.24.2` performs the physical lookup. Direct default classes, functions,
+expressions, and namespace-free identifier defaults use a structurally distinct default slot,
+never the named export map. The JSON summary deterministically accounts for roots, checked/skipped files,
 resolutions, project notices, parse errors, incomplete surfaces, and diagnostics. Any unsupported
 config, specifier, or module form is an explicit non-clean project notice.
 
@@ -69,13 +71,13 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, the pinned TypeScript 6.0.3 ES2025 full-host default library, and the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports and acyclic named source re-exports, and the bounded files-only Bundler project route |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports, acyclic named source re-exports, structurally distinct direct default exports/imports, and the bounded files-only Bundler project route |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
 
 `tsc`-compatible numeric codes with a `TK` prefix:
-`TK2302` (static member references a class type parameter), `TK2304` (cannot find name),
+`TK1192` (resolved module has no default export), `TK2302` (static member references a class type parameter), `TK2304` (cannot find name),
 `TK2305` (no exported member), `TK2307` (cannot find module), `TK2313` (circular constraint),
 `TK2314` (wrong generic type-argument count), `TK2322` (not assignable),
 `TK2339` (no such property), `TK2341`/`TK2445` (private/protected), `TK2344` (constraint
@@ -86,8 +88,9 @@ non-contiguous function implementation), `TK2394` (overload incompatible with im
 `TK2554`/`TK2555` (arity), `TK2558` (wrong explicit type-argument count), `TK2589`
 (instantiation excessively deep), `TK2673`/`TK2674` (private/protected constructor), `TK2684`
 (invalid explicit receiver), `TK2693` (type used as value), `TK2707` (generic arity range),
-`TK2741` (missing property), `TK2744`
-(invalid type-parameter default reference), and `TK2769` (no overload matches).
+`TK2741` (missing property), `TK2744` (invalid type-parameter default reference), `TK2749`
+(value used as a type on a proven value-only qualified/default-import surface), and `TK2769`
+(no overload matches).
 
 ## Architecture
 
@@ -194,18 +197,19 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   ES2025 full-host library, compiled from its 82 vendored source files in each fresh process.
   The public `check --project-summary json <directory|tsconfig.json>` route accepts only the exact
   files-only strict/noEmit/ESNext/Bundler config and configured local `.ts` roots. It resolves local
-  named imports, including extensionless and `.js`→`.ts` forms, through `oxc_resolver 11.24.2` and
-  admits acyclic local named source re-exports over namespace-free value/type slots, including
-  aliases, type-only forms, and chains. It emits deterministic complete accounting. Every
-  unsupported form is an explicit non-clean notice. Still deferred: packages / `node_modules`,
-  broader config/root selection, `.d.ts`, default/namespace/star imports, star/namespace
-  re-exports, namespace-bearing source targets, CommonJS, ambient modules, cyclic module graphs,
-  and parallel cross-file type identity. An **unresolved type name** in type position is
-  `TK2304` (M22); still deferred there (distinct tsc codes): a value used as a type (`TS2749`), type
-  args on a type parameter (`TS2315`) and a wrong type-argument count such as bare `Array`
-  (`TS2314`). Qualified namespace types `A.B` and standalone instantiated namespace values are
-  modeled. Ambient external modules remain with `15`; diagnosed ambient export-alias cascade parity
-  remains with `63`. (Backlogs `15`, `52`, `63`.)
+  named and regular direct default imports, including extensionless and `.js`→`.ts` forms, through
+  `oxc_resolver 11.24.2`. It admits acyclic local named source re-exports and structurally distinct
+  direct default declarations/expressions/imports. It emits deterministic complete accounting.
+  Every unsupported form is an explicit non-clean notice. Still deferred: packages /
+  `node_modules`, broader config/root selection, `.d.ts`, namespace imports, default bridges and
+  re-exports, mixed forms, star/namespace re-exports, namespace-bearing producers/targets,
+  CommonJS, ambient modules, cyclic module graphs, and parallel cross-file type identity. An
+  **unresolved type name** in type position is `TK2304` (M22). Qualified value leaves and admitted
+  default-import values with no type slot report `TK2749`; simple lexical value-as-type coverage,
+  type args on a type parameter (`TS2315`), and wrong generic arity such as bare `Array` (`TS2314`)
+  remain deferred. Qualified namespace types `A.B` and standalone instantiated namespace values
+  are modeled. Ambient external modules remain with `15`; diagnosed ambient export-alias cascade
+  parity remains with `63`. (Backlogs `15`, `52`, `63`.)
 - **Incomplete checking is a first-class outcome (2026-07-10 accounting sprint).** The consumed
   OXC AST surface is classified in a machine-validated inventory (`tests/surface/`), and an
   unsupported in-scope construct now reports `incomplete[<surface-id>]` with exit `3` instead of
@@ -219,8 +223,8 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   pinned public witness, mutation ratchet, or preview CI gate. The full default-library production
   cutover is shipped and archived after WU7
   independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
-  Acyclic local named source re-exports are shipped; default exports/imports are the next
-  module-breadth target in `15`, followed by package breadth. A clean
+  Acyclic local named source re-exports and the direct default-slot slice are shipped. The next
+  step is a fresh `placetext` re-screen, followed by the remaining module breadth in `15`. A clean
   result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families

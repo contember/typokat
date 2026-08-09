@@ -180,7 +180,10 @@ Checker scaling (from sprint-2026-07-25):
   shipped CLI, then land its mutation pack and differential CI ratchet.
 - **XL** · [`15`](15-modules-imports.md) — remaining Bundler module semantics and resolver breadth;
   the archived [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md)
-  shipped acyclic named source re-exports; default exports/imports are next, with packages later.
+  shipped acyclic named source re-exports, and the archived
+  [`default-slot sprint`](../archive/sprint-2026-08-08-default-module-slots.md) shipped direct default
+  declarations/expressions and regular default imports. Default bridges, namespace/star forms,
+  cycles, and packages remain.
 - **XL** · [`16`](16-parallelism-type-universe.md) — deterministic parallel cross-file type identity · blocked by `15`.
 - **XL** · [`17`](17-incrementality.md) — semantic batch cache followed by a Salsa-style IDE query layer · blocked by `16`.
 
@@ -199,19 +202,18 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Implement the active default-slot slice of `15`.** The archived
+1. **Re-screen `placetext` against the shipped direct default slot.** The archived
    [`2026-08-07 sprint`](../archive/sprint-2026-08-07-bundler-project-tracer.md) shipped the exact
    files-only Bundler CLI and complete accounting, then terminated incomplete because all six
    public candidates failed before mutations. The archived
    [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) removed the
    bounded acyclic named source-re-export blocker. The subsequent
    [`re-screen`](../archive/sprint-2026-08-08-real-project-rescreen.md) still found no qualifier;
-   `placetext` now has one currently visible default-export route blocker. The active
-   [`default-slot sprint`](../sprints/sprint-2026-08-08-default-module-slots.md) adds default
-   declarations/expressions and regular default imports without conflating the default slot with
-   named exports. Namespace/star forms, cycles, package loading, and checker-model fixes remain
-   separate.
-2. **Re-screen `placetext`, then close `72` only if it is genuinely zero-clean.** Preserve the
+   `placetext` had one visible default-export route blocker. The archived
+   [`default-slot sprint`](../archive/sprint-2026-08-08-default-module-slots.md) removed that specific
+   blocker without conflating the default slot with named exports. Re-establish the first blocker,
+   native-versus-overlay distinction, and target/library equivalence from fresh evidence.
+2. **Close `72` only if the re-screen is genuinely zero-clean.** Preserve the
    native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
    unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic
    fresh-cache runner, fault controls, and CI identity ratchet land. Do not relax a threshold or

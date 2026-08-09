@@ -65,8 +65,9 @@ and validated the same way.
   `const a: Foo = 5` is only `TK2304`, never also a `TK2322`. Top-level type
   declarations are **hoisted**, so a forward reference resolves (no false `TK2304`).
 - **Deferred (silent) `TK2304` sub-cases.** `TK2304` usually fires only when the name
-  resolves to *no* space. Not reported (documented divergences): a value used as a type
-  (tsc `TS2749` — the name resolves in the value space); type arguments applied to a
+  resolves to *no* space. General simple lexical value-as-type use remains unreported (tsc
+  `TS2749`), while qualified value leaves and admitted default-import values whose type slot is
+  proven absent report exact `TK2749`. Also not reported: type arguments applied to a
   type parameter (tsc `TS2315`); a wrong **type-argument count** on a recognized type
   such as bare/over-applied `Array` (tsc `TS2314` — `Array` is a known built-in, not
   "cannot find name"). Qualified namespace type paths are modeled; the remaining
@@ -798,11 +799,14 @@ is assignable to an optional member. No new diagnostic code.
   target as the bare `T` (e.g. `{ b: 5 }` → "not assignable to type 'string'"), typokat relates
   against the effective `T | undefined` and may render that union instead.
 
-## Modules / imports (M29)
+## Modules / imports (M29 + bounded Bundler slices)
 
 Implemented: local relative `./` / `../` imports resolved to configured `.ts` files; named imports,
-`import type`, exported declarations, simple local `export { x as y }` lists, and acyclic local
-named source re-exports over namespace-free value/type slots in one serial type universe. The
+`import type`, exported declarations, simple local `export { x as y }` lists, acyclic local named
+source re-exports, and regular direct default imports/exports in one serial type universe. Default
+classes/functions, expressions, and namespace-free identifier defaults publish through a
+structurally distinct slot; direct and type-only default imports never fall back to the named map.
+The
 source-re-export slice includes aliases, outer/inline type-only forms, chains,
 declaration-grouped missing-module diagnostics, per-member missing-export diagnostics, and
 empty-list erasure without creating barrel-local bindings. The
@@ -812,11 +816,29 @@ strict/noEmit/ESNext/Bundler config. It uses `oxc_resolver 11.24.2` for extensio
 deterministic summary. Unsupported forms are explicit non-clean project notices, not silent drops.
 
 - **Out of scope (deferred):** packages / `node_modules`, broader config/root selection, `.d.ts`,
-  default imports/exports, namespace imports, star/namespace re-exports, namespace-bearing source
-  targets, CommonJS, ambient modules, cyclic module graphs, and parallel cross-file identity. The
+  namespace imports, star/namespace re-exports, CommonJS, ambient modules, cyclic module graphs,
+  and parallel cross-file identity. The
   production driver supplies the full default library independently of this unresolved
   module-resolution surface.
   <!-- div: id=modules/out-of-scope-resolution dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/m29_modules -->
+- **Default-slot tail (explicit non-clean):** local export-list defaults, named `default` import
+  spelling, source re-exports involving a default slot, mixed default imports, default interfaces,
+  namespace-bearing producers, and duplicate-default diagnostic parity remain deferred. None is
+  routed through the named map or allowed to become false-clean.
+  <!-- div: id=modules/default-slot-tail dir=over scope=design-oos owner=../backlog/15-modules-imports.md witness=../../tests/cases/b15_default_module_slots -->
+- **Missing-default module display is cosmetic.** `TK1192` renders the request specifier while tsc
+  renders its resolved module identity. The resolved target, code, span, and verdict are unchanged.
+  <!-- div: id=modules/missing-default-module-display dir=cosmetic scope=s-name-resolution owner=design-oos witness=../../tests/cases/b15_default_module_slots/12_missing_resolved_default -->
+- **A named lookup cannot suggest the hidden default declaration.** When a module exports only
+  `export default class Hidden`, a named `import { Hidden }` reports `TK2305`; tsc reports
+  suggestion-bearing `TS2614`. Both reject substituting the declaration's lexical name for its
+  default export slot at the same binding.
+  <!-- div: id=modules/hidden-default-named-suggestion dir=cosmetic scope=s-name-resolution owner=design-oos witness=../../tests/cases/b15_default_module_slots/13_default_named_isolation -->
+- **Default implementation union headlines follow the existing typokat relation display.** For an
+  annotated default implementation returning a union, typokat promotes the first failing union
+  member to the headline while tsc prints the union headline plus an indented member cause. Union
+  order is canonical `TypeId` order, not source order; codes, spans, and verdicts are unchanged.
+  <!-- div: id=modules/default-union-headline dir=cosmetic scope=s-assignability owner=design-oos witness=../../tests/cases/b15_default_module_slots/24f_default_function_overload_surface -->
 
 Backlog `15` expands this shipped Bundler substrate. Typokat retains source-root accounting, module
 graph/import/export semantics, `.d.ts` checking, diagnostics, and determinism while physical lookup

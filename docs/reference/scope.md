@@ -14,7 +14,8 @@ Codes use the `TK` prefix; the number mirrors `tsc` exactly (`TK2322` ≡ `TS232
 
 typokat models TypeScript **types**. In scope: the semantic/type errors a strict
 `tsc --noEmit --strict` reports about an already-parsed `.ts` file or the bounded serial project
-slice: local-relative `.ts` roots with named imports/exports. Out of scope by
+slice: local-relative `.ts` roots with named imports/exports and regular direct default
+imports/exports. Out of scope by
 design (per [`CLAUDE.md`](../../CLAUDE.md)): **parsing** (oxc owns it), **emit**,
 **JS runtime semantics**, reimplementing host/filesystem **module resolution**, and
 **compiler/CLI configuration diagnostics**. The supported project profile is a bounded Bundler
@@ -30,7 +31,7 @@ most of in/out:
 
 | Range | Count | Theme | In scope? |
 |---|---:|---|---|
-| `1xxx` | 398 | parse / grammar | **No** — oxc parses; we consume its AST and never re-emit these as `TK` codes |
+| `1xxx` | 398 | parse / grammar | **No**, except semantic-module `TK1192` on the bounded direct-default-import route |
 | **`2xxx`** | **529** | **semantic / type** | **Yes** — the core (with a handful of module/emit strays called out below) |
 | `4xxx` | 109 | declaration emit | **No** — typokat does not emit |
 | `5xxx` | 65 | compiler options / tsconfig | **No** — no compiler-config surface |
@@ -44,7 +45,9 @@ The `2xxx` + `7xxx` ranges are the **candidate pool**, minus the module/emit
 exceptions below. The marked Tier S/A/B families are the canonical 1.0 inventory;
 an unlisted code is not implicitly promised. Backlog `75` owns the remaining
 candidate-range census and either promotes each family here or records a sound OOS
-disposition.
+disposition. `TK1192` is the one deliberate `1xxx` exception: TypeScript numbers the
+resolved-module missing-default diagnostic in the grammar range, but typokat emits it from semantic
+default-slot lookup, not parsing.
 
 ## In-scope tiers
 
@@ -81,13 +84,15 @@ already emitted.
 
 **Names & member access**
 <!-- scope-family: s-name-resolution -->
-- `TK2304` Cannot find name '{0}'.
+- `TK2304` Cannot find name '{0}'. · `TK1192` Module '{0}' has no default export.
 <!-- scope-family: s-member-access -->
 - `TK2339` Property '{0}' does not exist on type '{1}'.
 <!-- scope-family: s-member-suggestion -->
 - `TK2551` …Did you mean '{2}'?
 <!-- scope-family: s-value-type-space -->
-- `TK2693` '{0}' only refers to a type, but is being used as a value here (value/type symbol spaces).
+- `TK2693` '{0}' only refers to a type, but is being used as a value here. · `TK2749` '{0}' refers
+  to a value, but is being used as a type here on proven value-only qualified/default-import
+  surfaces. General simple lexical value-as-type coverage remains backlog `52`.
 <!-- scope-family: s-declaration-hoisting -->
 - Function declarations and `var` use TypeScript's hoisting/visibility rules so declaration order cannot hide checks.
 
@@ -200,11 +205,13 @@ indexed access — see [ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-
 
 ## Out of scope by design
 
-The whole-range entries below never get a `TK` code. The final module-resolution subsection
-separates today's supported slice, planned resolver capability, and diagnostics that remain OOS.
+Except for the explicit semantic-module `TK1192` exception, the whole-range entries below never get
+a `TK` code. The final module-resolution subsection separates today's supported slice, planned
+resolver capability, and diagnostics that remain OOS.
 
 **Whole ranges**
-- **`1xxx` parse & grammar (398).** oxc is the parser; typokat consumes its AST.
+- **`1xxx` parse & grammar (398).** oxc is the parser; typokat consumes its AST. `TK1192` is the
+  sole promoted exception because it is produced by resolved default-slot lookup, not parsing.
   Syntactic and grammar diagnostics (`TK1005` `'{0}' expected.`, `TK1109`, `TK1128`,
   misplaced-modifier checks) are oxc's job and are not re-implemented under `TK`.
 - **`4xxx` declaration emit (109).** No emit ⇒ no `.d.ts` privacy/portability errors
@@ -226,13 +233,15 @@ slice** (M29, backlog `15` slice 1) resolves imports, so it **emits** `TK2307` *
 module…* and `TK2305` *Module has no exported member…* for that slice — both are live codes in
 `crates/typokat-diagnostics/src/diagnostics/mod.rs` and the README diagnostics list.
 The public `check --project-summary json <directory|tsconfig.json>` route accepts only an exact
-files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, and local named
-imports. It also admits acyclic local named source re-exports over namespace-free value/type slots,
-including aliases, type-only forms, and chains. Extensionless and `.js`→`.ts` physical resolution
-use `oxc_resolver 11.24.2`. Its deterministic summary accounts for every root and encountered
-module form; unsupported config, specifier, or form is an explicit non-clean project notice.
-Packages/`node_modules`, `.d.ts`, default/namespace imports, star/namespace re-exports,
-namespace-bearing source targets, and module cycles remain unsupported under `15` and `72`.
+files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, local named imports,
+and regular direct default imports. It also admits acyclic local named source re-exports and direct
+default classes/functions, expressions, and namespace-free identifiers through a structurally
+distinct default slot. A resolved module without that slot reports exact `TK1192`. Extensionless
+and `.js`→`.ts` physical resolution use `oxc_resolver 11.24.2`. Its deterministic summary accounts
+for every root and encountered module form; unsupported config, specifier, or form is an explicit
+non-clean project notice. Packages/`node_modules`, `.d.ts`, namespace imports, default bridges and
+re-exports, mixed forms, star/namespace re-exports, namespace-bearing producers/targets, and module
+cycles remain unsupported under `15` and `72`.
 Alternate profiles (including NodeNext/Node16), `TK2792`, `TK2459`, unknown-option
 validation, and `isolatedModules`/emit-target-gated diagnostics stay OOS unless deliberately
 promoted. An unsupported profile or dependency gap is a separate explicit project outcome, not a

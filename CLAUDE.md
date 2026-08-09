@@ -68,12 +68,14 @@ diagnostics; parsing and project dependency ordering belong to
 
 The public project route accepts a directory or `tsconfig.json` with exactly `files`,
 `strict: true`, `noEmit: true`, `module: "ESNext"`, and `moduleResolution: "Bundler"`. Configured
-roots are local `.ts` files. Named local imports resolve extensionless and `.js`→`.ts` forms through
-`oxc_resolver 11.24.2`. Acyclic local named source re-exports project namespace-free value/type
-slots directly, including aliases, type-only forms, and chains. Every unsupported config,
-specifier, or module form is an explicit non-clean project notice in the deterministic JSON
-summary. Packages, default/namespace imports, star/namespace re-exports, namespace-bearing source
-targets, and cycles remain unsupported.
+roots are local `.ts` files. Named and regular direct default imports resolve extensionless and
+`.js`→`.ts` forms through `oxc_resolver 11.24.2`. Acyclic local named source re-exports project
+namespace-free value/type slots directly. Direct default class/function declarations, default
+expressions, and namespace-free identifier defaults publish through a structurally distinct
+default slot; there is no named/default fallback. Every unsupported config, specifier, or module
+form is an explicit non-clean project notice in the deterministic JSON summary. Packages,
+namespace imports, default bridges/re-exports, mixed forms, namespace-bearing producers,
+star/namespace re-exports, and cycles remain unsupported.
 
 **Soundness > completeness**: when in doubt, over-report (the safe direction). Every
 deliberate `tsc` divergence is documented in
@@ -89,7 +91,8 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
-recommended order — next: Bundler module breadth and the remaining model-completeness track, then
+recommended order — next: re-screen the pinned real-project candidate, then continue Bundler
+module breadth and the remaining model-completeness track, then
 parallel cross-file identity and incrementality; the bytecode VM stays a deferred,
 profiling-gated refactor, ADR-0001).
 

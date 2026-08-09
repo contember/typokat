@@ -15,7 +15,8 @@ already shipped. General module breadth remains backlog [`15`](./15-modules-impo
 
 The public command now accepts a directory or `tsconfig.json`, but its exact supported profile is
 deliberately small: files-only strict/noEmit/ESNext/Bundler, configured local `.ts` roots, local
-named imports, and acyclic local named source re-exports over namespace-free value/type slots.
+named and regular direct default imports, acyclic local named source re-exports, and direct default
+producers through a distinct slot.
 `oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts` physical resolution. The deterministic
 JSON summary accounts for every root, resolution, unsupported form, parse error, incomplete surface,
 and diagnostic. Unsupported input is non-clean rather than silently filtered.
@@ -25,10 +26,12 @@ first, then screened six immutable public projects. None qualified: common first
 source re-exports and default exports; one used explicit `.ts` specifiers under NodeNext; others
 required Node ambient types or non-equivalent config/test exclusions. Every candidate failed before
 the mutation gate. The named source-re-export blocker is now removed for the shipped bounded form.
-A follow-up immutable re-screen at `659e30e` still found no qualifier: `jabr` stops on a cycle,
-bare `..`, and a default export; `placetext` has one currently visible default-export route notice
-before semantic checking; `lite-fp`, `un-jinja`, and `south-african-id` reach checker model or
-diagnostic failures; and `deco` retains explicit-`.ts` specifier incompatibility. The transparent
+A follow-up immutable re-screen at `659e30e` still found no qualifier: `jabr` stopped on a cycle,
+bare `..`, and a default export; `placetext` stopped on one default-export route notice before
+semantic checking; `lite-fp`, `un-jinja`, and `south-african-id` reached checker model or diagnostic
+failures; and `deco` retained explicit-`.ts` specifier incompatibility. The shipped direct
+default-slot slice removes `placetext`'s historical route blocker, but qualification and the new
+first blocker are unknown until the mandated fresh re-screen. The transparent
 `un-jinja` and `south-african-id` production-subtree overlays exclude native tooling/tests that
 consume `@types/node`, so they are not exact native programs. Exact evidence is retained in the
 [`re-screen archive`](../archive/real-project-rescreen-2026-08-08/README.md). There is still no

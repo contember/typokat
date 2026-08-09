@@ -24,9 +24,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-08-default-module-slots.md`](sprints/sprint-2026-08-08-default-module-slots.md) —
-  active: add default declarations, expressions, and regular local default imports through a
-  distinct module slot; deferred named bridges and namespace-bearing surfaces stay non-clean.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -103,13 +100,16 @@ decisions → reference → archive.
   package/filesystem/tsconfig resolution to `oxc_resolver`; typokat retains project enumeration,
   module-graph and import/export semantics, `.d.ts` checking, diagnostics, and determinism.
   The shipped `check --project-summary json <directory|tsconfig.json>` route accepts the exact
-  files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, and named imports;
-  `oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts` lookup. The archived
+  files-only strict/noEmit/ESNext/Bundler config, configured local `.ts` roots, and named plus
+  regular direct default imports; `oxc_resolver 11.24.2` handles extensionless and `.js`→`.ts`
+  lookup. The archived
   [`source-re-export sprint`](archive/sprint-2026-08-08-acyclic-source-reexports.md) also ships
-  acyclic local named source re-exports over namespace-free value/type slots. Every unsupported
-  form is an explicit non-clean notice. Packages, default/namespace imports, star/namespace
-  re-exports, namespace-bearing source targets, cycles, NodeNext, and other host profiles remain
-  deferred rather than approximated.
+  acyclic local named source re-exports over namespace-free value/type slots. The archived
+  [`default-slot sprint`](archive/sprint-2026-08-08-default-module-slots.md) ships direct default
+  classes/functions, expressions, namespace-free identifiers, and direct/type-only imports through
+  a slot separate from named exports. Every unsupported form is an explicit non-clean notice.
+  Packages, default bridges/re-exports, mixed and namespace imports, star/namespace re-exports,
+  namespace-bearing producers/targets, cycles, NodeNext, and other host profiles remain deferred.
 - **Pre-lib hardening shipped 2026-07-13** (archived:
   [`archive/sprint-2026-07-12-pre-lib-hardening.md`](archive/sprint-2026-07-12-pre-lib-hardening.md)) —
   aliased construction (`22`), evaluator cycles (`56`), callable-object `ReturnType` inference
@@ -139,11 +139,11 @@ decisions → reference → archive.
   the first bounded slice of [`15`](backlog/15-modules-imports.md). The subsequent
   [`re-screen sprint`](archive/sprint-2026-08-08-real-project-rescreen.md) terminated incomplete at
   WU0 after all six immutable candidates still failed the unchanged zero threshold. No witness
-  tooling or production broadening started; `placetext` has one currently visible default-export
-  route blocker, but checking remains preempted and a clean result after the next slice is not
-  established. The active
-  [`default-slot sprint`](sprints/sprint-2026-08-08-default-module-slots.md) owns the next coherent
-  `15` slice; package breadth remains later work.
+  tooling or production broadening started. The archived
+  [`default-slot sprint`](archive/sprint-2026-08-08-default-module-slots.md) removed `placetext`'s
+  historical default-export route blocker, but a fresh re-screen must establish the new first
+  blocker and target/library equivalence before any witness claim. Package breadth remains later
+  work under `15`.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic

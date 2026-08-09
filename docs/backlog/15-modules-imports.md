@@ -10,9 +10,10 @@ blocked-by: []
 coverage in one **serial** type universe. `oxc_resolver 11.24.2` is already the sole physical
 authority for the admitted files-only project profile. The archived
 [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) shipped acyclic
-local named source re-exports over the existing namespace-free value/type slots. Default
-declarations/expressions and default imports are the next independent slice; namespace/star forms,
-cycles, and package/declaration breadth follow later. Per
+local named source re-exports over the existing namespace-free value/type slots. The archived
+[`default-slot sprint`](../archive/sprint-2026-08-08-default-module-slots.md) then shipped direct
+default declarations/expressions and regular default imports through a structurally distinct slot.
+Default bridges, namespace/star forms, cycles, and package/declaration breadth remain. Per
 [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), this item does not reimplement
 filesystem/package/tsconfig resolution and does not require NodeNext parity. Parallel cross-file
 type identity (Stage 2) remains solely backlog [`16`](./16-parallelism-type-universe.md). The pinned
@@ -31,16 +32,16 @@ The six-candidate WU4 screen showed the practical gap before this slice: five pr
 on source re-exports or default exports, while the sixth used NodeNext-only explicit `.ts`
 specifiers. Acyclic named source re-export publication is now shipped, including aliases,
 outer/inline type-only forms, chains, and a class's existing value/type pair. Namespace-bearing
-targets remain unsupported. Default declaration/expression export plus default-import semantics are
-the next independent spec-first slice. Keep both source orders and exact missing/export-space
-diagnostics in every slice; do not pull package loading into them.
+targets remain unsupported. Direct default declaration/expression export plus regular default-import
+semantics are now shipped. Keep both source orders and exact missing/export-space diagnostics in
+every later slice; do not pull package loading into an unrelated semantic change.
 
 The follow-up immutable six-candidate re-screen at `659e30e` confirmed that no candidate yet meets
-backlog `72`'s unchanged zero threshold. `lokicik/placetext` now reaches one currently visible route
-notice, a default export at `src/index.ts:104:1`, before semantic checking starts. Its transparent
-overlay drops native target/library options; equivalence looks plausible but is not proved. This is
-evidence to keep default declarations/expressions and default imports as one general next slice,
-not evidence that `placetext` contains a default import or will pass after that slice. The other
+backlog `72`'s unchanged zero threshold. `lokicik/placetext` reached one route notice, a default
+export at `src/index.ts:104:1`, before semantic checking started. The direct default-slot slice has
+removed that specific blocker, but its transparent overlay still drops native target/library
+options and equivalence is not proved. A fresh re-screen must establish the new first blocker; the
+shipped slice is not evidence that `placetext` now qualifies. The other
 candidates still stop on cycles or specifier policy, explicit `.ts` specifiers, or checker model and
 diagnostic gaps. The exact exits and blockers are retained in the
 [`re-screen archive`](../archive/sprint-2026-08-08-real-project-rescreen.md).
@@ -82,9 +83,12 @@ Extend the serial `check_project` path with a single explicit dependency boundar
   order, and the rule that the re-export does not create a local barrel binding.
   Namespace-bearing targets remain explicit unsupported input. The public summary classifies an
   admitted re-export as resolved only after both frontend and checker semantics run.
-- **Next breadth — default exports/imports:** add declaration and expression default exports plus
-  default imports without conflating the default slot with named exports. Namespace/star forms stay
-  deferred until their own spec-first slice.
+- **Shipped breadth — direct default slot:** the archived
+  [`default-slot sprint`](../archive/sprint-2026-08-08-default-module-slots.md) publishes direct
+  default classes/functions, expressions, and namespace-free identifiers through a separate slot.
+  Direct and type-only default imports read only that slot; missing defaults report `TK1192`.
+  Named/default bridges, mixed imports, namespace-bearing producers, and duplicate parity remain
+  explicit non-clean input.
 - **Physical resolution (external authority):** use the pinned crate's tsconfig and `resolve_dts`
   facilities for extension substitution, `node_modules`/`@types`, package conditions and declaration
   metadata, `paths`/`baseUrl`, inheritance, and references. Do not add fallback filesystem probes or
@@ -135,8 +139,8 @@ lands with `16`.
 
 ## Touch points
 
-Default-slot binding; later namespace/star source publication, `oxc_resolver` option mapping,
-broader project/config root enumeration, deterministic module graph, package/declaration loading,
+Namespace/star and default-bridge source publication, `oxc_resolver` option mapping, broader
+project/config root enumeration, deterministic module graph, package/declaration loading,
 `.d.ts` checking, the serial `check_project` path, and project accounting. Cross-file identity and
 `driver::check_files` are backlog `16`.
 

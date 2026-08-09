@@ -312,7 +312,8 @@ direct function, default expression, local export-list default, and source expor
 all 15 unordered pairs plus the 10 reverse lexical orders. Exact `TS2528` and related duplicate
 diagnostic parity is not required. Star/namespace forms, cycles, packages, and CommonJS keep their
 existing exact identities in the B72 contract; this corpus references those controls instead of
-copying them. The dedicated integration test remains ignored until the atomic production cutover.
+copying them. The `post_wu6_*` production acceptance tests are enabled. Only the pinned-local-tsc
+oracle and the obsolete pre-WU6 RED witness remain intentionally ignored.
 
 ## Fixture routing
 

@@ -1,3 +1,30 @@
+> **OUTCOME — shipped 2026-08-09.** The production Bundler route now publishes direct default
+> classes, functions, expressions, and namespace-free identifier defaults through a structurally
+> distinct slot. Regular direct and type-only default imports read only that slot; missing defaults
+> report `TK1192`, and named/default fallback is forbidden. Every deferred bridge, mixed form,
+> namespace-bearing producer, duplicate, missing target, and result channel remains deterministic
+> and non-clean. Explicit-file and legacy routes retain their pre-cutover behavior.
+>
+> Commit map: plan → `e332b73`; initial oracle → `006fec1`; frontend WU2/WU3 → `04caefa`; oracle
+> hardening → `07ccd98`, `8f9ee93`, `df02287`, `aabff02`, `64cdad2`, `d337b52`, `c138036`,
+> `fe2ed2c`; checker WU4/WU5 → `228482b`; contract corrections → `0f550db`, `f8dfd70`; overload
+> diagnostic span → `bc720c4`; public WU6/WU7 cutover → `4ec07f1`.
+>
+> Verification: pinned `tsc 6.0.3` passed all 38 projects in both root orders (76 runs: 23 admitted,
+> 15 deterministic deferred controls). Full workspace `cargo test`, 1,539 listed library tests,
+> conformance over 585 enabled source files, formatting, and all-target clippy with warnings denied
+> passed. The official harness passed 91/91; its 874-case identity ratchet reported zero regressions,
+> zero progress, and no missing cases. Replay access passed 6/6 and the complete B102/B103 matrix
+> passed in both orders. Three independent cluster reviews ended PASS; WU5 and WU7 reported no
+> HIGH/MEDIUM/LOW findings, and every required WU7 falsifier fired. The mandatory differential gate
+> for `bc720c4` passed committed repros and seeds 1/2/3 × 400 with only the intended `TK2769` span
+> changes; the known-broken `412f321` negative control fired on three scoreboard regressions.
+>
+> Backlogs `15` and `72` remain open. Deferred scope includes default bridges/re-exports, mixed and
+> namespace imports, namespace-bearing producers, duplicate diagnostic parity, cycles,
+> package/config/`.d.ts` breadth, the public-project witness, parallel identity, and incrementality.
+> No performance claim is made by this sprint.
+
 # Sprint — default module slots (2026-08-08)
 
 **Goal.** Admit local acyclic default declaration exports, default expression exports, and default
@@ -338,6 +365,21 @@ Keep one active RED/root-cause cluster. Do not start another semantic front whil
 ## Run log
 
 <!-- Append discoveries and deviations here. Graduate durable work to backlog/decision/reference. -->
+
+- The admitted overload fixture exposed invocation-wide `TK2769` spans. `bc720c4` now selects a
+  common direct argument mismatch only when every candidate proves the same argument owner;
+  arity, constraint, receiver, ambiguous, and conflicting cases retain invocation fallback. The
+  required randomized differential gate and known-broken falsifier passed.
+- Three oracle expectations were specification errors rather than checker regressions: anonymous
+  abstract diagnostics and `TK2383` require terminal punctuation, while the default implementation
+  union surface follows typokat's established union-source headline and canonical member-order
+  policy. Corrections landed separately in `0f550db` and `f8dfd70`.
+- WU6 moved only default-owned lifecycle rows in the older B15/B72 contracts. Historical pre-change
+  evidence remains; supported rows now assert exact clean output, while deferred producer/mixed
+  rows retain exit 3 with more precise producer and consumer ownership.
+- Agent-docs lint retained its exact pre-existing baseline of 21 hard findings: 20 immutable
+  historical links to deleted backlog files plus the ignored local `docs/AGENTS.md` symlink. This
+  closure added no finding and does not claim that baseline is clean.
 
 ## Post-closure action — backlog `72` placetext re-screen
 

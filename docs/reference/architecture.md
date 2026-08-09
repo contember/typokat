@@ -539,21 +539,26 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   exactly while there is no cross-file resolution. Maximal parallelism and zero sharing make it
   the architectural floor, while public production routes add the Stage-1 library lifecycle.
 - **Stage 0.5 — correctness-first serial project checker (M29).** Local relative `.ts` modules,
-  named imports/exports, and simple local export lists are checked in a single serial `Interner`,
+  named imports/exports, simple local export lists, and regular direct default imports/exports are
+  checked in a single serial `Interner`,
   so cross-file `TypeId` identity is ordinary run-local identity. This proves module semantics
   before the parallel type-universe problem is solved. It is implemented as
   `driver::check_project` for `typokat check <files...>`. The public
   `typokat check --project-summary json <directory|tsconfig.json>` route adds a bounded Bundler
   shell around the same semantic path: its exact config is files-only strict/noEmit/ESNext/Bundler;
-  roots are configured local `.ts` files; named imports admit extensionless and `.js`→`.ts`
-  specifiers; and `oxc_resolver 11.24.2` is the sole physical lookup authority. Acyclic local named
+  roots are configured local `.ts` files; named and direct default imports admit extensionless and
+  `.js`→`.ts` specifiers; and `oxc_resolver 11.24.2` is the sole physical lookup authority. Module
+  surfaces keep `default: Option<ExportedSlots>` structurally separate from the named export map.
+  Direct default classes/functions, expressions, and namespace-free identifier defaults publish
+  into that slot; direct and type-only default imports read only that slot, with exact `TK1192`
+  when a resolved module has no default. There is no named/default fallback. Acyclic local named
   source re-exports use frontend-certified dependency/provenance evidence and directly project
   namespace-free target value/type slots without a barrel-local binding. Typokat inventories every
   module declaration before filtering and returns a deterministic summary of roots, checked/skipped
   files, resolutions, project notices, parse errors, incompletes, and diagnostics. Unsupported
-  configs, specifiers, and forms are explicit non-clean outcomes. General packages,
-  default/namespace imports, star/namespace re-exports, namespace-bearing source targets, and
-  cycles are not admitted
+  configs, specifiers, and forms are explicit non-clean outcomes. General packages, namespace
+  imports, default bridges/re-exports, mixed forms, star/namespace re-exports,
+  namespace-bearing producers/targets, and cycles are not admitted
   ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
 - **Stage 1 — shared *read-only* default-library base (shipped).**
   `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
@@ -687,9 +692,10 @@ measured.
    profiling-gated refactor**, not part of this phase (ADR-0001).
 5. **Phase 4 — Real-project scale.** Full `lib.d.ts`, parallelism Stage 1, and the bounded
    files-only Bundler project route are shipped, including acyclic local named source re-exports
-   over existing namespace-free value/type slots. The remaining modules/imports rollout next adds
-   default exports/imports, then package/`.d.ts`/config breadth while retaining `oxc_resolver` as
-   the physical lookup authority and module semantics locally. The cross-file
+   over existing namespace-free value/type slots and the structurally distinct direct default-slot
+   slice. The remaining rollout adds default bridges, namespace/star forms, cycles, and then
+   package/`.d.ts`/config breadth while retaining `oxc_resolver` as the physical lookup authority
+   and module semantics locally. The cross-file
    type-identity strategy (stable structural hash or a shared growing interner) then enables
    parallel Stage 2. NodeNext and alternate host profiles are outside the required 1.0 ladder
    (ADR-0007).
