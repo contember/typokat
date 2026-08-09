@@ -47,8 +47,9 @@ Baseline is `943d810`. `✔` = confirmed live · `⚠` = drift or boundary caugh
   and `var`: shorthand, rename, and assignment defaults over static identifier/string/number keys.
   Pin block shadowing, `var` function ownership, declaration order, optional-without-default,
   default-removes-undefined, invalid defaults, exactly-once default-expression checking, nested
-  default diagnostics, subsequent assignment errors, and missing-property accounting. Add controls
-  for ordinary identifiers and the existing access/collision paths.
+  default diagnostics, explicit pattern-annotation precedence over a narrower initializer,
+  subsequent assignment errors, and missing-property accounting. Add controls for ordinary
+  identifiers and the existing access/collision paths.
 - **Acceptance / witness.** The spec records exact `tsc 6.0.3` diagnostics. A forced isolated run
   proves the corpus RED for currently missing leaf values, then the committed milestone entry stays
   disabled so HEAD remains green. It must not use an error type as silent recovery or weaken an
@@ -68,11 +69,13 @@ Baseline is `943d810`. `✔` = confirmed live · `⚠` = drift or boundary caugh
 - **Scope.** Bind each admitted leaf into the correct lexical or `var` scope, assign a distinct
   storage identity, derive its type from a ready static property on a modeled object source and its
   optional default, publish it through the normal declaration path, and invalidate only that
-  symbol's stale flow reads. Preserve source order, access checks, collision preflight, private
-  replay, and ordinary-variable behavior. Enable WU0's corpus only in this implementation commit.
-  Array, nested, rest, computed, parameter, catch, dynamic-key, and non-ready source shapes remain
-  outside this slice and must stay explicitly non-clean; none may become a bound error-typed leaf
-  that silently accepts later uses.
+  symbol's stale flow reads. An explicit aggregate pattern annotation is the source type and wins
+  over a narrower initializer before property/default projection. Preserve source order, access
+  checks, collision preflight, private replay, and ordinary-variable behavior. Enable WU0's corpus
+  only in this implementation commit. Array, nested, rest, computed, parameter, catch, `for-in` /
+  `for-of` loop-head, dynamic-key, and non-ready source shapes remain outside this slice and must
+  stay explicitly non-clean; none may become a bound error-typed leaf that silently accepts later
+  uses.
 - **Acceptance / witness.** WU0 becomes green. Each leaf has a distinct symbol/storage/type; rename
   reads the source key and publishes the local name; optional properties retain `undefined` unless
   a valid default removes it; invalid defaults and nested default-expression errors match the
@@ -121,8 +124,8 @@ Baseline is `943d810`. `✔` = confirmed live · `⚠` = drift or boundary caugh
 
 ## Out of scope (explicit)
 
-- Array, nested, rest, or computed binding patterns; parameter and catch bindings; assignment
-  targets; and the rest of backlog `48`'s implicit-any diagnostics.
+- Array, nested, rest, or computed binding patterns; parameter, catch, and `for-in` / `for-of`
+  loop-head bindings; assignment targets; and the rest of backlog `48`'s implicit-any diagnostics.
 - Enum semantics (`42`), predicate signatures and call-flow narrowing (`50`), exact computed object
   keys (`75`), and template interpolation (`71`). These remain separate general features even
   though `placetext` uses them.
