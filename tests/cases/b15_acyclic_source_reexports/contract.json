@@ -820,7 +820,7 @@
         "runs": [
           {
             "order": "normal",
-            "exit": 0,
+            "exit": 3,
             "summary": {
               "schema": 1,
               "profile": "bundler",
@@ -845,13 +845,18 @@
               ],
               "project_notices": [],
               "parse_errors": [],
-              "incomplete": [],
-              "diagnostics": []
+              "incomplete": [
+                "source.ts:1:8 decl/enum-declaration/self"
+              ],
+              "diagnostics": [
+                "barrel.ts:1:10 TK2305",
+                "consumer.ts:2:15 TK2304"
+              ]
             }
           },
           {
             "order": "reverse",
-            "exit": 0,
+            "exit": 3,
             "summary": {
               "schema": 1,
               "profile": "bundler",
@@ -876,8 +881,13 @@
               ],
               "project_notices": [],
               "parse_errors": [],
-              "incomplete": [],
-              "diagnostics": []
+              "incomplete": [
+                "source.ts:1:8 decl/enum-declaration/self"
+              ],
+              "diagnostics": [
+                "barrel.ts:1:10 TK2305",
+                "consumer.ts:2:15 TK2304"
+              ]
             }
           }
         ],

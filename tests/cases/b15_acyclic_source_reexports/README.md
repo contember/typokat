@@ -20,5 +20,7 @@ cycle accounting. The admitted contract compares the complete intended summary f
 orders, including exact checked/skipped files, target-bearing resolution rows, grouped missing
 owners, diagnostics, and all empty channels.
 
-The admitted enum row pins the existing named source re-export route: default-slot candidate
-classification must not turn an enum into namespace-bearing public input.
+The admitted enum row pins the clean `df02287` public route. TypeScript 6.0.3 is clean, while
+typokat still checks every root and reports its existing enum-model gap (`TK2305`, `TK2304`, and
+`enum-declaration/self`). Default-slot candidate classification must not replace that result with a
+namespace-provenance notice; enum modeling is outside the default-slot sprint.
