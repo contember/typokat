@@ -297,8 +297,8 @@ and anonymous default classes and functions, literal/object/arrow expressions, n
 identifier projection including a type-only interface slot, direct and type-only default imports,
 lexical visibility, distinct
 default/named slots, and named default functions that close adjacent overload groups without
-replacing their implementation-signature default surfaces, missing modules/defaults, and both
-wrong-space barriers. The expression-owned
+replacing their implementation-signature default surfaces while named imports retain the overload
+surface, missing modules/defaults, and both wrong-space barriers. The expression-owned
 error row proves that a default expression is checked exactly once.
 
 Deferred rows stay explicit non-clean outcomes: default interfaces; namespace-bearing producers,
