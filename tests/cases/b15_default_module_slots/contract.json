@@ -377,7 +377,7 @@
             "source.ts:4:1 TK2515"
           ]
         },
-        "stderr": "source.ts(4,1): error TK2515: Non-abstract class 'default' does not implement inherited abstract member go from class 'Base'\n"
+        "stderr": "source.ts(4,1): error TK2515: Non-abstract class 'default' does not implement inherited abstract member go from class 'Base'.\n"
       }
     },
     {
@@ -448,7 +448,7 @@
             "source.ts:5:1 TK2654"
           ]
         },
-        "stderr": "source.ts(5,1): error TK2654: Non-abstract class 'default' is missing implementations for the following members of 'Base': 'go', 'value'\n"
+        "stderr": "source.ts(5,1): error TK2654: Non-abstract class 'default' is missing implementations for the following members of 'Base': 'go', 'value'.\n"
       }
     },
     {
