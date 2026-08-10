@@ -423,6 +423,13 @@ flow-node CFG (M23), the single narrowing model.
   `typeGuardsOnClassProperty.ts` reports `TK2339` on members of a discriminated property that strict
   TypeScript accepts. Backlog `51` owns access-path keys and invalidation.
   <!-- div: id=narrowing/member-path-flow dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
+- **Dependent destructured bindings do not narrow as a correlated group (over-report).** Flat
+  object binding publication gives each leaf its truthful projected type, but a guard on one leaf
+  does not filter the source union and re-project its siblings. TypeScript preserves that
+  correlation, so `kind === "x"` can narrow a sibling `payload`; typokat keeps the sibling's full
+  union and reports safe surplus member/call errors. A fix needs group-aware flow state plus
+  invalidation when any participating leaf is assigned.
+  <!-- div: id=narrowing/dependent-destructured-bindings dir=over scope=a-narrowing-tail owner=../backlog/51-narrowing-tail.md witness=../../tooling/official-suite/scoreboard.txt -->
 - **Complex assignment RHS values reset flow to the declared type (over-report).** This is the
   deliberate sound boundary in the narrowing invariant: `controlFlowIterationErrors.ts` retains
   three surplus `TK2345` records where TypeScript narrows the assignment to a computed return type.

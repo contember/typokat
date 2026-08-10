@@ -1,7 +1,7 @@
 # typokat × official TS conformance — regression scoreboard
 # TS @ 050880ce59e30b356b686bd3144efe24f875ebc8
-# corpus 874  in-scope 359  out-of-scope 515
-# clean-kept 88/108  error-exact 60/251  diag-recall 697/2207
+# corpus 874  in-scope 354  out-of-scope 520
+# clean-kept 86/106  error-exact 59/248  diag-recall 697/2207
 # cols: status<TAB>matched fn fp expected<TAB>ids<TAB>rel  (status=IN | OOS:<bucket>; nums/ids '-' = n/a; ids=<matched>|<fp> as sorted line:code identities; OOS:unsupported carries nums + <matched>|<fp>|<incomplete> — an exit-3 demotion keeps its diagnostic diff plus its surface identities)
 IN	8 0 1 8	15:2341,16:2341,17:2341,18:2341,20:2341,21:2341,22:2341,23:2341|21:2349	conformance/classes/members/accessibility/classPropertyAsPrivate.ts
 IN	8 0 1 8	15:2445,16:2445,17:2445,18:2445,20:2445,21:2445,22:2445,23:2445|21:2349	conformance/classes/members/accessibility/classPropertyAsProtected.ts
@@ -9,7 +9,7 @@ IN	0 0 1 0	|20:2349	conformance/classes/members/accessibility/classPropertyIsPub
 IN	0 0 0 0	|	conformance/classes/members/accessibility/privateClassPropertyAccessibleWithinClass.ts
 IN	0 5 1 5	|25:2339	conformance/classes/members/accessibility/privateClassPropertyAccessibleWithinNestedClass.ts
 OOS:option-variant	- - - -	-	conformance/classes/members/accessibility/privateInstanceMemberAccessibility.ts
-OOS:unsupported	0 10 0 10	||class/class-heritage/poisoned-base,class/property-definition/implicit-any,class/property-definition/implicit-any	conformance/classes/members/accessibility/privateProtectedMembersAreNotAccessibleDestructuring.ts
+OOS:unsupported	0 10 0 10	||bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,class/class-heritage/poisoned-base,class/property-definition/implicit-any,class/property-definition/implicit-any	conformance/classes/members/accessibility/privateProtectedMembersAreNotAccessibleDestructuring.ts
 OOS:unsupported	2 0 0 2	6:2341,7:2341||class/property-definition/initializer-inference,class/property-definition/initializer-inference	conformance/classes/members/accessibility/privateStaticMemberAccessibility.ts
 OOS:syntax:module	- - - -	-	conformance/classes/members/accessibility/privateStaticNotAccessibleInClodule.ts
 OOS:syntax:module	- - - -	-	conformance/classes/members/accessibility/privateStaticNotAccessibleInClodule2.ts
@@ -92,7 +92,7 @@ OOS:unsupported	0 2 0 2	||class/property-definition/implicit-any	conformance/cla
 OOS:unsupported	0 1 0 1	||class/property-definition/implicit-any	conformance/classes/members/privateNames/privateNameBadSuperUseDefineForClassFields.ts
 OOS:unsupported	0 4 0 4	||class/property-definition/computed-key,class/property-definition/initializer-inference,class/property-definition/initializer-inference,expr-infer/private-field-access/self,expr-infer/private-field-access/self	conformance/classes/members/privateNames/privateNameCircularReference.ts
 OOS:unsupported	0 0 0 0	||expr-infer/class-expression/self	conformance/classes/members/privateNames/privateNameClassExpressionLoop.ts
-OOS:unsupported	0 0 5 0	|24:2304,24:2304,24:2304,24:2304,24:2304|expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self	conformance/classes/members/privateNames/privateNameComputedPropertyName1.ts
+OOS:unsupported	0 0 5 0	|24:2304,24:2304,24:2304,24:2304,24:2304|bind/binding-pattern/object-pattern,expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self	conformance/classes/members/privateNames/privateNameComputedPropertyName1.ts
 OOS:unsupported	0 1 0 1	||class/method-definition/computed-key,expr-infer/private-field-access/self	conformance/classes/members/privateNames/privateNameComputedPropertyName2.ts
 OOS:unsupported	0 0 0 0	||class/method-definition/computed-key,class/property-definition/implicit-any,expr-infer/private-field-access/self,expr-infer/private-field-access/self,expr-infer/private-field-access/self	conformance/classes/members/privateNames/privateNameComputedPropertyName3.ts
 OOS:unsupported	0 0 0 0	||class/method-definition/computed-key,class/method-definition/computed-key,class/property-definition/computed-key,class/property-definition/initializer-inference,class/property-definition/initializer-inference,class/property-definition/initializer-inference	conformance/classes/members/privateNames/privateNameComputedPropertyName4.ts
@@ -301,11 +301,11 @@ IN	0 0 0 0	|	conformance/controlFlow/controlFlowCommaOperator.ts
 IN	0 0 4 0	|3:2339,9:2339,13:2339,17:2339	conformance/controlFlow/controlFlowComputedPropertyNames.ts
 IN	0 1 0 1	|	conformance/controlFlow/controlFlowConditionalExpression.ts
 IN	0 3 0 3	|	conformance/controlFlow/controlFlowDeleteOperator.ts
-OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowDestructuringDeclaration.ts
+OOS:unsupported	0 0 7 0	|10:2304,12:2304,14:2304,19:2304,21:2304,23:2304,55:2339|bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern	conformance/controlFlow/controlFlowDestructuringDeclaration.ts
 IN	1 0 1 1	23:2322|34:2339	conformance/controlFlow/controlFlowDoWhileStatement.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowElementAccess.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowElementAccess2.ts
-OOS:unresolved	- - - -	-	conformance/controlFlow/controlFlowElementAccessNoCrash1.ts
+OOS:unsupported	0 0 0 0	||bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern	conformance/controlFlow/controlFlowElementAccessNoCrash1.ts
 IN	0 2 0 2	|	conformance/controlFlow/controlFlowForInStatement.ts
 OOS:unsupported	0 0 0 0	||signature/property-signature/computed-key,signature/property-signature/computed-key	conformance/controlFlow/controlFlowForInStatement2.ts
 OOS:unsupported	0 0 1 0	|7:2339|stmt-check/assignment-target/self	conformance/controlFlow/controlFlowForOfStatement.ts
@@ -318,12 +318,12 @@ OOS:syntax:instanceof	- - - -	-	conformance/controlFlow/controlFlowInstanceOfGua
 OOS:syntax:module	- - - -	-	conformance/controlFlow/controlFlowInstanceofExtendsFunction.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowIteration.ts
 IN	4 0 3 4	11:2345,22:2345,34:2769,45:2769|67:2345,76:2345,87:2345	conformance/controlFlow/controlFlowIterationErrors.ts
-OOS:unsupported	4 0 5 4	11:2345,22:2345,34:2769,45:2769|67:2345,76:2345,87:2345,131:2304,131:2304|expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self	conformance/controlFlow/controlFlowIterationErrorsAsync.ts
+OOS:unsupported	4 0 3 4	11:2345,22:2345,34:2769,45:2769|67:2345,76:2345,87:2345|expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self,expr-infer/await-expression/self	conformance/controlFlow/controlFlowIterationErrorsAsync.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowNoIntermediateErrors.ts
 IN	0 1 0 1	|	conformance/controlFlow/controlFlowNullishCoalesce.ts
 OOS:syntax:type-predicate	- - - -	-	conformance/controlFlow/controlFlowOptionalChain.ts
 OOS:unsupported	0 0 0 0	||expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self,expr-infer/optional-chain/self	conformance/controlFlow/controlFlowOptionalChain2.ts
-IN	0 0 0 0	|	conformance/controlFlow/controlFlowParameter.ts
+OOS:unsupported	0 0 0 0	||bind/binding-pattern/object-pattern	conformance/controlFlow/controlFlowParameter.ts
 IN	0 0 1 0	|7:2339	conformance/controlFlow/controlFlowStringIndex.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowSuperPropertyAccess.ts
 IN	0 0 0 0	|	conformance/controlFlow/controlFlowTruthiness.ts
@@ -332,7 +332,7 @@ IN	1 1 2 2	23:2322|93:2345,103:2345	conformance/controlFlow/controlFlowWhileStat
 OOS:unsupported	0 0 2 0	|3:2339,8:2339|expr-infer/template-literal/self,expr-infer/template-literal/self	conformance/controlFlow/controlFlowWithTemplateLiterals.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/definiteAssignmentAssertions.ts
 OOS:parse-error	- - - -	-	conformance/controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts
-OOS:unsupported	0 3 100 3	|6:2304,7:2304,9:2304,10:2304,16:2304,17:2304,19:2304,20:2304,25:2304,27:2304,30:2304,33:2304,39:2304,40:2304,42:2304,43:2304,49:2304,50:2304,52:2304,53:2304,62:2304,63:2304,64:2304,66:2304,67:2304,74:2304,75:2304,76:2304,78:2304,79:2304,87:2304,88:2304,90:2304,91:2304,97:2304,98:2304,100:2304,103:2304,106:2304,117:2304,118:2304,120:2304,121:2304,123:2304,124:2304,126:2304,127:2304,130:2304,137:2304,138:2304,140:2304,141:2304,159:2304,160:2304,163:2304,174:2304,176:2304,178:2304,186:2304,187:2304,194:2345,196:2339,199:2339,203:2322,212:2322,223:2345,234:2322,257:2322,274:2322,291:2322,308:2322,322:2322,350:2304,352:2304,357:2304,364:2304,366:2304,371:2304,376:2322,407:2304,408:2304,410:2304,411:2304,413:2304,414:2304,416:2304,417:2304,419:2304,420:2304,422:2304,423:2304,430:2304,431:2304,439:2304,441:2304,442:2304,448:2304,450:2304,451:2304,457:2322|expr-infer/template-literal/interpolation,expr-infer/template-literal/interpolation	conformance/controlFlow/dependentDestructuredVariables.ts
+OOS:unsupported	0 3 49 3	|17:2339,20:2339,50:2339,53:2339,76:2339,79:2339,88:2339,91:2339,137:2304,138:2304,140:2304,141:2304,160:2345,163:2345,194:2345,196:2339,199:2339,203:2322,212:2322,223:2345,234:2322,257:2322,274:2322,291:2322,308:2322,322:2322,350:2304,376:2322,407:2304,408:2304,410:2304,411:2304,413:2304,414:2304,416:2304,417:2304,419:2304,420:2304,422:2304,423:2304,430:2304,431:2304,439:2304,441:2304,442:2304,448:2304,450:2304,451:2304,457:2322|bind/binding-pattern/array-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,bind/binding-pattern/object-pattern,expr-infer/template-literal/interpolation,expr-infer/template-literal/interpolation	conformance/controlFlow/dependentDestructuredVariables.ts
 OOS:syntax:as-const	- - - -	-	conformance/controlFlow/dependentDestructuredVariablesFromNestedPatterns.ts
 OOS:syntax:module	- - - -	-	conformance/controlFlow/dependentDestructuredVariablesWithExport.ts
 OOS:syntax:enum	- - - -	-	conformance/controlFlow/exhaustiveSwitchStatements1.ts
@@ -635,7 +635,7 @@ OOS:syntax:module	- - - -	-	conformance/types/primitives/void/invalidVoidAssignm
 OOS:syntax:module	- - - -	-	conformance/types/primitives/void/invalidVoidValues.ts
 IN	0 0 0 0	|	conformance/types/primitives/void/validVoidAssignments.ts
 IN	1 0 0 1	3:2322|	conformance/types/primitives/void/validVoidValues.ts
-IN	13 4 4 17	18:2322,20:2322,21:2322,23:2322,24:2322,25:2322,26:2322,27:2322,28:2322,29:2322,30:2322,31:2322,32:2322|19:2322,22:2322,34:2322,35:2322	conformance/types/tuple/arityAndOrderCompatibility01.ts
+OOS:unsupported	13 4 4 17	18:2322,20:2322,21:2322,23:2322,24:2322,25:2322,26:2322,27:2322,28:2322,29:2322,30:2322,31:2322,32:2322|19:2322,22:2322,34:2322,35:2322|bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern	conformance/types/tuple/arityAndOrderCompatibility01.ts
 OOS:syntax:enum	- - - -	-	conformance/types/tuple/castingTuple.ts
 OOS:syntax:module	- - - -	-	conformance/types/tuple/contextualTypeTupleEnd.ts
 OOS:unsupported	7 1 3 8	3:2322,15:2322,19:2322,20:2322,23:2322,24:2322,25:2322|18:2322,30:2322,35:2322|interface/heritage/topology	conformance/types/tuple/contextualTypeWithTuple.ts
@@ -652,13 +652,13 @@ OOS:parse-error	- - - -	-	conformance/types/tuple/readonlyArraysAndTuples.ts
 OOS:syntax:decorator	- - - -	-	conformance/types/tuple/readonlyArraysAndTuples2.ts
 OOS:parse-error	- - - -	-	conformance/types/tuple/restTupleElements1.ts
 IN	1 2 0 3	18:2322|	conformance/types/tuple/strictTupleLength.ts
-IN	1 0 0 1	1:2322|	conformance/types/tuple/tupleElementTypes1.ts
+OOS:unsupported	1 0 0 1	1:2322||bind/binding-pattern/array-pattern	conformance/types/tuple/tupleElementTypes1.ts
 IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes2.ts
-IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes3.ts
+OOS:unsupported	0 0 0 0	||bind/binding-pattern/array-pattern	conformance/types/tuple/tupleElementTypes3.ts
 IN	0 0 0 0	|	conformance/types/tuple/tupleElementTypes4.ts
 IN	0 2 0 2	|	conformance/types/tuple/tupleLengthCheck.ts
 OOS:unsupported	1 5 2 6	11:2322|31:2322,32:2322|expr-infer/as-assertion/compatibility,expr-infer/as-assertion/compatibility	conformance/types/tuple/typeInferenceWithTupleType.ts
-OOS:unsupported	0 8 0 8	||expr-infer/as-assertion/compatibility	conformance/types/tuple/unionsOfTupleTypes1.ts
+OOS:unsupported	0 8 0 8	||bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,bind/binding-pattern/array-pattern,expr-infer/as-assertion/compatibility	conformance/types/tuple/unionsOfTupleTypes1.ts
 OOS:syntax:as-const	- - - -	-	conformance/types/tuple/variadicTuples1.ts
 OOS:parse-error	- - - -	-	conformance/types/tuple/variadicTuples2.ts
 IN	0 3 0 3	|	conformance/types/tuple/variadicTuples3.ts
@@ -666,8 +666,8 @@ IN	0 0 1 0	|4:2322	conformance/types/tuple/wideningTuples1.ts
 OOS:unresolved	- - - -	-	conformance/types/tuple/wideningTuples2.ts
 IN	1 1 0 2	3:2322|	conformance/types/tuple/wideningTuples3.ts
 IN	1 0 1 1	3:2322|4:2322	conformance/types/tuple/wideningTuples4.ts
-IN	0 2 0 2	|	conformance/types/tuple/wideningTuples5.ts
-OOS:unresolved	- - - -	-	conformance/types/tuple/wideningTuples6.ts
+OOS:unsupported	0 2 0 2	||bind/binding-pattern/array-pattern	conformance/types/tuple/wideningTuples5.ts
+OOS:unsupported	0 0 2 0	|2:2304,3:2304|bind/binding-pattern/array-pattern	conformance/types/tuple/wideningTuples6.ts
 IN	0 1 1 1	|3:2322	conformance/types/tuple/wideningTuples7.ts
 OOS:syntax:module	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/anyAssignabilityInInheritance.ts
 OOS:syntax:enum	- - - -	-	conformance/types/typeRelationships/assignmentCompatibility/anyAssignableToEveryType.ts
