@@ -1543,7 +1543,12 @@ mod tests {
         let source = "const [value]: [string] = [1];";
         let output = check_source(source);
         assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
-        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        let [incomplete] = output.incomplete.as_slice() else {
+            panic!("expected one array-binding incomplete record");
+        };
+        assert_eq!(incomplete.id, "bind/binding-pattern/array-pattern");
+        assert_eq!(incomplete.span, Span::new(6, 13));
+        assert_eq!(incomplete.context, "array binding pattern not typed");
         let [diagnostic] = output.diagnostics.as_slice() else {
             panic!("expected one array-binding initializer diagnostic");
         };
