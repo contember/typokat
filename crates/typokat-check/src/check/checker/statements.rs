@@ -37,6 +37,14 @@ enum StatementListMode<'a> {
     SourceGlobalContributors(&'a FxHashSet<String>),
 }
 
+#[derive(Copy, Clone)]
+enum ObjectBindingPropertyProjection {
+    Ready(TypeId),
+    Missing,
+    Blocked,
+    MissingAndBlocked,
+}
+
 impl<'a> StatementListMode<'a> {
     fn ambient(self) -> bool {
         matches!(self, Self::Ambient)
@@ -1742,6 +1750,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         object: &ObjectPattern<'_>,
         source: TypeId,
     ) {
+        let mut blocked = false;
         for (property_index, property) in object.properties.iter().enumerate() {
             let Some(binding) = direct_object_binding_target(&property.value) else {
                 continue;
@@ -1776,7 +1785,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 property,
                 &object.properties[property_index.saturating_add(1)..],
             );
-            let published = if self.replay_trace.is_some() {
+            let projection = if self.replay_trace.is_some() {
                 self.with_replay_owner(ReplayOwner::Value(publication_storage), |pass| {
                     pass.publish_flat_object_binding_property(
                         scope,
@@ -1797,9 +1806,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     default_references_later,
                 )
             };
-            if published {
-                self.close_authenticated_object_binding_publication(storage, publication_storage);
+            match projection {
+                Some(ObjectBindingPropertyProjection::Ready(_)) => {
+                    self.close_authenticated_object_binding_publication(
+                        storage,
+                        publication_storage,
+                    );
+                }
+                Some(ObjectBindingPropertyProjection::Missing) => {}
+                Some(
+                    ObjectBindingPropertyProjection::Blocked
+                    | ObjectBindingPropertyProjection::MissingAndBlocked,
+                ) => blocked = true,
+                // Demand exhaustion records its own incomplete surface.
+                None => {}
             }
+        }
+        if blocked {
+            self.record_incomplete(
+                "bind/binding-pattern/object-pattern",
+                Span::from_oxc(object.span),
+                "object binding pattern source type unavailable",
+            );
         }
     }
 
@@ -1811,9 +1839,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         storage: ValueStorageId,
         source: TypeId,
         default_references_later: bool,
-    ) -> bool {
+    ) -> Option<ObjectBindingPropertyProjection> {
         let Some(name) = property.key.static_name().map(|name| name.into_owned()) else {
-            return false;
+            return Some(ObjectBindingPropertyProjection::Missing);
         };
         let source = match self.demand_composite_apparent_type(source) {
             DemandOutcome::Ready(source) => source,
@@ -1822,18 +1850,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     DemandOutcome::Exhausted(exhaustion),
                     Span::from_oxc(property.key.span()),
                 );
-                return false;
+                return None;
             }
         };
-        let property_type = self
-            .interner
-            .store()
-            .object_type(source)
-            .and_then(|object| object.property(&name))
-            .map(|property| property.ty);
+        let property_type = self.project_object_binding_property(source, &name);
         if default_references_later {
             let BindingPattern::AssignmentPattern(assignment) = &property.value else {
-                return false;
+                return Some(ObjectBindingPropertyProjection::Missing);
             };
             self.record_incomplete(
                 "bind/binding-pattern/object-default-order",
@@ -1841,22 +1864,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 "object binding default references a later leaf",
             );
         }
-        let Some(mut leaf_type) = property_type else {
-            let target = render_type(self.interner.store(), source, false);
-            self.emit_diagnostic(Diagnostic::property_does_not_exist(
-                Span::from_oxc(property.key.span()),
-                &name,
-                &target,
-            ));
-            if let BindingPattern::AssignmentPattern(assignment) = &property.value {
-                self.check_annotated_initializer(
-                    scope,
-                    None,
-                    &assignment.right,
-                    Span::from_oxc(assignment.right.span()),
-                );
+        let mut leaf_type = match property_type {
+            ObjectBindingPropertyProjection::Ready(leaf_type) => leaf_type,
+            projection @ (ObjectBindingPropertyProjection::Missing
+            | ObjectBindingPropertyProjection::MissingAndBlocked) => {
+                let target = render_type(self.interner.store(), source, false);
+                self.emit_diagnostic(Diagnostic::property_does_not_exist(
+                    Span::from_oxc(property.key.span()),
+                    &name,
+                    &target,
+                ));
+                self.check_object_binding_default(scope, property, None);
+                return Some(projection);
             }
-            return false;
+            ObjectBindingPropertyProjection::Blocked => {
+                self.check_object_binding_default(scope, property, None);
+                return Some(ObjectBindingPropertyProjection::Blocked);
+            }
         };
 
         if let BindingPattern::AssignmentPattern(assignment) = &property.value {
@@ -1872,10 +1896,100 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let binding = match &property.value {
             BindingPattern::BindingIdentifier(_) => &property.value,
             BindingPattern::AssignmentPattern(assignment) => &assignment.left,
-            _ => return false,
+            _ => return Some(ObjectBindingPropertyProjection::Missing),
         };
         self.publish_variable_decl_type(scope, kind, binding, storage, leaf_type);
-        true
+        Some(ObjectBindingPropertyProjection::Ready(leaf_type))
+    }
+
+    fn project_object_binding_property(
+        &mut self,
+        source: TypeId,
+        name: &str,
+    ) -> ObjectBindingPropertyProjection {
+        let well_known = self.interner.well_known();
+        if source == well_known.any {
+            return ObjectBindingPropertyProjection::Ready(well_known.any);
+        }
+        if source == well_known.error {
+            return ObjectBindingPropertyProjection::Blocked;
+        }
+
+        let members = self
+            .interner
+            .store()
+            .union_members(source)
+            .map(|members| members.to_vec());
+        if let Some(members) = members {
+            let mut property_types = Vec::with_capacity(members.len());
+            let mut missing = false;
+            let mut blocked = false;
+            for member in members {
+                let member = self.apparent_type(member);
+                if member == well_known.error {
+                    blocked = true;
+                    continue;
+                }
+                if member == well_known.any {
+                    property_types.push(well_known.any);
+                    continue;
+                }
+                let Some(property_type) = self
+                    .interner
+                    .store()
+                    .object_type(member)
+                    .and_then(|object| object.property(name))
+                    .map(|property| property.ty)
+                else {
+                    missing = true;
+                    continue;
+                };
+                if property_type == well_known.error {
+                    blocked = true;
+                    continue;
+                }
+                property_types.push(property_type);
+            }
+            return match (missing, blocked) {
+                (false, false) => {
+                    ObjectBindingPropertyProjection::Ready(self.interner.union(property_types))
+                }
+                (true, false) => ObjectBindingPropertyProjection::Missing,
+                (false, true) => ObjectBindingPropertyProjection::Blocked,
+                (true, true) => ObjectBindingPropertyProjection::MissingAndBlocked,
+            };
+        }
+
+        match self
+            .interner
+            .store()
+            .object_type(source)
+            .and_then(|object| object.property(name))
+            .map(|property| property.ty)
+        {
+            Some(property_type) if property_type == well_known.error => {
+                ObjectBindingPropertyProjection::Blocked
+            }
+            Some(property_type) => ObjectBindingPropertyProjection::Ready(property_type),
+            None => ObjectBindingPropertyProjection::Missing,
+        }
+    }
+
+    fn check_object_binding_default(
+        &mut self,
+        scope: ScopeId,
+        property: &BindingProperty<'_>,
+        annotation: Option<TypeId>,
+    ) {
+        let BindingPattern::AssignmentPattern(assignment) = &property.value else {
+            return;
+        };
+        self.check_annotated_initializer(
+            scope,
+            annotation,
+            &assignment.right,
+            Span::from_oxc(assignment.right.span()),
+        );
     }
 
     fn strip_binding_undefined(&mut self, ty: TypeId) -> TypeId {

@@ -169,14 +169,21 @@ fn published_value_type(
     decl_types: &DeclTypes,
     name: &str,
 ) -> TypeId {
-    let storage = binder
+    let storage = value_storage(binder, name);
+    decl_types.get(storage).expect("published value type")
+}
+
+fn value_storage(
+    binder: &crate::binder::Binder,
+    name: &str,
+) -> crate::binder::declaration::ValueStorageId {
+    binder
         .graph
         .get(binder.module)
         .and_then(|scope| scope.lookup_local(name))
         .and_then(|symbol| binder.symbols.get(symbol))
         .and_then(|symbol| symbol.value)
-        .expect("named value storage");
-    decl_types.get(storage).expect("published value type")
+        .expect("named value storage")
 }
 
 fn free_type_params(store: &Store, root: TypeId) -> FxHashSet<TypeParamId> {
@@ -829,6 +836,94 @@ declare const nested: Recursive<Recursive<string>>;
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert!(result.incomplete.is_empty(), "{:?}", result.incomplete);
+}
+
+#[test]
+fn object_binding_recovery_source_does_not_publish_an_error_leaf() {
+    let source = "declare const source: Missing; const { leaf } = source;";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_namespace_value_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, _, decl_types, _| {
+            assert!(
+                decl_types.get(value_storage(binder, "leaf")).is_none(),
+                "recovery error must not become a published binding type"
+            );
+        },
+    );
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        [DiagnosticCode::TK2304]
+    );
+    assert_eq!(result.incomplete.len(), 1);
+    assert_eq!(
+        result.incomplete[0].id,
+        "bind/binding-pattern/object-pattern"
+    );
+}
+
+#[test]
+fn object_binding_missing_and_blocked_union_members_do_not_publish_in_either_order() {
+    let source = "\
+type MissingFirst = { otherA: string };
+type BlockedSecond = { leaf: MissingA };
+declare const first: MissingFirst | BlockedSecond;
+const { leaf: leafA } = first;
+type BlockedFirst = { leaf: MissingB };
+type MissingSecond = { otherB: string };
+declare const second: BlockedFirst | MissingSecond;
+const { leaf: leafB } = second;
+";
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    let mut interner = Interner::with_intrinsics();
+
+    let result = check_program_with_namespace_value_inspector(
+        &mut interner,
+        &parsed.program,
+        |binder, _, decl_types, _| {
+            for name in ["leafA", "leafB"] {
+                assert!(
+                    decl_types.get(value_storage(binder, name)).is_none(),
+                    "{name} must not publish from missing and blocked union members"
+                );
+            }
+        },
+    );
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == DiagnosticCode::TK2304)
+            .count(),
+        2
+    );
+    assert_eq!(
+        result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == DiagnosticCode::TK2339)
+            .count(),
+        2
+    );
+    assert_eq!(
+        result
+            .incomplete
+            .iter()
+            .filter(|incomplete| incomplete.id == "bind/binding-pattern/object-pattern")
+            .count(),
+        2
+    );
 }
 
 #[test]
