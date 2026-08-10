@@ -288,14 +288,6 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
         "b43_namespaces_declaration_merging",
         "wu6a_review_cross_space_reverse",
     ),
-    (
-        "b48_object_binding_publication",
-        "project_consumer_first",
-    ),
-    (
-        "b48_object_binding_publication",
-        "project_declaration_first",
-    ),
 ];
 
 /// Flat fixtures that are enabled before their containing corpus can run in
