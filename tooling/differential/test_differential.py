@@ -11,6 +11,7 @@ generator determinism, and the shrinker's refusal to wander to a different bug.
 """
 
 import os
+import re
 import tempfile
 import unittest
 from collections import Counter
@@ -326,6 +327,155 @@ class TestGenerator(unittest.TestCase):
                 for line in src.splitlines():
                     if "<U,>" in line:
                         self.assertNotRegex(line, r"<U,>[A-Za-z_]")
+
+
+class TestBindingMatrix(unittest.TestCase):
+    EXPECTED = (
+        (
+            "bm0_shorthand_rename.ts",
+            "// binding-matrix: shorthand-rename\n"
+            "const bm0_source: { bm0_count: number; label: string } = "
+            "{ bm0_count: 1, label: \"ready\" };\n"
+            "const { bm0_count, label: bm0_label } = bm0_source;\n"
+            "const bm0_count_good: number = bm0_count;\n"
+            "const bm0_label_good: string = bm0_label;\n"
+            "const bm0_count_wrong: string = bm0_count;\n",
+        ),
+        (
+            "bm1_static_keys.ts",
+            "// binding-matrix: static-keys\n"
+            "const bm1_source: { \"string-key\": string; 7: boolean } = "
+            "{ \"string-key\": \"ready\", 7: true };\n"
+            "const { \"string-key\": bm1_text, 7: bm1_flag } = bm1_source;\n"
+            "const bm1_text_good: string = bm1_text;\n"
+            "const bm1_flag_good: boolean = bm1_flag;\n"
+            "const bm1_text_wrong: number = bm1_text;\n",
+        ),
+        (
+            "bm2_let_independence.ts",
+            "// binding-matrix: let-independence\n"
+            "const bm2_source = { count: 1, label: \"ready\" };\n"
+            "let { count: bm2_count, label: bm2_label } = bm2_source;\n"
+            "bm2_count = 2;\n"
+            "bm2_label = \"changed\";\n"
+            "const bm2_count_good: number = bm2_count;\n"
+            "const bm2_label_good: string = bm2_label;\n"
+            "const bm2_count_wrong: string = bm2_count;\n",
+        ),
+        (
+            "bm3_var_pre_source.ts",
+            "// binding-matrix: var-pre-source\n"
+            "function bm3_owner(): void {\n"
+            "  const bm3_before: number = bm3_leaf;\n"
+            "  var { bm3_leaf } = { bm3_leaf: 1 };\n"
+            "  const bm3_leaf_good: number = bm3_leaf;\n"
+            "  const bm3_leaf_wrong: string = bm3_leaf;\n"
+            "}\n",
+        ),
+        (
+            "bm4_optional_default.ts",
+            "// binding-matrix: optional-default\n"
+            "const bm4_source: { maybe?: number; label?: string } = {};\n"
+            "const { maybe: bm4_maybe, label: bm4_label = \"fallback\" } = bm4_source;\n"
+            "const bm4_maybe_good: number | undefined = bm4_maybe;\n"
+            "const bm4_label_good: string = bm4_label;\n"
+            "const bm4_maybe_wrong: number = bm4_maybe;\n",
+        ),
+        (
+            "bm5_annotation_precedence.ts",
+            "// binding-matrix: annotation-precedence\n"
+            "const { value: bm5_value }: { value: number } = { value: 1 };\n"
+            "const bm5_value_good: number = bm5_value;\n"
+            "const bm5_value_wrong: 1 = bm5_value;\n",
+        ),
+        (
+            "bm6_default_diagnostics.ts",
+            "// binding-matrix: default-diagnostics\n"
+            "declare function bm6_needNumber(value: number): number;\n"
+            "const {\n"
+            "  direct: bm6_direct = \"bad\",\n"
+            "  callback: bm6_callback = () => bm6_needNumber(\"bad\"),\n"
+            "}: { direct?: number; callback?: () => number } = {};\n"
+            "const bm6_direct_good: number = bm6_direct;\n"
+            "const bm6_callback_good: () => number = bm6_callback;\n"
+            "const bm6_direct_wrong: string = bm6_direct;\n",
+        ),
+        (
+            "bm7_missing_shadow.ts",
+            "// binding-matrix: missing-shadow\n"
+            "declare function bm7_needNumber(value: number): number;\n"
+            "declare const bm7_source: { present: number };\n"
+            "let bm7_shadow = \"outer\";\n"
+            "{\n"
+            "  const { missing: bm7_shadow = () => bm7_needNumber(\"bad\") } = bm7_source;\n"
+            "  const bm7_inner_good: () => number = bm7_shadow;\n"
+            "  const bm7_inner_wrong: number = bm7_shadow;\n"
+            "}\n"
+            "const bm7_outer_good: string = bm7_shadow;\n"
+            "const bm7_outer_wrong: number = bm7_shadow;\n",
+        ),
+    )
+
+    def test_exact_deterministic_matrix(self):
+        first = tuple(D.binding_matrix_programs())
+        second = tuple(D.binding_matrix_programs())
+        self.assertEqual(first, second)
+        self.assertEqual(first, self.EXPECTED)
+
+    def test_every_program_is_namespaced_and_has_a_binding_oracle(self):
+        matrix = tuple(D.binding_matrix_programs())
+        self.assertEqual(len(matrix), 8)
+        for index, (filename, source) in enumerate(matrix):
+            prefix = f"bm{index}_"
+            self.assertTrue(filename.startswith(prefix), filename)
+            identifiers = re.findall(r"\bbm\d+_[A-Za-z_]\w*", source)
+            self.assertTrue(identifiers, filename)
+            self.assertTrue(all(name.startswith(prefix) for name in identifiers), filename)
+            self.assertRegex(source, r"\b(?:const|let|var)\s*\{")
+            self.assertIn("_good", source)
+            self.assertIn("_wrong", source)
+            self.assertNotIn("...", source)
+            self.assertNotIn("incomplete[", source)
+            self.assertNotIn("TK2448", source)
+
+    def test_matrix_pins_all_eight_admitted_shapes(self):
+        sources = dict(D.binding_matrix_programs())
+        self.assertIn("const { bm0_count, label: bm0_label }", sources["bm0_shorthand_rename.ts"])
+        self.assertIn("\"string-key\": bm1_text, 7: bm1_flag", sources["bm1_static_keys.ts"])
+        self.assertIn("let { count: bm2_count, label: bm2_label }", sources["bm2_let_independence.ts"])
+        self.assertLess(sources["bm3_var_pre_source.ts"].index("bm3_before"),
+                        sources["bm3_var_pre_source.ts"].index("var { bm3_leaf }"))
+        self.assertIn("number | undefined", sources["bm4_optional_default.ts"])
+        self.assertIn("bm4_label = \"fallback\"", sources["bm4_optional_default.ts"])
+        self.assertIn(": { value: number } = { value: 1 }", sources["bm5_annotation_precedence.ts"])
+        defaults = sources["bm6_default_diagnostics.ts"]
+        self.assertEqual(defaults.count("bm6_direct = \"bad\""), 1)
+        self.assertEqual(defaults.count("bm6_needNumber(\"bad\")"), 1)
+        missing = sources["bm7_missing_shadow.ts"]
+        self.assertEqual(missing.count("missing: bm7_shadow ="), 1)
+        self.assertEqual(missing.count("bm7_needNumber(\"bad\")"), 1)
+        self.assertIn("{\n  const { missing:", missing)
+
+    def test_cli_exposes_the_matrix_and_reference_falsifier(self):
+        args = D.build_parser().parse_args([
+            "binding-matrix",
+            "--ref", "/tmp/prechange-typokat",
+            "--check",
+            "--require-reference-divergence",
+        ])
+        self.assertIs(args.func, D.cmd_binding_matrix)
+        self.assertTrue(args.check)
+        self.assertTrue(args.require_reference_divergence)
+
+    def test_reference_falsifier_cannot_pass_on_zero_divergence(self):
+        self.assertEqual(D.binding_matrix_check_exit_code(
+            0, require_reference_divergence=False), 0)
+        self.assertEqual(D.binding_matrix_check_exit_code(
+            1, require_reference_divergence=False), 1)
+        self.assertEqual(D.binding_matrix_check_exit_code(
+            0, require_reference_divergence=True), 1)
+        self.assertEqual(D.binding_matrix_check_exit_code(
+            1, require_reference_divergence=True), 0)
 
 
 class TestShrinker(unittest.TestCase):
