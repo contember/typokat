@@ -137,6 +137,17 @@ class TestTscComparison(unittest.TestCase):
         self.assertEqual(residue, [])
         self.assertEqual(hits["tk[]~ts[7006]"], 1)
 
+    def test_incomplete_candidate_is_a_finding(self):
+        tk = outcome([diag(3, 2322)], exit_code=3,
+                     incompletes=("bind/binding-pattern/object-pattern",))
+        ts = outcome([diag(3, 2322)])
+        residue, hits = D.compare_tsc(tk, ts)
+        self.assertEqual(
+            residue,
+            ["incomplete-new:bind/binding-pattern/object-pattern"],
+        )
+        self.assertEqual(hits, Counter())
+
     def test_paired_rules_are_applied_before_one_sided_ones(self):
         """Otherwise the one-sided rule eats the code the paired rule needed and the
         typokat side is left as spurious residue."""
@@ -208,6 +219,16 @@ class TestOutputParsing(unittest.TestCase):
         tmp, path = self._fake_bin("something entirely unexpected\n", 1)
         with self.assertRaises(D.HarnessFailure):
             D.run_typokat(path, tmp, "probe.ts")
+
+    def test_indented_output_without_a_primary_diagnostic_is_a_hard_failure(self):
+        tmp, path = self._fake_bin("  internal failure\n", 0)
+        with self.assertRaises(D.HarnessFailure):
+            D.run_typokat(path, tmp, "probe.ts")
+
+    def test_tsc_indented_output_without_a_primary_diagnostic_is_a_hard_failure(self):
+        tmp, path = self._fake_bin("  internal failure\n", 0)
+        with self.assertRaises(D.HarnessFailure):
+            D.run_tsc(path, tmp, ["probe.ts"])
 
     def test_non_strict_mode_reports_rather_than_raises(self):
         tmp, path = self._fake_bin("error: Unexpected token\n", 1)

@@ -59,6 +59,47 @@ corpus in the gitignored `work/`), `--no-shrink`, `--check` (exit 1 on divergenc
 > **Build a current binary first.** `fuzz` measures whatever binary you point at. A
 > stale `target/release/typokat` silently reports old behaviour.
 
+## Deterministic object-binding matrix
+
+`binding-matrix` runs eight fixed object-binding programs. It uses the same strict
+output parser and comparison rules as `fuzz`, but does not generate or shrink input.
+Each source is written to a fresh isolated directory under `work/` and removed after
+the run. Pass `--keep-work` only when the rendered corpus needs inspection.
+
+The gate has two required halves. First, prove that it can see the pre-change bug at
+`943d810`. Then compare the current binary with pinned tsc 6.0.3 and require zero
+unexplained differences:
+
+```sh
+# From the repository root: build the two binaries that the matrix will measure.
+cpu-lease run -n 2 -- flock -w 3600 /tmp/typokat-perf.lock \
+  -c 'cargo build --release --bin typokat'
+prechange_dir=/tmp/typokat-binding-matrix-943d810
+git worktree add --detach "$prechange_dir" 943d810
+cpu-lease run -n 2 -- flock -w 3600 /tmp/typokat-perf.lock \
+  -c "CARGO_TARGET_DIR=$prechange_dir/target cargo build --release --bin typokat \
+      --manifest-path $prechange_dir/Cargo.toml"
+
+cd tooling/differential
+
+# Falsifier: success means at least one matrix program differs from 943d810.
+python3 differential.py binding-matrix \
+  --bin ../../target/release/typokat \
+  --ref "$prechange_dir/target/release/typokat" \
+  --check --require-reference-divergence
+
+# Current truth gate: success means no unexplained difference from tsc 6.0.3.
+python3 differential.py binding-matrix \
+  --bin ../../target/release/typokat --ref tsc --check
+```
+
+Normal `--check` exits 1 when any program diverges. Falsifier mode changes only that
+verdict: `--require-reference-divergence` exits 1 when the divergence count is zero and
+passes when it is non-zero. A crash, parse failure, unsupported exit code, inconsistent
+output, missing binary, or wrong tsc version remains a hard harness failure. A typokat
+reference is never allowlisted. The existing exact tsc allowlist is available only in
+tsc mode; the matrix requires no new rules.
+
 ## The generator (`grammar.py`)
 
 Narrow and deep, not broad and shallow. It composes a handful of constructs to
@@ -195,8 +236,9 @@ program the oracle rejected.
 - The grammar covers the contextual-typing region and nothing else — no narrowing, no
   classes beyond a `this` field, no modules, no type-level programming. It is meant to
   grow towards whatever region a bug last came from.
-- tsc-mode comparison is (line, code) only. A divergence that keeps the code and moves
-  the column is invisible there (it is *not* invisible in reference-binary mode).
+- tsc-mode diagnostic comparison is (line, code) only. A divergence that keeps the code
+  and moves the column is invisible there (it is *not* invisible in reference-binary
+  mode). Typokat `incomplete[…]` records always remain visible divergences.
 - The allowlist cannot distinguish a documented cosmetic difference from an
   undocumented one that happens to have the same code pair on the same line. The
   per-rule hit counts are the mitigation: a shape that suddenly explodes is visible.

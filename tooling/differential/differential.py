@@ -41,6 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
@@ -140,28 +141,36 @@ def run_typokat(binary: str, cwd: str, filename: str, timeout: int = 60,
     diags: List[Diag] = []
     incompletes: List[str] = []
     parse_errors: List[str] = []
+    continuation_diag: Optional[int] = None
     for raw in out.split("\n"):
         if not raw:
+            continuation_diag = None
             continue
         m = TK_LINE_RE.match(raw)
         if m:
             diags.append(Diag(int(m["line"]), int(m["col"]), int(m["code"]), m["msg"]))
+            continuation_diag = len(diags) - 1
             continue
         mi = TK_INC_RE.match(raw)
         if mi:
             incompletes.append(mi["id"])
+            continuation_diag = None
             continue
         me = TK_ERR_RE.match(raw)
         if me:
             parse_errors.append(me["msg"])
+            continuation_diag = None
             continue
         if raw.startswith(" ") or raw.startswith("\t"):
             # A reason-chain continuation line: attach it to the diagnostic above.
-            if diags:
-                last = diags[-1]
-                diags[-1] = Diag(last.line, last.col, last.code, last.message,
-                                 last.detail + (raw.strip(),))
-            continue
+            if continuation_diag is not None:
+                last = diags[continuation_diag]
+                diags[continuation_diag] = Diag(
+                    last.line, last.col, last.code, last.message,
+                    last.detail + (raw.strip(),),
+                )
+                continue
+        continuation_diag = None
         if strict:
             raise HarnessFailure(
                 f"{filename}: unparseable output line from {binary}: {raw!r}\n"
@@ -231,8 +240,10 @@ def run_tsc(tsc: str, cwd: str, filenames: Sequence[str],
             f"tsc exited {proc.returncode}\n--- captured output ---\n"
             f"{proc.stdout}\n{proc.stderr}")
     per_file: Dict[str, List[Diag]] = {f: [] for f in filenames}
+    continuation_file: Optional[str] = None
     for raw in (proc.stdout + proc.stderr).split("\n"):
         if not raw.strip():
+            continuation_file = None
             continue
         m = TSC_LINE_RE.match(raw)
         if m:
@@ -240,9 +251,11 @@ def run_tsc(tsc: str, cwd: str, filenames: Sequence[str],
             if f not in per_file:
                 raise HarnessFailure(f"tsc reported on an unexpected file {f!r}: {raw}")
             per_file[f].append(Diag(int(m["line"]), int(m["col"]), int(m["code"]), m["msg"]))
+            continuation_file = f
             continue
         if raw.startswith(" ") or raw.startswith("\t"):
-            continue  # elaboration continuation
+            if continuation_file is not None:
+                continue  # elaboration continuation
         raise HarnessFailure(f"unparseable tsc output line: {raw!r}")
     return {f: Outcome(0 if not ds else 1, tuple(ds), (), "") for f, ds in per_file.items()}
 
@@ -290,7 +303,8 @@ def compare_tsc(tk: Outcome, ts: Outcome,
 
     Granularity is (line, code-number) — the same robust contract the official-suite
     harness uses, since columns and message wording diverge by design. Codes map by
-    number (`TK2322` == `TS2322`).
+    number (`TK2322` == `TS2322`). Any typokat incomplete record remains an
+    uncancellable divergence because tsc has no corresponding incomplete channel.
 
     Each allowlist entry is a **cancellation rule** applied per line: it removes one
     specific `(typokat code, tsc code)` pair from that line's difference. Whatever
@@ -325,6 +339,8 @@ def compare_tsc(tk: Outcome, ts: Outcome,
             left = ",".join(str(c) for c in sorted(only_tk.elements()))
             right = ",".join(str(c) for c in sorted(only_ts.elements()))
             residue.append(f"tk[{left}]!=ts[{right}]")
+    for incomplete, count in sorted(Counter(tk.incompletes).items()):
+        residue.extend([f"incomplete-new:{incomplete}"] * count)
     return sorted(residue), hits
 
 
@@ -417,6 +433,186 @@ def classify(residue: Sequence[str], hits: Counter) -> str:
     if residue:
         return "DIVERGE"
     return "ALLOWED" if hits else "MATCH"
+
+
+# --- deterministic object-binding matrix ------------------------------------
+
+
+def binding_matrix_programs() -> Sequence[Tuple[str, str]]:
+    """The fixed object-binding corpus used to falsify and gate the WU0 change."""
+    return (
+        (
+            "bm0_shorthand_rename.ts",
+            "// binding-matrix: shorthand-rename\n"
+            "const bm0_source: { bm0_count: number; label: string } = "
+            "{ bm0_count: 1, label: \"ready\" };\n"
+            "const { bm0_count, label: bm0_label } = bm0_source;\n"
+            "const bm0_count_good: number = bm0_count;\n"
+            "const bm0_label_good: string = bm0_label;\n"
+            "const bm0_count_wrong: string = bm0_count;\n",
+        ),
+        (
+            "bm1_static_keys.ts",
+            "// binding-matrix: static-keys\n"
+            "const bm1_source: { \"string-key\": string; 7: boolean } = "
+            "{ \"string-key\": \"ready\", 7: true };\n"
+            "const { \"string-key\": bm1_text, 7: bm1_flag } = bm1_source;\n"
+            "const bm1_text_good: string = bm1_text;\n"
+            "const bm1_flag_good: boolean = bm1_flag;\n"
+            "const bm1_text_wrong: number = bm1_text;\n",
+        ),
+        (
+            "bm2_let_independence.ts",
+            "// binding-matrix: let-independence\n"
+            "const bm2_source = { count: 1, label: \"ready\" };\n"
+            "let { count: bm2_count, label: bm2_label } = bm2_source;\n"
+            "bm2_count = 2;\n"
+            "bm2_label = \"changed\";\n"
+            "const bm2_count_good: number = bm2_count;\n"
+            "const bm2_label_good: string = bm2_label;\n"
+            "const bm2_count_wrong: string = bm2_count;\n",
+        ),
+        (
+            "bm3_var_pre_source.ts",
+            "// binding-matrix: var-pre-source\n"
+            "function bm3_owner(): void {\n"
+            "  const bm3_before: number = bm3_leaf;\n"
+            "  var { bm3_leaf } = { bm3_leaf: 1 };\n"
+            "  const bm3_leaf_good: number = bm3_leaf;\n"
+            "  const bm3_leaf_wrong: string = bm3_leaf;\n"
+            "}\n",
+        ),
+        (
+            "bm4_optional_default.ts",
+            "// binding-matrix: optional-default\n"
+            "const bm4_source: { maybe?: number; label?: string } = {};\n"
+            "const { maybe: bm4_maybe, label: bm4_label = \"fallback\" } = bm4_source;\n"
+            "const bm4_maybe_good: number | undefined = bm4_maybe;\n"
+            "const bm4_label_good: string = bm4_label;\n"
+            "const bm4_maybe_wrong: number = bm4_maybe;\n",
+        ),
+        (
+            "bm5_annotation_precedence.ts",
+            "// binding-matrix: annotation-precedence\n"
+            "const { value: bm5_value }: { value: number } = { value: 1 };\n"
+            "const bm5_value_good: number = bm5_value;\n"
+            "const bm5_value_wrong: 1 = bm5_value;\n",
+        ),
+        (
+            "bm6_default_diagnostics.ts",
+            "// binding-matrix: default-diagnostics\n"
+            "declare function bm6_needNumber(value: number): number;\n"
+            "const {\n"
+            "  direct: bm6_direct = \"bad\",\n"
+            "  callback: bm6_callback = () => bm6_needNumber(\"bad\"),\n"
+            "}: { direct?: number; callback?: () => number } = {};\n"
+            "const bm6_direct_good: number = bm6_direct;\n"
+            "const bm6_callback_good: () => number = bm6_callback;\n"
+            "const bm6_direct_wrong: string = bm6_direct;\n",
+        ),
+        (
+            "bm7_missing_shadow.ts",
+            "// binding-matrix: missing-shadow\n"
+            "declare function bm7_needNumber(value: number): number;\n"
+            "declare const bm7_source: { present: number };\n"
+            "let bm7_shadow = \"outer\";\n"
+            "{\n"
+            "  const { missing: bm7_shadow = () => bm7_needNumber(\"bad\") } = bm7_source;\n"
+            "  const bm7_inner_good: () => number = bm7_shadow;\n"
+            "  const bm7_inner_wrong: number = bm7_shadow;\n"
+            "}\n"
+            "const bm7_outer_good: string = bm7_shadow;\n"
+            "const bm7_outer_wrong: number = bm7_shadow;\n",
+        ),
+    )
+
+
+def binding_matrix_check_exit_code(
+        divergence_count: int, require_reference_divergence: bool) -> int:
+    """Return the gate verdict without hiding invocation failures."""
+    if require_reference_divergence:
+        return 0 if divergence_count else 1
+    return 1 if divergence_count else 0
+
+
+def cmd_binding_matrix(args) -> int:
+    if not os.path.exists(args.bin):
+        print(f"error: candidate binary {args.bin} does not exist", file=sys.stderr)
+        return 2
+    if args.ref not in ("tsc", "none") and not os.path.exists(args.ref):
+        print(f"error: reference binary {args.ref} does not exist", file=sys.stderr)
+        return 2
+
+    ts_version = None
+    if args.ref == "tsc":
+        ts_version = tsc_version(args.tsc)
+        if ts_version != EXPECTED_TSC_VERSION and not args.allow_tsc_version:
+            print(f"error: tsc {ts_version} != pinned {EXPECTED_TSC_VERSION} "
+                  f"(pass --allow-tsc-version to override)", file=sys.stderr)
+            return 2
+
+    os.makedirs(WORK, exist_ok=True)
+    work = tempfile.mkdtemp(prefix="binding-matrix-", dir=WORK)
+    try:
+        programs = tuple(binding_matrix_programs())
+        names = []
+        for name, source in programs:
+            with open(os.path.join(work, name), "w", encoding="utf-8") as fh:
+                fh.write(source)
+            names.append(name)
+
+        candidate = {name: run_typokat(args.bin, work, name) for name in names}
+        reference: Dict[str, Outcome] = {}
+        rules: Sequence[AllowEntry] = ()
+        if args.ref == "tsc":
+            reference = run_tsc(args.tsc, work, names)
+            rules = tuple(load_allowlist().values())
+        elif args.ref != "none":
+            reference = {name: run_typokat(args.ref, work, name) for name in names}
+
+        divergence_count = 0
+        status_counts: Counter = Counter()
+        allowed_hits: Counter = Counter()
+        print("=" * 78)
+        print(f"typokat binding matrix — {len(programs)} programs")
+        print(f"  candidate : {args.bin}")
+        ref_desc = f"tsc {ts_version} --strict" if args.ref == "tsc" else args.ref
+        print(f"  reference : {ref_desc}")
+        print("=" * 78)
+        for name in names:
+            if args.ref == "none":
+                tokens, hits, status = [], Counter(), "MATCH"
+            elif args.ref == "tsc":
+                tokens, hits = compare_tsc(candidate[name], reference[name], rules)
+                status = classify(tokens, hits)
+            else:
+                tokens = compare_binaries(reference[name], candidate[name])
+                hits = Counter()
+                status = classify(tokens, hits)
+            status_counts[status] += 1
+            allowed_hits.update(hits)
+            if status == "DIVERGE":
+                divergence_count += 1
+            detail = f" — {' '.join(tokens)}" if tokens else ""
+            print(f"{name}: {status}{detail}")
+
+        print("-" * 78)
+        print("summary: " + ", ".join(
+            f"{status}={status_counts[status]}"
+            for status in ("MATCH", "ALLOWED", "DIVERGE")))
+        if allowed_hits:
+            print("allowlist hits: " + ", ".join(
+                f"{token}={count}" for token, count in sorted(allowed_hits.items())))
+        if args.keep_work:
+            print(f"work directory: {work}")
+
+        if args.check or args.require_reference_divergence:
+            return binding_matrix_check_exit_code(
+                divergence_count, args.require_reference_divergence)
+        return 0
+    finally:
+        if not args.keep_work:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 # --- the run -----------------------------------------------------------------
@@ -966,6 +1162,29 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--keep-work", action="store_true",
                    help="keep the generated corpus in work/ for inspection")
     f.set_defaults(func=cmd_fuzz)
+
+    m = sub.add_parser(
+        "binding-matrix",
+        help="run the fixed object-binding corpus against tsc or another typokat",
+    )
+    m.add_argument("--bin", default=DEFAULT_BIN,
+                   help="candidate typokat binary (default: target/release/typokat)")
+    m.add_argument("--ref", default="tsc",
+                   help="'tsc', 'none', or a path to a reference typokat binary")
+    m.add_argument("--tsc", default=os.environ.get("TYPOKAT_TSC", "tsc"),
+                   help="tsc executable (env: TYPOKAT_TSC)")
+    m.add_argument("--allow-tsc-version", action="store_true",
+                   help=f"accept a tsc other than the pinned {EXPECTED_TSC_VERSION}")
+    m.add_argument("--check", action="store_true",
+                   help="exit 1 if any non-allowlisted divergence was found")
+    m.add_argument(
+        "--require-reference-divergence",
+        action="store_true",
+        help="falsifier mode: exit 1 unless the reference differs from the candidate",
+    )
+    m.add_argument("--keep-work", action="store_true",
+                   help="keep the isolated matrix directory for inspection")
+    m.set_defaults(func=cmd_binding_matrix)
 
     s = sub.add_parser("shrink", help="minimize one program that diverges")
     common(s)
