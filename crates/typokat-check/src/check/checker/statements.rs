@@ -1472,7 +1472,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let symbol = declaration
                 .site
                 .scope
-                .and_then(|scope| self.binder.resolve_value(scope, identifier.name.as_str()));
+                .and_then(|scope| self.resolve_value_replay(scope, identifier.name.as_str()));
             let participant = symbol
                 .and_then(|symbol| self.binder.symbols.get(symbol))
                 .is_some_and(|symbol| symbol.declarations.contains(&declaration.id));
