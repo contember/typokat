@@ -28,6 +28,15 @@ unannotated body cannot be inferred safely at that point with the current sequen
 - a hoisted unannotated `var` has the same missing value-type problem, while using
   `unknown` would be permissive as an assignment target.
 
+The object-binding review pinned the cross-file form on 2026-08-10. With a consumer script sorted
+before `var crossProjectLeaf = "ready"`, typokat exits clean and drops the `TS2322` wrong-type
+witness from tsc 6.0.3. The equivalent flat object `var { crossProjectLeaf } = ...` reports
+`TK2454` on both the valid and invalid reads and still drops `TK2322`; placing the declaration path first produces
+the expected single `TK2322`. Reversing the supplied root list does not change either result because
+the project route canonicalizes path order. The parked acceptance witnesses are
+`tests/cases/b48_object_binding_publication/project_consumer_first/` and
+`tests/cases/b48_object_binding_publication/project_declaration_first/`.
+
 TypeScript separates declaration visibility from type availability. It resolves a
 signature return on demand, tracks `Unresolved → Resolving → Resolved/Errored`, and
 reports the implicit-any cycle family (TS7022/TS7023) before using a recovery type.
@@ -68,6 +77,8 @@ mutual return cycles, mixed value/function cycles, annotated cycle breakers, ove
 implementations, reordered declarations, and repeated-query/cache-order probes.
 Acceptance requires exact verdicts without conservative `unknown` over-reports, no
 duplicate/reordered body diagnostics, and no query-order-dependent false negative.
+It also requires the parked cross-file object-binding witnesses to agree in both path orders. The
+fix must resolve the general declaration-type demand; do not add object-binding-only pre-inference.
 
 Add the five official files above as getter/static-method demand controls. The arrow getter must be
 callable, both `this`-returning static methods must preserve their constructor surfaces, and the

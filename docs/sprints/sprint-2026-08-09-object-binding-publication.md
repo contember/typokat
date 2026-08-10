@@ -146,3 +146,9 @@ WU0 → WU1 → WU2 → WU3. Only read-only enum-identity and predicate/flow pha
 parallel with WU1; they cannot add RED specs or implementation to this sprint.
 
 ## Run log
+
+- **2026-08-10 — WU2 project-order RED parked under backlog 76.** Declaration-first object `var`
+  matches tsc's single wrong-type diagnostic; consumer-first reports two `TK2454` records and drops
+  `TK2322`. The ordinary unannotated `var` control exits falsely clean in the same order, proving the
+  root is backlog `76`'s general declaration-type demand. The two B48 project fixtures stay parked;
+  no object-only pre-inference enters this sprint, and WU1 remains the same-file flat slice.
