@@ -5585,8 +5585,32 @@ namespace Standalone { export const value = 1; }
             &source[a.site.declaration_span.range()],
             "{ a, nested: { b = 1 }, ...objectRest } = value"
         );
-        assert!(a.value_storage.is_none());
-        assert!(b.value_storage.is_none());
+        let object_rest = declarations
+            .iter()
+            .find(|declaration| source[declaration.site.binding_span.range()] == *"objectRest")
+            .expect("object rest leaf");
+        let mut object_leaf_storages = Vec::new();
+        for declaration in [a, b, object_rest] {
+            assert_eq!(declaration.kind, DeclarationKind::Variable);
+            assert_eq!(declaration.site.scope, Some(binder.module));
+            let storage = declaration
+                .value_storage
+                .expect("object binding leaf storage");
+            let name = &source[declaration.site.binding_span.range()];
+            let symbol = binder
+                .graph
+                .get(binder.module)
+                .and_then(|scope| scope.lookup_local(name))
+                .and_then(|symbol| binder.symbols.get(symbol))
+                .expect("object binding leaf symbol");
+            assert_eq!(symbol.value, Some(storage));
+            assert_eq!(symbol.declarations, vec![declaration.id]);
+            object_leaf_storages.push(storage);
+        }
+        assert!(object_leaf_storages
+            .iter()
+            .enumerate()
+            .all(|(index, storage)| !object_leaf_storages[..index].contains(storage)));
 
         let supported_parameter = declarations
             .iter()

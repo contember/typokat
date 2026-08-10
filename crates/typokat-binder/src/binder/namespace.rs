@@ -11239,10 +11239,10 @@ namespace Visibility {
     }
 
     #[test]
-    fn rich_namespace_and_global_bodies_inventory_exact_declarations_without_storage() {
+    fn rich_namespace_and_global_bodies_inventory_exact_declarations_and_binding_storage() {
         let source = "interface Existing {} namespace Existing { export const { a, nested: { b } } = value; export function f(param: number): void {} export class C {} export type T = number; export interface I {} export enum E {} export namespace Child {} export { a as alias }; } declare global { const [g]: number[]; function gf(arg: number): void; class GC {} type GT = number; interface GI {} enum GE {} namespace GN {} }";
         let binder = bind(source, false);
-        assert_eq!(binder.decl_count, 4);
+        assert_eq!(binder.decl_count, 6);
         assert_eq!(binder.type_groups.len(), 4);
 
         let existing_type_symbol = binder
@@ -11276,7 +11276,7 @@ namespace Visibility {
                 || &source[declaration.site.binding_span.range()] != "Existing"
         }) {
             let name = &source[declaration.site.binding_span.range()];
-            if matches!(name, "f" | "C" | "param") {
+            if matches!(name, "a" | "b" | "f" | "C" | "param") {
                 assert!(declaration.value_storage.is_some(), "{name}");
             } else {
                 assert_eq!(declaration.value_storage, None, "{name}");
@@ -11302,6 +11302,54 @@ namespace Visibility {
             .and_then(|fragment| binder.namespaces.fragment(*fragment))
             .map(|fragment| fragment.private_scope)
             .expect("Existing fragment");
+        let mut binding_leaf_storages = Vec::new();
+        for name in ["a", "b"] {
+            let declaration = binder
+                .declarations
+                .iter()
+                .find(|declaration| &source[declaration.site.binding_span.range()] == name)
+                .expect("object binding leaf declaration");
+            assert_eq!(declaration.kind, DeclarationKind::Variable);
+            assert_eq!(declaration.site.scope, Some(private_scope));
+            let storage = declaration
+                .value_storage
+                .expect("object binding leaf storage");
+            let local_symbol_id = binder
+                .graph
+                .get(private_scope)
+                .and_then(|scope| scope.lookup_local(name))
+                .expect("private object binding symbol");
+            let local_symbol = binder
+                .symbols
+                .get(local_symbol_id)
+                .expect("private object binding symbol row");
+            assert_eq!(local_symbol.value, Some(storage));
+            assert_eq!(local_symbol.declarations, vec![declaration.id]);
+
+            let member = binder
+                .namespaces
+                .members()
+                .find(|member| member.declaration == Some(declaration.id))
+                .expect("exported object binding member");
+            assert_eq!(member.local_symbol, Some(local_symbol_id));
+            let public_symbol_id = member.symbol.expect("public object binding symbol id");
+            assert_ne!(public_symbol_id, local_symbol_id);
+            assert_eq!(
+                binder
+                    .graph
+                    .get(namespace.public_scope)
+                    .and_then(|scope| scope.lookup_local(name)),
+                Some(public_symbol_id)
+            );
+            let public_symbol = binder
+                .symbols
+                .get(public_symbol_id)
+                .expect("public object binding symbol");
+            assert_eq!(public_symbol.value, Some(storage));
+            assert_eq!(public_symbol.declarations, vec![declaration.id]);
+            binding_leaf_storages.push(storage);
+        }
+        assert_ne!(binding_leaf_storages[0], binding_leaf_storages[1]);
         for name in ["a", "b", "f", "C", "T", "I", "E", "Child"] {
             let declaration = binder
                 .declarations
