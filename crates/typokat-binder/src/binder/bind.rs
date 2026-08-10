@@ -2525,6 +2525,14 @@ fn bind_try(state: &mut BindState, parent: ScopeId, try_stmt: &TryStatement<'_>)
                     DeclarationKind::CatchParameter,
                 );
                 declare_value(state, catch_scope, name, storage, declaration);
+            } else {
+                bind_syntax_only_pattern_values(
+                    state,
+                    catch_scope,
+                    catch_scope,
+                    &param.pattern,
+                    DeclarationKind::CatchParameter,
+                );
             }
         }
         bind_block(state, catch_scope, &handler.body);
@@ -2639,7 +2647,7 @@ fn bind_for_in_of(
     bind_expression(state, parent, right);
     if let ForStatementLeft::VariableDeclaration(decl) = left {
         for declarator in &decl.declarations {
-            bind_declarator(state, head, decl.kind, declarator);
+            bind_declarator_with_object_patterns(state, head, decl.kind, declarator, false);
         }
     }
     bind_statement(state, head, body);
@@ -2652,6 +2660,16 @@ pub(super) fn bind_declarator(
     scope: ScopeId,
     kind: VariableDeclarationKind,
     declarator: &VariableDeclarator<'_>,
+) {
+    bind_declarator_with_object_patterns(state, scope, kind, declarator, true);
+}
+
+fn bind_declarator_with_object_patterns(
+    state: &mut BindState,
+    scope: ScopeId,
+    kind: VariableDeclarationKind,
+    declarator: &VariableDeclarator<'_>,
+    admit_flat_object: bool,
 ) {
     let declaration_scope = if kind.is_var() {
         state.graph.var_scope(scope).unwrap_or(scope)
@@ -2668,10 +2686,77 @@ pub(super) fn bind_declarator(
             DeclarationKind::Variable,
         );
         declare_value(state, declaration_scope, name, storage, declaration);
+    } else if matches!(declarator.id, BindingPattern::ObjectPattern(_)) {
+        if !admit_flat_object
+            || !bind_flat_object_pattern(state, scope, declaration_scope, &declarator.id)
+        {
+            bind_syntax_only_pattern_values(
+                state,
+                scope,
+                declaration_scope,
+                &declarator.id,
+                DeclarationKind::Variable,
+            );
+        }
+    } else if !admit_flat_object {
+        bind_syntax_only_pattern_values(
+            state,
+            scope,
+            declaration_scope,
+            &declarator.id,
+            DeclarationKind::Variable,
+        );
     }
     if let Some(init) = &declarator.init {
         bind_expression(state, scope, init);
     }
+}
+
+fn bind_flat_object_pattern(
+    state: &mut BindState,
+    expression_scope: ScopeId,
+    declaration_scope: ScopeId,
+    pattern: &BindingPattern<'_>,
+) -> bool {
+    let BindingPattern::ObjectPattern(object) = pattern else {
+        return false;
+    };
+    if object.rest.is_some()
+        || object.properties.iter().any(|property| {
+            property.computed
+                || property.key.static_name().is_none()
+                || direct_binding_identifier(&property.value).is_none()
+        })
+    {
+        return false;
+    }
+
+    for property in &object.properties {
+        let Some(identifier) = direct_binding_identifier(&property.value) else {
+            continue;
+        };
+        let (declaration, storage) = bind_source_value(
+            state,
+            declaration_scope,
+            identifier.name.as_str(),
+            identifier.span.start,
+            DeclarationKind::Variable,
+        );
+        declare_value(
+            state,
+            declaration_scope,
+            identifier.name.as_str(),
+            storage,
+            declaration,
+        );
+    }
+
+    for property in &object.properties {
+        if let BindingPattern::AssignmentPattern(assignment) = &property.value {
+            bind_expression(state, expression_scope, &assignment.right);
+        }
+    }
+    true
 }
 
 /// Bind a function declaration: declare its name (value space) in `scope`, then
@@ -2828,6 +2913,14 @@ fn bind_parameters(state: &mut BindState, fn_scope: ScopeId, params: &FormalPara
                 DeclarationKind::Parameter,
             );
             declare_value(state, fn_scope, name, storage, declaration);
+        } else if matches!(param.pattern, BindingPattern::ObjectPattern(_)) {
+            bind_syntax_only_pattern_values(
+                state,
+                fn_scope,
+                fn_scope,
+                &param.pattern,
+                DeclarationKind::Parameter,
+            );
         }
     }
     if let Some(rest) = &params.rest {
@@ -2841,6 +2934,62 @@ fn bind_parameters(state: &mut BindState, fn_scope: ScopeId, params: &FormalPara
                 DeclarationKind::Parameter,
             );
             declare_value(state, fn_scope, name, storage, declaration);
+        }
+    }
+}
+
+fn bind_syntax_only_pattern_values(
+    state: &mut BindState,
+    expression_scope: ScopeId,
+    declaration_scope: ScopeId,
+    pattern: &BindingPattern<'_>,
+    kind: DeclarationKind,
+) {
+    for identifier in pattern.get_binding_identifiers() {
+        let (declaration, storage) = bind_source_value(
+            state,
+            declaration_scope,
+            identifier.name.as_str(),
+            identifier.span.start,
+            kind,
+        );
+        declare_value(
+            state,
+            declaration_scope,
+            identifier.name.as_str(),
+            storage,
+            declaration,
+        );
+    }
+    bind_syntax_only_pattern_initializers(state, expression_scope, pattern);
+}
+
+fn bind_syntax_only_pattern_initializers(
+    state: &mut BindState,
+    expression_scope: ScopeId,
+    pattern: &BindingPattern<'_>,
+) {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => {}
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                bind_syntax_only_pattern_initializers(state, expression_scope, &property.value);
+            }
+            if let Some(rest) = &object.rest {
+                bind_syntax_only_pattern_initializers(state, expression_scope, &rest.argument);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                bind_syntax_only_pattern_initializers(state, expression_scope, element);
+            }
+            if let Some(rest) = &array.rest {
+                bind_syntax_only_pattern_initializers(state, expression_scope, &rest.argument);
+            }
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            bind_syntax_only_pattern_initializers(state, expression_scope, &assignment.left);
+            bind_expression(state, expression_scope, &assignment.right);
         }
     }
 }
@@ -3177,6 +3326,19 @@ fn declare_import(
 fn binding_name_and_start<'a>(pattern: &'a BindingPattern<'a>) -> Option<(&'a str, u32)> {
     match pattern {
         BindingPattern::BindingIdentifier(ident) => Some((ident.name.as_str(), ident.span.start)),
+        _ => None,
+    }
+}
+
+fn direct_binding_identifier<'a>(
+    pattern: &'a BindingPattern<'a>,
+) -> Option<&'a oxc_ast::ast::BindingIdentifier<'a>> {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => Some(identifier),
+        BindingPattern::AssignmentPattern(assignment) => match &assignment.left {
+            BindingPattern::BindingIdentifier(identifier) => Some(identifier),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -5431,11 +5593,18 @@ namespace Standalone { export const value = 1; }
             .find(|declaration| source[declaration.site.binding_span.range()] == *"t")
             .expect("simple parameter");
         assert!(supported_parameter.value_storage.is_some());
-        for name in ["q", "r", "s", "caught", "catchRest"] {
+        for name in ["q", "caught", "catchRest"] {
             let declaration = declarations
                 .iter()
                 .find(|declaration| source[declaration.site.binding_span.range()] == *name)
-                .expect("destructured binding leaf");
+                .expect("syntax-only binding leaf");
+            assert!(declaration.value_storage.is_some());
+        }
+        for name in ["r", "s"] {
+            let declaration = declarations
+                .iter()
+                .find(|declaration| source[declaration.site.binding_span.range()] == *name)
+                .expect("unpublished array parameter leaf");
             assert!(declaration.value_storage.is_none());
         }
     }

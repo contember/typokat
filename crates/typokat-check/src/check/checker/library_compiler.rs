@@ -7652,6 +7652,10 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             if symbol.value.is_some_and(|current| {
                 current != library_participant && user_value_contributors.contains(&current)
             }) {
+                pass.install_authenticated_collision_value_occurrences(
+                    symbol_id,
+                    library_participant,
+                );
                 pass.private_collision_value_winners
                     .insert(symbol_id, library_participant);
                 pass.private_collision_value_winners_by_name

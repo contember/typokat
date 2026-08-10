@@ -212,7 +212,6 @@ impl<Ticket: Copy> CheckerRecordBatch<Ticket> {
 
     pub(in crate::check::checker) fn discard(self) {}
 
-    #[cfg(test)]
     pub(in crate::check::checker) fn len(&self) -> usize {
         self.records.len()
     }
@@ -325,6 +324,19 @@ impl<Ticket: Copy> CheckerEffects<Ticket> {
             replay_owners: None,
             nested: Vec::new(),
         }
+    }
+
+    pub(in crate::check::checker) fn observable_count(&self) -> usize {
+        self.records.len()
+            + self.obligations.len()
+            + self.constraint_checks.len()
+            + self.interface_relations.len()
+            + self.override_checks.len()
+            + self
+                .nested
+                .iter()
+                .map(CheckerEffects::observable_count)
+                .sum::<usize>()
     }
 }
 
@@ -954,12 +966,41 @@ pub(in crate::check::checker) struct VarAnnotationSurface {
     pub(in crate::check::checker) annotation: Option<TypeId>,
 }
 
-/// Whether a shared `var` declaration type is only a forward annotation, comes
-/// from its first source declarator, or belongs to an earlier non-`var` binding.
+/// Publication state for hoisted `var` values and admitted syntax-only parameter leaves.
 pub(in crate::check::checker) enum VarValueTypeState {
+    ObjectBindingPending,
+    SyntaxOnlyObjectParameter,
     Provisional,
     Source,
     Existing,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(in crate::check::checker) enum ObjectBindingPendingLeafState {
+    Pending,
+    SpecificDemand,
+    OrdinaryDemand,
+    Published,
+}
+
+pub(in crate::check::checker) struct ObjectBindingPendingLeaf {
+    pub(in crate::check::checker) declaration: DeclId,
+    pub(in crate::check::checker) exact_storage: ValueStorageId,
+    pub(in crate::check::checker) effective_storage: ValueStorageId,
+    pub(in crate::check::checker) state: ObjectBindingPendingLeafState,
+}
+
+pub(in crate::check::checker) struct ObjectBindingPendingGroup<Ticket: Copy> {
+    pub(in crate::check::checker) owner: Ticket,
+    pub(in crate::check::checker) span: Span,
+    pub(in crate::check::checker) leaves: Vec<ObjectBindingPendingLeaf>,
+    pub(in crate::check::checker) generic_emitted: bool,
+}
+
+#[derive(Copy, Clone)]
+pub(in crate::check::checker) struct ObjectBindingPendingLeafRef {
+    pub(in crate::check::checker) group: usize,
+    pub(in crate::check::checker) leaf: usize,
 }
 
 /// A top-level type declaration's reserve-then-fill plan, indexed by type-space
@@ -1789,6 +1830,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// Library-owned value selected by each affected sealed root slot.
     pub(in crate::check::checker) private_collision_value_winners:
         FxHashMap<SymbolId, ValueStorageId>,
+    /// Exact continued declarations certified to publish through an affected winner.
+    pub(in crate::check::checker) private_collision_value_occurrence_winners:
+        FxHashMap<DeclId, Option<ValueStorageId>>,
     pub(in crate::check::checker) private_collision_value_winners_by_name:
         FxHashMap<String, ValueStorageId>,
     pub(in crate::check::checker) combined_source_library_value_precedence: bool,
@@ -1906,6 +1950,13 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// forward annotation provisional without overwriting a parameter type.
     pub(in crate::check::checker) var_value_type_states:
         FxHashMap<ValueStorageId, VarValueTypeState>,
+    /// Exact deferred accounting for unsupported variable object-binding groups.
+    pub(in crate::check::checker) object_binding_pending_groups:
+        Vec<ObjectBindingPendingGroup<Ticket>>,
+    pub(in crate::check::checker) object_binding_pending_by_exact:
+        FxHashMap<ValueStorageId, ObjectBindingPendingLeafRef>,
+    pub(in crate::check::checker) object_binding_pending_by_effective:
+        FxHashMap<ValueStorageId, Vec<ObjectBindingPendingLeafRef>>,
     /// Current `this` type while checking class members.
     /// Save/restored at member boundaries so it never leaks; nested functions keep
     /// the enclosing value in this subset.

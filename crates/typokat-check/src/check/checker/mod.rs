@@ -5425,6 +5425,7 @@ where
 fn finish_semantic_effects<Ticket: Copy + PartialEq>(
     pass: &mut Pass<'_, '_, Ticket>,
 ) -> Vec<CheckerRecordBatch<Ticket>> {
+    pass.finalize_object_binding_pending_groups();
     let pending = std::mem::take(&mut pass.pending_effects);
     let mut completed = Vec::with_capacity(pending.len());
     for mut effects in pending {
@@ -6020,12 +6021,20 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         name: &str,
     ) -> Option<ValueStorageId> {
         let symbol = self.resolve_value_replay(scope, name)?;
+        self.effective_value_storage_for_symbol_replay(symbol)
+    }
+
+    pub(in crate::check::checker) fn effective_value_storage_for_symbol_replay(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<ValueStorageId> {
         if let Some(winner) = self.private_collision_value_winners.get(&symbol).copied() {
             if self.combined_source_library_value_precedence
                 || self
                     .private_collision_affected
                     .contains(&ReplayOwner::Value(winner))
             {
+                self.record_replay_demand_at(ReplayOwner::Value(winner), "effective-value-storage");
                 return Some(winner);
             }
         }
@@ -6466,6 +6475,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             else {
                 continue;
             };
+            self.install_authenticated_collision_value_occurrences(symbol, winner);
             if self.binder.symbols.get(symbol).is_some_and(|binding| {
                 binding.function_values.len() > 1 && binding.function_values.contains(&winner)
             }) {
@@ -6473,6 +6483,42 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
                     .insert(name.clone(), winner);
             }
             self.private_collision_value_winners.insert(symbol, winner);
+        }
+    }
+
+    pub(in crate::check::checker) fn install_authenticated_collision_value_occurrences(
+        &mut self,
+        symbol: SymbolId,
+        winner: ValueStorageId,
+    ) {
+        if let Some(binding) = self.binder.symbols.get(symbol) {
+            for declaration in &binding.declarations {
+                let user_occurrence = self
+                    .lexical_events
+                    .declaration_reservation(*declaration)
+                    .is_some_and(|reservation| {
+                        matches!(reservation.source.unit, SourceUnit::User { .. })
+                    });
+                if self
+                    .binder
+                    .declarations
+                    .get(*declaration)
+                    .is_some_and(|row| {
+                        user_occurrence
+                            && row.kind == DeclarationKind::Variable
+                            && row.value_storage.is_some()
+                    })
+                {
+                    self.private_collision_value_occurrence_winners
+                        .entry(*declaration)
+                        .and_modify(|existing| {
+                            if existing.is_some_and(|existing| existing != winner) {
+                                *existing = None;
+                            }
+                        })
+                        .or_insert(Some(winner));
+                }
+            }
         }
     }
 
@@ -6760,6 +6806,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         combined_user_library_type_groups: BTreeSet::new(),
         combined_user_source: false,
         private_collision_value_winners: FxHashMap::default(),
+        private_collision_value_occurrence_winners: FxHashMap::default(),
         private_collision_value_winners_by_name: FxHashMap::default(),
         combined_source_library_value_precedence: false,
         global_object_type: None,
@@ -6810,6 +6857,9 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         namespace_values: namespace_values::NamespaceValueRegistry::default(),
         var_annotation_surfaces: FxHashMap::default(),
         var_value_type_states: FxHashMap::default(),
+        object_binding_pending_groups: Vec::new(),
+        object_binding_pending_by_exact: FxHashMap::default(),
+        object_binding_pending_by_effective: FxHashMap::default(),
         // M23 flow-graph state. Slots 0/1 are the UNREACHABLE/START sentinels the
         // whole arena reserves (see `FlowNodeId::{UNREACHABLE,START}`).
         flow_nodes: vec![

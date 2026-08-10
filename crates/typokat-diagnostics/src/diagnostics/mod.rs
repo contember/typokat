@@ -98,6 +98,10 @@ pub enum DiagnosticCode {
     TK2445,
     /// Cannot redeclare a block-scoped variable.
     TK2451,
+    /// Variable is used before assignment.
+    TK2454,
+    /// A `for...in` left-hand side cannot be a destructuring pattern.
+    TK2491,
     /// Cannot find namespace.
     TK2503,
     /// Cannot create an instance of an abstract class — M15.
@@ -207,6 +211,8 @@ impl DiagnosticCode {
             DiagnosticCode::TK2434 => "TK2434",
             DiagnosticCode::TK2445 => "TK2445",
             DiagnosticCode::TK2451 => "TK2451",
+            DiagnosticCode::TK2454 => "TK2454",
+            DiagnosticCode::TK2491 => "TK2491",
             DiagnosticCode::TK2503 => "TK2503",
             DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2515 => "TK2515",
@@ -715,6 +721,28 @@ impl Diagnostic {
             code: DiagnosticCode::TK2339,
             severity: Severity::Error,
             message: format!("Property '{name}' does not exist on type '{tgt}'"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn for_in_destructuring(span: Span) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2491,
+            severity: Severity::Error,
+            message:
+                "The left-hand side of a 'for...in' statement cannot be a destructuring pattern."
+                    .to_string(),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn variable_used_before_assignment(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2454,
+            severity: Severity::Error,
+            message: format!("Variable '{name}' is used before being assigned."),
             span,
             elaboration: Vec::new(),
         }

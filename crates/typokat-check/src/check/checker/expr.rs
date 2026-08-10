@@ -175,6 +175,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         symbol: symbol_id,
                         kind: ResolvedValueKind::Ordinary,
                     } => {
+                        if let Some(storage) =
+                            self.effective_value_storage_for_symbol_replay(symbol_id)
+                        {
+                            self.account_untyped_parameter_binding_use(storage);
+                            if self.account_object_binding_identifier_demand(storage) {
+                                if self.decl_type_replay(storage).is_none() {
+                                    self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
+                                    return Some((well_known.error, span));
+                                }
+                            }
+                        }
+                        if self
+                            .binder
+                            .symbols
+                            .get(symbol_id)
+                            .and_then(|symbol| symbol.value)
+                            .is_some_and(|storage| {
+                                matches!(
+                                    self.var_value_type_states.get(&storage),
+                                    Some(VarValueTypeState::ObjectBindingPending)
+                                )
+                            })
+                        {
+                            self.emit_diagnostic(Diagnostic::variable_used_before_assignment(
+                                span, name,
+                            ));
+                            return Some((well_known.error, span));
+                        }
                         if name == "globalThis"
                             && self.binder.direct_global_this_value_conflict(symbol_id)
                         {
@@ -397,6 +425,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     Span::from_oxc(private_field.span),
                     "private field access not inferred",
                 );
+                self.account_direct_private_field_object(scope, &private_field.object);
                 None
             }
             Expression::RegExpLiteral(lit) => {
@@ -482,6 +511,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     Span::from_oxc(member.span),
                     "private field access not inferred",
                 );
+                self.account_direct_private_field_object(scope, &member.object);
             }
             SimpleAssignmentTarget::TSAsExpression(assertion) => {
                 self.infer_assertion(
@@ -519,6 +549,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
         }
+    }
+
+    fn account_direct_private_field_object(&mut self, scope: ScopeId, object: &Expression<'_>) {
+        let Expression::Identifier(identifier) = object else {
+            return;
+        };
+        let ValueResolution::Resolved {
+            symbol,
+            kind: ResolvedValueKind::Ordinary,
+        } = self.resolve_value_binding_replay(scope, identifier.name.as_str())
+        else {
+            return;
+        };
+        let Some(storage) = self.effective_value_storage_for_symbol_replay(symbol) else {
+            return;
+        };
+        self.account_object_binding_private_field_demand(storage);
     }
 
     /// Walk a chain expression without resolving calls or member access on its spine.

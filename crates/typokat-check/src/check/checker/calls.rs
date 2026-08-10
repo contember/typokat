@@ -13,7 +13,7 @@ use super::function_groups::FunctionGroupDemand;
 use super::type_groups::{
     PublishedTypeGroupSurface, PublishedTypeGroupTerminal, TypeEnvironmentState,
 };
-use crate::binder::declaration::ValueStorageId;
+use crate::binder::declaration::{DeclarationKind, ValueStorageId};
 use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
 use crate::check::infer;
@@ -4333,6 +4333,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     // annotation type only; binding destructured names is deferred. The
                     // annotation resolves in the enclosing class context.
                     if let BindingPattern::ObjectPattern(object) = &parameter.pattern {
+                        let records_before = self
+                            .effect_stack
+                            .last()
+                            .map(CheckerEffects::observable_count)
+                            .unwrap_or(0);
                         if let Some(annotation_ty) = annotation_ty {
                             match self.demand_apparent_type(annotation_ty) {
                                 DemandOutcome::Ready(source) => {
@@ -4346,6 +4351,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 }
                             }
                         }
+                        let access_is_non_clean = self
+                            .effect_stack
+                            .last()
+                            .is_some_and(|effects| effects.observable_count() > records_before);
+                        self.publish_syntax_only_object_parameter(
+                            &parameter.pattern,
+                            access_is_non_clean,
+                        );
                     }
 
                     if check_initializers {
@@ -4389,6 +4402,43 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         lowered
     }
 
+    fn publish_syntax_only_object_parameter(
+        &mut self,
+        pattern: &BindingPattern<'_>,
+        access_is_non_clean: bool,
+    ) {
+        let storages: Vec<ValueStorageId> = pattern
+            .get_binding_identifiers()
+            .into_iter()
+            .filter_map(|identifier| {
+                self.binder
+                    .exact_declaration_at(
+                        self.current_module,
+                        identifier.span.start,
+                        DeclarationKind::Parameter,
+                    )
+                    .and_then(|declaration| declaration.value_storage)
+            })
+            .collect();
+        if storages
+            .iter()
+            .any(|storage| self.decl_type_replay(*storage).is_some())
+        {
+            return;
+        }
+        if !access_is_non_clean {
+            self.record_incomplete(
+                "bind/binding-pattern/object-pattern",
+                Span::from_oxc(pattern.span()),
+                "parameter object binding pattern not typed",
+            );
+        }
+        let error = self.interner.well_known().error;
+        for storage in storages {
+            self.publish_copied_decl_type_replay(storage, error);
+        }
+    }
+
     /// Parameter defaults are executable expressions, so declaration pre-reservation
     /// leaves them until the original function source position. Their parameter types
     /// were lowered once into the reserved surface.
@@ -4398,6 +4448,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         params: &FormalParameters<'_>,
         lowered: &[ParameterType],
     ) {
+        self.mark_syntax_only_object_parameters(scope, params);
         for (param, parameter) in params.items.iter().zip(lowered) {
             if param.type_annotation.is_some() {
                 if let Some(init) = &param.initializer {
@@ -4407,6 +4458,69 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         &param.pattern,
                         init,
                     );
+                }
+            }
+        }
+    }
+
+    /// Account for a body read of an object-parameter leaf whose type is deferred.
+    pub(in crate::check::checker) fn account_untyped_parameter_binding_use(
+        &mut self,
+        storage: ValueStorageId,
+    ) {
+        if !matches!(
+            self.var_value_type_states.get(&storage),
+            Some(VarValueTypeState::SyntaxOnlyObjectParameter)
+        ) {
+            return;
+        }
+        if self.decl_type_replay(storage).is_some() {
+            return;
+        }
+        let binding_span = self
+            .binder
+            .declarations
+            .iter()
+            .find(|declaration| {
+                declaration.kind == DeclarationKind::Parameter
+                    && declaration.value_storage == Some(storage)
+            })
+            .map(|declaration| declaration.site.binding_span);
+        let Some(binding_span) = binding_span else {
+            return;
+        };
+        self.record_incomplete(
+            "bind/binding-pattern/object-pattern",
+            binding_span,
+            "parameter object binding pattern not typed",
+        );
+        let error = self.interner.well_known().error;
+        self.publish_copied_decl_type_replay(storage, error);
+    }
+
+    fn mark_syntax_only_object_parameters(
+        &mut self,
+        scope: ScopeId,
+        params: &FormalParameters<'_>,
+    ) {
+        for parameter in &params.items {
+            let BindingPattern::ObjectPattern(_) = &parameter.pattern else {
+                continue;
+            };
+            self.check_syntax_only_pattern_initializers(scope, &parameter.pattern);
+            for identifier in parameter.pattern.get_binding_identifiers() {
+                let storage = self
+                    .binder
+                    .exact_declaration_at(
+                        self.current_module,
+                        identifier.span.start,
+                        DeclarationKind::Parameter,
+                    )
+                    .and_then(|declaration| declaration.value_storage);
+                if let Some(storage) = storage {
+                    self.var_value_type_states
+                        .entry(storage)
+                        .or_insert(VarValueTypeState::SyntaxOnlyObjectParameter);
                 }
             }
         }
@@ -4486,6 +4600,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         params: &FormalParameters<'_>,
         lowered: &[Option<ParameterType>],
     ) {
+        self.mark_syntax_only_object_parameters(scope, params);
         for (param, lowered) in params.items.iter().zip(lowered) {
             if let Some(initializer) = &param.initializer {
                 self.check_pattern_annotated_initializer(

@@ -8,7 +8,7 @@ use super::function_groups::{
     FunctionGroupBodyCompletion, FunctionGroupIdentity, FunctionGroupUnavailableCause,
     FunctionNamespacePayload,
 };
-use super::lexical_events::LexicalOwnerPhase;
+use super::lexical_events::{source_ordinal, LexicalOwnerPhase};
 use super::replay_index::ReplayOwner;
 use crate::binder::declaration::{DeclarationKind, ValueStorageId};
 use crate::binder::scope::ScopeId;
@@ -20,11 +20,11 @@ use crate::span::Span;
 use crate::types::repr::{FunctionType, ObjectType};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
-    BindingPattern, BlockStatement, Declaration, ExportDefaultDeclarationKind, Expression,
-    ForInStatement, ForOfStatement, ForStatement, ForStatementInit, ForStatementLeft, Function,
-    ObjectPropertyKind, Statement, TSModuleDeclaration, TSModuleDeclarationBody,
-    TSModuleDeclarationName, TSType, TSTypeName, TryStatement, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    BindingIdentifier, BindingPattern, BindingProperty, BlockStatement, Declaration,
+    ExportDefaultDeclarationKind, Expression, ForInStatement, ForOfStatement, ForStatement,
+    ForStatementInit, ForStatementLeft, Function, ObjectPattern, ObjectPropertyKind, Statement,
+    TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName, TSType, TSTypeName,
+    TryStatement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -125,6 +125,31 @@ struct NamespaceAliasCandidateCollector<'a> {
     binder: &'a crate::binder::Binder,
     module: ScopeId,
     candidates: Vec<(ValueStorageId, ScopeId, String)>,
+}
+
+struct LaterObjectBindingReferenceFinder<'a> {
+    later_names: &'a FxHashSet<String>,
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for LaterObjectBindingReferenceFinder<'_> {
+    fn visit_expression(&mut self, expression: &Expression<'ast>) {
+        if matches!(
+            expression,
+            Expression::ArrowFunctionExpression(_)
+                | Expression::ClassExpression(_)
+                | Expression::FunctionExpression(_)
+        ) {
+            return;
+        }
+        walk::walk_expression(self, expression);
+    }
+
+    fn visit_identifier_reference(&mut self, identifier: &oxc_ast::ast::IdentifierReference<'ast>) {
+        if self.later_names.contains(identifier.name.as_str()) {
+            self.found = true;
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for NamespaceAliasCandidateCollector<'_> {
@@ -893,14 +918,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         self.check_block(scope, &try_stmt.block, declared_ret, inferred);
         if let Some(handler) = &try_stmt.handler {
+            let catch_scope = self.block_scope(scope, handler.span.start);
             if let Some(param) = &handler.param {
                 self.record_incomplete(
                     "stmt-check/try-statement/catch-param",
                     Span::from_oxc(param.span),
                     "catch parameter type not modeled (tsc types it unknown)",
                 );
+                self.check_syntax_only_pattern_initializers(catch_scope, &param.pattern);
             }
-            self.check_block(scope, &handler.body, declared_ret, inferred);
+            self.check_block(catch_scope, &handler.body, declared_ret, inferred);
         }
         if let Some(finalizer) = &try_stmt.finalizer {
             self.check_block(scope, finalizer, declared_ret, inferred);
@@ -1108,8 +1135,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     ) {
         let head = self.loop_head_scope(scope, for_in.span.start);
         self.infer_expr(scope, &for_in.right);
-        let key_ty = self.interner.well_known().string;
-        self.declare_for_left(head, &for_in.left, key_ty);
+        if let ForStatementLeft::VariableDeclaration(declaration) = &for_in.left {
+            for declarator in &declaration.declarations {
+                if !matches!(declarator.id, BindingPattern::BindingIdentifier(_)) {
+                    self.check_syntax_only_pattern_initializers(head, &declarator.id);
+                    self.emit_diagnostic(Diagnostic::for_in_destructuring(Span::from_oxc(
+                        declarator.id.span(),
+                    )));
+                }
+            }
+        }
+        let simple_left = match &for_in.left {
+            ForStatementLeft::VariableDeclaration(declaration) => declaration
+                .declarations
+                .iter()
+                .all(|declarator| matches!(declarator.id, BindingPattern::BindingIdentifier(_))),
+            _ => true,
+        };
+        if simple_left {
+            let key_ty = self.interner.well_known().string;
+            self.declare_for_left(head, &for_in.left, key_ty);
+        }
         self.check_stmt(head, &for_in.body, declared_ret, inferred);
     }
 
@@ -1180,6 +1226,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     &declarator.id,
                     decl_id,
                     declared,
+                );
+            } else if matches!(declarator.id, BindingPattern::ObjectPattern(_)) {
+                self.check_syntax_only_pattern_initializers(scope, &declarator.id);
+                self.record_incomplete(
+                    "bind/binding-pattern/object-pattern",
+                    Span::from_oxc(declarator.id.span()),
+                    "for-in/of object binding pattern not typed",
+                );
+            } else if matches!(declarator.id, BindingPattern::ArrayPattern(_)) {
+                self.record_incomplete(
+                    "bind/binding-pattern/array-pattern",
+                    Span::from_oxc(declarator.id.span()),
+                    "for-in/of array binding pattern not typed",
                 );
             }
         }
@@ -1294,6 +1353,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         kind: VariableDeclarationKind,
         declarator: &VariableDeclarator<'_>,
     ) {
+        if let BindingPattern::ObjectPattern(object) = &declarator.id {
+            if !flat_object_binding_pattern(object) {
+                self.reserve_object_binding_pending_group(declarator, object);
+            }
+        }
         let decl_id = variable_declaration_decl_id(self.binder, scope, kind, &declarator.id);
 
         // Lower the annotation first (independent of the initializer; emits no
@@ -1318,7 +1382,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.record_class_value_alias(scope, kind, declarator, decl_id);
 
         // F4: object destructuring bindings run M13 access checks against the
-        // initializer type; binding the destructured names' types is deferred.
+        // initializer type.
         if let BindingPattern::ObjectPattern(object) = &declarator.id {
             if let Some((source, _)) = &initializer {
                 match self.demand_apparent_type(*source) {
@@ -1333,6 +1397,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                 }
             }
+
+            if flat_object_binding_pattern(object) {
+                if let Some(source) = annotation.or(initializer.map(|(ty, _)| ty)) {
+                    self.publish_flat_object_binding(scope, kind, object, source);
+                }
+            } else {
+                self.check_syntax_only_pattern_initializers(scope, &declarator.id);
+            }
+            return;
+        }
+        if let BindingPattern::ArrayPattern(array) = &declarator.id {
+            self.record_incomplete(
+                "bind/binding-pattern/array-pattern",
+                Span::from_oxc(array.span),
+                "array binding pattern not typed",
+            );
+            return;
         }
 
         // The declared type the symbol resolves to: annotation wins; otherwise the
@@ -1345,6 +1426,475 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if let (Some(decl_id), Some(ty)) = (decl_id, declared) {
             self.publish_variable_decl_type(scope, kind, &declarator.id, decl_id, ty);
         }
+    }
+
+    fn reserve_object_binding_pending_group(
+        &mut self,
+        declarator: &VariableDeclarator<'_>,
+        object: &ObjectPattern<'_>,
+    ) {
+        let Some(owner) = self
+            .lexical_events
+            .owner_at(
+                source_ordinal(self.current_source),
+                declarator.span.start,
+                LexicalOwnerPhase::Incomplete,
+            )
+            .map(|owner| owner.ticket)
+        else {
+            self.record_incomplete(
+                "bind/binding-pattern/object-pattern",
+                Span::from_oxc(object.span),
+                "object binding pattern shape not typed",
+            );
+            return;
+        };
+
+        let mut leaves = Vec::new();
+        for identifier in declarator.id.get_binding_identifiers() {
+            let Some(declaration) = self.binder.exact_declaration_at(
+                self.current_module,
+                identifier.span.start,
+                DeclarationKind::Variable,
+            ) else {
+                continue;
+            };
+            let Some(exact_storage) = declaration.value_storage else {
+                continue;
+            };
+            if self
+                .object_binding_pending_by_exact
+                .contains_key(&exact_storage)
+            {
+                continue;
+            }
+
+            let symbol = declaration
+                .site
+                .scope
+                .and_then(|scope| self.binder.resolve_value(scope, identifier.name.as_str()));
+            let participant = symbol
+                .and_then(|symbol| self.binder.symbols.get(symbol))
+                .is_some_and(|symbol| symbol.declarations.contains(&declaration.id));
+            let visible_storage = symbol
+                .and_then(|symbol| self.binder.symbols.get(symbol))
+                .and_then(|symbol| symbol.value)
+                .filter(|_| participant)
+                .unwrap_or(exact_storage);
+            let certified_collision = self
+                .private_collision_value_occurrence_winners
+                .get(&declaration.id)
+                .copied()
+                .flatten()
+                .filter(|_| participant);
+            let effective_storage = certified_collision.unwrap_or(visible_storage);
+            leaves.push(ObjectBindingPendingLeaf {
+                declaration: declaration.id,
+                exact_storage,
+                effective_storage,
+                state: ObjectBindingPendingLeafState::Pending,
+            });
+        }
+
+        if leaves.is_empty() {
+            self.with_ticket_effects(owner, |pass| {
+                pass.record_incomplete(
+                    "bind/binding-pattern/object-pattern",
+                    Span::from_oxc(object.span),
+                    "object binding pattern shape not typed",
+                );
+            });
+            return;
+        }
+
+        let group = self.object_binding_pending_groups.len();
+        self.object_binding_pending_groups
+            .push(ObjectBindingPendingGroup {
+                owner,
+                span: Span::from_oxc(object.span),
+                leaves,
+                generic_emitted: false,
+            });
+        for (leaf, pending) in self.object_binding_pending_groups[group]
+            .leaves
+            .iter()
+            .enumerate()
+        {
+            let reference = ObjectBindingPendingLeafRef { group, leaf };
+            self.object_binding_pending_by_exact
+                .insert(pending.exact_storage, reference);
+            self.object_binding_pending_by_effective
+                .entry(pending.effective_storage)
+                .or_default()
+                .push(reference);
+        }
+        let certified = self.object_binding_pending_groups[group]
+            .leaves
+            .iter()
+            .filter_map(|leaf| {
+                self.private_collision_value_occurrence_winners
+                    .get(&leaf.declaration)
+                    .copied()
+                    .flatten()
+                    .map(|winner| (leaf.exact_storage, winner))
+            })
+            .collect::<Vec<_>>();
+        for (exact, winner) in certified {
+            self.close_authenticated_object_binding_publication(exact, winner);
+        }
+    }
+
+    pub(in crate::check::checker) fn check_syntax_only_pattern_initializers(
+        &mut self,
+        scope: ScopeId,
+        pattern: &BindingPattern<'_>,
+    ) {
+        match pattern {
+            BindingPattern::BindingIdentifier(_) => {}
+            BindingPattern::ObjectPattern(object) => {
+                for property in &object.properties {
+                    self.check_syntax_only_pattern_initializers(scope, &property.value);
+                }
+                if let Some(rest) = &object.rest {
+                    self.check_syntax_only_pattern_initializers(scope, &rest.argument);
+                }
+            }
+            BindingPattern::ArrayPattern(array) => {
+                for element in array.elements.iter().flatten() {
+                    self.check_syntax_only_pattern_initializers(scope, element);
+                }
+                if let Some(rest) = &array.rest {
+                    self.check_syntax_only_pattern_initializers(scope, &rest.argument);
+                }
+            }
+            BindingPattern::AssignmentPattern(assignment) => {
+                self.check_syntax_only_pattern_initializers(scope, &assignment.left);
+                self.infer_expr(scope, &assignment.right);
+            }
+        }
+    }
+
+    fn emit_object_binding_pending_group(&mut self, group: usize) {
+        let Some(pending) = self.object_binding_pending_groups.get_mut(group) else {
+            return;
+        };
+        if pending.generic_emitted {
+            return;
+        }
+        pending.generic_emitted = true;
+        let owner = pending.owner;
+        let span = pending.span;
+        self.with_ticket_effects(owner, |pass| {
+            pass.record_incomplete(
+                "bind/binding-pattern/object-pattern",
+                span,
+                "object binding pattern shape not typed",
+            );
+        });
+    }
+
+    pub(in crate::check::checker) fn account_object_binding_identifier_demand(
+        &mut self,
+        storage: ValueStorageId,
+    ) -> bool {
+        let Some(references) = self
+            .object_binding_pending_by_effective
+            .get(&storage)
+            .cloned()
+        else {
+            return false;
+        };
+        let mut groups = Vec::new();
+        let mut demanded = false;
+        for reference in references {
+            let Some(leaf) = self
+                .object_binding_pending_groups
+                .get_mut(reference.group)
+                .and_then(|group| group.leaves.get_mut(reference.leaf))
+            else {
+                continue;
+            };
+            match leaf.state {
+                ObjectBindingPendingLeafState::Pending
+                | ObjectBindingPendingLeafState::SpecificDemand => {
+                    leaf.state = ObjectBindingPendingLeafState::OrdinaryDemand;
+                    demanded = true;
+                    if !groups.contains(&reference.group) {
+                        groups.push(reference.group);
+                    }
+                }
+                ObjectBindingPendingLeafState::OrdinaryDemand => demanded = true,
+                ObjectBindingPendingLeafState::Published => {}
+            }
+        }
+        for group in groups {
+            self.emit_object_binding_pending_group(group);
+        }
+        demanded
+    }
+
+    pub(in crate::check::checker) fn account_object_binding_private_field_demand(
+        &mut self,
+        storage: ValueStorageId,
+    ) {
+        let Some(references) = self.object_binding_pending_by_effective.get(&storage) else {
+            return;
+        };
+        let mut candidate = None;
+        for reference in references.iter().copied() {
+            let Some(leaf) = self
+                .object_binding_pending_groups
+                .get(reference.group)
+                .and_then(|group| group.leaves.get(reference.leaf))
+            else {
+                continue;
+            };
+            if matches!(
+                leaf.state,
+                ObjectBindingPendingLeafState::Pending
+                    | ObjectBindingPendingLeafState::SpecificDemand
+            ) {
+                if candidate.is_some() {
+                    return;
+                }
+                candidate = Some(reference);
+            }
+        }
+        let Some(reference) = candidate else {
+            return;
+        };
+        if let Some(leaf) = self
+            .object_binding_pending_groups
+            .get_mut(reference.group)
+            .and_then(|group| group.leaves.get_mut(reference.leaf))
+        {
+            leaf.state = ObjectBindingPendingLeafState::SpecificDemand;
+        }
+    }
+
+    fn close_authenticated_object_binding_publication(
+        &mut self,
+        exact_storage: ValueStorageId,
+        effective_storage: ValueStorageId,
+    ) {
+        let Some(reference) = self
+            .object_binding_pending_by_exact
+            .get(&exact_storage)
+            .copied()
+        else {
+            return;
+        };
+        let Some(leaf) = self
+            .object_binding_pending_groups
+            .get_mut(reference.group)
+            .and_then(|group| group.leaves.get_mut(reference.leaf))
+        else {
+            return;
+        };
+        let exact_participant = self
+            .binder
+            .declarations
+            .get(leaf.declaration)
+            .is_some_and(|declaration| declaration.value_storage == Some(exact_storage));
+        if exact_participant && leaf.effective_storage == effective_storage {
+            leaf.state = ObjectBindingPendingLeafState::Published;
+        }
+    }
+
+    pub(in crate::check::checker) fn finalize_object_binding_pending_groups(&mut self) {
+        let mut groups = Vec::new();
+        for (index, group) in self.object_binding_pending_groups.iter().enumerate() {
+            let needs_generic = group.leaves.is_empty()
+                || group.leaves.iter().any(|leaf| {
+                    matches!(
+                        leaf.state,
+                        ObjectBindingPendingLeafState::Pending
+                            | ObjectBindingPendingLeafState::OrdinaryDemand
+                    )
+                });
+            if !group.generic_emitted && needs_generic {
+                groups.push(index);
+            }
+        }
+        for group in groups {
+            self.emit_object_binding_pending_group(group);
+        }
+        debug_assert!(self.object_binding_pending_groups.iter().all(|group| {
+            group.generic_emitted
+                || (!group.leaves.is_empty()
+                    && group.leaves.iter().all(|leaf| {
+                        matches!(
+                            leaf.state,
+                            ObjectBindingPendingLeafState::SpecificDemand
+                                | ObjectBindingPendingLeafState::Published
+                        )
+                    }))
+        }));
+        self.object_binding_pending_by_exact.clear();
+        self.object_binding_pending_by_effective.clear();
+        self.object_binding_pending_groups.clear();
+    }
+
+    fn publish_flat_object_binding(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        object: &ObjectPattern<'_>,
+        source: TypeId,
+    ) {
+        for (property_index, property) in object.properties.iter().enumerate() {
+            let Some(binding) = direct_object_binding_target(&property.value) else {
+                continue;
+            };
+            let BindingPattern::BindingIdentifier(identifier) = binding else {
+                continue;
+            };
+            let Some(storage) = self
+                .binder
+                .exact_declaration_at(
+                    self.current_module,
+                    identifier.span.start,
+                    DeclarationKind::Variable,
+                )
+                .and_then(|declaration| declaration.value_storage)
+            else {
+                continue;
+            };
+            let publication_storage = if kind.is_var() {
+                variable_declaration_symbol_id(self.binder, scope, kind, binding)
+                    .and_then(|symbol| self.binder.symbols.get(symbol))
+                    .and_then(|symbol| symbol.value)
+                    .unwrap_or(storage)
+            } else {
+                storage
+            };
+            if publication_storage != storage {
+                self.var_value_type_states
+                    .insert(storage, VarValueTypeState::Source);
+            }
+            let default_references_later = object_default_references_later_binding(
+                property,
+                &object.properties[property_index.saturating_add(1)..],
+            );
+            let published = if self.replay_trace.is_some() {
+                self.with_replay_owner(ReplayOwner::Value(publication_storage), |pass| {
+                    pass.publish_flat_object_binding_property(
+                        scope,
+                        kind,
+                        property,
+                        publication_storage,
+                        source,
+                        default_references_later,
+                    )
+                })
+            } else {
+                self.publish_flat_object_binding_property(
+                    scope,
+                    kind,
+                    property,
+                    publication_storage,
+                    source,
+                    default_references_later,
+                )
+            };
+            if published {
+                self.close_authenticated_object_binding_publication(storage, publication_storage);
+            }
+        }
+    }
+
+    fn publish_flat_object_binding_property(
+        &mut self,
+        scope: ScopeId,
+        kind: VariableDeclarationKind,
+        property: &BindingProperty<'_>,
+        storage: ValueStorageId,
+        source: TypeId,
+        default_references_later: bool,
+    ) -> bool {
+        let Some(name) = property.key.static_name().map(|name| name.into_owned()) else {
+            return false;
+        };
+        let source = match self.demand_composite_apparent_type(source) {
+            DemandOutcome::Ready(source) => source,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(
+                    DemandOutcome::Exhausted(exhaustion),
+                    Span::from_oxc(property.key.span()),
+                );
+                return false;
+            }
+        };
+        let property_type = self
+            .interner
+            .store()
+            .object_type(source)
+            .and_then(|object| object.property(&name))
+            .map(|property| property.ty);
+        if default_references_later {
+            let BindingPattern::AssignmentPattern(assignment) = &property.value else {
+                return false;
+            };
+            self.record_incomplete(
+                "bind/binding-pattern/object-default-order",
+                Span::from_oxc(assignment.span),
+                "object binding default references a later leaf",
+            );
+        }
+        let Some(mut leaf_type) = property_type else {
+            let target = render_type(self.interner.store(), source, false);
+            self.emit_diagnostic(Diagnostic::property_does_not_exist(
+                Span::from_oxc(property.key.span()),
+                &name,
+                &target,
+            ));
+            if let BindingPattern::AssignmentPattern(assignment) = &property.value {
+                self.check_annotated_initializer(
+                    scope,
+                    None,
+                    &assignment.right,
+                    Span::from_oxc(assignment.right.span()),
+                );
+            }
+            return false;
+        };
+
+        if let BindingPattern::AssignmentPattern(assignment) = &property.value {
+            leaf_type = self.strip_binding_undefined(leaf_type);
+            self.check_annotated_initializer(
+                scope,
+                Some(leaf_type),
+                &assignment.right,
+                Span::from_oxc(assignment.right.span()),
+            );
+        }
+
+        let binding = match &property.value {
+            BindingPattern::BindingIdentifier(_) => &property.value,
+            BindingPattern::AssignmentPattern(assignment) => &assignment.left,
+            _ => return false,
+        };
+        self.publish_variable_decl_type(scope, kind, binding, storage, leaf_type);
+        true
+    }
+
+    fn strip_binding_undefined(&mut self, ty: TypeId) -> TypeId {
+        let well_known = self.interner.well_known();
+        if ty == well_known.undefined {
+            return well_known.never;
+        }
+        let Some(members) = self.interner.store().union_members(ty) else {
+            return ty;
+        };
+        if !members.contains(&well_known.undefined) {
+            return ty;
+        }
+        let filtered = members
+            .iter()
+            .copied()
+            .filter(|member| *member != well_known.undefined)
+            .collect();
+        self.interner.union(filtered)
     }
 
     pub(in crate::check::checker) fn check_owned_declarator(
@@ -1571,6 +2121,43 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         declaration: &VariableDeclaration<'_>,
     ) {
         for declarator in &declaration.declarations {
+            if declaration.kind.is_var() {
+                if let BindingPattern::ObjectPattern(object) = &declarator.id {
+                    if flat_object_binding_pattern(object) {
+                        for property in &object.properties {
+                            let Some(binding) = direct_object_binding_target(&property.value)
+                            else {
+                                continue;
+                            };
+                            let BindingPattern::BindingIdentifier(identifier) = binding else {
+                                continue;
+                            };
+                            if let Some(exact_storage) = self
+                                .binder
+                                .exact_declaration_at(
+                                    self.current_module,
+                                    identifier.span.start,
+                                    DeclarationKind::Variable,
+                                )
+                                .and_then(|declaration| declaration.value_storage)
+                            {
+                                let storage = variable_declaration_symbol_id(
+                                    self.binder,
+                                    scope,
+                                    declaration.kind,
+                                    binding,
+                                )
+                                .and_then(|symbol| self.binder.symbols.get(symbol))
+                                .and_then(|symbol| symbol.value)
+                                .unwrap_or(exact_storage);
+                                self.var_value_type_states
+                                    .entry(storage)
+                                    .or_insert(VarValueTypeState::ObjectBindingPending);
+                            }
+                        }
+                    }
+                }
+            }
             let Some(type_annotation) = &declarator.type_annotation else {
                 continue;
             };
@@ -1649,6 +2236,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .unwrap_or(decl_id),
             _ => decl_id,
         };
+        if replay_decl_id != decl_id
+            && matches!(
+                self.var_value_type_states.get(&decl_id),
+                Some(VarValueTypeState::ObjectBindingPending)
+            )
+        {
+            self.var_value_type_states
+                .insert(decl_id, VarValueTypeState::Source);
+        }
         if kind.is_var() {
             if let Some(function_ty) = self.function_value_type_for_var(scope, kind, pattern) {
                 self.set_variable_decl_type(scope, kind, pattern, replay_decl_id, function_ty);
@@ -1657,10 +2253,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return;
             }
             match self.var_value_type_states.get(&replay_decl_id) {
-                Some(VarValueTypeState::Source) | Some(VarValueTypeState::Existing) => {
+                Some(
+                    VarValueTypeState::Source
+                    | VarValueTypeState::Existing
+                    | VarValueTypeState::SyntaxOnlyObjectParameter,
+                ) => {
                     return;
                 }
-                Some(VarValueTypeState::Provisional) => {}
+                Some(VarValueTypeState::ObjectBindingPending | VarValueTypeState::Provisional) => {}
                 None if self.decl_type_replay(replay_decl_id).is_some()
                     && !self
                         .private_collision_affected
@@ -1711,8 +2311,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return;
         }
         match self.var_value_type_states.get(&replay_decl_id) {
-            Some(VarValueTypeState::Source) | Some(VarValueTypeState::Existing) => return,
-            Some(VarValueTypeState::Provisional) => return,
+            Some(
+                VarValueTypeState::Source
+                | VarValueTypeState::Existing
+                | VarValueTypeState::SyntaxOnlyObjectParameter,
+            ) => return,
+            Some(VarValueTypeState::ObjectBindingPending | VarValueTypeState::Provisional) => {
+                return
+            }
             None if self.decl_type_replay(replay_decl_id).is_some()
                 && !self
                     .private_collision_affected
@@ -2882,6 +3488,62 @@ fn variable_declaration_symbol_id(
         scope
     };
     binder.resolve_value(declaration_scope, identifier.name.as_str())
+}
+
+fn flat_object_binding_pattern(pattern: &ObjectPattern<'_>) -> bool {
+    pattern.rest.is_none()
+        && pattern.properties.iter().all(|property| {
+            !property.computed
+                && property.key.static_name().is_some()
+                && direct_object_binding_identifier(&property.value).is_some()
+        })
+}
+
+fn object_default_references_later_binding(
+    property: &BindingProperty<'_>,
+    later_properties: &[BindingProperty<'_>],
+) -> bool {
+    let BindingPattern::AssignmentPattern(assignment) = &property.value else {
+        return false;
+    };
+    let later_names: FxHashSet<String> = later_properties
+        .iter()
+        .filter_map(|property| direct_object_binding_identifier(&property.value))
+        .map(|identifier| identifier.name.to_string())
+        .collect();
+    if later_names.is_empty() {
+        return false;
+    }
+    let mut finder = LaterObjectBindingReferenceFinder {
+        later_names: &later_names,
+        found: false,
+    };
+    finder.visit_expression(&assignment.right);
+    finder.found
+}
+
+fn direct_object_binding_identifier<'a>(
+    pattern: &'a BindingPattern<'a>,
+) -> Option<&'a BindingIdentifier<'a>> {
+    let BindingPattern::BindingIdentifier(identifier) = direct_object_binding_target(pattern)?
+    else {
+        return None;
+    };
+    Some(identifier)
+}
+
+fn direct_object_binding_target<'a>(
+    pattern: &'a BindingPattern<'a>,
+) -> Option<&'a BindingPattern<'a>> {
+    match pattern {
+        BindingPattern::BindingIdentifier(_) => Some(pattern),
+        BindingPattern::AssignmentPattern(assignment)
+            if matches!(assignment.left, BindingPattern::BindingIdentifier(_)) =>
+        {
+            Some(&assignment.left)
+        }
+        _ => None,
+    }
 }
 
 pub(in crate::check::checker) fn function_overload_group<'stmt>(
