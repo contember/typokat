@@ -1680,3 +1680,9 @@ id = "class/class-heritage/poisoned-base"
 context = "class heritage base surface is poisoned"
 owner = "shipped"
 witness = "../cases/sr_semantic_duplication/class_initializer_poison.ts"
+
+[[incomplete]]
+id = "bind/binding-pattern/object-default-order"
+context = "object binding default references a later leaf"
+owner = "shipped"
+witness = "../cases/b48_object_binding_publication/review_regressions.ts"
