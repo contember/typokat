@@ -35,3 +35,18 @@ const b48ProjectionDefaultString: string = b48ProjectionAnyDefault;
 
 declare const b48ProjectionError: B48MissingProjectionSource; // error[TK2304]
 const { leaf: b48ProjectionErrorLeaf } = b48ProjectionError; // incomplete[bind/binding-pattern/object-pattern]
+
+// Missing and blocked union members are independent outcomes in either declaration order.
+type B48ProjectionMissingFirst = { otherA: string };
+type B48ProjectionBlockedSecond = { leaf: B48MissingProjectionA }; // error[TK2304]
+declare const b48ProjectionMissingBeforeBlocked:
+  | B48ProjectionMissingFirst
+  | B48ProjectionBlockedSecond;
+const { leaf: b48ProjectionOrderA } = b48ProjectionMissingBeforeBlocked; // error[TK2339] | incomplete[bind/binding-pattern/object-pattern]
+
+type B48ProjectionBlockedFirst = { leaf: B48MissingProjectionB }; // error[TK2304]
+type B48ProjectionMissingSecond = { otherB: string };
+declare const b48ProjectionBlockedBeforeMissing:
+  | B48ProjectionBlockedFirst
+  | B48ProjectionMissingSecond;
+const { leaf: b48ProjectionOrderB } = b48ProjectionBlockedBeforeMissing; // error[TK2339] | incomplete[bind/binding-pattern/object-pattern]
