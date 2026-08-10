@@ -179,11 +179,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                             self.effective_value_storage_for_symbol_replay(symbol_id)
                         {
                             self.account_untyped_parameter_binding_use(storage);
-                            if self.account_object_binding_identifier_demand(storage) {
-                                if self.decl_type_replay(storage).is_none() {
-                                    self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
-                                    return Some((well_known.error, span));
-                                }
+                            if self.account_object_binding_identifier_demand(storage)
+                                && self.decl_type_replay(storage).is_none()
+                            {
+                                self.emit_diagnostic(Diagnostic::cannot_find_name(span, name));
+                                return Some((well_known.error, span));
                             }
                         }
                         if self
