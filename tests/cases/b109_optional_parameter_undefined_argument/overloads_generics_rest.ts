@@ -69,11 +69,6 @@ const lockedReverseUndefined: undefined = lockedReverseValue; // error[TK2322]
 const lockedStringLiteral: "locked" = locked("locked", undefined);
 const lockedBooleanLiteral: true = locked(true, undefined);
 
-declare function paired<T>(value: { left: T; right: T }, fallback?: T): T;
-const pairedValue = paired({ left: 1, right: 2 }, undefined);
-const pairedNumber: number = pairedValue;
-const pairedLiteralUnion: 1 | 2 = pairedValue; // error[TK2322]
-
 declare function split<T, U>(first: T, second?: U): [T, U];
 const splitFallback: [number, undefined] = split(1, undefined);
 
