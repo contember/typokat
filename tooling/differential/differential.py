@@ -527,7 +527,104 @@ def binding_matrix_programs() -> Sequence[Tuple[str, str]]:
     )
 
 
-def binding_matrix_check_exit_code(
+def optional_parameter_matrix_programs() -> Sequence[Tuple[str, str]]:
+    """The fixed optional-parameter corpus used to falsify and gate backlog 109."""
+    return (
+        (
+            "opm0_fixed_boundaries.ts",
+            "// optional-parameter-matrix: fixed-boundaries\n"
+            "declare const opm0_maybe: number | undefined;\n"
+            "function opm0_optional(value?: number): void {}\n"
+            "function opm0_defaulted(value: number = 1): void {}\n"
+            "function opm0_required(value: number): void {}\n"
+            "opm0_optional(undefined);\n"
+            "opm0_optional(opm0_maybe);\n"
+            "opm0_defaulted(undefined);\n"
+            "opm0_defaulted(opm0_maybe);\n"
+            "opm0_optional(\"wrong\");\n"
+            "opm0_required(undefined);\n",
+        ),
+        (
+            "opm1_call_consumers.ts",
+            "// optional-parameter-matrix: call-consumers\n"
+            "class opm1_Box { constructor(value?: number) {} "
+            "method(value?: number): void {} }\n"
+            "const opm1_instance = new opm1_Box(undefined);\n"
+            "opm1_instance.method(undefined);\n"
+            "const opm1_function: (value?: number) => void = "
+            "(value?: number): void => {};\n"
+            "opm1_function(undefined);\n"
+            "class opm1_Base { constructor(value?: number) {} }\n"
+            "class opm1_Derived extends opm1_Base { constructor() { super(undefined); } }\n"
+            "interface opm1_Call { (value?: number): \"called\"; }\n"
+            "declare const opm1_call: opm1_Call;\n"
+            "const opm1_called: \"called\" = opm1_call(undefined);\n"
+            "interface opm1_Construct { "
+            "new (value?: number): { kind: \"constructed\" }; }\n"
+            "declare const opm1_construct: opm1_Construct;\n"
+            "const opm1_constructed: { kind: \"constructed\" } = "
+            "new opm1_construct(undefined);\n",
+        ),
+        (
+            "opm2_overload_rest.ts",
+            "// optional-parameter-matrix: overload-rest\n"
+            "function opm2_select(value?: number): \"optional\";\n"
+            "function opm2_select(value: string): \"required\";\n"
+            "function opm2_select(value?: number | string): \"optional\" | \"required\" "
+            "{ return \"optional\"; }\n"
+            "const opm2_selected: \"optional\" = opm2_select(undefined);\n"
+            "opm2_select(true);\n"
+            "function opm2_before_rest(prefix: string, value?: number, "
+            "...tail: boolean[]): void {}\n"
+            "opm2_before_rest(\"prefix\", undefined, true);\n"
+            "opm2_before_rest(\"prefix\", 1, \"wrong\");\n"
+            "opm2_before_rest();\n"
+            "declare function opm2_union_rest(value?: number, "
+            "...tail: [] | [boolean]): void;\n"
+            "opm2_union_rest(undefined);\n"
+            "opm2_union_rest(undefined, true);\n"
+            "function opm2_default_rest(prefix: string, value: number = 1, "
+            "...tail: boolean[]): void {}\n"
+            "opm2_default_rest(\"prefix\", undefined, true);\n",
+        ),
+        (
+            "opm3_inference.ts",
+            "// optional-parameter-matrix: inference\n"
+            "declare function opm3_locked<T>(first: T, second?: T): T;\n"
+            "declare const opm3_maybe: number | undefined;\n"
+            "const opm3_literal: 1 = opm3_locked(1, undefined);\n"
+            "const opm3_number: number = opm3_locked(1, opm3_maybe);\n"
+            "declare function opm3_callback<T>(value?: T, "
+            "callback?: (value: T) => void): void;\n"
+            "opm3_callback(opm3_maybe, (value) => {\n"
+            "  const opm3_callback_number: number = value;\n"
+            "  const opm3_callback_undefined: undefined = value;\n"
+            "});\n"
+            "function opm3_explicit<T>(value?: T): T | undefined { return value; }\n"
+            "const opm3_explicit_result: number | undefined = "
+            "opm3_explicit<number>(undefined);\n"
+            "function opm3_inferred<T extends number>(seed: T[], value?: T): T[] "
+            "{ return seed; }\n"
+            "const opm3_inferred_result: number[] = opm3_inferred([1], undefined);\n",
+        ),
+        (
+            "opm4_contextual.ts",
+            "// optional-parameter-matrix: contextual\n"
+            "function opm4_object(value?: { tag: \"ok\" }): void {}\n"
+            "opm4_object(undefined);\n"
+            "opm4_object({ tag: \"bad\" });\n"
+            "function opm4_callback(value?: (input: number) => string): void {}\n"
+            "opm4_callback(undefined);\n"
+            "opm4_callback((input) => input.toString());\n"
+            "opm4_callback((input) => true);\n"
+            "function opm4_array(value?: { items: number[] }): void {}\n"
+            "opm4_array(undefined);\n"
+            "opm4_array({ items: [\"bad\"] });\n",
+        ),
+    )
+
+
+def matrix_check_exit_code(
         divergence_count: int, require_reference_divergence: bool) -> int:
     """Return the gate verdict without hiding invocation failures."""
     if require_reference_divergence:
@@ -535,7 +632,14 @@ def binding_matrix_check_exit_code(
     return 1 if divergence_count else 0
 
 
-def cmd_binding_matrix(args) -> int:
+def binding_matrix_check_exit_code(
+        divergence_count: int, require_reference_divergence: bool) -> int:
+    """Compatibility wrapper for the original matrix's tested API."""
+    return matrix_check_exit_code(divergence_count, require_reference_divergence)
+
+
+def _cmd_matrix(args, programs: Sequence[Tuple[str, str]], title: str,
+                work_prefix: str) -> int:
     if not os.path.exists(args.bin):
         print(f"error: candidate binary {args.bin} does not exist", file=sys.stderr)
         return 2
@@ -552,9 +656,8 @@ def cmd_binding_matrix(args) -> int:
             return 2
 
     os.makedirs(WORK, exist_ok=True)
-    work = tempfile.mkdtemp(prefix="binding-matrix-", dir=WORK)
+    work = tempfile.mkdtemp(prefix=work_prefix, dir=WORK)
     try:
-        programs = tuple(binding_matrix_programs())
         names = []
         for name, source in programs:
             with open(os.path.join(work, name), "w", encoding="utf-8") as fh:
@@ -574,7 +677,7 @@ def cmd_binding_matrix(args) -> int:
         status_counts: Counter = Counter()
         allowed_hits: Counter = Counter()
         print("=" * 78)
-        print(f"typokat binding matrix — {len(programs)} programs")
+        print(f"typokat {title} — {len(programs)} programs")
         print(f"  candidate : {args.bin}")
         ref_desc = f"tsc {ts_version} --strict" if args.ref == "tsc" else args.ref
         print(f"  reference : {ref_desc}")
@@ -607,12 +710,30 @@ def cmd_binding_matrix(args) -> int:
             print(f"work directory: {work}")
 
         if args.check or args.require_reference_divergence:
-            return binding_matrix_check_exit_code(
+            return matrix_check_exit_code(
                 divergence_count, args.require_reference_divergence)
         return 0
     finally:
         if not args.keep_work:
             shutil.rmtree(work, ignore_errors=True)
+
+
+def cmd_binding_matrix(args) -> int:
+    return _cmd_matrix(
+        args,
+        tuple(binding_matrix_programs()),
+        "binding matrix",
+        "binding-matrix-",
+    )
+
+
+def cmd_optional_parameter_matrix(args) -> int:
+    return _cmd_matrix(
+        args,
+        tuple(optional_parameter_matrix_programs()),
+        "optional-parameter matrix",
+        "optional-parameter-matrix-",
+    )
 
 
 # --- the run -----------------------------------------------------------------
@@ -1163,28 +1284,49 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keep the generated corpus in work/ for inspection")
     f.set_defaults(func=cmd_fuzz)
 
-    m = sub.add_parser(
+    def matrix_command(name, help_text, func):
+        matrix = sub.add_parser(name, help=help_text)
+        matrix.add_argument(
+            "--bin", default=DEFAULT_BIN,
+            help="candidate typokat binary (default: target/release/typokat)",
+        )
+        matrix.add_argument(
+            "--ref", default="tsc",
+            help="'tsc', 'none', or a path to a reference typokat binary",
+        )
+        matrix.add_argument(
+            "--tsc", default=os.environ.get("TYPOKAT_TSC", "tsc"),
+            help="tsc executable (env: TYPOKAT_TSC)",
+        )
+        matrix.add_argument(
+            "--allow-tsc-version", action="store_true",
+            help=f"accept a tsc other than the pinned {EXPECTED_TSC_VERSION}",
+        )
+        matrix.add_argument(
+            "--check", action="store_true",
+            help="exit 1 if any non-allowlisted divergence was found",
+        )
+        matrix.add_argument(
+            "--require-reference-divergence",
+            action="store_true",
+            help="falsifier mode: exit 1 unless the reference differs from the candidate",
+        )
+        matrix.add_argument(
+            "--keep-work", action="store_true",
+            help="keep the isolated matrix directory for inspection",
+        )
+        matrix.set_defaults(func=func)
+
+    matrix_command(
         "binding-matrix",
-        help="run the fixed object-binding corpus against tsc or another typokat",
+        "run the fixed object-binding corpus against tsc or another typokat",
+        cmd_binding_matrix,
     )
-    m.add_argument("--bin", default=DEFAULT_BIN,
-                   help="candidate typokat binary (default: target/release/typokat)")
-    m.add_argument("--ref", default="tsc",
-                   help="'tsc', 'none', or a path to a reference typokat binary")
-    m.add_argument("--tsc", default=os.environ.get("TYPOKAT_TSC", "tsc"),
-                   help="tsc executable (env: TYPOKAT_TSC)")
-    m.add_argument("--allow-tsc-version", action="store_true",
-                   help=f"accept a tsc other than the pinned {EXPECTED_TSC_VERSION}")
-    m.add_argument("--check", action="store_true",
-                   help="exit 1 if any non-allowlisted divergence was found")
-    m.add_argument(
-        "--require-reference-divergence",
-        action="store_true",
-        help="falsifier mode: exit 1 unless the reference differs from the candidate",
+    matrix_command(
+        "optional-parameter-matrix",
+        "run the fixed optional-parameter corpus against tsc or another typokat",
+        cmd_optional_parameter_matrix,
     )
-    m.add_argument("--keep-work", action="store_true",
-                   help="keep the isolated matrix directory for inspection")
-    m.set_defaults(func=cmd_binding_matrix)
 
     s = sub.add_parser("shrink", help="minimize one program that diverges")
     common(s)

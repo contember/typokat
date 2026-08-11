@@ -100,6 +100,51 @@ output, missing binary, or wrong tsc version remains a hard harness failure. A t
 reference is never allowlisted. The existing exact tsc allowlist is available only in
 tsc mode; the matrix requires no new rules.
 
+## Deterministic optional-parameter matrix
+
+`optional-parameter-matrix` runs five fixed programs for explicit `undefined` at
+optional and defaulted fixed parameters. The corpus covers direct calls, method and
+constructor consumers, `super`, call and construct signatures, overload selection,
+fixed parameters before ordinary and union rests, generic inference, and contextual
+object, callback, and array arguments. Its negative controls keep required parameters,
+wrong scalar arguments, rest tails, overload rejection, and contextual typing strict.
+
+Use the current-vs-tsc half as the truth gate. It must report `MATCH` for all five
+programs. Use the exact pre-change commit `281c27b` as the falsifier. It must report
+`DIVERGE` for all five programs. Keep the worktree and Cargo target isolated from the
+current build and from every other historical build:
+
+```sh
+# From the repository root, build the candidate and the exact pre-change reference.
+cpu-lease run -n 2 -- flock -w 3600 /tmp/typokat-perf.lock \
+  -c 'cargo build --release --bin typokat'
+prechange_dir=/tmp/typokat-optional-parameter-matrix-281c27b
+prechange_target=/tmp/typokat-optional-parameter-target-281c27b
+git worktree add --detach "$prechange_dir" 281c27b
+cpu-lease run -n 2 -- flock -w 3600 /tmp/typokat-perf.lock \
+  -c "cd $prechange_dir && CARGO_TARGET_DIR=$prechange_target \
+      cargo build --release --bin typokat"
+
+cd tooling/differential
+
+# Falsifier: the expected summary includes DIVERGE=5.
+python3 differential.py optional-parameter-matrix \
+  --bin ../../target/release/typokat \
+  --ref "$prechange_target/release/typokat" \
+  --check --require-reference-divergence
+
+# Truth gate: the expected summary includes MATCH=5 and DIVERGE=0.
+python3 differential.py optional-parameter-matrix \
+  --bin ../../target/release/typokat \
+  --ref tsc \
+  --tsc /run/user/1000/fnm_multishells/1002937_1784884227968/bin/tsc \
+  --check
+```
+
+The command shares the object-binding matrix's parser, comparison rules, hard-failure
+checks, and exit semantics. It does not change the randomized grammar, shrinker,
+committed repros, scoreboard, or tsc allowlist.
+
 ## The generator (`grammar.py`)
 
 Narrow and deep, not broad and shallow. It composes a handful of constructs to
