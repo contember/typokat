@@ -499,6 +499,190 @@ class TestBindingMatrix(unittest.TestCase):
             1, require_reference_divergence=True), 0)
 
 
+class TestOptionalParameterMatrix(unittest.TestCase):
+    EXPECTED = (
+        (
+            "opm0_fixed_boundaries.ts",
+            "// optional-parameter-matrix: fixed-boundaries\n"
+            "declare const opm0_maybe: number | undefined;\n"
+            "function opm0_optional(value?: number): void {}\n"
+            "function opm0_defaulted(value: number = 1): void {}\n"
+            "function opm0_required(value: number): void {}\n"
+            "opm0_optional(undefined);\n"
+            "opm0_optional(opm0_maybe);\n"
+            "opm0_defaulted(undefined);\n"
+            "opm0_defaulted(opm0_maybe);\n"
+            "opm0_optional(\"wrong\");\n"
+            "opm0_required(undefined);\n",
+        ),
+        (
+            "opm1_call_consumers.ts",
+            "// optional-parameter-matrix: call-consumers\n"
+            "class opm1_Box { constructor(value?: number) {} "
+            "method(value?: number): void {} }\n"
+            "const opm1_instance = new opm1_Box(undefined);\n"
+            "opm1_instance.method(undefined);\n"
+            "const opm1_function: (value?: number) => void = "
+            "(value?: number): void => {};\n"
+            "opm1_function(undefined);\n"
+            "class opm1_Base { constructor(value?: number) {} }\n"
+            "class opm1_Derived extends opm1_Base { constructor() { super(undefined); } }\n"
+            "interface opm1_Call { (value?: number): \"called\"; }\n"
+            "declare const opm1_call: opm1_Call;\n"
+            "const opm1_called: \"called\" = opm1_call(undefined);\n"
+            "interface opm1_Construct { "
+            "new (value?: number): { kind: \"constructed\" }; }\n"
+            "declare const opm1_construct: opm1_Construct;\n"
+            "const opm1_constructed: { kind: \"constructed\" } = "
+            "new opm1_construct(undefined);\n",
+        ),
+        (
+            "opm2_overload_rest.ts",
+            "// optional-parameter-matrix: overload-rest\n"
+            "function opm2_select(value?: number): \"optional\";\n"
+            "function opm2_select(value: string): \"required\";\n"
+            "function opm2_select(value?: number | string): \"optional\" | \"required\" "
+            "{ return \"optional\"; }\n"
+            "const opm2_selected: \"optional\" = opm2_select(undefined);\n"
+            "opm2_select(true);\n"
+            "function opm2_before_rest(prefix: string, value?: number, "
+            "...tail: boolean[]): void {}\n"
+            "opm2_before_rest(\"prefix\", undefined, true);\n"
+            "opm2_before_rest(\"prefix\", 1, \"wrong\");\n"
+            "opm2_before_rest();\n"
+            "declare function opm2_union_rest(value?: number, "
+            "...tail: [] | [boolean]): void;\n"
+            "opm2_union_rest(undefined);\n"
+            "opm2_union_rest(undefined, true);\n"
+            "function opm2_default_rest(prefix: string, value: number = 1, "
+            "...tail: boolean[]): void {}\n"
+            "opm2_default_rest(\"prefix\", undefined, true);\n",
+        ),
+        (
+            "opm3_inference.ts",
+            "// optional-parameter-matrix: inference\n"
+            "declare function opm3_locked<T>(first: T, second?: T): T;\n"
+            "declare const opm3_maybe: number | undefined;\n"
+            "const opm3_literal: 1 = opm3_locked(1, undefined);\n"
+            "const opm3_number: number = opm3_locked(1, opm3_maybe);\n"
+            "declare function opm3_callback<T>(value?: T, "
+            "callback?: (value: T) => void): void;\n"
+            "opm3_callback(opm3_maybe, (value) => {\n"
+            "  const opm3_callback_number: number = value;\n"
+            "  const opm3_callback_undefined: undefined = value;\n"
+            "});\n"
+            "function opm3_explicit<T>(value?: T): T | undefined { return value; }\n"
+            "const opm3_explicit_result: number | undefined = "
+            "opm3_explicit<number>(undefined);\n"
+            "function opm3_inferred<T extends number>(seed: T[], value?: T): T[] "
+            "{ return seed; }\n"
+            "const opm3_inferred_result: number[] = opm3_inferred([1], undefined);\n",
+        ),
+        (
+            "opm4_contextual.ts",
+            "// optional-parameter-matrix: contextual\n"
+            "function opm4_object(value?: { tag: \"ok\" }): void {}\n"
+            "opm4_object(undefined);\n"
+            "opm4_object({ tag: \"bad\" });\n"
+            "function opm4_callback(value?: (input: number) => string): void {}\n"
+            "opm4_callback(undefined);\n"
+            "opm4_callback((input) => input.toString());\n"
+            "opm4_callback((input) => true);\n"
+            "function opm4_array(value?: { items: number[] }): void {}\n"
+            "opm4_array(undefined);\n"
+            "opm4_array({ items: [\"bad\"] });\n",
+        ),
+    )
+
+    def matrix(self):
+        self.assertTrue(
+            hasattr(D, "optional_parameter_matrix_programs"),
+            "optional_parameter_matrix_programs is not implemented",
+        )
+        return tuple(D.optional_parameter_matrix_programs())
+
+    def test_exact_deterministic_matrix(self):
+        first = self.matrix()
+        second = self.matrix()
+        self.assertEqual(first, second)
+        self.assertEqual(first, self.EXPECTED)
+
+    def test_every_program_is_namespaced_and_reaches_the_changed_rule(self):
+        matrix = self.matrix()
+        self.assertEqual(len(matrix), 5)
+        for index, (filename, source) in enumerate(matrix):
+            prefix = f"opm{index}_"
+            self.assertTrue(filename.startswith(prefix), filename)
+            identifiers = re.findall(r"\bopm\d+_[A-Za-z_]\w*", source)
+            self.assertTrue(identifiers, filename)
+            self.assertTrue(all(name.startswith(prefix) for name in identifiers), filename)
+            self.assertIn("undefined", source)
+            self.assertRegex(source, r"\w+\?\s*:\s*")
+            self.assertNotIn("incomplete[", source)
+
+    def test_matrix_pins_fixed_consumers_overloads_and_rest_controls(self):
+        sources = dict(self.matrix())
+        fixed = sources["opm0_fixed_boundaries.ts"]
+        self.assertIn("value?: number", fixed)
+        self.assertIn("value: number = 1", fixed)
+        self.assertIn("opm0_optional(opm0_maybe)", fixed)
+        self.assertIn("opm0_optional(\"wrong\")", fixed)
+        self.assertIn("opm0_required(undefined)", fixed)
+
+        consumers = sources["opm1_call_consumers.ts"]
+        self.assertIn("new opm1_Box(undefined)", consumers)
+        self.assertIn("opm1_instance.method(undefined)", consumers)
+        self.assertIn("opm1_function(undefined)", consumers)
+        self.assertIn("super(undefined)", consumers)
+        self.assertIn("opm1_call(undefined)", consumers)
+        self.assertIn("new opm1_construct(undefined)", consumers)
+
+        rest = sources["opm2_overload_rest.ts"]
+        self.assertIn("opm2_select(undefined)", rest)
+        self.assertIn("opm2_select(true)", rest)
+        self.assertIn("value?: number, ...tail: boolean[]", rest)
+        self.assertIn("...tail: [] | [boolean]", rest)
+        self.assertIn("value: number = 1, ...tail: boolean[]", rest)
+        self.assertIn("opm2_before_rest(\"prefix\", 1, \"wrong\")", rest)
+        self.assertIn("opm2_before_rest()", rest)
+
+    def test_matrix_pins_inference_and_contextual_non_widening(self):
+        sources = dict(self.matrix())
+        inference = sources["opm3_inference.ts"]
+        self.assertIn("opm3_locked(1, undefined)", inference)
+        self.assertIn("opm3_locked(1, opm3_maybe)", inference)
+        self.assertIn("opm3_callback_number: number = value", inference)
+        self.assertIn("opm3_callback_undefined: undefined = value", inference)
+        self.assertIn("opm3_explicit<number>(undefined)", inference)
+        self.assertIn("opm3_inferred([1], undefined)", inference)
+
+        contextual = sources["opm4_contextual.ts"]
+        self.assertIn("opm4_object(undefined)", contextual)
+        self.assertIn("opm4_object({ tag: \"bad\" })", contextual)
+        self.assertIn("opm4_callback((input) => input.toString())", contextual)
+        self.assertIn("opm4_callback((input) => true)", contextual)
+        self.assertIn("opm4_array(undefined)", contextual)
+        self.assertIn("opm4_array({ items: [\"bad\"] })", contextual)
+
+    def test_cli_exposes_the_matrix_and_reference_falsifier(self):
+        parser = D.build_parser()
+        subcommands = next(action for action in parser._actions if action.dest == "cmd").choices
+        self.assertIn(
+            "optional-parameter-matrix",
+            subcommands,
+            "optional-parameter-matrix CLI is not implemented",
+        )
+        args = parser.parse_args([
+            "optional-parameter-matrix",
+            "--ref", "/tmp/prechange-typokat",
+            "--check",
+            "--require-reference-divergence",
+        ])
+        self.assertIs(args.func, D.cmd_optional_parameter_matrix)
+        self.assertTrue(args.check)
+        self.assertTrue(args.require_reference_divergence)
+
+
 class TestShrinker(unittest.TestCase):
     def test_reduces_to_the_statement_the_oracle_cares_about(self):
         prog = grammar.generate(5, 3)
