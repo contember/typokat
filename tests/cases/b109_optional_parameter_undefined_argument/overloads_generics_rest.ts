@@ -57,3 +57,33 @@ defaultBeforeRest("prefix", undefined, true);
 declare function unionRestAlternative(value?: number, ...tail: [] | [boolean]): void;
 unionRestAlternative(undefined);
 unionRestAlternative(undefined, true);
+
+// Fallback candidates are retained only when a binder has no non-fallback source.
+declare function sole<T>(value?: T): T;
+const soleUndefined: undefined = sole(undefined);
+
+const lockedReverseValue = locked(undefined, 1);
+const lockedReverseUnion: 1 | undefined = lockedReverseValue;
+const lockedReverseOne: 1 = lockedReverseValue; // error[TK2322]
+const lockedReverseUndefined: undefined = lockedReverseValue; // error[TK2322]
+
+declare function split<T, U>(first: T, second?: U): [T, U];
+const splitFallback: [number, undefined] = split(1, undefined);
+
+declare function unionOptionalTarget<T>(first: T, second?: T | number): T;
+const unionTargetLiteral: 1 = unionOptionalTarget(1, undefined);
+
+declare function callbackWinner<T>(value?: T, callback?: (value: T) => void): T;
+const callbackNumberWinner: number = callbackWinner(undefined, (value: number): void => {});
+const callbackFallbackWinner: undefined = callbackWinner(undefined, (value): void => {
+  const callbackFallbackValue: undefined = value;
+});
+
+declare function dependentDefault<T, U = T>(first: T, second?: T): [T, U];
+const dependentDefaultLiteral: [1, 1] = dependentDefault(1, undefined);
+
+interface GenericLockedConstructor {
+  new <T>(first: T, second?: T): { value: T };
+}
+declare const genericLockedConstructor: GenericLockedConstructor;
+const genericLockedResult: { value: 1 } = new genericLockedConstructor(1, undefined);
