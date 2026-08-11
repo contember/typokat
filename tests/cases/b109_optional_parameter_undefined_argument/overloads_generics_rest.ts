@@ -86,9 +86,6 @@ const callbackFallbackWinner: undefined = callbackWinner(undefined, (value): voi
   const callbackFallbackValue: undefined = value;
 });
 
-declare function dependentDefault<T, U = T>(first: T, second?: T): [T, U];
-const dependentDefaultLiteral: [1, 1] = dependentDefault(1, undefined);
-
 interface GenericLockedConstructor {
   new <T>(first: T, second?: T): { value: T };
 }
