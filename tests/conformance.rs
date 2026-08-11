@@ -124,6 +124,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // literal only DIRECTLY in the checked position. Enabled by its spec commit, which is
     // RED until the implementation lands.
     ("b104_excess_property_descent", true),
+    // Backlog 109 — explicit undefined and T | undefined arguments are admitted
+    // at optional/defaulted fixed parameter slots. WU0 is a disabled RED corpus;
+    // WU1 enables it with the shared call-boundary fix.
+    ("b109_optional_parameter_undefined_argument", false),
     // Backlog 87 — the reason chain must be bounded like the type renderer next to it:
     // past REASON_DEPTH_LIMIT nesting levels it collapses to one elision line plus the
     // retained innermost cause, and the indent stops growing. Enabled by its spec commit,
