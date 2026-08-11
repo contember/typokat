@@ -102,6 +102,7 @@ pub(crate) struct SignatureInferenceRequest<'a> {
     pub(crate) params: &'a [ParameterType],
     pub(crate) args: &'a [TypeId],
     pub(crate) fresh_args: &'a [bool],
+    pub(crate) optional_undefined_fallback: &'a [bool],
     pub(crate) receiver: Option<(TypeId, TypeId)>,
 }
 
@@ -110,6 +111,7 @@ struct CandidateCollectionRequest<'a> {
     params: &'a [ParameterType],
     args: &'a [TypeId],
     fresh_args: &'a [bool],
+    optional_undefined_fallback: &'a [bool],
     receiver: Option<(TypeId, TypeId)>,
 }
 
@@ -144,6 +146,7 @@ struct CallSiteCandidate {
     ty: TypeId,
     source: CallSiteSource,
     fresh: bool,
+    optional_undefined_fallback: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -316,6 +319,7 @@ fn infer_signature_type_arguments(
         params,
         args,
         fresh_args,
+        optional_undefined_fallback,
         receiver,
     } = request;
     let active_params: FxHashSet<_> = type_params.iter().map(|param| param.id).collect();
@@ -330,10 +334,12 @@ fn infer_signature_type_arguments(
             params,
             args,
             fresh_args,
+            optional_undefined_fallback,
             receiver,
         },
     );
-    let candidates = collection.candidates;
+    let mut candidates = collection.candidates;
+    let preserve_unwidened = prune_optional_undefined_fallbacks(&mut candidates);
     let exempt = fresh_exempt_params(&candidates);
     let ordinary_bound: FxHashSet<_> = candidates.keys().copied().collect();
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
@@ -347,6 +353,7 @@ fn infer_signature_type_arguments(
         queries,
         candidates,
         &constraints,
+        &preserve_unwidened,
     ) {
         DemandOutcome::Ready(fixed) => fixed,
         DemandOutcome::Exhausted(exhaustion) => {
@@ -438,6 +445,7 @@ fn apply_return_context_candidates(
         queries,
         contextual.candidates,
         request.constraints,
+        &FxHashSet::default(),
     ) {
         DemandOutcome::Ready(contextual) if !contextual.is_empty() => contextual,
         DemandOutcome::Ready(_) | DemandOutcome::Exhausted(_) => {
@@ -655,6 +663,7 @@ fn collect_return_context_candidates_query(
             local,
             |occurrence| CallSiteSource::ReturnContext { occurrence },
             false,
+            false,
         );
     }
     CandidateCollectionResult {
@@ -695,6 +704,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         params,
         args,
         fresh_args,
+        optional_undefined_fallback,
         receiver,
     } = request;
     let active_params: FxHashSet<_> = type_params.iter().map(|param| param.id).collect();
@@ -709,10 +719,12 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
             params,
             args,
             fresh_args,
+            optional_undefined_fallback,
             receiver,
         },
     );
-    let candidates = collection.candidates;
+    let mut candidates = collection.candidates;
+    let preserve_unwidened = prune_optional_undefined_fallbacks(&mut candidates);
     let exempt = fresh_exempt_params(&candidates);
     let constraints: FxHashMap<TypeParamId, Option<TypeId>> = type_params
         .iter()
@@ -725,6 +737,7 @@ pub(crate) fn infer_partial_signature_type_arguments_from_params(
         queries,
         candidates,
         &constraints,
+        &preserve_unwidened,
     ) {
         DemandOutcome::Ready(fixed) => fixed,
         DemandOutcome::Exhausted(exhaustion) => {
@@ -768,8 +781,14 @@ fn collect_call_site_candidates_query(
         params,
         args,
         fresh_args,
+        optional_undefined_fallback,
         receiver,
     } = request;
+    assert_eq!(
+        args.len(),
+        optional_undefined_fallback.len(),
+        "inference fallback provenance must align with positional arguments"
+    );
     let mut candidates: CallSiteCandidates = FxHashMap::default();
     let mut first_exhaustion = None;
     let targets = inference_argument_targets(interner, params, args);
@@ -797,6 +816,7 @@ fn collect_call_site_candidates_query(
             local,
             |occurrence| CallSiteSource::Argument { index, occurrence },
             is_fresh,
+            optional_undefined_fallback[index],
         );
     }
     if let Some((rest_ty, rest_start)) = direct_rest_type_param(interner, params) {
@@ -823,6 +843,7 @@ fn collect_call_site_candidates_query(
                         occurrence,
                     },
                     is_fresh,
+                    false,
                 );
             }
         }
@@ -843,6 +864,7 @@ fn collect_call_site_candidates_query(
                 &mut candidates,
                 local,
                 |occurrence| CallSiteSource::Receiver { occurrence },
+                false,
                 false,
             );
         }
@@ -879,6 +901,7 @@ fn collect_call_site_candidates(
     let published = PublishedClasses::empty();
     let mut queries = SemanticQueryState::default();
     let mut next_type_param = 0;
+    let optional_undefined_fallback = vec![false; args.len()];
     collect_call_site_candidates_query(
         interner,
         &mut next_type_param,
@@ -889,6 +912,7 @@ fn collect_call_site_candidates(
             params,
             args,
             fresh_args,
+            optional_undefined_fallback: &optional_undefined_fallback,
             receiver,
         },
     )
@@ -900,6 +924,7 @@ fn record_call_site_candidates(
     local: Candidates,
     source: impl Fn(usize) -> CallSiteSource,
     fresh: bool,
+    optional_undefined_fallback: bool,
 ) {
     for (param_id, cands) in local {
         candidates
@@ -913,9 +938,29 @@ fn record_call_site_candidates(
                         ty,
                         source: source(occurrence),
                         fresh,
+                        optional_undefined_fallback,
                     }),
             );
     }
+}
+
+fn prune_optional_undefined_fallbacks(
+    candidates: &mut CallSiteCandidates,
+) -> FxHashSet<TypeParamId> {
+    let mut preserve_unwidened = FxHashSet::default();
+    for (&parameter, candidates) in candidates.iter_mut() {
+        let has_fallback = candidates
+            .iter()
+            .any(|candidate| candidate.optional_undefined_fallback);
+        let has_regular = candidates
+            .iter()
+            .any(|candidate| !candidate.optional_undefined_fallback);
+        if has_fallback && has_regular {
+            candidates.retain(|candidate| !candidate.optional_undefined_fallback);
+            preserve_unwidened.insert(parameter);
+        }
+    }
+    preserve_unwidened
 }
 
 fn fresh_exempt_params(candidates: &CallSiteCandidates) -> FxHashSet<TypeParamId> {
@@ -1029,6 +1074,7 @@ fn fix_call_site_candidates(
     queries: &mut SemanticQueryState,
     candidates: CallSiteCandidates,
     constraints: &FxHashMap<TypeParamId, Option<TypeId>>,
+    preserve_unwidened: &FxHashSet<TypeParamId>,
 ) -> DemandOutcome<FxHashMap<crate::types::repr::TypeParamId, TypeId>> {
     let mut map = FxHashMap::default();
     for (param, cands) in candidates {
@@ -1040,6 +1086,7 @@ fn fix_call_site_candidates(
             queries,
             constraint,
             &cands,
+            preserve_unwidened.contains(&param),
         ) {
             DemandOutcome::Ready(fixed) => fixed,
             DemandOutcome::Exhausted(exhaustion) => {
@@ -1060,6 +1107,7 @@ fn fix_call_site_candidates_for_param(
     queries: &mut SemanticQueryState,
     constraint: Option<TypeId>,
     cands: &[CallSiteCandidate],
+    preserve_unwidened: bool,
 ) -> DemandOutcome<Option<TypeId>> {
     let contributions = candidate_contributions(cands);
     let mut iter = contributions.iter();
@@ -1068,6 +1116,12 @@ fn fix_call_site_candidates_for_param(
     };
     let primitive_constraint = constraint.is_some_and(|ty| is_primitive_ish(interner.store(), ty));
     if contributions.len() == 1 {
+        if preserve_unwidened && cands.len() == 1 && !cands[0].fresh {
+            return DemandOutcome::Ready(Some(raw_candidate_set(
+                interner,
+                first.candidates.iter().copied(),
+            )));
+        }
         return DemandOutcome::Ready(Some(fix_candidate_set(
             interner,
             constraint,

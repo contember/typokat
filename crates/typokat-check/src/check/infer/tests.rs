@@ -66,6 +66,7 @@ fn infer_type_arguments_from_params(
         .collect();
     let published = PublishedClasses::empty();
     let mut queries = SemanticQueryState::default();
+    let optional_undefined_fallback = vec![false; args.len()];
     match infer_signature_type_arguments_from_params(
         interner,
         next_type_param,
@@ -76,6 +77,7 @@ fn infer_type_arguments_from_params(
             params,
             args,
             fresh_args,
+            optional_undefined_fallback: &optional_undefined_fallback,
             receiver: None,
         },
     ) {

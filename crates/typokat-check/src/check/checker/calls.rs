@@ -899,32 +899,47 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         arg_types: &[(TypeId, Span)],
         arg_exprs: &[&Expression<'_>],
         #[cfg(test)] phase: ContextualMeasurePhase,
-    ) -> Vec<TypeId> {
+    ) -> PreparedInferenceArgs {
         let targets = self.call_argument_targets(params, arg_types.len());
-        arg_types
-            .iter()
-            .zip(arg_exprs)
-            .zip(targets)
-            .map(|(((arg_ty, arg_span), arg_expr), target)| {
-                let Some(target) = target else {
-                    return *arg_ty;
-                };
-                if self.should_keep_raw_array_inference_source(arg_expr, *arg_ty, target) {
-                    return *arg_ty;
+        let undefined = self.interner.well_known().undefined;
+        let mut types = Vec::with_capacity(arg_types.len());
+        let mut optional_undefined_fallback = Vec::with_capacity(arg_types.len());
+        for (((arg_ty, arg_span), arg_expr), target) in arg_types.iter().zip(arg_exprs).zip(targets)
+        {
+            let source = match target {
+                None => *arg_ty,
+                Some(target)
+                    if self.should_keep_raw_array_inference_source(
+                        arg_expr,
+                        *arg_ty,
+                        target.declared,
+                    ) =>
+                {
+                    *arg_ty
                 }
-                contextual_source_after_walked!(
-                    self,
-                    scope,
-                    arg_expr,
-                    target,
-                    (*arg_ty, *arg_span),
-                    true,
-                    false,
-                    phase
-                )
-                .0
-            })
-            .collect()
+                Some(target) => {
+                    let source = contextual_source_after_walked!(
+                        self,
+                        scope,
+                        arg_expr,
+                        target.declared,
+                        (*arg_ty, *arg_span),
+                        true,
+                        false,
+                        phase
+                    )
+                    .0;
+                    self.call_argument_inference_source(source, target)
+                }
+            };
+            optional_undefined_fallback
+                .push(target.is_some_and(|target| target.accepts_undefined && source == undefined));
+            types.push(source);
+        }
+        PreparedInferenceArgs {
+            types,
+            optional_undefined_fallback,
+        }
     }
 
     fn should_keep_raw_array_inference_source(
@@ -2218,10 +2233,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let contextual_params = if let Some(start) = contextual_start {
                         #[cfg(test)]
                         measure_call(|measure| measure.generic_preliminary_inference_runs += 1);
-                        let raw_args: Vec<TypeId> = args.types[..start]
-                            .iter()
-                            .map(|(argument, _)| *argument)
-                            .collect();
+                        let raw_targets = self.call_argument_targets(&params, args.types.len());
+                        let undefined = self.interner.well_known().undefined;
+                        let mut raw_args = Vec::with_capacity(start);
+                        let mut raw_optional_undefined_fallback = Vec::with_capacity(start);
+                        for ((source, _), target) in args.types[..start].iter().zip(raw_targets) {
+                            let source = target.map_or(*source, |target| {
+                                self.call_argument_inference_source(*source, target)
+                            });
+                            raw_optional_undefined_fallback.push(target.is_some_and(|target| {
+                                target.accepts_undefined && source == undefined
+                            }));
+                            raw_args.push(source);
+                        }
                         let preliminary = infer::infer_signature_type_arguments_from_params(
                             self.interner,
                             &mut self.next_type_param,
@@ -2232,6 +2256,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                 params: &params,
                                 args: &raw_args,
                                 fresh_args: &args.fresh[..start],
+                                optional_undefined_fallback: &raw_optional_undefined_fallback,
                                 receiver: call_receiver.zip(
                                     self.interner
                                         .store()
@@ -2288,8 +2313,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     let request = infer::SignatureInferenceRequest {
                         type_params: &generic_params,
                         params: &params,
-                        args: &inference_args,
+                        args: &inference_args.types,
                         fresh_args: args.fresh,
+                        optional_undefined_fallback: &inference_args.optional_undefined_fallback,
                         receiver: call_receiver.zip(
                             self.interner
                                 .store()
@@ -2466,28 +2492,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .into_iter()
             .next()
             .expect("one alternative has a first element");
-        for (((arg_ty, arg_span), arg_expr), param_ty) in
-            arg_types.iter().zip(arg_exprs).zip(targets)
+        for (((arg_ty, arg_span), arg_expr), target) in arg_types.iter().zip(arg_exprs).zip(targets)
         {
-            let Some(param_ty) = param_ty else {
+            let Some(target) = target else {
                 continue;
             };
             let (src, _src_span) = contextual_source_after_walked!(
                 self,
                 scope,
                 arg_expr,
-                param_ty,
+                target.declared,
                 (*arg_ty, *arg_span),
                 true,
                 false,
                 ContextualMeasurePhase::CandidateTrial
             );
-            let diagnostics = match self.check_excess_properties_for_target(arg_expr, param_ty) {
-                DemandOutcome::Ready(diagnostics) => diagnostics,
-                DemandOutcome::Exhausted(exhaustion) => {
-                    return CandidateTrial::Exhausted(exhaustion);
-                }
-            };
+            let diagnostics =
+                match self.check_excess_properties_for_target(arg_expr, target.declared) {
+                    DemandOutcome::Ready(diagnostics) => diagnostics,
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        return CandidateTrial::Exhausted(exhaustion);
+                    }
+                };
             if !diagnostics.is_empty() {
                 #[cfg(test)]
                 measure_call(|measure| {
@@ -2497,7 +2523,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 });
                 return CandidateTrial::Mismatch(Some(*arg_span));
             }
-            match self.with_semantic_query(|query| query.is_assignable(src, param_ty)) {
+            let relation_target = self.call_argument_relation_target(target, src);
+            match self.with_semantic_query(|query| query.is_assignable(src, relation_target)) {
                 RelationOutcome::Yes => {}
                 RelationOutcome::No(_) => {
                     #[cfg(test)]
@@ -2621,7 +2648,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .filter(|parameter| parameter.is_fixed())
                 .collect();
             (0..arg_types.len())
-                .map(|index| fixed.get(index).map(|parameter| parameter.ty))
+                .map(|index| {
+                    fixed.get(index).map(|parameter| CallArgumentTarget {
+                        declared: parameter.ty,
+                        accepts_undefined: parameter.optional,
+                    })
+                })
                 .collect()
         } else if alternatives.len() == 1 {
             alternatives
@@ -2649,17 +2681,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
         };
-        for (index, (((arg_ty, arg_span), arg_expr), param_ty)) in
+        for (index, (((arg_ty, arg_span), arg_expr), target)) in
             arg_types.iter().zip(arg_exprs).zip(targets).enumerate()
         {
-            let Some(param_ty) = param_ty else {
+            let Some(target) = target else {
                 continue;
             };
             let ((src, src_span), rewalk) = contextual_source_after_walked_reporting!(
                 self,
                 scope,
                 arg_expr,
-                param_ty,
+                target.declared,
                 (*arg_ty, *arg_span),
                 true,
                 true,
@@ -2670,7 +2702,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if rewalk == ContextualRewalk::Rewalked {
                 self.supersede_provisional_argument_effects(index);
             }
-            match self.check_excess_properties_for_target(arg_expr, param_ty) {
+            match self.check_excess_properties_for_target(arg_expr, target.declared) {
                 DemandOutcome::Ready(diagnostics) => {
                     for diagnostic in diagnostics {
                         self.emit_diagnostic(diagnostic);
@@ -2681,17 +2713,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     return;
                 }
             }
+            let relation_target = self.call_argument_relation_target(target, src);
             self.schedule_obligation(AssignObligation {
                 src,
-                tgt: param_ty,
+                tgt: relation_target,
                 src_span,
                 source_member_spans: Vec::new(),
-                kind: self.call_argument_obligation_kind(arg_expr, param_ty),
+                kind: self.call_argument_obligation_kind(arg_expr, target.declared),
             });
             // A `never` parameter makes this call candidate impossible. Later
             // contextual callback targets are recovery artifacts of that failure,
             // not independent argument errors.
-            if param_ty == never {
+            if target.declared == never && !target.accepts_undefined {
                 break;
             }
         }
@@ -2741,36 +2774,37 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         arg_types: &[(TypeId, Span)],
         arg_exprs: &[&Expression<'_>],
         scope: ScopeId,
-    ) -> DemandOutcome<Option<Vec<Option<TypeId>>>> {
+    ) -> DemandOutcome<Option<Vec<Option<CallArgumentTarget>>>> {
         let alternatives = self.call_argument_target_alternatives(params, arg_types.len());
         for targets in alternatives {
             let mut compatible = true;
-            for (((arg_ty, arg_span), arg_expr), param_ty) in
+            for (((arg_ty, arg_span), arg_expr), target) in
                 arg_types.iter().zip(arg_exprs).zip(&targets)
             {
-                let Some(param_ty) = *param_ty else {
+                let Some(target) = *target else {
                     continue;
                 };
                 let (src, _) = self.infer_contextual_source_after_walked(
                     scope,
                     arg_expr,
-                    param_ty,
+                    target.declared,
                     (*arg_ty, *arg_span),
                     true,
                     false,
                 );
-                let diagnostics = match self.check_excess_properties_for_target(arg_expr, param_ty)
-                {
-                    DemandOutcome::Ready(diagnostics) => diagnostics,
-                    DemandOutcome::Exhausted(exhaustion) => {
-                        return DemandOutcome::Exhausted(exhaustion)
-                    }
-                };
+                let diagnostics =
+                    match self.check_excess_properties_for_target(arg_expr, target.declared) {
+                        DemandOutcome::Ready(diagnostics) => diagnostics,
+                        DemandOutcome::Exhausted(exhaustion) => {
+                            return DemandOutcome::Exhausted(exhaustion)
+                        }
+                    };
                 if !diagnostics.is_empty() {
                     compatible = false;
                     break;
                 }
-                match self.with_semantic_query(|query| query.is_assignable(src, param_ty)) {
+                let relation_target = self.call_argument_relation_target(target, src);
+                match self.with_semantic_query(|query| query.is_assignable(src, relation_target)) {
                     RelationOutcome::Yes => {}
                     RelationOutcome::No(_) => {
                         compatible = false;
@@ -2966,7 +3000,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         params: &[ParameterType],
         arg_count: usize,
-    ) -> Vec<Option<TypeId>> {
+    ) -> Vec<Option<CallArgumentTarget>> {
         let alternatives = self.call_argument_target_alternatives(params, arg_count);
         let Some(first) = alternatives.first() else {
             return vec![None; arg_count];
@@ -2976,11 +3010,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         (0..arg_count)
             .map(|index| {
-                let members: Vec<TypeId> = alternatives
+                let targets: Vec<CallArgumentTarget> = alternatives
                     .iter()
                     .filter_map(|targets| targets.get(index).copied().flatten())
                     .collect();
-                (!members.is_empty()).then(|| self.interner.union(members))
+                let first = targets.first().copied()?;
+                assert!(
+                    targets
+                        .iter()
+                        .all(|target| target.accepts_undefined == first.accepts_undefined),
+                    "call target alternatives disagree on optional fixed-slot metadata"
+                );
+                Some(CallArgumentTarget {
+                    declared: self
+                        .interner
+                        .union(targets.into_iter().map(|target| target.declared).collect()),
+                    accepts_undefined: first.accepts_undefined,
+                })
             })
             .collect()
     }
@@ -2989,13 +3035,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &self,
         params: &[ParameterType],
         arg_count: usize,
-    ) -> Vec<Vec<Option<TypeId>>> {
+    ) -> Vec<Vec<Option<CallArgumentTarget>>> {
         let fixed: Vec<&ParameterType> = params.iter().filter(|param| param.is_fixed()).collect();
         let rest = params.iter().find(|param| param.rest);
         let total_rest_args = arg_count.saturating_sub(fixed.len());
         let fixed_targets = || {
             (0..arg_count)
-                .map(|index| fixed.get(index).map(|param| param.ty))
+                .map(|index| {
+                    fixed.get(index).map(|param| CallArgumentTarget {
+                        declared: param.ty,
+                        accepts_undefined: param.optional,
+                    })
+                })
                 .collect::<Vec<_>>()
         };
         let Some(rest) = rest else {
@@ -3008,16 +3059,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 vec![fixed_targets()]
             };
         };
-        let alternatives: Vec<Vec<Option<TypeId>>> = shapes
+        let alternatives: Vec<Vec<Option<CallArgumentTarget>>> = shapes
             .iter()
             .filter(|shape| shape.accepts_len(total_rest_args))
             .map(|shape| {
                 (0..arg_count)
                     .map(|index| {
                         if let Some(param) = fixed.get(index) {
-                            return Some(param.ty);
+                            return Some(CallArgumentTarget {
+                                declared: param.ty,
+                                accepts_undefined: param.optional,
+                            });
                         }
-                        shape.element_at(index - fixed.len(), total_rest_args)
+                        shape
+                            .element_at(index - fixed.len(), total_rest_args)
+                            .map(|declared| CallArgumentTarget {
+                                declared,
+                                accepts_undefined: false,
+                            })
                     })
                     .collect()
             })
@@ -3031,9 +3090,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         vec![(0..arg_count)
             .map(|index| {
                 if let Some(param) = fixed.get(index) {
-                    return Some(param.ty);
+                    return Some(CallArgumentTarget {
+                        declared: param.ty,
+                        accepts_undefined: param.optional,
+                    });
                 }
                 self.rest_argument_target(rest.ty, index - fixed.len(), total_rest_args)
+                    .map(|declared| CallArgumentTarget {
+                        declared,
+                        accepts_undefined: false,
+                    })
             })
             .collect()]
     }
@@ -3059,6 +3125,83 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .get(index)
             .copied()
             .flatten()
+            .map(|target| target.declared)
+    }
+
+    fn call_argument_inference_source(
+        &mut self,
+        source: TypeId,
+        target: CallArgumentTarget,
+    ) -> TypeId {
+        if !target.accepts_undefined {
+            return source;
+        }
+        let undefined = self.interner.well_known().undefined;
+        let Some(members) = self.interner.store().union_members(source) else {
+            return source;
+        };
+        let retained: Vec<TypeId> = members
+            .iter()
+            .copied()
+            .filter(|member| *member != undefined)
+            .collect();
+        if retained.len() == members.len() || retained.is_empty() {
+            source
+        } else {
+            self.interner.union(retained)
+        }
+    }
+
+    fn call_argument_relation_target(
+        &mut self,
+        target: CallArgumentTarget,
+        source: TypeId,
+    ) -> TypeId {
+        if !target.accepts_undefined {
+            return target.declared;
+        }
+        let well_known = self.interner.well_known();
+        if target.declared != well_known.never && self.call_source_is_concrete_non_nullish(source) {
+            return target.declared;
+        }
+        self.interner
+            .union(vec![target.declared, well_known.undefined])
+    }
+
+    fn call_source_is_concrete_non_nullish(&self, source: TypeId) -> bool {
+        match self.interner.store().tag(source) {
+            TypeTag::Literal
+            | TypeTag::Object
+            | TypeTag::Function
+            | TypeTag::Array
+            | TypeTag::Tuple
+            | TypeTag::Readonly
+            | TypeTag::ClassInstance => true,
+            TypeTag::Intrinsic => matches!(
+                self.interner.store().intrinsic_kind(source),
+                Some(
+                    IntrinsicKind::Boolean
+                        | IntrinsicKind::Number
+                        | IntrinsicKind::String
+                        | IntrinsicKind::Object
+                        | IntrinsicKind::BigInt
+                        | IntrinsicKind::Symbol
+                        | IntrinsicKind::Never
+                )
+            ),
+            TypeTag::Union
+            | TypeTag::Intersection
+            | TypeTag::TypeParam
+            | TypeTag::Conditional
+            | TypeTag::Instantiation
+            | TypeTag::Infer
+            | TypeTag::Mapped
+            | TypeTag::MappedValue
+            | TypeTag::Template
+            | TypeTag::Keyof
+            | TypeTag::DeferredIndexedAccess
+            | TypeTag::Declared => false,
+        }
     }
 
     fn rest_argument_target(
@@ -3668,8 +3811,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     infer::SignatureInferenceRequest {
                         type_params: &generic_params,
                         params: &params,
-                        args: &args,
+                        args: &args.types,
                         fresh_args: arg_fresh,
+                        optional_undefined_fallback: &args.optional_undefined_fallback,
                         receiver: None,
                     },
                 ) {
@@ -4878,6 +5022,17 @@ enum CandidateBuildFailure {
     InferredConstraint,
     Exhausted(Exhaustion),
     Unavailable,
+}
+
+#[derive(Clone, Copy)]
+struct CallArgumentTarget {
+    declared: TypeId,
+    accepts_undefined: bool,
+}
+
+struct PreparedInferenceArgs {
+    types: Vec<TypeId>,
+    optional_undefined_fallback: Vec<bool>,
 }
 
 #[derive(Clone)]
