@@ -20,9 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-11-optional-parameter-undefined-arguments.md`](sprint-2026-08-11-optional-parameter-undefined-arguments.md) —
-  active: admit explicit `undefined` at optional/defaulted call boundaries without widening stored
-  parameter types, then re-screen immutable `placetext` under backlog 72's unchanged zero gate.
 - [`sprint-2026-07-25-checker-scaling.md`](sprint-2026-07-25-checker-scaling.md) —
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have

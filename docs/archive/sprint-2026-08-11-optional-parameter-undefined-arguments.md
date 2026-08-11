@@ -1,3 +1,26 @@
+> **OUTCOME — shipped 2026-08-11.** Optional and defaulted fixed parameters now admit direct
+> `undefined` and matching undefined-bearing arguments through one shared call-only descriptor.
+> Stored parameter types, required/rest targets, contextual typing, overload diagnostics, and
+> body-local parameter meaning remain unchanged. Generic inference treats exact `undefined` at an
+> optional fixed slot as per-binder fallback evidence and preserves the reviewed non-fresh
+> singleton candidate when that fallback is discarded. Commit map: plan → `281c27b`; WU0 corpus
+> and inference falsifiers → `7eb20df`, `5857cea`, `8b595d2`, `fa77026`, `1239a6c`, `2c6241e`;
+> WU1 → `2be673b`; WU2 differential matrix and gate → `2c84db0`, `ab02d3d`.
+>
+> The full WU2 gate passed workspace tests, all-target clippy with warnings denied, formatting, and
+> the 874-file official-suite ratchet with zero regressions. The differential harness passed 60/60
+> unit tests, the exact 5/5 tsc matrix, all five pre-change falsifiers, committed repros, and seeds
+> 1/2/3 × 400 with 1,200/1,200 matches against exact pre-change `281c27b`. The immutable WU3
+> re-screen preserved 9 roots, 9/0/0 file accounting, 13 resolutions, and zero notices/parse errors;
+> `src/core/generator.ts:36:48 TK2345` disappeared, reducing diagnostics from 6 to 5 with no new
+> identity. Independent WU1, WU2-matrix, and WU3 reviews returned **PASS**.
+>
+> Backlog `109` is closed. Backlog `72` remains open at 7 incomplete records and 5 diagnostics;
+> target/library meaning equivalence is still unproved, so no mutation, witness, or CI work started.
+> Review probes graduated the independent contextual-return literal gap to backlog `110` and the
+> fresh structural inference provenance under-report to backlog `111`. No performance result is
+> claimed.
+
 # Sprint — optional parameter `undefined` arguments (2026-08-11)
 
 **Goal.** Accept explicit `undefined`-bearing arguments at optional and defaulted fixed parameters
@@ -170,5 +193,21 @@ in parallel with WU1; implementation, evidence mutation, and sprint closure rema
 
 ## Run log
 
-<!-- Append discoveries, deviations, and blockers during execution; graduate durable work to an
-     ADR or backlog item before archiving. -->
+- **2026-08-11 — WU0 established the shared boundary.** The enabled corpus covers direct calls,
+  overloads, function values, methods, constructors, `new`, and `super`, plus required/rest/null/
+  unknown/recovery controls. Pinned tsc 6.0.3 established that optional acceptance must not rewrite
+  stored parameter types or wrong-scalar diagnostic targets.
+- **2026-08-11 — WU1 review isolated two unrelated inference gaps.** A contextual dependent-default
+  witness failed without any optional fallback, and a fresh structural multi-member witness failed
+  without the optional argument. They were removed from backlog `109` rather than widening its seam.
+  Durable owners: [`110`](../backlog/110-contextual-return-literal-inference.md) and
+  [`111`](../backlog/111-structural-inference-literal-provenance.md).
+- **2026-08-11 — WU1 and WU2 passed.** The final independent implementation review found no HIGH or
+  MEDIUM issue. Workspace tests, clippy, formatting, the official suite, focused differential
+  matrix, committed repros, and 1,200 randomized pre-change comparisons all passed.
+- **2026-08-11 — WU3 passed.** Two typokat summaries were byte-identical at
+  `49c9b3f69d3a2608bba59acd68db5e6d8d41ea96d6a90fd0dc05ccbebe83a649`. The optional-parameter
+  `TK2345` disappeared with no route, incomplete, or independent diagnostic drift. The first
+  remaining normalized diagnostic is the enum-owned `repo/src/core/types.ts:68:12 TK2304`.
+  Independent evidence review returned PASS; backlog `72` retains the zero-clean and meaning-
+  equivalence gates.

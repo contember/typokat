@@ -330,6 +330,17 @@ links = ["../../tests/cases/sr_deferred_ledger/b62_index_signature.ts", "../refe
 deps = []
 
 [[criterion]]
+id = "C-structural-inference-literal-provenance"
+track = "C"
+title = "Structural inference retains member literal widenability provenance"
+state = "incomplete"
+blocks_release = "true"
+owner = "./111-structural-inference-literal-provenance.md"
+witness = "strict tsc 6.0.3 fresh-object baseline in the owner; spec-first object/array and typed/asserted controls required"
+links = ["../reference/divergences.md", "../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md"]
+deps = []
+
+[[criterion]]
 id = "C-numeric-stringification"
 track = "C"
 title = "JS-exact number stringification (String(n) dtoa) — UNDER-report, not safe FP"
@@ -526,6 +537,17 @@ blocks_release = "false"
 owner = "./108-generic-arrow-signature-descriptors.md"
 witness = "official assignmentCompatWithCallSignatures2 stripped lines 23 and 27; randomized differential gate against the pre-change binary"
 links = ["../reference/divergences.md", "../../tooling/official-suite/scoreboard.txt", "../../tooling/differential/README.md"]
+deps = []
+
+[[criterion]]
+id = "C-parity-tail-contextual-return-literal-inference"
+track = "C"
+title = "Contextual return inference widens singleton literals — safe over-report"
+state = "incomplete"
+blocks_release = "false"
+owner = "./110-contextual-return-literal-inference.md"
+witness = "strict tsc 6.0.3 dependent-default baseline in the owner; typokat reports surplus TK2322"
+links = ["../reference/divergences.md", "../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md"]
 deps = []
 
 [[criterion]]

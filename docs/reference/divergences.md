@@ -90,11 +90,16 @@ and validated the same way.
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
-- **An optional parameter rejects an explicit `undefined` argument (over-report).** Signature
-  identity and arity preserve the optional flag, but fixed call-argument target selection still
-  checks against the bare declared type. The immutable `placetext` screen therefore rejects a
-  correctly published `number | undefined` value at `seed?: number`.
-  <!-- div: id=calls/optional-parameter-explicit-undefined dir=over scope=s-call-arguments owner=../backlog/109-optional-parameter-undefined-argument.md witness=../archive/real-project-rescreen-2026-08-10/placetext.json -->
+- **Contextual return inference widens a singleton and overrides a dependent default
+  (over-report).** A generic call that is contextually expected as `[1, 1]` can infer
+  `[number, number]` even though tsc preserves the literal through the context. The same failure
+  occurs without optional parameters; backlog `110` owns the inference ordering rule.
+  <!-- div: id=calls/contextual-return-literal-widening dir=over scope=s-call-arguments owner=../backlog/110-contextual-return-literal-inference.md witness=../backlog/110-contextual-return-literal-inference.md -->
+- **Fresh structural inference loses member literal widenability (under-report).** Candidates from
+  raw object/array members can collapse to a literal union before fixing, so typokat retains
+  `1 | 2` where tsc widens to `number`. Typed or asserted literal members must remain exact, which
+  rules out recursively widening every union marked only by outer freshness.
+  <!-- div: id=calls/structural-inference-literal-provenance dir=under scope=s-call-arguments owner=../backlog/111-structural-inference-literal-provenance.md witness=../backlog/111-structural-inference-literal-provenance.md -->
 - **A contextually typed argument is blamed at the argument (cosmetic).** When an argument that
   carries a contextual type — an arrow, or a fresh object/array literal — fails to match its
   parameter, typokat reports `TK2345` on the whole argument and names the inner mismatch in the

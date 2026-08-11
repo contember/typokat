@@ -33,18 +33,19 @@ failures; and `deco` retained explicit-`.ts` specifier incompatibility. The ship
 default-slot slice removes `placetext`'s historical route blocker. A read-only re-screen at
 `ca13c30` then admitted and checked all 9 roots with all 13 local resolutions and no route, parse,
 skipped-root, or excluded-root record, but stopped on 7 incomplete records and 27 diagnostics. The
-flat object-variable binding slice has now removed all exact 22 unpublished-leaf `TK2304`
-identities. The immutable 2026-08-10 re-screen preserves the same route counts and seven incomplete
-records, with six diagnostics: five independent old records remain, and one newly visible `TK2345`
-rejects the correctly published `number | undefined` seed at an optional `number` parameter.
-Backlog [`109`](./109-optional-parameter-undefined-argument.md) owns that next general blocker. Enum,
-computed object-key, template-interpolation, and predicate-bearing array surface gaps remain
+flat object-variable binding slice removed all exact 22 unpublished-leaf `TK2304` identities. The
+optional-parameter call-boundary slice then removed the revealed
+`repo/src/core/generator.ts:36:48 TK2345`. The immutable 2026-08-11 re-screen preserves the same
+route counts and seven incomplete records, with five unchanged diagnostics and no new identity.
+Enum, computed object-key, template-interpolation, and predicate-bearing array surface gaps remain
 independent.
 
 The pinned native and overlay `tsc 6.0.3` runs are both clean, but their
 ES2020-versus-full-ES2025 library meaning is not proved equivalent. The hard stop therefore still
 forbids mutations, witness files, or CI work. Exact evidence and independent PASS are retained in
-the [`2026-08-10 placetext re-screen`](../archive/real-project-rescreen-2026-08-10/README.md); the
+the [`2026-08-11 placetext re-screen`](../archive/real-project-rescreen-2026-08-11/README.md); the
+[`2026-08-10 predecessor`](../archive/real-project-rescreen-2026-08-10/README.md) preserves the
+optional-parameter diagnostic, and the
 [`2026-08-09 predecessor`](../archive/real-project-rescreen-2026-08-09/README.md) preserves the
 pre-publication cascade. The transparent
 `un-jinja` and `south-african-id` production-subtree overlays exclude native tooling/tests that

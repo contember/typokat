@@ -57,9 +57,9 @@ interpolation.
 
 The newly visible first diagnostic is `TK2345` at `src/core/generator.ts:36:48`. The `seed` binding
 is now correctly published as `number | undefined`, but call argument target construction checks it
-against the raw `number` type of `createRandom(seed?: number)`. Backlog
-[`109`](../../backlog/109-optional-parameter-undefined-argument.md) owns this general bug in optional
-parameter acceptance.
+against the raw `number` type of `createRandom(seed?: number)`. The archived
+[`optional-parameter sprint`](../sprint-2026-08-11-optional-parameter-undefined-arguments.md) later
+shipped the general fix.
 
 The native config selects target/library ES2020 while the screening config uses typokat's fixed
 full ES2025 host library. Both programs are clean under `tsc`, but that does not prove identical

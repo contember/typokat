@@ -95,8 +95,8 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
-recommended order — next: close the general blockers exposed by the immutable `placetext` screen,
-starting with backlog `109`, then re-screen for backlog `72`; continue Bundler module breadth and
+recommended order — next: close the remaining general blockers exposed by the immutable `placetext`
+screen, then re-screen for backlog `72`; continue Bundler module breadth and
 the remaining model-completeness track, then
 parallel cross-file identity and incrementality; the bytecode VM stays a deferred,
 profiling-gated refactor, ADR-0001).

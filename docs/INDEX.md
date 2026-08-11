@@ -24,9 +24,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-11-optional-parameter-undefined-arguments.md`](sprints/sprint-2026-08-11-optional-parameter-undefined-arguments.md) —
-  active: close backlog 109 at the shared call boundary, preserve parameter identity and wrong-value
-  diagnostics, then re-screen immutable `placetext` for backlog 72's next general blocker.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -38,15 +35,15 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Flat object variable binding publication shipped 2026-08-11** — the archived
-  [`object-binding sprint`](archive/sprint-2026-08-09-object-binding-publication.md) publishes one
-  storage, symbol, projected type, and flow identity per admitted leaf, including static keys,
-  renames, defaults, union sources, and replay. The immutable
-  [`placetext re-screen`](archive/real-project-rescreen-2026-08-10/README.md) removed all exact 22
-  old binding `TK2304` identities with unchanged 9-root/13-resolution accounting.
-  The active [`optional-parameter sprint`](sprints/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
-  owns the newly exposed first `TK2345`; [`72`](backlog/72-real-project-preview-readiness.md) remains
-  open at 7 incomplete records and 6 diagnostics.
+- **Optional-parameter argument acceptance shipped 2026-08-11** — the archived
+  [`optional-parameter sprint`](archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
+  admits direct `undefined` and matching undefined-bearing values at optional/defaulted fixed call
+  slots without rewriting stored parameter types. The immutable
+  [`placetext re-screen`](archive/real-project-rescreen-2026-08-11/README.md) removed the revealed
+  `TK2345` with unchanged 9-root/13-resolution accounting and no new identity. Backlog
+  [`72`](backlog/72-real-project-preview-readiness.md) remains open at 7 incomplete records and 5
+  diagnostics. Review byproducts are [`110`](backlog/110-contextual-return-literal-inference.md)
+  and [`111`](backlog/111-structural-inference-literal-provenance.md).
 - **The backlog-14 closure audit graduated independent semantic tails** — `globalThis` diagnostic
   fidelity is owned by [`48`](backlog/48-no-implicit-any.md), flow evaluation order by
   [`51`](backlog/51-narrowing-tail.md), construct-only call code parity by
@@ -157,10 +154,13 @@ decisions → reference → archive.
   [`object-binding sprint`](archive/sprint-2026-08-09-object-binding-publication.md) then removed all
   22 unpublished-leaf diagnostics measured by the
   [`pre-change screen`](archive/real-project-rescreen-2026-08-09/README.md). The immutable
-  [`post-change screen`](archive/real-project-rescreen-2026-08-10/README.md) still stops before
-  witness work: optional-parameter argument acceptance is first, followed by independent enum,
-  computed-key, template-interpolation, and predicate-bearing array surfaces. Target/library
-  meaning equivalence also remains unproved. Package breadth remains later work under `15`.
+  [`post-binding screen`](archive/real-project-rescreen-2026-08-10/README.md) exposed the optional-
+  parameter argument bug. The archived
+  [`optional-parameter sprint`](archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
+  removed it; the [`latest screen`](archive/real-project-rescreen-2026-08-11/README.md) still stops
+  before witness work on independent enum, computed-key, template-interpolation, and predicate-
+  bearing array surfaces. Target/library meaning equivalence also remains unproved. Package breadth
+  remains later work under `15`.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic

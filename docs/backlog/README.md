@@ -39,7 +39,8 @@ The implementation for `102` (visible frozen-prefix writes) and `103` (source-na
 collision epochs and routing) shipped through the archived backlog-`14` closure sprint; both shipped
 backlog files have been removed. The flat object-variable publication slice of `48` shipped through
 the archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md);
-the implicit-any family and excluded binding shapes remain open.
+the implicit-any family and excluded binding shapes remain open. Backlog `109` shipped through the
+archived [`optional-parameter sprint`](../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md).
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -119,8 +120,6 @@ fillers.
 - **M** · [`48`](48-no-implicit-any.md) — implicit-any declarations, remaining binding elements,
   element access, and `globalThis` property code fidelity; flat ready-source object variables ship.
 - **L** · [`49`](49-possibly-undefined-family.md) — nullable receivers, optional members/calls, optional chaining, and non-null assertions.
-- **S** · [`109`](109-optional-parameter-undefined-argument.md) — admit explicit `undefined` at
-  optional/defaulted call parameters without widening required targets or body-local types.
 - **L** · [`50`](50-type-predicates-assertions.md) — predicate/assertion signatures wired into flow narrowing.
 - **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, closure
   narrowing, and assignment-target evaluation order.
@@ -139,6 +138,9 @@ items — `53` `55` `57` `58` `61` — **shipped** in sprint-2026-07-07-soundnes
 - **L** · [`66`](66-protected-override-compat.md) — protected override compatibility and lineage-aware nominal origins · blocked by `63(d)`.
 - **L** · [`71`](71-expression-inference-fn-tail.md) — expression/iteration traversal: elisions, object/call spreads, tagged templates, and iteration targets.
 - **M** · [`78`](78-generic-class-value-aliases.md) — generic class const aliases retain substitution and class-keyed construction facts.
+- **L** · [`111`](111-structural-inference-literal-provenance.md) — preserve member-level literal
+  widenability through structural inference so fresh object/array candidates do not silently stay
+  narrower than tsc.
 
 FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
@@ -154,6 +156,8 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
   objects and apparent `Object` members on ordinary object sources.
 - **M** · [`108`](108-generic-arrow-signature-descriptors.md) — retain generic arrow descriptors
   through contextual object-method assignment.
+- **M** · [`110`](110-contextual-return-literal-inference.md) — contextual return inference must
+  preserve a proved singleton without overriding dependent defaults with a widened candidate.
 - **L** · [`63`](63-review-parity-tail.md) — Callable/Newable canonical compatibility and surplus
   cardinality, batched evaluator/relation/checker FPs, messages, and the residual parser-depth guard.
 - **XL** · [`82`](82-declare-global-value-space.md) — legal `declare global` value-space
@@ -206,12 +210,14 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Close the general blockers exposed by the immutable `placetext` screen.** The archived
-   [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md) removed all
-   22 measured binding `TK2304` identities. Start with the newly exposed, bounded optional-parameter
-   bug in [`109`](109-optional-parameter-undefined-argument.md); enum (`42`), computed-key (`75`),
-   template-interpolation (`71`), and predicate-bearing array (`50`/`107`) surfaces remain
-   independent blockers. Re-screen only from reviewed general commits; do not patch the project.
+1. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
+   archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
+   removed all 22 measured binding `TK2304` identities, and the archived
+   [`optional-parameter sprint`](../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
+   removed the next `TK2345`. Five independent diagnostics and seven incomplete records remain:
+   enum (`42`), computed-key (`75`), template-interpolation (`71`), and predicate-bearing array
+   (`50`/`107`) surfaces are the visible general owners. Re-screen only from reviewed general
+   commits; do not patch the project.
 2. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
    native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
    unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic

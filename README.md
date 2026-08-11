@@ -223,10 +223,11 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   cutover is shipped and archived after WU7
   independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
   Acyclic local named source re-exports, the direct default-slot slice, and flat object variable
-  binding publication are shipped. The immutable `placetext` re-screen now has 7 incomplete records
-  and 6 diagnostics after all 22 old binding `TK2304` identities disappeared. Backlog `109` owns
-  the newly exposed optional-parameter `TK2345`; enum, computed-key, template-interpolation, and
-  predicate-bearing array blockers remain. A clean result on an arbitrary npm/Bun/Node project is
+  binding publication and optional-parameter call-boundary correction are shipped. The immutable
+  `placetext` re-screen now has 7 incomplete records and 5 diagnostics after all 22 old binding
+  `TK2304` identities and the subsequent optional-parameter `TK2345` disappeared. Enum,
+  computed-key, template-interpolation, and predicate-bearing array blockers remain. A clean result
+  on an arbitrary npm/Bun/Node project is
   not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
