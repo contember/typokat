@@ -24,6 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-11-optional-parameter-undefined-arguments.md`](sprints/sprint-2026-08-11-optional-parameter-undefined-arguments.md) —
+  active: close backlog 109 at the shared call boundary, preserve parameter identity and wrong-value
+  diagnostics, then re-screen immutable `placetext` for backlog 72's next general blocker.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -40,10 +43,10 @@ decisions → reference → archive.
   storage, symbol, projected type, and flow identity per admitted leaf, including static keys,
   renames, defaults, union sources, and replay. The immutable
   [`placetext re-screen`](archive/real-project-rescreen-2026-08-10/README.md) removed all exact 22
-  old binding `TK2304` identities with unchanged 9-root/13-resolution accounting. Backlog
-  [`109`](backlog/109-optional-parameter-undefined-argument.md) owns the newly exposed first
-  `TK2345`; [`72`](backlog/72-real-project-preview-readiness.md) remains open at 7 incomplete records
-  and 6 diagnostics.
+  old binding `TK2304` identities with unchanged 9-root/13-resolution accounting.
+  The active [`optional-parameter sprint`](sprints/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
+  owns the newly exposed first `TK2345`; [`72`](backlog/72-real-project-preview-readiness.md) remains
+  open at 7 incomplete records and 6 diagnostics.
 - **The backlog-14 closure audit graduated independent semantic tails** — `globalThis` diagnostic
   fidelity is owned by [`48`](backlog/48-no-implicit-any.md), flow evaluation order by
   [`51`](backlog/51-narrowing-tail.md), construct-only call code parity by
