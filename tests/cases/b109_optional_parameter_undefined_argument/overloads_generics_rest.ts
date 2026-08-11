@@ -86,3 +86,28 @@ interface GenericLockedConstructor {
 }
 declare const genericLockedConstructor: GenericLockedConstructor;
 const genericLockedResult: { value: 1 } = new genericLockedConstructor(1, undefined);
+
+declare function structuralFallback<T>(value: { tag: T }, fallback?: T): T;
+const structuralFallbackValue = structuralFallback({ tag: "x" }, undefined);
+const structuralFallbackString: string = structuralFallbackValue;
+const structuralFallbackLiteral: "x" = structuralFallbackValue; // error[TK2322]: Type 'string' is not assignable to type '"x"'
+
+interface StructuralFallbackConstruct {
+  new <T>(value: { tag: T }, fallback?: T): { value: T };
+}
+declare const structuralFallbackConstruct: StructuralFallbackConstruct;
+const structuralConstructValue = new structuralFallbackConstruct({ tag: "x" }, undefined);
+const structuralConstructString: { value: string } = structuralConstructValue;
+const structuralConstructLiteral: { value: "x" } = structuralConstructValue; // error[TK2322]
+
+class StructuralFallbackClass<T> {
+  value: T;
+
+  constructor(value: { tag: T }, fallback?: T) {
+    this.value = value.tag;
+  }
+}
+
+const structuralClassValue = new StructuralFallbackClass({ tag: "x" }, undefined);
+const structuralClassString: { value: string } = structuralClassValue;
+const structuralClassLiteral: { value: "x" } = structuralClassValue; // error[TK2322]
