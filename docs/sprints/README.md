@@ -20,9 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-09-object-binding-publication.md`](sprint-2026-08-09-object-binding-publication.md) —
-  active: publish distinct typed values for flat object variable binding leaves, then re-screen the
-  immutable `placetext` project without changing its witness threshold.
 - [`sprint-2026-07-25-checker-scaling.md`](sprint-2026-07-25-checker-scaling.md) —
   active: checker scaling on real code. Six complexity hunts plus a bisect found five nonlinearities,
   none in the type model; the batch removes them and adds the local-layer scan guard that would have

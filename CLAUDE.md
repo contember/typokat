@@ -77,6 +77,10 @@ form is an explicit non-clean project notice in the deterministic JSON summary. 
 namespace imports, default bridges/re-exports, mixed forms, namespace-bearing producers,
 star/namespace re-exports, and cycles remain unsupported.
 
+Flat object variable binding patterns over a ready modeled source publish one independent value
+identity, projected type, and flow state per static-key leaf. Array/nested/rest/computed patterns
+and parameter/catch/loop-head bindings remain explicitly unsupported.
+
 **Soundness > completeness**: when in doubt, over-report (the safe direction). Every
 deliberate `tsc` divergence is documented in
 [docs/reference/divergences.md](docs/reference/divergences.md).
@@ -91,8 +95,9 @@ against real `tsc --strict`). Implementation goes through subagents; the leader 
 commits. The soundness/architecture **invariants you must not break** are in
 [docs/reference/invariants.md](docs/reference/invariants.md); the roadmap **is** the
 [docs/backlog/](docs/backlog/README.md) (its README carries the definition of done and the
-recommended order — next: re-screen the pinned real-project candidate, then continue Bundler
-module breadth and the remaining model-completeness track, then
+recommended order — next: close the general blockers exposed by the immutable `placetext` screen,
+starting with backlog `109`, then re-screen for backlog `72`; continue Bundler module breadth and
+the remaining model-completeness track, then
 parallel cross-file identity and incrementality; the bytecode VM stays a deferred,
 profiling-gated refactor, ADR-0001).
 

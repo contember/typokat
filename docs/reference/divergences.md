@@ -90,6 +90,11 @@ and validated the same way.
   the first. Fixtures keep at most one mismatched argument per call so the corpus
   matches both.
   <!-- div: id=calls/multiple-mismatched-arguments dir=over scope=s-call-arguments owner=design-oos witness=../../tests/cases/m3_functions -->
+- **An optional parameter rejects an explicit `undefined` argument (over-report).** Signature
+  identity and arity preserve the optional flag, but fixed call-argument target selection still
+  checks against the bare declared type. The immutable `placetext` screen therefore rejects a
+  correctly published `number | undefined` value at `seed?: number`.
+  <!-- div: id=calls/optional-parameter-explicit-undefined dir=over scope=s-call-arguments owner=../backlog/109-optional-parameter-undefined-argument.md witness=../archive/real-project-rescreen-2026-08-10/placetext.json -->
 - **A contextually typed argument is blamed at the argument (cosmetic).** When an argument that
   carries a contextual type — an arrow, or a fresh object/array literal — fails to match its
   parameter, typokat reports `TK2345` on the whole argument and names the inner mismatch in the

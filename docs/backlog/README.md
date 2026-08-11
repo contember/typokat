@@ -37,7 +37,9 @@ closed 2026-07-13), `43` (namespace/declaration-space completion,
 [`../archive/`](../archive/README.md), including the completed WU6 official-suite ratchet.
 The implementation for `102` (visible frozen-prefix writes) and `103` (source-native sparse
 collision epochs and routing) shipped through the archived backlog-`14` closure sprint; both shipped
-backlog files have been removed.
+backlog files have been removed. The flat object-variable publication slice of `48` shipped through
+the archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md);
+the implicit-any family and excluded binding shapes remain open.
 Architecture §12 governs
 phase ordering; the bytecode VM stays a deferred, profiling-gated refactor
 ([ADR-0001](../decisions/0001-type-level-vm-is-a-deferred-evaluator-optimization.md)). How each item
@@ -114,9 +116,11 @@ fillers.
 - **L** · [`45`](45-operator-comparison-typing.md) — arithmetic, unary, comparison-overlap, `in`, and `instanceof` typing.
 - **M** · [`46`](46-return-path-analysis.md) — CFG return coverage, accessors, and bare-return inference.
 - **L** · [`47`](47-definite-assignment.md) — use-before-assignment, TDZ, and constructor property initialization.
-- **M** · [`48`](48-no-implicit-any.md) — implicit-any declarations, binding elements, element
-  access, and `globalThis` property code fidelity.
+- **M** · [`48`](48-no-implicit-any.md) — implicit-any declarations, remaining binding elements,
+  element access, and `globalThis` property code fidelity; flat ready-source object variables ship.
 - **L** · [`49`](49-possibly-undefined-family.md) — nullable receivers, optional members/calls, optional chaining, and non-null assertions.
+- **S** · [`109`](109-optional-parameter-undefined-argument.md) — admit explicit `undefined` at
+  optional/defaulted call parameters without widening required targets or body-local types.
 - **L** · [`50`](50-type-predicates-assertions.md) — predicate/assertion signatures wired into flow narrowing.
 - **XL** · [`51`](51-narrowing-tail.md) — remaining loops, member-path invalidation, closure
   narrowing, and assignment-target evaluation order.
@@ -202,18 +206,13 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 
 ## Recommended order
 
-1. **Re-screen `placetext` against the shipped direct default slot.** The archived
-   [`2026-08-07 sprint`](../archive/sprint-2026-08-07-bundler-project-tracer.md) shipped the exact
-   files-only Bundler CLI and complete accounting, then terminated incomplete because all six
-   public candidates failed before mutations. The archived
-   [`2026-08-08 sprint`](../archive/sprint-2026-08-08-acyclic-source-reexports.md) removed the
-   bounded acyclic named source-re-export blocker. The subsequent
-   [`re-screen`](../archive/sprint-2026-08-08-real-project-rescreen.md) still found no qualifier;
-   `placetext` had one visible default-export route blocker. The archived
-   [`default-slot sprint`](../archive/sprint-2026-08-08-default-module-slots.md) removed that specific
-   blocker without conflating the default slot with named exports. Re-establish the first blocker,
-   native-versus-overlay distinction, and target/library equivalence from fresh evidence.
-2. **Close `72` only if the re-screen is genuinely zero-clean.** Preserve the
+1. **Close the general blockers exposed by the immutable `placetext` screen.** The archived
+   [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md) removed all
+   22 measured binding `TK2304` identities. Start with the newly exposed, bounded optional-parameter
+   bug in [`109`](109-optional-parameter-undefined-argument.md); enum (`42`), computed-key (`75`),
+   template-interpolation (`71`), and predicate-bearing array (`50`/`107`) surfaces remain
+   independent blockers. Re-screen only from reviewed general commits; do not patch the project.
+2. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
    native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
    unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic
    fresh-cache runner, fault controls, and CI identity ratchet land. Do not relax a threshold or

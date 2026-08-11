@@ -71,7 +71,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, the pinned TypeScript 6.0.3 ES2025 full-host default library, and the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
-| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports, acyclic named source re-exports, structurally distinct direct default exports/imports, and the bounded files-only Bundler project route |
+| **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, flat object variable binding publication with one typed identity per static-key leaf, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports, acyclic named source re-exports, structurally distinct direct default exports/imports, and the bounded files-only Bundler project route |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
 ### Diagnostics
@@ -218,14 +218,16 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   incomplete, never silently clean: `x!`/`a?.b` remain backlog `49`; traversal/iteration forms
   such as elisions, spreads, and tagged templates remain `71`; the other deferred surface tail is
   `75`. The pinned real-project preview gate (`72`) remains required. The bounded Bundler
-  resolver/project substrate is shipped, but its replacement sprint also terminated incomplete:
-  six screened public projects failed the unchanged zero threshold before mutations. There is no
-  pinned public witness, mutation ratchet, or preview CI gate. The full default-library production
+  resolver/project substrate is shipped, but no screened project meets the unchanged zero threshold.
+  There is no pinned public witness, mutation ratchet, or preview CI gate. The full default-library production
   cutover is shipped and archived after WU7
   independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4` remote CI.
-  Acyclic local named source re-exports and the direct default-slot slice are shipped. The next
-  step is a fresh `placetext` re-screen, followed by the remaining module breadth in `15`. A clean
-  result on an arbitrary npm/Bun/Node project is not yet a completeness claim.
+  Acyclic local named source re-exports, the direct default-slot slice, and flat object variable
+  binding publication are shipped. The immutable `placetext` re-screen now has 7 incomplete records
+  and 6 diagnostics after all 22 old binding `TK2304` identities disappeared. Backlog `109` owns
+  the newly exposed optional-parameter `TK2345`; enum, computed-key, template-interpolation, and
+  predicate-bearing array blockers remain. A clean result on an arbitrary npm/Bun/Node project is
+  not yet a completeness claim.
 - Remaining `tsc` divergences are logged in
   [`docs/reference/divergences.md`](./docs/reference/divergences.md): known under-report families
   block 1.0 through manifest Track C; documented over-report/cosmetic tails are non-blocking only

@@ -24,9 +24,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-09-object-binding-publication.md`](sprints/sprint-2026-08-09-object-binding-publication.md) —
-  active: publish one correctly typed value identity per flat object variable binding leaf, then
-  re-screen the immutable `placetext` project and record the next general blocker.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -38,6 +35,15 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Flat object variable binding publication shipped 2026-08-11** — the archived
+  [`object-binding sprint`](archive/sprint-2026-08-09-object-binding-publication.md) publishes one
+  storage, symbol, projected type, and flow identity per admitted leaf, including static keys,
+  renames, defaults, union sources, and replay. The immutable
+  [`placetext re-screen`](archive/real-project-rescreen-2026-08-10/README.md) removed all exact 22
+  old binding `TK2304` identities with unchanged 9-root/13-resolution accounting. Backlog
+  [`109`](backlog/109-optional-parameter-undefined-argument.md) owns the newly exposed first
+  `TK2345`; [`72`](backlog/72-real-project-preview-readiness.md) remains open at 7 incomplete records
+  and 6 diagnostics.
 - **The backlog-14 closure audit graduated independent semantic tails** — `globalThis` diagnostic
   fidelity is owned by [`48`](backlog/48-no-implicit-any.md), flow evaluation order by
   [`51`](backlog/51-narrowing-tail.md), construct-only call code parity by
@@ -144,12 +150,14 @@ decisions → reference → archive.
   WU0 after all six immutable candidates still failed the unchanged zero threshold. No witness
   tooling or production broadening started. The archived
   [`default-slot sprint`](archive/sprint-2026-08-08-default-module-slots.md) removed `placetext`'s
-  historical default-export route blocker. The fresh
-  [`placetext re-screen`](archive/real-project-rescreen-2026-08-09/README.md) now proves the route
-  complete for its 9 roots and 13 local resolutions, but stops before witness work on general
-  checker gaps: object-destructuring publication first, then independent enum, computed-key,
-  template-interpolation, and predicate-bearing array surfaces. Target/library meaning equivalence
-  also remains unproved. Package breadth remains later work under `15`.
+  historical default-export route blocker. The archived
+  [`object-binding sprint`](archive/sprint-2026-08-09-object-binding-publication.md) then removed all
+  22 unpublished-leaf diagnostics measured by the
+  [`pre-change screen`](archive/real-project-rescreen-2026-08-09/README.md). The immutable
+  [`post-change screen`](archive/real-project-rescreen-2026-08-10/README.md) still stops before
+  witness work: optional-parameter argument acceptance is first, followed by independent enum,
+  computed-key, template-interpolation, and predicate-bearing array surfaces. Target/library
+  meaning equivalence also remains unproved. Package breadth remains later work under `15`.
 - **Surface-accounting tail shipped 2026-07-12** (archived:
   [`archive/sprint-2026-07-12-surface-accounting-tail.md`](archive/sprint-2026-07-12-surface-accounting-tail.md)) —
   all inventoried expression shapes now report incomplete explicitly or have a durable semantic
@@ -197,8 +205,9 @@ decisions → reference → archive.
   subsequently shipped. Backlog `38` is GO
   (ADR-0003). The post-sprint MVP audit added executable
   scope/unsupported censuses (`73`/`75`) and the first honest pinned-project preview gate
-  (`72`). **Now:** `14` is closed; the bounded Bundler CLI/accounting substrate is shipped, while
-  `72` still lacks its public witness and `15` retains module breadth. The remaining
+  (`72`). **Now:** `14` is closed; the bounded Bundler CLI/accounting and flat object-binding
+  publication are shipped, while `72` still lacks its public witness and `15` retains module
+  breadth. The remaining
   model-completeness items stay open.
 - **Cross-cutting soundness review + fix sprint shipped 2026-07-07.** Four adversarial
   reviewers (relate/CFG/evaluator/M29+M30) confirmed the §6.3 relation-cache and loop-fixpoint

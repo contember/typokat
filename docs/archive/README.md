@@ -47,9 +47,14 @@ that ships — only what genuinely helps a future reader. The git log holds the 
 - [`sprint-2026-08-08-acyclic-source-reexports.md`](sprint-2026-08-08-acyclic-source-reexports.md) — backlog 15 bounded slice: acyclic local named source re-exports ship through the production Bundler route with frontend-owned admission evidence, direct namespace-free value/type slot projection, exact type-only provenance, and frozen explicit/legacy routes. Defaults, namespace/star forms, cycles, package breadth, and the backlog-72 witness remain open.
 - [`sprint-2026-08-08-default-module-slots.md`](sprint-2026-08-08-default-module-slots.md) — backlog 15 bounded slice: direct default declarations/expressions and regular default imports ship through a structurally distinct slot, with exact `TK1192`, deterministic deferred-form refusals, frozen explicit/legacy routes, and three independent review passes.
 - [`sprint-2026-08-08-real-project-rescreen.md`](sprint-2026-08-08-real-project-rescreen.md) — terminated incomplete at WU0 after all six immutable candidates failed backlog 72's unchanged zero threshold. Kept for the exact release/oracle identities, exit and blocker matrix, and independent hard-stop PASS; no witness tooling or production change started.
+- [`sprint-2026-08-09-object-binding-publication.md`](sprint-2026-08-09-object-binding-publication.md) — flat object variable binding leaves now publish distinct storage, type, symbol, and flow identities across static keys, renames, defaults, source unions, and replay. The full semantic gate and independent review passed; the immutable `placetext` re-screen removed all 22 measured object-binding `TK2304` identities without route drift.
 - [`real-project-rescreen-2026-08-09/`](real-project-rescreen-2026-08-09/README.md) — the mandated
   post-default-slot read-only `placetext` re-screen. The module route is complete for all 9 roots,
   but the unchanged zero-clean gate stops on general checker-model gaps; no witness or mutation
   tooling started.
+- [`real-project-rescreen-2026-08-10/`](real-project-rescreen-2026-08-10/README.md) — the immutable
+  post-object-binding `placetext` re-screen. All exact 22 old binding `TK2304` identities disappear
+  with unchanged 9-root/13-resolution accounting; a general optional-parameter `TK2345` is now the
+  first blocker, so backlog 72 remains open.
 - [`backlog-13-profiling-gate.md`](backlog-13-profiling-gate.md) — ADR-0001 profiling gate: 100k flow/typelevel timings and RSS baselines, six blocked samply attempts on a restrictive host, and the strict DEFER/no-VM outcome.
 - [`backlog-14-libdts-loading.md`](backlog-14-libdts-loading.md) — shipped full default-library delivery contract. Kept for the historical start gate, explicit ownership boundaries, and links to the closure evidence.

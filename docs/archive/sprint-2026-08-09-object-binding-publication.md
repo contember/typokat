@@ -1,3 +1,18 @@
+> **OUTCOME — shipped 2026-08-11.** Flat object variable binding patterns now publish one distinct
+> value symbol, storage identity, projected type, and flow state per admitted leaf. Static
+> identifier/string/number keys, renames, defaults, optionality, shadowing, `var` ownership,
+> collision replay, union projection, `any`, and recovery blocking are covered; excluded binding
+> shapes remain explicitly non-clean. Production commits: publication `79348f0`, replay lookup
+> `5636a85`, demand guard `c27c1ae`, and source projection `8638c4b`. The full WU2 gate passed:
+> workspace tests including 15/15 conformance, clippy, formatting, and the 874-file official suite
+> with zero ratchet regressions. Differential evidence passed 55/55 harness tests, the exact 8/8
+> tsc matrix, 1,200 randomized pre-change comparisons, committed repros, and both known-broken
+> controls. The immutable WU3 re-screen preserved 9 roots, 9/0/0 file accounting, 13 resolutions,
+> and zero notices/parse errors while removing all exact 22 old object-binding `TK2304` identities.
+> It remains non-clean at 7 incomplete records and 6 diagnostics; backlog `72` stays open and new
+> backlog `109` owns the revealed optional-parameter `TK2345`. Independent WU2 and WU3 reviews
+> returned **PASS**. No performance result is claimed.
+
 # Sprint — object binding publication (2026-08-09)
 
 **Goal.** Publish correctly typed leaves from flat object variable binding patterns, then re-screen
@@ -152,3 +167,24 @@ parallel with WU1; they cannot add RED specs or implementation to this sprint.
   `TK2322`. The ordinary unannotated `var` control exits falsely clean in the same order, proving the
   root is backlog `76`'s general declaration-type demand. The two B48 project fixtures stay parked;
   no object-only pre-inference enters this sprint, and WU1 remains the same-file flat slice.
+- **2026-08-10 — WU0/WU1 shipped.** The enabled corpus and binder inspectors prove independent
+  leaf identities, static-key projection, optional/default behavior, lexical and `var` ownership,
+  replay, excluded-shape accounting, and exact storage/private-public namespace identities.
+- **2026-08-10 — WU2 review closed two false-green routes.** A stale array-pattern white-box
+  assertion was corrected to require the intentional incomplete record. Official-suite triage then
+  exposed direct-only source projection: `any`, internal error recovery, and common-key unions were
+  misclassified as missing properties. Spec-first projection fixtures and inspector units led to
+  the reviewed order-independent `Ready` / `Missing` / `Blocked` implementation; mixed missing and
+  blocked unions emit one property diagnostic plus one pattern incomplete and never publish a
+  recovery leaf. Dependent destructuring correlation remains a documented safe over-report under
+  backlog `51`.
+- **2026-08-10 — WU2 gates passed.** `cargo test`, `cargo clippy --all-targets -- -D warnings`, and
+  `cargo fmt --check` passed from the reviewed source. The full official suite classified 354 files
+  in-scope and 520 out-of-scope across its 874-file corpus with zero regressions. The release binary
+  SHA-256 is `628daee6cf1d55b6a96dd51e8aeb8cb8261f3661b545a72af552826fd72ace25`.
+- **2026-08-10 — WU3 immutable re-screen passed its scoped acceptance.** Two typokat runs were
+  byte-identical (`ed646172491a6aef5ddc9b3ff7e6037dc93a06b557762b417cea956464ffd9cb`).
+  Every exact old object-binding `TK2304` disappeared with no route/accounting drift. The newly
+  visible first blocker is `src/core/generator.ts:36:48 TK2345`: optional parameter calls reject an
+  explicit `undefined`-bearing argument. The independent evidence review returned PASS; backlog
+  `109` owns the bug and backlog `72` retains the unchanged zero-clean/meaning-equivalence gate.
