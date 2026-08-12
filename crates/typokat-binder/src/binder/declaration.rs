@@ -892,6 +892,7 @@ pub enum TypeFragmentKind {
     TypeAlias,
     Interface,
     Class,
+    Enum,
 }
 
 /// One ordered group fragment with its exact lexical scope.

@@ -26,7 +26,8 @@ use oxc_ast::ast::{
     ArrowFunctionExpression, BindingPattern, BlockStatement, Class, ClassElement, Declaration,
     ExportDefaultDeclarationKind, Expression, ForStatement, ForStatementInit, ForStatementLeft,
     FormalParameters, Function, FunctionBody, FunctionType, Program, Statement, SwitchStatement,
-    TSModuleDeclarationName, TryStatement, VariableDeclarationKind, VariableDeclarator,
+    TSEnumDeclaration, TSModuleDeclarationName, TryStatement, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use rustc_hash::FxHashMap;
 use std::fmt;
@@ -1265,6 +1266,19 @@ impl BindState {
         id
     }
 
+    pub(super) fn ensure_value_storage(&mut self, declaration: DeclId) -> ValueStorageId {
+        if let Some(storage) = self
+            .declarations
+            .get(declaration)
+            .and_then(|declaration| declaration.value_storage)
+        {
+            return storage;
+        }
+        let storage = self.fresh_value_storage();
+        self.attach_value_storage(declaration, storage);
+        storage
+    }
+
     fn attach_value_storage(&mut self, declaration: DeclId, storage: ValueStorageId) {
         self.declarations
             .get_mut(declaration)
@@ -1571,6 +1585,9 @@ impl<'ast> ProjectBinderBuilder<'ast> {
                         if let Some(identifier) = &class.id {
                             occupied_values.insert(identifier.name.to_string());
                         }
+                    }
+                    Statement::TSEnumDeclaration(enumeration) => {
+                        occupied_values.insert(enumeration.id.name.to_string());
                     }
                     _ => {}
                 }
@@ -2238,6 +2255,16 @@ fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: 
                 );
             }
         }
+        Statement::TSEnumDeclaration(enumeration) => {
+            bind_source_type(
+                state,
+                scope,
+                enumeration.id.name.as_str(),
+                enumeration.id.span.start,
+                DeclarationKind::Enum,
+                TypeFragmentKind::Enum,
+            );
+        }
         Statement::ExportNamedDeclaration(export) => {
             if let Some(decl) = &export.declaration {
                 bind_type_declaration(state, scope, decl);
@@ -2367,6 +2394,16 @@ fn bind_type_declaration(state: &mut BindState, scope: ScopeId, decl: &Declarati
                 );
             }
         }
+        Declaration::TSEnumDeclaration(enumeration) => {
+            bind_source_type(
+                state,
+                scope,
+                enumeration.id.name.as_str(),
+                enumeration.id.span.start,
+                DeclarationKind::Enum,
+                TypeFragmentKind::Enum,
+            );
+        }
         _ => {}
     }
 }
@@ -2419,6 +2456,9 @@ pub(super) fn bind_statement(state: &mut BindState, scope: ScopeId, stmt: &State
         // Class value-side names live in the constructor slot; the body still needs scopes.
         Statement::ClassDeclaration(class) => {
             bind_class_declaration(state, scope, class);
+        }
+        Statement::TSEnumDeclaration(enumeration) => {
+            bind_enum_declaration(state, scope, enumeration);
         }
         Statement::ExportNamedDeclaration(export) => {
             if let Some(decl) = &export.declaration {
@@ -2554,6 +2594,9 @@ fn bind_declaration(state: &mut BindState, scope: ScopeId, decl: &Declaration<'_
         }
         Declaration::ClassDeclaration(class) => {
             bind_class_declaration(state, scope, class);
+        }
+        Declaration::TSEnumDeclaration(enumeration) => {
+            bind_enum_declaration(state, scope, enumeration);
         }
         _ => {}
     }
@@ -2813,6 +2856,24 @@ pub(super) fn bind_class_declaration(state: &mut BindState, scope: ScopeId, clas
         declare_value(state, scope, id.name.as_str(), storage, declaration);
     }
     bind_class(state, scope, class);
+}
+
+/// Bind the value side of an enum without constructing its checker-owned descriptor.
+pub(super) fn bind_enum_declaration(
+    state: &mut BindState,
+    scope: ScopeId,
+    enumeration: &TSEnumDeclaration<'_>,
+) {
+    let declaration =
+        state.attach_declaration_scope(enumeration.id.span.start, DeclarationKind::Enum, scope);
+    let storage = state.ensure_value_storage(declaration);
+    declare_value(
+        state,
+        scope,
+        enumeration.id.name.as_str(),
+        storage,
+        declaration,
+    );
 }
 
 fn bind_default_class_declaration(state: &mut BindState, scope: ScopeId, class: &Class<'_>) {

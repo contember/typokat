@@ -5,8 +5,8 @@
 //! the ordinary value binder for exported members.
 
 use crate::binder::bind::{
-    bind_class_declaration, bind_declarator, bind_function_declaration, declare_type, BindState,
-    Binder, FrozenPrefixWrite, FrozenPrefixWriteSite,
+    bind_class_declaration, bind_declarator, bind_enum_declaration, bind_function_declaration,
+    declare_type, BindState, Binder, FrozenPrefixWrite, FrozenPrefixWriteSite,
 };
 use crate::binder::declaration::{
     DeclId, DeclarationKind, DeclarationSite, DeclarationTable, TypeFragmentKind, TypeGroupId,
@@ -1133,6 +1133,7 @@ pub enum MergeDisposition {
     Admitted,
     DeferredBacklog15,
     DeferredBacklog42,
+    RejectedFutureTk2567,
     RejectedFutureTk2440,
     RejectedRedeclaration,
     RejectedRuntimeNamespace,
@@ -1189,6 +1190,42 @@ pub struct MergeRecord {
     /// placement lane already owns instead of copying them.
     pub declarations: Arc<Vec<MergeParticipant>>,
     pub classification: MergeClassification,
+    pub placement_issues: Vec<PlacementIssue>,
+}
+
+/// Whether the checker may construct one enum descriptor for a canonical type group.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum EnumGroupBuildability {
+    Buildable,
+    RejectedFutureTk2567,
+}
+
+/// Enum merge issue retained for exact checker diagnostic ownership.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum EnumGroupIssueKind {
+    FutureTk2567,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct EnumGroupIssue {
+    pub kind: EnumGroupIssueKind,
+    pub owner: DeclId,
+    pub source: SourceUnitKey,
+    pub origin: CompilationOrigin,
+    pub span: Span,
+}
+
+/// Frozen binder input for one enum descriptor, keyed by its real type group.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EnumGroupView<'a> {
+    pub group: TypeGroupId,
+    pub owner: DeclarationOwner,
+    pub name: &'a str,
+    pub declarations: Vec<MergeParticipant>,
+    pub namespace: Option<NamespaceId>,
+    pub namespace_declarations: Vec<MergeParticipant>,
+    pub buildability: EnumGroupBuildability,
+    pub issues: Vec<EnumGroupIssue>,
     pub placement_issues: Vec<PlacementIssue>,
 }
 
@@ -3065,6 +3102,9 @@ impl NamespaceTable {
                         .standalone_merge_record(*namespace)
                         .is_some_and(|record| {
                             record.classification.disposition == MergeDisposition::Admitted
+                                && !record.declarations.iter().any(|participant| {
+                                    participant.kind == MergeDeclarationKind::Enum
+                                })
                                 && namespace_value_attachment_disposition(record)
                                     == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
                         })
@@ -3077,6 +3117,10 @@ impl NamespaceTable {
             && (record.owner != DeclarationOwner::CompilationGlobal
                 || self.uses_library_shared_globals())
             && record.classification.disposition == MergeDisposition::Admitted
+            && !record
+                .declarations
+                .iter()
+                .any(|participant| participant.kind == MergeDeclarationKind::Enum)
             && namespace_value_attachment_disposition(record)
                 == Some(NamespaceValueAttachmentDisposition::TypeContainerOnly)
             && record.declarations.iter().any(|participant| {
@@ -3860,6 +3904,60 @@ impl Binder {
         self.namespace_value_attachment_from_record(record)
     }
 
+    /// Return the canonical enum descriptor input for one real type-group identity.
+    pub fn enum_group(&self, group: TypeGroupId) -> Option<EnumGroupView<'_>> {
+        let record = self.namespaces.merges.iter().find(|record| {
+            record.declarations.iter().any(|participant| {
+                participant.kind == MergeDeclarationKind::Enum
+                    && self
+                        .declarations
+                        .get(participant.declaration)
+                        .is_some_and(|declaration| declaration.type_group == Some(group))
+            })
+        })?;
+        let (buildability, issues) = enum_group_semantics(&record.declarations)?;
+        let declarations = record
+            .declarations
+            .iter()
+            .filter(|participant| {
+                participant.kind == MergeDeclarationKind::Enum
+                    && self
+                        .declarations
+                        .get(participant.declaration)
+                        .is_some_and(|declaration| declaration.type_group == Some(group))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        let namespace_declarations = record
+            .declarations
+            .iter()
+            .filter(|participant| participant.kind == MergeDeclarationKind::Namespace)
+            .copied()
+            .collect::<Vec<_>>();
+        let namespace = namespace_declarations
+            .iter()
+            .filter_map(|participant| participant.namespace_fragment)
+            .filter_map(|fragment| self.namespaces.fragment(fragment))
+            .map(|fragment| fragment.namespace)
+            .next();
+        debug_assert!(namespace_declarations
+            .iter()
+            .filter_map(|participant| participant.namespace_fragment)
+            .filter_map(|fragment| self.namespaces.fragment(fragment))
+            .all(|fragment| Some(fragment.namespace) == namespace));
+        Some(EnumGroupView {
+            group,
+            owner: record.owner,
+            name: record.name.as_ref(),
+            declarations,
+            namespace,
+            namespace_declarations,
+            buildability,
+            issues,
+            placement_issues: record.placement_issues.clone(),
+        })
+    }
+
     fn namespace_value_attachment_from_record<'a>(
         &'a self,
         record: &'a MergeRecord,
@@ -4076,6 +4174,9 @@ impl Binder {
                     return QualifiedTypePathResolution::Deferred { segment: 0, reason };
                 }
                 if let Some(reason) = root_deferred {
+                    if reason == QualifiedTypePathDeferredReason::Enum {
+                        return QualifiedTypePathResolution::Deferred { segment: 0, reason };
+                    }
                     let known_target = view.namespace.is_some() || view.type_group.is_some();
                     let admitted = root_merge.is_some_and(|record| {
                         record.classification.disposition == MergeDisposition::Admitted
@@ -4135,6 +4236,12 @@ impl Binder {
                             return QualifiedTypePathResolution::Deferred { segment: 0, reason };
                         }
                         if let Some(reason) = public_root_deferred {
+                            if reason == QualifiedTypePathDeferredReason::Enum {
+                                return QualifiedTypePathResolution::Deferred {
+                                    segment: 0,
+                                    reason,
+                                };
+                            }
                             let known_target =
                                 view.namespace.is_some() || view.type_group.is_some();
                             let admitted = public_root_merge.is_some_and(|record| {
@@ -4447,7 +4554,7 @@ fn namespace_value_attachment_disposition(
                 | MergeDeclarationKind::Namespace
         )
     });
-    if record.classification.disposition == MergeDisposition::DeferredBacklog42
+    if record.classification.disposition == MergeDisposition::RejectedFutureTk2567
         && has_function
         && has_enum
         && only_enum_function_namespace
@@ -4477,6 +4584,60 @@ fn namespace_value_attachment_disposition(
     }
 }
 
+fn enum_group_semantics(
+    declarations: &[MergeParticipant],
+) -> Option<(EnumGroupBuildability, Vec<EnumGroupIssue>)> {
+    let enum_declarations = declarations
+        .iter()
+        .filter(|participant| participant.kind == MergeDeclarationKind::Enum)
+        .collect::<Vec<_>>();
+    let first_enum = declarations
+        .iter()
+        .position(|participant| participant.kind == MergeDeclarationKind::Enum)?;
+    let only_enum_namespace = declarations.iter().all(|participant| {
+        matches!(
+            participant.kind,
+            MergeDeclarationKind::Enum | MergeDeclarationKind::Namespace
+        )
+    });
+    let constant = enum_declarations.first().and_then(|participant| {
+        let DeclarationSyntaxFacts::Enum { constant } = participant.syntax else {
+            return None;
+        };
+        Some(constant)
+    });
+    let constant_modifiers_match = constant.is_some_and(|constant| {
+        enum_declarations
+            .iter()
+            .all(|participant| participant.syntax == DeclarationSyntaxFacts::Enum { constant })
+    });
+    let has_namespace = declarations
+        .iter()
+        .any(|participant| participant.kind == MergeDeclarationKind::Namespace);
+    let const_enum_namespace = has_namespace && constant == Some(true);
+    if only_enum_namespace && constant_modifiers_match && !const_enum_namespace {
+        return Some((EnumGroupBuildability::Buildable, Vec::new()));
+    }
+
+    let issues = declarations
+        .iter()
+        .enumerate()
+        .filter(|(index, participant)| {
+            const_enum_namespace
+                || participant.kind != MergeDeclarationKind::Namespace
+                || *index < first_enum
+        })
+        .map(|(_, participant)| EnumGroupIssue {
+            kind: EnumGroupIssueKind::FutureTk2567,
+            owner: participant.declaration,
+            source: participant.source,
+            origin: participant.origin,
+            span: participant.binding_span,
+        })
+        .collect();
+    Some((EnumGroupBuildability::RejectedFutureTk2567, issues))
+}
+
 fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
     use MergeDeclarationKind::{
         Class, Enum, Function, ImportAlias, Interface, Namespace, Variable,
@@ -4488,7 +4649,10 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
     let classes = count(Class);
     let variables = count(Variable);
     let imports = count(ImportAlias);
+    let enums = count(Enum);
     let total = declarations.len();
+    let enum_buildability = enum_group_semantics(declarations).map(|(state, _)| state);
+    let enum_group_buildable = enum_buildability == Some(EnumGroupBuildability::Buildable);
     let mut compositions = Vec::new();
     let mut push = |kind, disposition| {
         let composition = MergeComposition { kind, disposition };
@@ -4511,7 +4675,9 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
     }
 
     if value.declarations > 1 {
-        if functions == value.declarations {
+        if enums == value.declarations && enum_group_buildable {
+            value.disposition = MergeSlotDisposition::AdmittedMerge;
+        } else if functions == value.declarations {
             value.disposition = MergeSlotDisposition::AdmittedMerge;
             push(
                 MergeCompositionKind::FunctionGroup,
@@ -4528,8 +4694,8 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
                 MergeCompositionKind::VariableGroup,
                 MergeDisposition::DeferredBacklog15,
             );
-        } else if declarations.iter().any(|item| item.kind == Enum) {
-            value.disposition = MergeSlotDisposition::Deferred;
+        } else if enums > 0 {
+            value.disposition = MergeSlotDisposition::Rejected;
         } else {
             value.disposition = MergeSlotDisposition::Rejected;
             push(
@@ -4540,7 +4706,9 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
     }
 
     if r#type.declarations > 1 {
-        if interfaces == r#type.declarations {
+        if enums == r#type.declarations && enum_group_buildable {
+            r#type.disposition = MergeSlotDisposition::AdmittedMerge;
+        } else if interfaces == r#type.declarations {
             r#type.disposition = MergeSlotDisposition::AdmittedMerge;
             push(
                 MergeCompositionKind::InterfaceGroup,
@@ -4552,8 +4720,8 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
                 MergeCompositionKind::ClassInterface,
                 MergeDisposition::Admitted,
             );
-        } else if declarations.iter().any(|item| item.kind == Enum) {
-            r#type.disposition = MergeSlotDisposition::Deferred;
+        } else if enums > 0 {
+            r#type.disposition = MergeSlotDisposition::Rejected;
         } else {
             r#type.disposition = MergeSlotDisposition::Rejected;
             push(
@@ -4637,16 +4805,20 @@ fn classify_group(declarations: &[MergeParticipant]) -> MergeClassification {
             );
         }
     }
-    let enum_composition = total > 1 && declarations.iter().any(|item| item.kind == Enum);
+    let enum_composition = total > 1 && enums > 0;
     if enum_composition {
         push(
             MergeCompositionKind::EnumComposition,
-            MergeDisposition::DeferredBacklog42,
+            if enum_group_buildable {
+                MergeDisposition::Admitted
+            } else {
+                MergeDisposition::RejectedFutureTk2567
+            },
         );
     }
 
-    let disposition = if enum_composition {
-        MergeDisposition::DeferredBacklog42
+    let disposition = if enum_buildability == Some(EnumGroupBuildability::RejectedFutureTk2567) {
+        MergeDisposition::RejectedFutureTk2567
     } else if compositions
         .iter()
         .any(|item| item.disposition == MergeDisposition::RejectedFutureTk2440)
@@ -5023,6 +5195,7 @@ pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceVa
                             MergeDeclarationKind::Variable
                                 | MergeDeclarationKind::Function
                                 | MergeDeclarationKind::Class
+                                | MergeDeclarationKind::Enum
                         )
                         && (!storage_free_global_namespace
                             || member.kind == MergeDeclarationKind::Class)
@@ -5262,6 +5435,14 @@ fn bind_selected_namespace_value_statements(
                     bind_class_declaration(state, scope, class);
                 }
             }
+            Statement::TSEnumDeclaration(enumeration) => {
+                let scope = state
+                    .source_decl_at(enumeration.id.span.start, DeclarationKind::Enum)
+                    .and_then(|declaration| scopes.get(&declaration).copied());
+                if let Some(scope) = scope {
+                    bind_enum_declaration(state, scope, enumeration);
+                }
+            }
             Statement::TSModuleDeclaration(declaration) => {
                 bind_selected_namespace_module_body(state, declaration, scopes)
             }
@@ -5300,6 +5481,14 @@ fn bind_selected_namespace_value_declaration(
             });
             if let Some(scope) = scope {
                 bind_class_declaration(state, scope, class);
+            }
+        }
+        Declaration::TSEnumDeclaration(enumeration) => {
+            let scope = state
+                .source_decl_at(enumeration.id.span.start, DeclarationKind::Enum)
+                .and_then(|declaration| scopes.get(&declaration).copied());
+            if let Some(scope) = scope {
+                bind_enum_declaration(state, scope, enumeration);
             }
         }
         Declaration::TSModuleDeclaration(declaration) => {
@@ -5912,6 +6101,9 @@ fn bind_named_declaration_with_syntax(
     let continuation_global = state.continuation_compilation_global_for(binding_start);
     let declaration =
         state.attach_declaration_scope(binding_start, declaration_kind, context.lexical_scope);
+    if merge_kind == MergeDeclarationKind::Enum && context.namespace.is_some() {
+        state.ensure_value_storage(declaration);
+    }
     let publication = context.publication(explicit);
     let owner = continuation_global.map_or_else(
         || context.declaration_owner(publication),
@@ -5954,6 +6146,7 @@ fn bind_named_declaration_with_syntax(
             MergeDeclarationKind::TypeAlias => Some(TypeFragmentKind::TypeAlias),
             MergeDeclarationKind::Interface => Some(TypeFragmentKind::Interface),
             MergeDeclarationKind::Class => Some(TypeFragmentKind::Class),
+            MergeDeclarationKind::Enum => Some(TypeFragmentKind::Enum),
             _ => None,
         };
         if let (Some(fragment_kind), Some(scope)) =
@@ -6037,7 +6230,15 @@ fn bind_module_declaration(
             .get(context.lexical_scope)
             .and_then(|scope| scope.lookup_local(identifier.name.as_str()))
             .and_then(|symbol| state.symbols.get(symbol))
-            .is_some_and(|symbol| symbol.value.is_some());
+            .is_some_and(|symbol| {
+                symbol.value.is_some()
+                    || symbol.declarations.iter().any(|declaration| {
+                        state
+                            .declarations
+                            .get(*declaration)
+                            .is_some_and(|declaration| declaration.kind == DeclarationKind::Enum)
+                    })
+            });
         if !occupied_local {
             owner = NamespaceOwner::Lexical(
                 state
@@ -8542,6 +8743,464 @@ mod tests {
             .expect("merge record")
     }
 
+    fn enum_group<'a>(binder: &'a Binder, name: &str) -> EnumGroupView<'a> {
+        let record = merge(binder, name);
+        let group = record
+            .declarations
+            .iter()
+            .find(|participant| participant.kind == MergeDeclarationKind::Enum)
+            .and_then(|participant| binder.declarations.get(participant.declaration))
+            .and_then(|declaration| declaration.type_group)
+            .expect("enum declaration owns a type group");
+        binder.enum_group(group).expect("canonical enum group view")
+    }
+
+    fn issue_owner_kinds(
+        record: &MergeRecord,
+        issues: &[EnumGroupIssue],
+    ) -> Vec<MergeDeclarationKind> {
+        issues
+            .iter()
+            .map(|issue| {
+                record
+                    .declarations
+                    .iter()
+                    .find(|participant| participant.declaration == issue.owner)
+                    .expect("issue owner is a group participant")
+                    .kind
+            })
+            .collect()
+    }
+
+    fn placement_owner_kinds(record: &MergeRecord) -> Vec<MergeDeclarationKind> {
+        record
+            .placement_issues
+            .iter()
+            .map(|issue| {
+                record
+                    .declarations
+                    .iter()
+                    .find(|participant| participant.declaration == issue.owner)
+                    .expect("placement owner is a group participant")
+                    .kind
+            })
+            .collect()
+    }
+
+    #[test]
+    fn enum_groups_use_real_type_group_keys_and_ordered_canonical_inputs() {
+        let source = r#"
+enum Root { First }
+enum Root { Second }
+namespace Root { export const tag = 1; }
+export enum Exported { Value }
+namespace Outer {
+    export enum Nested { First }
+    export enum Nested { Second }
+    export namespace Nested { export const tag = 1; }
+}
+"#;
+        let binder = bind(source, false);
+
+        let enum_declarations = binder
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.kind == DeclarationKind::Enum)
+            .collect::<Vec<_>>();
+        assert_eq!(enum_declarations.len(), 5);
+        assert!(enum_declarations
+            .iter()
+            .all(|declaration| declaration.type_group.is_some()));
+        assert!(enum_declarations
+            .iter()
+            .all(|declaration| declaration.value_storage.is_some()));
+        for declaration in &enum_declarations {
+            let group = declaration.type_group.expect("real enum type group");
+            let row = binder.type_groups.get(group).expect("type group row");
+            assert!(row
+                .fragments
+                .iter()
+                .any(|fragment| fragment.declaration == declaration.id
+                    && fragment.kind == TypeFragmentKind::Enum));
+        }
+
+        let root = enum_group(&binder, "Root");
+        assert_eq!(root.name, "Root");
+        assert_eq!(root.declarations.len(), 2);
+        assert!(root.declarations.windows(2).all(|pair| {
+            (pair[0].source, pair[0].span.start, pair[0].declaration.0)
+                < (pair[1].source, pair[1].span.start, pair[1].declaration.0)
+        }));
+        assert!(root.namespace.is_some());
+        assert_eq!(root.namespace_declarations.len(), 1);
+        assert_eq!(root.buildability, EnumGroupBuildability::Buildable);
+        assert!(root.issues.is_empty());
+        assert!(root.placement_issues.is_empty());
+        assert!(root.declarations.iter().all(|participant| {
+            binder
+                .declarations
+                .get(participant.declaration)
+                .is_some_and(|declaration| declaration.type_group == Some(root.group))
+        }));
+
+        let exported = enum_group(&binder, "Exported");
+        assert_eq!(exported.declarations.len(), 1);
+        assert_eq!(exported.namespace, None);
+        assert_eq!(exported.buildability, EnumGroupBuildability::Buildable);
+
+        let nested_record = binder
+            .namespaces
+            .merges
+            .iter()
+            .find(|record| {
+                record.name.as_ref() == "Nested"
+                    && matches!(record.owner, DeclarationOwner::NamespacePublic(_))
+            })
+            .expect("nested enum merge record");
+        let nested_group = nested_record
+            .declarations
+            .iter()
+            .find(|participant| participant.kind == MergeDeclarationKind::Enum)
+            .and_then(|participant| binder.declarations.get(participant.declaration))
+            .and_then(|declaration| declaration.type_group)
+            .expect("nested enum group");
+        let nested = binder.enum_group(nested_group).expect("nested enum view");
+        assert_eq!(nested.declarations.len(), 2);
+        assert!(nested.namespace.is_some());
+        assert_eq!(nested.namespace_declarations.len(), 1);
+        assert_eq!(nested.buildability, EnumGroupBuildability::Buildable);
+    }
+
+    #[test]
+    fn nested_const_enums_reserve_checker_values_without_runtime_namespace_storage() {
+        let source = r#"
+namespace PrivateOuter { const enum Private { Value } }
+namespace ExportedOuter { export const enum Exported { Value } }
+namespace TypeOnlyOuter {
+    export interface Marker {}
+    export const enum TypeOnly { Value }
+}
+declare namespace AmbientOuter { const enum Ambient { Value } }
+"#;
+        let binder = bind(source, false);
+        let enum_declarations = binder
+            .declarations
+            .iter()
+            .filter(|declaration| declaration.kind == DeclarationKind::Enum)
+            .collect::<Vec<_>>();
+        assert_eq!(enum_declarations.len(), 4);
+        let storages = enum_declarations
+            .iter()
+            .map(|declaration| {
+                assert!(declaration.type_group.is_some());
+                declaration
+                    .value_storage
+                    .expect("const enum has checker-visible value storage")
+            })
+            .collect::<rustc_hash::FxHashSet<_>>();
+        assert_eq!(storages.len(), enum_declarations.len());
+        assert_eq!(binder.decl_count, 4);
+
+        for name in [
+            "PrivateOuter",
+            "ExportedOuter",
+            "TypeOnlyOuter",
+            "AmbientOuter",
+        ] {
+            let namespace = binder
+                .namespaces
+                .namespaces()
+                .find(|namespace| namespace.name == name)
+                .unwrap_or_else(|| panic!("{name} namespace"));
+            assert_eq!(
+                binder.namespaces.aggregate_instance_state(namespace.id),
+                Some(NamespaceInstanceState::NonInstantiated),
+                "{name}"
+            );
+            assert_eq!(
+                binder.namespaces.standalone_value_storage(namespace.id),
+                None,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn enum_group_legality_and_issue_owners_match_typescript_matrix() {
+        use MergeDeclarationKind::{Enum, Function, Namespace};
+
+        struct Row {
+            name: &'static str,
+            source: &'static str,
+            buildability: EnumGroupBuildability,
+            issue_owners: &'static [MergeDeclarationKind],
+            placement_owners: &'static [MergeDeclarationKind],
+        }
+
+        let rows = [
+            Row {
+                name: "EE",
+                source: "enum X {}\nenum X {}\n",
+                buildability: EnumGroupBuildability::Buildable,
+                issue_owners: &[],
+                placement_owners: &[],
+            },
+            Row {
+                name: "CC",
+                source: "const enum X {}\nconst enum X {}\n",
+                buildability: EnumGroupBuildability::Buildable,
+                issue_owners: &[],
+                placement_owners: &[],
+            },
+            Row {
+                name: "EN",
+                source: "enum X {}\nnamespace X { export const tag = 1; }\n",
+                buildability: EnumGroupBuildability::Buildable,
+                issue_owners: &[],
+                placement_owners: &[],
+            },
+            Row {
+                name: "NE",
+                source: "namespace X { export const tag = 1; }\nenum X {}\n",
+                buildability: EnumGroupBuildability::Buildable,
+                issue_owners: &[],
+                placement_owners: &[],
+            },
+            Row {
+                name: "CN",
+                source: "const enum X {}\nnamespace X { export const tag = 1; }\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Enum, Namespace],
+                placement_owners: &[],
+            },
+            Row {
+                name: "NC",
+                source: "namespace X { export const tag = 1; }\nconst enum X {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Namespace, Enum],
+                placement_owners: &[],
+            },
+            Row {
+                name: "CO",
+                source: "const enum X {}\nenum X {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Enum, Enum],
+                placement_owners: &[],
+            },
+            Row {
+                name: "OC",
+                source: "enum X {}\nconst enum X {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Enum, Enum],
+                placement_owners: &[],
+            },
+            Row {
+                name: "EF",
+                source: "enum X {}\nfunction X() {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Enum, Function],
+                placement_owners: &[],
+            },
+            Row {
+                name: "FE",
+                source: "function X() {}\nenum X {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Function, Enum],
+                placement_owners: &[],
+            },
+            Row {
+                name: "ENF",
+                source: "enum X {}\nnamespace X { export const tag = 1; }\nfunction X() {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Enum, Function],
+                placement_owners: &[Namespace],
+            },
+            Row {
+                name: "EFN",
+                source: "enum X {}\nfunction X() {}\nnamespace X { export const tag = 1; }\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Enum, Function],
+                placement_owners: &[],
+            },
+            Row {
+                name: "NEF",
+                source: "namespace X { export const tag = 1; }\nenum X {}\nfunction X() {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Namespace, Enum, Function],
+                placement_owners: &[Namespace],
+            },
+            Row {
+                name: "NFE",
+                source: "namespace X { export const tag = 1; }\nfunction X() {}\nenum X {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Namespace, Function, Enum],
+                placement_owners: &[Namespace],
+            },
+            Row {
+                name: "FEN",
+                source: "function X() {}\nenum X {}\nnamespace X { export const tag = 1; }\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Function, Enum],
+                placement_owners: &[],
+            },
+            Row {
+                name: "FNE",
+                source: "function X() {}\nnamespace X { export const tag = 1; }\nenum X {}\n",
+                buildability: EnumGroupBuildability::RejectedFutureTk2567,
+                issue_owners: &[Function, Namespace, Enum],
+                placement_owners: &[],
+            },
+        ];
+
+        for row in rows {
+            let binder = bind(row.source, false);
+            let record = merge(&binder, "X");
+            assert!(
+                record
+                    .declarations
+                    .iter()
+                    .any(|participant| participant.kind == MergeDeclarationKind::Enum),
+                "{} merge record contains an enum",
+                row.name
+            );
+            assert!(
+                record
+                    .declarations
+                    .iter()
+                    .filter(|participant| participant.kind == MergeDeclarationKind::Enum)
+                    .all(|participant| binder
+                        .declarations
+                        .get(participant.declaration)
+                        .is_some_and(|declaration| declaration.type_group.is_some())),
+                "{} enum declarations own type groups",
+                row.name
+            );
+            let view = enum_group(&binder, "X");
+            assert_eq!(view.buildability, row.buildability, "{}", row.name);
+            assert_eq!(
+                record.classification.disposition,
+                match row.buildability {
+                    EnumGroupBuildability::Buildable => MergeDisposition::Admitted,
+                    EnumGroupBuildability::RejectedFutureTk2567 => {
+                        MergeDisposition::RejectedFutureTk2567
+                    }
+                },
+                "{}",
+                row.name
+            );
+            assert_eq!(
+                issue_owner_kinds(record, &view.issues),
+                row.issue_owners,
+                "{} TK2567 owners",
+                row.name
+            );
+            assert!(view
+                .issues
+                .iter()
+                .all(|issue| issue.kind == EnumGroupIssueKind::FutureTk2567));
+            assert_eq!(
+                placement_owner_kinds(record),
+                row.placement_owners,
+                "{} TK2434 owners",
+                row.name
+            );
+            assert_eq!(
+                view.placement_issues, record.placement_issues,
+                "{}",
+                row.name
+            );
+            assert!(view.issues.iter().all(|issue| {
+                binder
+                    .declarations
+                    .get(issue.owner)
+                    .is_some_and(|declaration| declaration.site.binding_span == issue.span)
+            }));
+        }
+    }
+
+    #[test]
+    fn enum_group_normalization_is_independent_of_module_insertion_order() {
+        const SOURCES: [(&str, SourceUnitKey); 3] = [
+            ("declare enum X { First }", SourceUnitKey(10)),
+            ("declare enum X { Second }", SourceUnitKey(15)),
+            (
+                "declare namespace X { const tag: number; }",
+                SourceUnitKey(20),
+            ),
+        ];
+
+        let bind_permutation = |order: [usize; 3]| {
+            let prelude_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
+            let allocators = SOURCES
+                .iter()
+                .map(|_| Allocator::default())
+                .collect::<Vec<_>>();
+            let parsed = SOURCES
+                .iter()
+                .zip(&allocators)
+                .map(|((source, _), allocator)| {
+                    let parsed = Parser::new(allocator, source, SourceType::d_ts()).parse();
+                    assert!(!parsed.panicked, "parse failed: {source}");
+                    parsed
+                })
+                .collect::<Vec<_>>();
+            let units = order
+                .iter()
+                .map(|index| {
+                    let source = SOURCES[*index].1;
+                    let ordinal = LibraryFileOrdinal::new(*index);
+                    (
+                        &parsed[*index].program,
+                        CompilationUnit::library(source, ordinal, &parsed[*index].program),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut builder = ProjectBinderBuilder::new(&prelude.program);
+            let modules = builder.add_library_modules(&units);
+            builder.finish(*modules.last().expect("one library module"))
+        };
+
+        let snapshot = |binder: &Binder| {
+            let view = enum_group(binder, "X");
+            (
+                view.declarations
+                    .iter()
+                    .map(|participant| participant.source)
+                    .collect::<Vec<_>>(),
+                view.namespace_declarations
+                    .iter()
+                    .map(|participant| participant.source)
+                    .collect::<Vec<_>>(),
+                view.namespace.is_some(),
+                view.buildability,
+                view.issues
+                    .iter()
+                    .map(|issue| issue.source)
+                    .collect::<Vec<_>>(),
+                view.placement_issues
+                    .iter()
+                    .map(|issue| issue.source)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let forward = bind_permutation([0, 1, 2]);
+        let reverse_insertion = bind_permutation([2, 1, 0]);
+        assert_eq!(snapshot(&forward), snapshot(&reverse_insertion));
+        assert_eq!(
+            snapshot(&forward),
+            (
+                vec![SourceUnitKey(10), SourceUnitKey(15)],
+                vec![SourceUnitKey(20)],
+                true,
+                EnumGroupBuildability::Buildable,
+                Vec::new(),
+                Vec::new(),
+            )
+        );
+    }
+
     #[test]
     fn attached_namespace_value_view_is_whole_group_ordered_and_storage_truthful() {
         let source = r#"
@@ -8747,7 +9406,7 @@ enum ClassChimera {}
         );
         assert_eq!(
             merge(&binder, "Chimera").classification.disposition,
-            MergeDisposition::DeferredBacklog42
+            MergeDisposition::RejectedFutureTk2567
         );
         assert_eq!(chimera.fragments.len(), 2);
         assert!(chimera
@@ -8814,15 +9473,15 @@ enum ClassChimera {}
             .declarations
             .iter()
             .find(|participant| participant.kind == MergeDeclarationKind::Enum)
-            .expect("enum participant remains owned by backlog 42");
+            .expect("enum participant remains in the rejected group");
         let enum_declaration = binder
             .declarations
             .get(enum_participant.declaration)
             .expect("enum declaration identity");
         assert_eq!(enum_declaration.kind, DeclarationKind::Enum);
         assert_eq!(enum_declaration.site.module, binder.module);
-        assert_eq!(enum_declaration.value_storage, None);
-        assert_eq!(enum_declaration.type_group, None);
+        assert!(enum_declaration.value_storage.is_some());
+        assert!(enum_declaration.type_group.is_some());
         assert_eq!(
             merge(&binder, "Chimera").owner,
             DeclarationOwner::Lexical(binder.module)
@@ -8841,7 +9500,7 @@ enum ClassChimera {}
             .expect("class backlog-42 group");
         assert_eq!(
             class_chimera.disposition,
-            NamespaceValueAttachmentDisposition::Rejected(MergeDisposition::DeferredBacklog42)
+            NamespaceValueAttachmentDisposition::Rejected(MergeDisposition::RejectedFutureTk2567)
         );
         assert!(merge(&binder, "ClassChimera")
             .classification
@@ -11242,8 +11901,8 @@ namespace Visibility {
     fn rich_namespace_and_global_bodies_inventory_exact_declarations_and_binding_storage() {
         let source = "interface Existing {} namespace Existing { export const { a, nested: { b } } = value; export function f(param: number): void {} export class C {} export type T = number; export interface I {} export enum E {} export namespace Child {} export { a as alias }; } declare global { const [g]: number[]; function gf(arg: number): void; class GC {} type GT = number; interface GI {} enum GE {} namespace GN {} }";
         let binder = bind(source, false);
-        assert_eq!(binder.decl_count, 6);
-        assert_eq!(binder.type_groups.len(), 4);
+        assert_eq!(binder.decl_count, 7);
+        assert_eq!(binder.type_groups.len(), 5);
 
         let existing_type_symbol = binder
             .graph
@@ -11276,12 +11935,12 @@ namespace Visibility {
                 || &source[declaration.site.binding_span.range()] != "Existing"
         }) {
             let name = &source[declaration.site.binding_span.range()];
-            if matches!(name, "a" | "b" | "f" | "C" | "param") {
+            if matches!(name, "a" | "b" | "f" | "C" | "E" | "param") {
                 assert!(declaration.value_storage.is_some(), "{name}");
             } else {
                 assert_eq!(declaration.value_storage, None, "{name}");
             }
-            if matches!(name, "C" | "T" | "I") {
+            if matches!(name, "C" | "T" | "I" | "E") {
                 assert!(declaration.type_group.is_some());
             } else {
                 assert_eq!(declaration.type_group, None);
@@ -11430,13 +12089,11 @@ namespace Visibility {
             disposition("VBad"),
             MergeDisposition::RejectedRuntimeNamespace
         );
-        for name in ["E", "Chimera"] {
-            assert_eq!(
-                disposition(name),
-                MergeDisposition::DeferredBacklog42,
-                "{name}"
-            );
-        }
+        assert_eq!(disposition("E"), MergeDisposition::Admitted);
+        assert_eq!(
+            disposition("Chimera"),
+            MergeDisposition::RejectedFutureTk2567
+        );
         for name in [
             "NamedImport",
             "NamedImportRev",
