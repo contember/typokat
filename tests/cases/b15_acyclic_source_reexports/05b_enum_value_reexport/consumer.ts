@@ -1,2 +1,3 @@
 import { Local } from "./barrel.js";
-const value = Local.A;
+const whole: Local = Local.B;
+const member: Local.A = Local.A;

@@ -101,16 +101,18 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
 - **Verify first.** Unit-test the exact WU0 relation matrix directly against interned types before
   connecting any AST path. Include relation-cache order permutations so a cached primitive/enum
   result cannot erase the enum identity.
-- **Scope.** Add a stable `EnumId` and an identity-bearing enum-member type keyed by enum identity and
-  member identity, carrying only the proved primitive/literal facts needed by relation, rendering,
-  and narrowing. Represent a non-empty whole enum as the canonical union of its member types; follow
-  WU0's tsc result for empty enums and opaque computed members. Keep ordinary `LiteralValue`
+- **Scope.** Add a stable `EnumId`, an identity-bearing whole-enum type, and an enum-member type keyed
+  by enum identity and member identity, carrying only the proved primitive/literal facts needed by
+  relation, rendering, and narrowing. The whole-enum node records its canonical member family plus
+  the numeric openness proved by WU0; a plain member union is insufficient for empty enums and
+  opaque/ambient numeric members. Equal-valued members of one enum retain distinct declaration
+  identities but are relation-compatible. Keep ordinary `LiteralValue`
   unchanged. Extend store/interner hashing and equality, substitution, evaluator/free-parameter
   walkers, type rendering, relation dispatch, apparent/base-type demand, and serialization-free
   frozen-layer validation as required by the new tag. Preserve `TypeId` hash-consing and the
   three-`u32` relation cache key.
 - **Acceptance / witness.** Same enum member identity interns once; distinct enums and distinct
-  members stay distinct; whole-enum unions are deterministic; numeric and string assignment rules
+  members stay distinct; whole-enum member families are deterministic; numeric and string assignment rules
   match WU0 in both source/target directions; rendering distinguishes `E` and `E.Member`; no
   exhaustive type walker falls through to error/recovery. Existing literal, union, substitution,
   evaluator, and cache-soundness tests remain byte-identical.
@@ -184,8 +186,10 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
 - **Scope.** Resolve bare `E` to the whole enum and bare `E.Member` to the exact member endpoint.
   Resolve static and statically keyed computed
   value access through the descriptor while preserving ordinary missing-member diagnostics. Extend
-  equality and `switch` label extraction to exact enum member expressions with a side-effect-free
-  lookup; reuse the existing union/discriminant narrowing machinery. Wire numeric-enum operand
+  equality and `switch` label extraction to exact enum member expressions and overlapping raw
+  primitive values with a side-effect-free lookup; assignment compatibility is deliberately not
+  reused because raw strings compare and narrow but do not assign to string enums. Reuse the existing
+  union/discriminant narrowing machinery. Wire numeric-enum operand
   classification only where the already implemented operator checks ask whether an operand is
   number-like; general operator semantics remain backlog `45`.
 - **Acceptance / witness.** Enable the single-file portion of WU0. Clean enum uses lose all three
@@ -302,9 +306,11 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
 
 ## Decisions
 
-- **Nominal member node, structural whole enum.** Each enum member has declaration identity plus its
-  proved primitive/literal facts. The enum type is the union of those members. Ordinary literals do
-  not acquire enum metadata.
+- **Nominal family and members.** Each whole enum and member has declaration identity plus its proved
+  primitive/literal facts. The whole node owns the canonical member family and numeric-openness
+  state; it is not reducible to a member union because empty enums and opaque/ambient numeric members
+  admit numeric sources that a closed union cannot express. Equal-valued members of one family are
+  compatible without collapsing their identities. Ordinary literals do not acquire enum metadata.
 - **One descriptor publishes both slots.** Type and value surfaces are derived from one ordered
   member table and become visible atomically. There is no duplicate enum builder and no partial
   value/type publication.
@@ -341,4 +347,15 @@ semantic identity.
 
 ## Run log
 
-<!-- Append discoveries, deviations, and blockers here during execution. -->
+- **WU0 oracle refinement (2026-08-12).** The complete TypeScript 6.0.3 matrix disproved the initial
+  plain-union whole-enum model: empty enums and opaque/ambient numeric members accept arbitrary
+  numeric sources; broad `number` also assigns to a closed numeric member. It also proved that
+  equal-valued members of one enum are compatible, while raw string values compare and narrow
+  against string members but remain non-assignable. WU1/WU3 were tightened before implementation.
+  Oxc reports dynamic and numeric enum member names as parse errors, so their invalid-syntax
+  diagnostics are not part of the checker corpus; accepted identifier, quoted, and static-computed
+  names remain required.
+- **WU0 RED gate (2026-08-12).** Every flat marker matched the exact TypeScript 6.0.3 code and source
+  line. Normal/reverse Bundler configs were byte-identical at the oracle boundary. A temporary
+  isolated run of both disabled corpora failed with 239 conformance differences across 17 files and
+  no unexpected parse error; the committed registration remains disabled and behavior-neutral.

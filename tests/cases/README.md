@@ -62,6 +62,7 @@ EOF spans.
 
 | Code | Meaning |
 |---|---|
+| `TK1061` | Enum member following a computed member must have an initializer |
 | `TK1192` | Resolved module has no default export (narrow Bundler default-import exception) |
 | `TK1314` | `export as namespace` appears outside a module |
 | `TK1315` | `export as namespace` appears in a non-declaration source file |
@@ -97,6 +98,7 @@ EOF spans.
 | `TK2362` | Left-hand side of an arithmetic operation must be `any`/`number`/`bigint`/enum |
 | `TK2363` | Right-hand side of an arithmetic operation must be `any`/`number`/`bigint`/enum |
 | `TK2365` | Operator cannot be applied to the two operand types (`+` general mismatch) |
+| `TK2367` | Comparison operands have no overlap |
 | `TK2374` | Duplicate index signature |
 | `TK2391` | Function implementation is missing or not immediately following overload declarations |
 | `TK2394` | Overload signature is not compatible with its implementation signature |
@@ -105,18 +107,26 @@ EOF spans.
 | `TK2413` | Numeric index type is not assignable to string index type |
 | `TK2428` | Merged declarations must have identical type parameters |
 | `TK2430` | Interface incorrectly extends a base interface |
+| `TK2432` | A repeated enum declaration illegally omits its first initializer |
 | `TK2434` | Namespace declaration precedes the class or function it augments |
+| `TK2474` | `const enum` member initializer is not a constant expression |
+| `TK2477` | `const enum` member initializer evaluates to a non-finite value |
+| `TK2478` | `const enum` member initializer evaluates to `NaN` |
 | `TK2554` | Wrong number of arguments (arity) |
 | `TK2555` | Too few arguments for a rest/min-arity call |
 | `TK2558` | Wrong number of type arguments |
+| `TK2565` | Enum member references itself in its initializer |
+| `TK2567` | Enum declaration merges with an incompatible declaration kind |
 | `TK2576` | Static class member is accessed on an instance |
 | `TK2589` | Type instantiation is excessively deep and possibly infinite |
 | `TK2631` | Cannot assign to a namespace binding |
+| `TK2651` | Enum initializer references a later enum member |
 | `TK2503` | Cannot find namespace |
 | `TK2669` | Global augmentation is outside an external or ambient module |
 | `TK2670` | Global augmentation is missing `declare` outside an ambient context |
 | `TK2673` | Constructor of class is private (direct `new` outside the declaring class) |
 | `TK2674` | Constructor of class is protected (direct `new` outside the declaring class/subclasses) |
+| `TK2678` | `switch` case is not comparable to the enum discriminant |
 | `TK2684` | The `this` context of a call is not assignable to the method's explicit receiver type |
 | `TK2687` | Merged property declarations must have identical modifiers |
 | `TK2694` | Namespace has no exported member |
@@ -124,12 +134,14 @@ EOF spans.
 | `TK2706` | Required type parameters may not follow optional type parameters |
 | `TK2707` | Generic type requires between a minimum and maximum number of type arguments |
 | `TK2708` | Cannot use a type-only namespace as a value |
+| `TK2709` | Cannot use a namespace as a type |
 | `TK2713` | A type-only path segment is accessed as a namespace |
 | `TK2717` | Subsequent property declaration has an incompatible type |
 | `TK2741` | Property is missing in type but required |
 | `TK2744` | Type parameter defaults can only reference previously declared type parameters |
 | `TK2749` | A value is used as a type |
 | `TK2769` | No overload matches this call |
+| `TK18033` | Computed enum member value is not numeric |
 
 ## Type display format (what the renderer must print)
 
@@ -391,6 +403,8 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b38_minimal_ambient_prelude/` | shipped backlog `38` | historical bounded `console` and numeric `Math` acceptance, now exercised through the production default library |
 | `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped ambient-library boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit library names, and local type-only exports do not acquire ambient value slots |
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
+| `b42_enum_type_value_model/` | backlog `42` (disabled WU0 spec) | nominal enum/member identity, initializer analysis, relation, flow narrowing, legal merges, and typed invalid-merge recovery |
+| `b42_enum_project_model/` | backlog `42` (disabled WU0 spec) | paired enum value/type publication through named, type-only, source-re-export, namespace-payload, and admitted identifier-default Bundler routes |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |

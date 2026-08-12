@@ -778,11 +778,11 @@
         },
         {
           "path": "consumer.ts",
-          "text": "import { Local } from \"./barrel.js\";\nconst value = Local.A;\n"
+          "text": "import { Local } from \"./barrel.js\";\nconst whole: Local = Local.B;\nconst member: Local.A = Local.A;\n"
         },
         {
           "path": "source.ts",
-          "text": "export enum Local { A }\n"
+          "text": "export enum Local { A = 1, B = 2 }\n"
         }
       ],
       "runs": [
@@ -846,11 +846,13 @@
               "project_notices": [],
               "parse_errors": [],
               "incomplete": [
+                "consumer.ts:3:15 annotation-lower/type-name/qualified-import-alias",
                 "source.ts:1:8 decl/enum-declaration/self"
               ],
               "diagnostics": [
                 "barrel.ts:1:10 TK2305",
-                "consumer.ts:2:15 TK2304"
+                "consumer.ts:2:22 TK2304",
+                "consumer.ts:3:25 TK2304"
               ]
             }
           },
@@ -882,11 +884,13 @@
               "project_notices": [],
               "parse_errors": [],
               "incomplete": [
+                "consumer.ts:3:15 annotation-lower/type-name/qualified-import-alias",
                 "source.ts:1:8 decl/enum-declaration/self"
               ],
               "diagnostics": [
                 "barrel.ts:1:10 TK2305",
-                "consumer.ts:2:15 TK2304"
+                "consumer.ts:2:22 TK2304",
+                "consumer.ts:3:25 TK2304"
               ]
             }
           }
