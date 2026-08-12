@@ -615,6 +615,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     PublishedTypeGroupSurface::Template(template) => {
                         (template, group.parameters.clone(), true)
                     }
+                    PublishedTypeGroupSurface::Enum(enumeration) => (enumeration, Vec::new(), true),
                     PublishedTypeGroupSurface::Class(_) => return None,
                 },
                 PublishedTypeGroupTerminal::Unavailable(_) => return None,

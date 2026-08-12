@@ -27,7 +27,7 @@ namespace Available {
 type UnionUnavailableFirst = Available.Good | MissingRoot.Bad; // error[TK2503]: Cannot find namespace 'MissingRoot'
 type FunctionUnavailableFirst = (value: Available.Good) => MissingReturn.Bad; // error[TK2503]: Cannot find namespace 'MissingReturn'
 
-enum DeferredEnum { A } // incomplete[decl/enum-declaration/self]
+enum DeferredEnum { A }
 type EnumUnavailableFirst = DeferredEnum.A | MissingEnumSibling.Bad; // incomplete[annotation-lower/type-name/qualified-enum] | error[TK2503]: Cannot find namespace 'MissingEnumSibling'
 
 class GenericBase<T> {}

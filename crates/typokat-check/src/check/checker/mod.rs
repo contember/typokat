@@ -808,6 +808,7 @@ fn try_bootstrap_test_support_prelude<Error>(
     seed_prelude_intrinsics(&binder, &mut pass.type_resolved, intrinsic_markers);
     pass.fill_type_decls(binder.prelude_module);
     pass.publish_class_surfaces();
+    pass.fill_enum_decls();
     pass.fill_pending_interfaces_range(binder.prelude_module, 0, pass.type_decls.len());
     pass.freeze_seeded_type_groups();
     let publication = pass.publish_type_groups();
@@ -1177,6 +1178,11 @@ where
         &reporting.lexical_events,
         &mut external_effects,
     ));
+    infallible(enqueue_enum_merge_diagnostics(
+        &binder,
+        &reporting.lexical_events,
+        &mut external_effects,
+    ));
     infallible(enqueue_ambient_context_diagnostics(
         &binder,
         &reporting.lexical_events,
@@ -1228,6 +1234,10 @@ where
     pass.prepare_attached_namespace_values(binder.module, &program.body);
     pass.prepare_standalone_namespace_values(binder.module, &program.body);
     pass.publish_class_surfaces();
+    // Direct function signatures are reserved once after their annotation types
+    // are complete and before enum initializer typing.
+    let mut function_surfaces = pass.reserve_function_surfaces(binder.module, &program.body);
+    pass.fill_enum_decls();
     pass.finalize_standalone_namespace_values();
     pass.precompute_standalone_namespace_value_aliases(&[(binder.module, program.body.as_slice())]);
     pass.fill_pending_interfaces_range(
@@ -1240,7 +1250,6 @@ where
         pass.suppress_effects = true;
     }
     pass.validate_published_class_surfaces();
-    let mut function_surfaces = pass.reserve_function_surfaces(binder.module, &program.body);
     pass.reserve_var_annotation_surfaces(binder.module, &program.body);
     pass.reserve_continuation_global_augmentation_surfaces(&program.body, &mut function_surfaces);
     let contributor_names = source_global_binding_census(
@@ -2672,6 +2681,7 @@ where
         &mut external_effects,
     )?;
     enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects)?;
+    enqueue_enum_merge_diagnostics(&binder, &lexical_events, &mut external_effects)?;
     enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)?;
     seed_module_placeholder_errors(&mut decl_types, &module_placeholders, error);
 
@@ -2740,15 +2750,6 @@ where
         pass.enqueue_effects(combined);
     }
 
-    if let (true, Some((ordinal, module, _))) = (
-        has_library_semantic_identities,
-        selected_library_units.first(),
-    ) {
-        pass.current_module = *module;
-        pass.current_source = SourceUnit::Library {
-            file_ordinal: LibraryFileOrdinal::new(*ordinal),
-        };
-    }
     pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
     let mut standalone_modules = selected_library_units
         .iter()
@@ -2775,6 +2776,33 @@ where
         return Err("private namespace terminal planning escaped the sparse epoch");
     }
     pass.publish_class_surfaces();
+    if let (true, Some((ordinal, module, _))) = (
+        has_library_semantic_identities,
+        selected_library_units.first(),
+    ) {
+        pass.current_module = *module;
+        pass.current_source = SourceUnit::Library {
+            file_ordinal: LibraryFileOrdinal::new(*ordinal),
+        };
+    }
+    let mut library_surfaces = Vec::with_capacity(selected_library_units.len());
+    for (ordinal, scope, statements) in &selected_library_units {
+        pass.current_module = *scope;
+        pass.current_source = SourceUnit::Library {
+            file_ordinal: LibraryFileOrdinal::new(*ordinal),
+        };
+        library_surfaces.push(pass.reserve_function_surfaces_for_lists(*scope, statements));
+    }
+    let mut module_surfaces = Vec::with_capacity(units.len());
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        module_surfaces.push(pass.reserve_function_surfaces(scope, &unit.program.body));
+    }
+    pass.fill_enum_decls_range(user_type_start, pass.type_decls.len());
     pass.fill_pending_interfaces_range(binder.module, user_type_start, pass.type_decls.len());
     let user_namespace_modules = module_scopes.iter().copied().collect::<FxHashSet<_>>();
     pass.refresh_colliding_standalone_variable_surfaces(
@@ -2793,29 +2821,26 @@ where
     // contributes must all be in place before the first module executes — otherwise a forward
     // `declare var`/`function` reads an unfilled slot and its errors vanish (backlog 102).
     pass.refresh_private_global_object(Vec::new());
-    let mut library_surfaces = Vec::with_capacity(selected_library_units.len());
     for (ordinal, scope, statements) in &selected_library_units {
         pass.current_module = *scope;
         pass.current_source = SourceUnit::Library {
             file_ordinal: LibraryFileOrdinal::new(*ordinal),
         };
-        let surfaces = pass.reserve_function_surfaces_for_lists(*scope, statements);
         for statements in statements {
             pass.reserve_var_annotation_surfaces(*scope, statements);
         }
-        library_surfaces.push(surfaces);
     }
-    let mut module_surfaces = Vec::with_capacity(units.len());
-    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+    for (module_index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
         pass.current_module = scope;
         pass.current_source = SourceUnit::User {
             module_ordinal: unit.module_ordinal,
             unit_slot: unit.unit_slot,
         };
-        let mut surfaces = pass.reserve_function_surfaces(scope, &unit.program.body);
         pass.reserve_var_annotation_surfaces(scope, &unit.program.body);
-        pass.reserve_continuation_global_augmentation_surfaces(&unit.program.body, &mut surfaces);
-        module_surfaces.push(surfaces);
+        pass.reserve_continuation_global_augmentation_surfaces(
+            &unit.program.body,
+            &mut module_surfaces[module_index],
+        );
     }
     let global_contributor_names = units
         .iter()
@@ -3097,7 +3122,8 @@ fn private_project_visible_root_members_for_test(
         .filter_map(|group| pass.type_environment.published().groups().get(group))
         .filter_map(|terminal| match terminal {
             PublishedTypeGroupTerminal::Ready(group) => match group.surface {
-                PublishedTypeGroupSurface::Template(template) => Some(template),
+                PublishedTypeGroupSurface::Template(template)
+                | PublishedTypeGroupSurface::Enum(template) => Some(template),
                 PublishedTypeGroupSurface::Class(class) => match pass
                     .type_environment
                     .published()
@@ -3167,7 +3193,8 @@ fn private_project_semantic_evidence_for_test(
                 .and_then(|group| pass.type_environment.published().groups().get(group))
                 .map(|terminal| match terminal {
                     PublishedTypeGroupTerminal::Ready(group) => match group.surface {
-                        PublishedTypeGroupSurface::Template(template) => {
+                        PublishedTypeGroupSurface::Template(template)
+                        | PublishedTypeGroupSurface::Enum(template) => {
                             render_type(pass.interner.store(), template, false)
                         }
                         PublishedTypeGroupSurface::Class(class) => match pass
@@ -3266,7 +3293,8 @@ fn private_project_semantic_evidence_for_test(
         .filter_map(|group| pass.type_environment.published().groups().get(group))
         .filter_map(|terminal| match terminal {
             PublishedTypeGroupTerminal::Ready(group) => match group.surface {
-                PublishedTypeGroupSurface::Template(template) => Some(template),
+                PublishedTypeGroupSurface::Template(template)
+                | PublishedTypeGroupSurface::Enum(template) => Some(template),
                 PublishedTypeGroupSurface::Class(class) => match pass
                     .type_environment
                     .published()
@@ -4194,6 +4222,11 @@ where
         &lexical_events,
         &mut external_effects,
     ));
+    infallible(enqueue_enum_merge_diagnostics(
+        &binder,
+        &lexical_events,
+        &mut external_effects,
+    ));
     infallible(enqueue_ambient_context_diagnostics(
         &binder,
         &lexical_events,
@@ -4227,7 +4260,6 @@ where
     }
 
     pass.fill_type_decls_range(binder.module, user_type_start, pass.type_decls.len());
-
     let standalone_modules = module_scopes
         .iter()
         .copied()
@@ -4236,8 +4268,18 @@ where
         .collect::<Vec<_>>();
     pass.prepare_project_attached_namespace_values(&standalone_modules);
     pass.prepare_project_standalone_namespace_values(&standalone_modules);
-
     pass.publish_class_surfaces();
+    let mut module_surfaces = Vec::with_capacity(units.len());
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        module_surfaces.push(pass.reserve_function_surfaces(scope, &unit.program.body));
+    }
+    pass.fill_enum_decls_range(user_type_start, pass.type_decls.len());
+
     pass.finalize_standalone_namespace_values();
     pass.precompute_standalone_namespace_value_aliases(&standalone_modules);
 
@@ -4257,14 +4299,21 @@ where
         &module_scopes,
     );
 
-    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+    for (module_index, (scope, unit)) in module_scopes.iter().copied().zip(units).enumerate() {
         pass.current_module = scope;
         pass.current_source = SourceUnit::User {
             module_ordinal: unit.module_ordinal,
             unit_slot: unit.unit_slot,
         };
         pass.build_flow_graph(scope, &unit.program.body);
-        pass.check_statements(scope, &unit.program.body);
+        let mut no_return = None;
+        pass.check_statement_list_with_surfaces(
+            scope,
+            &unit.program.body,
+            None,
+            &mut no_return,
+            &mut module_surfaces[module_index],
+        );
         emit_test_incomplete(&mut pass);
     }
 
@@ -5012,6 +5061,31 @@ fn enqueue_namespace_placement_diagnostics<Ticket: UserReportingOwner>(
     Ok(())
 }
 
+fn enqueue_enum_merge_diagnostics<Ticket: UserReportingOwner>(
+    binder: &Binder,
+    reservations: &LexicalReservations<Ticket>,
+    effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
+) -> Result<(), Ticket::Error> {
+    for index in 0..binder.type_groups.len() {
+        let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+        let Some(view) = binder.enum_group(group) else {
+            continue;
+        };
+        for issue in view.issues {
+            let owner = reservations
+                .declaration_owner(issue.owner)
+                .expect("enum merge issue keeps its declaration owner")
+                .ticket
+                .user_ticket()?;
+            effects
+                .entry(owner)
+                .or_insert_with(|| CandidateEffects::new(owner))
+                .diagnostic(Diagnostic::enum_merge_incompatible(issue.span));
+        }
+    }
+    Ok(())
+}
+
 fn enqueue_ambient_context_diagnostics<Ticket: UserReportingOwner>(
     binder: &Binder,
     reservations: &LexicalReservations<Ticket>,
@@ -5747,11 +5821,131 @@ impl UserReportingAdapter {
     }
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EnumPublicationTraceForTest {
+    pub reservations: u64,
+    pub fills: u64,
+    pub ordered_member_names: Vec<String>,
+    pub readonly_value_properties: bool,
+    pub terminal_visible_before_freeze: bool,
+    pub enum_group: Option<ReplayOwner>,
+    pub owners: BTreeSet<ReplayOwner>,
+    pub edges: BTreeSet<(ReplayOwner, ReplayOwner)>,
+    owner_stack: Vec<ReplayOwner>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ENUM_PUBLICATION_TRACE: std::cell::RefCell<Option<EnumPublicationTraceForTest>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn start_enum_publication_trace_for_test() {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        *trace.borrow_mut() = Some(EnumPublicationTraceForTest::default());
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn finish_enum_publication_trace_for_test() -> EnumPublicationTraceForTest {
+    ENUM_PUBLICATION_TRACE.with(|trace| trace.borrow_mut().take().unwrap_or_default())
+}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn record_enum_reservation_for_test() {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.reservations = trace.reservations.saturating_add(1);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn record_enum_reservation_for_test() {}
+
+#[cfg(test)]
+pub(in crate::check::checker) fn record_enum_fill_for_test(
+    group: TypeGroupId,
+    member_names: Vec<String>,
+    readonly_value_properties: bool,
+    terminal_visible_before_freeze: bool,
+) {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.fills = trace.fills.saturating_add(1);
+            trace.enum_group = Some(ReplayOwner::TypeGroup(group));
+            trace.ordered_member_names = member_names;
+            trace.readonly_value_properties = readonly_value_properties;
+            trace.terminal_visible_before_freeze |= terminal_visible_before_freeze;
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn record_enum_fill_for_test(_: TypeGroupId, _: Vec<String>, _: bool, _: bool) {}
+
+#[cfg(test)]
+fn enum_publication_current_owner_for_test() -> Option<ReplayOwner> {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        trace
+            .borrow()
+            .as_ref()
+            .and_then(|trace| trace.owner_stack.last().copied())
+    })
+}
+
+#[cfg(not(test))]
+fn enum_publication_current_owner_for_test() -> Option<ReplayOwner> {
+    None
+}
+
+#[cfg(test)]
+fn enum_publication_enter_owner_for_test(owner: ReplayOwner) {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.owners.insert(owner);
+            trace.owner_stack.push(owner);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn enum_publication_enter_owner_for_test(_: ReplayOwner) {}
+
+#[cfg(test)]
+fn enum_publication_leave_owner_for_test(owner: ReplayOwner) {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            assert_eq!(trace.owner_stack.pop(), Some(owner));
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn enum_publication_leave_owner_for_test(_: ReplayOwner) {}
+
+#[cfg(test)]
+fn enum_publication_record_demand_for_test(dependency: ReplayOwner) {
+    ENUM_PUBLICATION_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            if let Some(consumer) = trace.owner_stack.last().copied() {
+                trace.owners.insert(dependency);
+                trace.edges.insert((dependency, consumer));
+            }
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn enum_publication_record_demand_for_test(_: ReplayOwner) {}
+
 impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     pub(in crate::check::checker) fn current_replay_owner(&self) -> Option<ReplayOwner> {
         self.replay_trace
             .as_ref()
             .and_then(replay_index::ReplayDependencyTrace::current_owner)
+            .or_else(enum_publication_current_owner_for_test)
     }
 
     pub(in crate::check::checker) fn with_replay_owner<R>(
@@ -5759,12 +5953,19 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
         owner: ReplayOwner,
         produce: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        enum_publication_enter_owner_for_test(owner);
         let Some(trace) = self.replay_trace.clone() else {
-            return produce(self);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(self)));
+            enum_publication_leave_owner_for_test(owner);
+            return match result {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
         };
         trace.enter(owner);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(self)));
         trace.leave(owner);
+        enum_publication_leave_owner_for_test(owner);
         match result {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -5772,6 +5973,7 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
     }
 
     pub(in crate::check::checker) fn record_replay_demand(&self, owner: ReplayOwner) {
+        enum_publication_record_demand_for_test(owner);
         if let Some(trace) = &self.replay_trace {
             if !self.compact_demand_capture.get() {
                 if let Some(consumer) = trace.current_owner() {
@@ -6146,10 +6348,15 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
 
     pub(in crate::check::checker) fn with_semantic_query<R>(
         &mut self,
-        run: impl FnOnce(&mut SemanticQueryCoordinator<'_, replay_index::ReplayClassLookup<'_>>) -> R,
+        run: impl FnOnce(
+            &mut SemanticQueryCoordinator<'_, replay_index::ConstructionReplayClassLookup<'_>>,
+        ) -> R,
     ) -> R {
-        let lookup = replay_index::ReplayClassLookup::new(
-            self.type_environment.published().classes(),
+        let (staged_classes, inherited_classes) =
+            self.type_environment.semantic_query_class_layers();
+        let lookup = replay_index::ConstructionReplayClassLookup::new(
+            staged_classes,
+            inherited_classes,
             self.replay_trace.clone(),
         );
         let mut coordinator = SemanticQueryCoordinator::new(
@@ -6876,6 +7083,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         flow_loop_depth: 0,
         cond_frames: Vec::new(),
         building_template: false,
+        enum_initializer_invalid_semantic_query: false,
         resolving_conditional_alias: None,
         resolving_alias: None,
         resolving_alias_stack: Vec::new(),

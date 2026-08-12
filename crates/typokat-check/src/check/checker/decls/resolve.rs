@@ -354,10 +354,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .groups()
                 .get(decl_id)
                 .is_some())
-            || matches!(
-                self.type_decls.get(decl_id.index()),
-                Some(TypeDecl::Class { .. })
-            );
+            || (!self.type_environment.is_published()
+                && matches!(
+                    self.type_decls.get(decl_id.index()),
+                    Some(TypeDecl::Class { .. })
+                ));
         let resolved = self.resolve_type_group_reference(
             scope,
             decl_id,
@@ -691,6 +692,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
                 PublishedTypeGroupSurface::Template(_) => {
                     self.instantiate_type_group_arguments(scope, group, Vec::new(), span)
+                }
+                PublishedTypeGroupSurface::Enum(enumeration) => {
+                    self.maybe_evaluate(enumeration, span)
                 }
                 PublishedTypeGroupSurface::Class(_) => unreachable!(),
             },
@@ -1294,12 +1298,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// The published identities, or their construction-only exact library-root roles.
     pub(in crate::check::checker) fn native_array_groups(&self) -> NativeArrayGroups {
         let Some(source) = self.early_native_array_root_source else {
-            return self
-                .library_semantic_identities
-                .as_ref()
-                .map_or_else(NativeArrayGroups::default, |identities| {
-                    identities.native_array_groups()
-                });
+            return self.library_semantic_identities.as_ref().map_or_else(
+                || self.early_native_array_groups.unwrap_or_default(),
+                |identities| identities.native_array_groups(),
+            );
         };
         self.native_array_groups_for_source(source)
     }
@@ -1375,6 +1377,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Some(PublishedTypeGroupTerminal::Ready(published)) => match published.surface {
                 PublishedTypeGroupSurface::Template(template) => {
                     (template, published.parameters, published.parameter_defaults)
+                }
+                PublishedTypeGroupSurface::Enum(enumeration) => {
+                    (enumeration, Vec::new(), Vec::new())
                 }
                 PublishedTypeGroupSurface::Class(_) => return None,
             },
@@ -1510,6 +1515,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .unwrap_or_default();
         }
         match self.type_decls.get(decl_id.index()) {
+            Some(TypeDecl::Enum { .. }) => return Vec::new(),
             Some(TypeDecl::Interface {
                 recovery_defaults, ..
             }) => return recovery_defaults.clone(),
@@ -1602,6 +1608,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
         match self.type_decls.get(decl_id.index()) {
+            Some(TypeDecl::Enum { .. }) => Vec::new(),
             Some(TypeDecl::Interface {
                 recovery_params, ..
             }) => recovery_params.clone(),

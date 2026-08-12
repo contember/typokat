@@ -28,6 +28,19 @@ pub fn check_source(source: &str) -> CheckOutput {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn check_source_with_enum_publication_trace(
+    source: &str,
+) -> (CheckOutput, super::checker::EnumPublicationTraceForTest) {
+    on_raw_check_worker(|| {
+        super::checker::start_enum_publication_trace_for_test();
+        let output = check_source_inner(source);
+        let trace = super::checker::finish_enum_publication_trace_for_test();
+        (output, trace)
+    })
+    .expect("enum publication trace worker")
+}
+
 fn check_source_inner(source: &str) -> CheckOutput {
     let run = run_source_frontend(source, |program| {
         let mut interner = Interner::with_intrinsics();

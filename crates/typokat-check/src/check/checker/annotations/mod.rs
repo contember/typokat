@@ -395,10 +395,7 @@ mod multi_child_recovery_tests {
                 .iter()
                 .map(|record| record.id.as_str())
                 .collect::<Vec<_>>(),
-            [
-                "decl/enum-declaration/self",
-                "annotation-lower/type-name/qualified-enum",
-            ]
+            ["annotation-lower/type-name/qualified-enum"]
         );
     }
 

@@ -4,6 +4,7 @@ mod array;
 mod assertions;
 mod calls_measure;
 mod classes;
+mod enums;
 mod generic_class;
 mod generic_methods;
 mod generics;

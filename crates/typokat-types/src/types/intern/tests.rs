@@ -579,6 +579,77 @@ fn frozen_enum_rows_are_shared_and_readable_from_deltas() {
 }
 
 #[test]
+fn failed_or_second_enum_fill_leaves_store_unchanged() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = interner.next_enum_id();
+    let reserved = interner.reserve_enum(enum_id, "Mode");
+    let invalid = EnumType {
+        id: EnumId(enum_id.0 + 1),
+        name: "Mode".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Read".to_owned(),
+            value: EnumValue::String("read".to_owned()),
+        }],
+        numeric_open: false,
+    };
+    let before_invalid = interner.store().len();
+    assert!(interner.fill_enum(reserved, invalid).is_err());
+    assert_eq!(interner.store().len(), before_invalid);
+    assert_eq!(
+        interner
+            .store()
+            .enum_member_type_id(enum_id, EnumMemberId(0)),
+        None
+    );
+
+    let family = EnumType {
+        id: enum_id,
+        name: "Mode".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Read".to_owned(),
+            value: EnumValue::String("read".to_owned()),
+        }],
+        numeric_open: false,
+    };
+    interner
+        .fill_enum(reserved, family.clone())
+        .expect("first matching fill succeeds");
+    let after_fill = interner.store().len();
+    let member = interner
+        .store()
+        .enum_member_type_id(enum_id, EnumMemberId(0));
+    assert!(interner.fill_enum(reserved, family).is_err());
+    assert_eq!(interner.store().len(), after_fill);
+    assert_eq!(
+        interner
+            .store()
+            .enum_member_type_id(enum_id, EnumMemberId(0)),
+        member
+    );
+}
+
+#[test]
+fn frozen_base_enum_ids_are_not_reused_by_delta_reservations() {
+    let mut base = Interner::with_intrinsics();
+    let inherited = base.intern_enum(EnumType {
+        id: EnumId(0),
+        name: "Inherited".to_owned(),
+        members: Vec::new(),
+        numeric_open: true,
+    });
+    base.freeze_as_base().expect("enum base freezes");
+    let mut delta = base.fork_delta().expect("enum base forks");
+    let fresh_id = delta.next_enum_id();
+    let reserved = delta.reserve_enum(fresh_id, "PrivateReplacement");
+    assert_eq!(fresh_id, EnumId(1));
+    assert_ne!(reserved, inherited);
+    assert_eq!(delta.store().enum_whole_type_id(EnumId(0)), Some(inherited));
+    assert_eq!(delta.store().enum_whole_type_id(EnumId(1)), Some(reserved));
+}
+
+#[test]
 fn sealed_base_forks_share_prefix_and_isolate_dense_suffixes() {
     let mut base = Interner::with_intrinsics();
     let wk = base.well_known();

@@ -49,9 +49,9 @@ use super::type_groups::{
 };
 use super::{
     attach_class_bindings, attach_type_decl_owners, build_pass_with_tickets,
-    enqueue_ambient_context_diagnostics, enqueue_local_ambient_export_alias_diagnostics,
-    enqueue_namespace_placement_diagnostics, finish_semantic_effects,
-    private_combined_record_ticket_key, reserve_type_decls,
+    enqueue_ambient_context_diagnostics, enqueue_enum_merge_diagnostics,
+    enqueue_local_ambient_export_alias_diagnostics, enqueue_namespace_placement_diagnostics,
+    finish_semantic_effects, private_combined_record_ticket_key, reserve_type_decls,
     reserve_type_decls_for_combined_library, reserve_type_decls_for_combined_user,
     FrozenCheckerRuntimeMetadata, FrozenCheckerRuntimeSnapshotParts, PassReporting,
     PassReportingPlan, PrivateCombinedRecordTicket,
@@ -1366,6 +1366,9 @@ fn validate_owned_library_product_parts(
             PublishedTypeGroupSurface::Template(ty) if !type_in_range(ty, store_len) => {
                 return Err("product published type-group template is out of range")
             }
+            PublishedTypeGroupSurface::Enum(ty) if !type_in_range(ty, store_len) => {
+                return Err("product published enum type is out of range")
+            }
             PublishedTypeGroupSurface::Class(class) => {
                 if !classes.contains(&class) {
                     return Err("product published type group refers to an unknown class");
@@ -1377,7 +1380,7 @@ fn validate_owned_library_product_parts(
                     return Err("product class identity is published by multiple type groups");
                 }
             }
-            PublishedTypeGroupSurface::Template(_) => {}
+            PublishedTypeGroupSurface::Template(_) | PublishedTypeGroupSurface::Enum(_) => {}
         }
     }
     if class_group_names.keys().copied().collect::<BTreeSet<_>>() != classes {
@@ -2170,7 +2173,9 @@ impl OwnedLibraryRuntimeState {
             return None;
         };
         match group.surface {
-            PublishedTypeGroupSurface::Template(ty) => Some(ty),
+            PublishedTypeGroupSurface::Template(ty) | PublishedTypeGroupSurface::Enum(ty) => {
+                Some(ty)
+            }
             PublishedTypeGroupSurface::Class(class) => {
                 match self.published_types.classes().published_class(class) {
                     DemandOutcome::Ready(surface) => Some(surface.instance_template()),
@@ -2198,7 +2203,8 @@ impl OwnedLibraryRuntimeState {
                     .and_then(|group| self.published_types.groups().get(group))
                     .map(|terminal| match terminal {
                         PublishedTypeGroupTerminal::Ready(group) => match group.surface {
-                            PublishedTypeGroupSurface::Template(template) => {
+                            PublishedTypeGroupSurface::Template(template)
+                            | PublishedTypeGroupSurface::Enum(template) => {
                                 render_type(self.interner.store(), template, false)
                             }
                             PublishedTypeGroupSurface::Class(class) => {
@@ -3017,7 +3023,7 @@ fn final_reference_summary<Ticket: Copy + PartialEq>(
             continue;
         };
         match group.surface {
-            PublishedTypeGroupSurface::Template(ty) => {
+            PublishedTypeGroupSurface::Template(ty) | PublishedTypeGroupSurface::Enum(ty) => {
                 classify_live_reference(&mut summary, base, 7, owner.0, 1, ty.0)
             }
             PublishedTypeGroupSurface::Class(class) => {
@@ -5183,7 +5189,9 @@ fn validate_terminal_class_dependencies(
         };
         let owner = ReplayOwner::TypeGroup(group);
         match ready.surface {
-            PublishedTypeGroupSurface::Template(ty) => direct.entry(owner).or_default().push(ty),
+            PublishedTypeGroupSurface::Template(ty) | PublishedTypeGroupSurface::Enum(ty) => {
+                direct.entry(owner).or_default().push(ty)
+            }
             PublishedTypeGroupSurface::Class(class) => {
                 require_dependency(owner, ReplayOwner::Class(class));
             }
@@ -7612,6 +7620,8 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
         enqueue_namespace_placement_diagnostics(&binder, &lexical_events, &mut external_effects)
             .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
+        enqueue_enum_merge_diagnostics(&binder, &lexical_events, &mut external_effects)
+            .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
         enqueue_ambient_context_diagnostics(&binder, &lexical_events, &mut external_effects)
             .map_err(|error| InjectedProfileError::Binder(error.to_owned()))?;
     }
@@ -7741,11 +7751,6 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
 
     let declaration_count = pass.type_decls.len();
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
-    #[cfg(any(test, feature = "test-utils"))]
-    let reserve_fill_elapsed = reserve_fill_started.elapsed();
-
-    #[cfg(any(test, feature = "test-utils"))]
-    let publication_validation_started = Instant::now();
     let module_programs = module_scopes
         .iter()
         .copied()
@@ -7771,6 +7776,27 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     pass.prepare_project_standalone_namespace_values(&module_programs);
     pass.combined_user_source = false;
     pass.publish_class_surfaces();
+    let mut surfaces = Vec::with_capacity(canonical.len());
+    for (index, (((input, program), module), semantic_scope)) in canonical
+        .iter()
+        .zip(&parsed)
+        .zip(module_scopes.iter().copied())
+        .zip(semantic_scopes.iter().copied())
+        .enumerate()
+    {
+        pass.combined_user_source = user_start.is_some_and(|user_start| index >= user_start);
+        pass.current_module = module;
+        pass.current_source = source_unit_for_index(index, input);
+        let mut reserved = pass.reserve_function_surfaces(semantic_scope, &program.body);
+        pass.reserve_continuation_global_augmentation_surfaces(&program.body, &mut reserved);
+        surfaces.push(reserved);
+    }
+    pass.fill_enum_decls_range(0, declaration_count);
+    #[cfg(any(test, feature = "test-utils"))]
+    let reserve_fill_elapsed = reserve_fill_started.elapsed();
+
+    #[cfg(any(test, feature = "test-utils"))]
+    let publication_validation_started = Instant::now();
     if user_start.is_none() {
         pass.finalize_standalone_namespace_values();
         pass.precompute_standalone_namespace_value_aliases(&module_programs);
@@ -7848,7 +7874,6 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             user_global_contributor_names.push(contributor_names);
         }
     }
-    let mut surfaces = Vec::with_capacity(canonical.len());
     for (index, (((input, program), module), semantic_scope)) in canonical
         .iter()
         .zip(&parsed)
@@ -7859,10 +7884,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         pass.combined_user_source = user_start.is_some_and(|user_start| index >= user_start);
         pass.current_module = module;
         pass.current_source = source_unit_for_index(index, input);
-        let mut reserved = pass.reserve_function_surfaces(semantic_scope, &program.body);
         pass.reserve_var_annotation_surfaces(semantic_scope, &program.body);
-        pass.reserve_continuation_global_augmentation_surfaces(&program.body, &mut reserved);
-        surfaces.push(reserved);
     }
     pass.combined_user_source = false;
     if let Some(user_start) = user_start {
@@ -9019,7 +9041,9 @@ fn type_probe(
         .get(identity)
         .and_then(|terminal| match terminal {
             PublishedTypeGroupTerminal::Ready(group) => match group.surface {
-                PublishedTypeGroupSurface::Template(ty) => Some(ty),
+                PublishedTypeGroupSurface::Template(ty) | PublishedTypeGroupSurface::Enum(ty) => {
+                    Some(ty)
+                }
                 PublishedTypeGroupSurface::Class(class) => {
                     match published.classes().published_class(class) {
                         DemandOutcome::Ready(surface) => Some(surface.instance_template()),
@@ -10066,6 +10090,9 @@ mod tests {
                 ),
                 PublishedTypeGroupSurface::Class(class) => {
                     panic!("{name} accidentally published class {class:?}")
+                }
+                PublishedTypeGroupSurface::Enum(ty) => {
+                    panic!("{name} accidentally published enum TypeId {}", ty.0)
                 }
             },
             None => panic!("{name} has no published terminal"),

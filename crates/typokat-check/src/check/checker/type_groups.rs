@@ -16,6 +16,7 @@ use rustc_hash::FxHashMap;
 pub(in crate::check::checker) enum PublishedTypeGroupSurface {
     Template(TypeId),
     Class(ClassId),
+    Enum(TypeId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,6 +189,30 @@ impl<'ast> TypeEnvironmentState<'ast> {
         match self {
             Self::Constructing { .. } => self.inherited(),
             Self::Published(_) => self.published(),
+        }
+    }
+
+    pub(in crate::check::checker) fn semantic_query_class_layers(
+        &self,
+    ) -> (&PublishedClasses, Option<&PublishedClasses>) {
+        match self {
+            Self::Constructing {
+                inherited: Some(inherited),
+                drafts: Some(drafts),
+            } => (
+                drafts
+                    .staged_published_classes
+                    .as_ref()
+                    .expect("semantic construction query requires staged class terminals"),
+                Some(inherited.classes()),
+            ),
+            Self::Constructing {
+                inherited: None, ..
+            } => panic!("inherited environment is being consumed"),
+            Self::Constructing { drafts: None, .. } => {
+                panic!("construction drafts are being consumed")
+            }
+            Self::Published(environment) => (environment.classes(), None),
         }
     }
 
@@ -452,6 +477,7 @@ fn construction_terminal(
             },
             match group.surface {
                 PublishedTypeGroupSurface::Template(template) => Some(template),
+                PublishedTypeGroupSurface::Enum(enumeration) => Some(enumeration),
                 PublishedTypeGroupSurface::Class(_) => None,
             },
         ),
@@ -1004,7 +1030,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 TypeDecl::Resolved { params, defaults } => {
                     (params.clone(), Vec::new(), defaults.clone())
                 }
-                TypeDecl::Class { .. } | TypeDecl::Unavailable { .. } => {
+                TypeDecl::Enum { .. } | TypeDecl::Class { .. } | TypeDecl::Unavailable { .. } => {
                     unreachable!("trusted markers belong to exact library type roots")
                 }
             };
@@ -1023,6 +1049,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return;
         }
         let terminal = match &declaration {
+            TypeDecl::Enum { reserved, .. } => {
+                PublishedTypeGroupTerminal::Ready(PublishedTypeGroup {
+                    name,
+                    surface: PublishedTypeGroupSurface::Enum(*reserved),
+                    parameters: Vec::new(),
+                    parameter_names: Vec::new(),
+                    parameter_defaults: Vec::new(),
+                    conflict_alternatives: Vec::new(),
+                })
+            }
             TypeDecl::Interface {
                 reserved,
                 recovery_params,

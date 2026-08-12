@@ -4,7 +4,7 @@ namespace Available {
   export interface Good { good: true }
 }
 
-enum DeferredEnum { A } // incomplete[decl/enum-declaration/self]
+enum DeferredEnum { A }
 
 function mixedOverload(value: DeferredEnum.A): number; // incomplete[annotation-lower/type-name/qualified-enum]
 function mixedOverload(value: string): string; // error[TK2394]: This overload signature is not compatible with its implementation signature

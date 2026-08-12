@@ -15,14 +15,15 @@ use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
 use crate::diagnostics::Diagnostic;
 use crate::span::Span;
-use crate::types::repr::{ClassId, TypeParamId, TypeTag, Visibility};
+use crate::types::repr::{ClassId, EnumId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
-    Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit,
-    ForStatementLeft, Function, ObjectPropertyKind, Program, Statement, TSInterfaceDeclaration,
-    TSInterfaceHeritage, TSModuleDeclaration, TSModuleDeclarationBody, TSType,
-    TSTypeAliasDeclaration, TSTypeName, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
+    BinaryOperator, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
+    ForStatementInit, ForStatementLeft, Function, ObjectPropertyKind, Program, Statement,
+    TSEnumDeclaration, TSInterfaceDeclaration, TSInterfaceHeritage, TSModuleDeclaration,
+    TSModuleDeclarationBody, TSType, TSTypeAliasDeclaration, TSTypeName,
+    TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryOperator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -731,7 +732,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             self.record_replay_demand(super::replay_index::ReplayOwner::TypeGroup(decl_id));
         }
         let declaration = match self.type_decls.get(decl_id.index()) {
-            Some(TypeDecl::Interface { declaration, .. })
+            Some(TypeDecl::Enum { declaration, .. })
+            | Some(TypeDecl::Interface { declaration, .. })
             | Some(TypeDecl::Alias { declaration, .. })
             | Some(TypeDecl::Class { declaration, .. })
             | Some(TypeDecl::Unavailable { declaration }) => *declaration,
@@ -1033,6 +1035,428 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         // Value-position annotations may evaluate conditionals after fill.
         self.building_template = building_template;
+    }
+
+    pub(in crate::check::checker) fn fill_enum_decls(&mut self) {
+        self.fill_enum_decls_range(self.type_decls.published_len(), self.type_decls.len());
+    }
+
+    pub(in crate::check::checker) fn fill_enum_decls_range(&mut self, start: usize, end: usize) {
+        let building_template = std::mem::replace(&mut self.building_template, true);
+        for index in start..end {
+            if matches!(self.type_decls.get(index), Some(TypeDecl::Enum { .. })) {
+                self.fill_enum_descriptor(index);
+            }
+        }
+        self.building_template = building_template;
+    }
+
+    fn fill_enum_descriptor(&mut self, index: usize) {
+        let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
+        let Some(view) = self.binder.enum_group(group) else {
+            return;
+        };
+        let buildability = view.buildability;
+        let participants = view.declarations;
+        let name = view.name.to_owned();
+        let (enum_id, reserved, mut fragments) = match &self.type_decls[index] {
+            TypeDecl::Enum {
+                enum_id,
+                reserved,
+                fragments,
+                ..
+            } => (*enum_id, *reserved, fragments.clone()),
+            _ => return,
+        };
+        self.begin_type_group_construction(group);
+        if buildability != crate::binder::namespace::EnumGroupBuildability::Buildable {
+            self.with_type_decl_effects(group, |pass| {
+                pass.interner
+                    .poison_reserved_enum(reserved)
+                    .expect("rejected enum freezes its pending reservation");
+                pass.type_decls[index] = TypeDecl::Unavailable {
+                    declaration: fragments[0].declaration,
+                };
+                pass.freeze_type_group(group);
+            });
+            return;
+        }
+        fragments.sort_by_key(|fragment| {
+            participants
+                .iter()
+                .position(|participant| participant.declaration == fragment.declaration)
+                .unwrap_or(usize::MAX)
+        });
+        self.with_type_decl_effects(group, |pass| {
+            match pass.build_enum_family(enum_id, &name, &fragments) {
+                Some(family) => {
+                    pass.interner
+                        .fill_enum(reserved, family.clone())
+                        .expect("enum descriptor fills one matching reservation");
+                    let properties = family
+                        .members
+                        .iter()
+                        .filter_map(|member| {
+                            pass.interner
+                                .store()
+                                .enum_member_type_id(enum_id, member.id)
+                                .map(|ty| {
+                                    let mut property = crate::types::repr::PropertyType::public(
+                                        member.name.clone(),
+                                        ty,
+                                    );
+                                    property.readonly = true;
+                                    property
+                                })
+                        })
+                        .collect();
+                    let value_object =
+                        pass.interner.intern_object(crate::types::repr::ObjectType {
+                            properties,
+                            ..Default::default()
+                        });
+                    let readonly_value_properties = pass
+                        .interner
+                        .store()
+                        .object_type(value_object)
+                        .is_some_and(|object| {
+                            object.properties.iter().all(|property| property.readonly)
+                        });
+                    let terminal_visible_before_freeze = pass
+                        .type_environment
+                        .resolution_environment()
+                        .groups()
+                        .get(group)
+                        .is_some();
+                    super::record_enum_fill_for_test(
+                        group,
+                        family
+                            .members
+                            .iter()
+                            .map(|member| member.name.clone())
+                            .collect(),
+                        readonly_value_properties,
+                        terminal_visible_before_freeze,
+                    );
+                    for participant in &participants {
+                        if let Some(storage) = pass
+                            .binder
+                            .declarations
+                            .get(participant.declaration)
+                            .and_then(|declaration| declaration.value_storage)
+                        {
+                            pass.publish_copied_decl_type_replay(storage, value_object);
+                        }
+                    }
+                }
+                None => pass
+                    .interner
+                    .poison_reserved_enum(reserved)
+                    .expect("failed enum descriptor poisons one reservation"),
+            }
+            pass.freeze_type_group(group);
+        });
+    }
+
+    fn build_enum_family(
+        &mut self,
+        enum_id: EnumId,
+        name: &str,
+        fragments: &[EnumFragment<'ast>],
+    ) -> Option<crate::types::repr::EnumType> {
+        use crate::types::repr::{EnumMemberFact, EnumMemberId, EnumNumber, EnumType, EnumValue};
+        let mut facts = Vec::new();
+        let mut values = BTreeMap::<String, EnumValue>::new();
+        let mut seen_names = BTreeSet::<String>::new();
+        let all_names = fragments
+            .iter()
+            .flat_map(|fragment| &fragment.enumeration.body.members)
+            .map(|member| member.id.static_name().to_string())
+            .collect::<Vec<_>>();
+        let mut counts = BTreeMap::<String, usize>::new();
+        for name in &all_names {
+            *counts.entry(name.clone()).or_default() += 1;
+        }
+        let mut missing_first_fragment_seen = false;
+        for fragment in fragments {
+            let owner = self
+                .lexical_events
+                .declaration_owner(fragment.declaration)
+                .expect("enum fragment has one exact declaration owner")
+                .ticket;
+            self.with_exact_type_declaration_source(fragment.declaration, |pass| {
+                pass.with_ticket_effects(owner, |pass| {
+                    let enumeration = fragment.enumeration;
+                    let mut next_auto = Some(0.0);
+                    if let Some(first) = enumeration.body.members.first() {
+                        if first.initializer.is_none() {
+                            if missing_first_fragment_seen {
+                                pass.emit_diagnostic(
+                                    Diagnostic::enum_first_member_requires_initializer(
+                                        Span::from_oxc(first.id.span()),
+                                    ),
+                                );
+                            }
+                            missing_first_fragment_seen = true;
+                        }
+                    }
+                    for member in &enumeration.body.members {
+                        let member_name = member.id.static_name().to_string();
+                        if counts.get(&member_name).copied().unwrap_or_default() > 1 {
+                            pass.emit_diagnostic(Diagnostic::duplicate_identifier(
+                                Span::from_oxc(member.id.span()),
+                                &member_name,
+                            ));
+                        }
+                        let duplicate_after_first = seen_names.contains(&member_name);
+                        let value = if let Some(initializer) = &member.initializer {
+                            pass.enum_initializer_invalid_semantic_query = false;
+                            let folded = fold_enum_constant(
+                                initializer,
+                                name,
+                                &member_name,
+                                &all_names,
+                                &seen_names,
+                                &values,
+                            );
+                            match folded {
+                                EnumFold::Value(value) => Some(value),
+                                EnumFold::NonFinite if enumeration.r#const => {
+                                    pass.emit_diagnostic(Diagnostic::const_enum_non_finite(
+                                        Span::from_oxc(initializer.span()),
+                                    ));
+                                    None
+                                }
+                                EnumFold::Nan if enumeration.r#const => {
+                                    pass.emit_diagnostic(Diagnostic::const_enum_nan(
+                                        Span::from_oxc(initializer.span()),
+                                    ));
+                                    None
+                                }
+                                EnumFold::SelfReference(span) => {
+                                    pass.visit_enum_initializer_children(
+                                        fragment.scope,
+                                        initializer,
+                                        name,
+                                        &member_name,
+                                        &all_names,
+                                    );
+                                    pass.emit_diagnostic(
+                                        Diagnostic::enum_member_used_before_initialized(span),
+                                    );
+                                    if enumeration.r#const {
+                                        pass.emit_diagnostic(
+                                            Diagnostic::const_enum_initializer_not_constant(
+                                                Span::from_oxc(initializer.span()),
+                                            ),
+                                        );
+                                    } else if enumeration.declare {
+                                        pass.emit_diagnostic(
+                                            Diagnostic::ambient_enum_initializer_not_constant(
+                                                Span::from_oxc(initializer.span()),
+                                            ),
+                                        );
+                                    }
+                                    None
+                                }
+                                EnumFold::LaterReference(span) => {
+                                    pass.visit_enum_initializer_children(
+                                        fragment.scope,
+                                        initializer,
+                                        name,
+                                        &member_name,
+                                        &all_names,
+                                    );
+                                    pass.emit_diagnostic(
+                                        Diagnostic::enum_member_used_before_declared(span),
+                                    );
+                                    if enumeration.r#const {
+                                        pass.emit_diagnostic(
+                                            Diagnostic::const_enum_initializer_not_constant(
+                                                Span::from_oxc(initializer.span()),
+                                            ),
+                                        );
+                                    } else if enumeration.declare {
+                                        pass.emit_diagnostic(
+                                            Diagnostic::ambient_enum_initializer_not_constant(
+                                                Span::from_oxc(initializer.span()),
+                                            ),
+                                        );
+                                    }
+                                    None
+                                }
+                                EnumFold::Computed => {
+                                    let inferred =
+                                        pass.infer_enum_initializer(fragment.scope, initializer);
+                                    let invalid_semantic_query = std::mem::replace(
+                                        &mut pass.enum_initializer_invalid_semantic_query,
+                                        false,
+                                    );
+                                    if enumeration.r#const {
+                                        pass.emit_diagnostic(
+                                            Diagnostic::const_enum_initializer_not_constant(
+                                                Span::from_oxc(initializer.span()),
+                                            ),
+                                        );
+                                        None
+                                    } else if enumeration.declare {
+                                        pass.emit_diagnostic(
+                                            Diagnostic::ambient_enum_initializer_not_constant(
+                                                Span::from_oxc(initializer.span()),
+                                            ),
+                                        );
+                                        None
+                                    } else if invalid_semantic_query {
+                                        Some(EnumValue::OpaqueNumber)
+                                    } else {
+                                        match inferred {
+                                            Some((ty, _))
+                                                if ty == pass.interner.well_known().number
+                                                    || ty == pass.interner.well_known().any
+                                                    || ty == pass.interner.well_known().error =>
+                                            {
+                                                Some(EnumValue::OpaqueNumber)
+                                            }
+                                            _ => {
+                                                pass.emit_diagnostic(
+                                                    Diagnostic::computed_enum_member_not_numeric(
+                                                        Span::from_oxc(initializer.span()),
+                                                    ),
+                                                );
+                                                None
+                                            }
+                                        }
+                                    }
+                                }
+                                EnumFold::NonFinite | EnumFold::Nan => {
+                                    Some(EnumValue::OpaqueNumber)
+                                }
+                            }
+                        } else if enumeration.declare && !enumeration.r#const {
+                            Some(EnumValue::OpaqueNumber)
+                        } else if let Some(value) = next_auto.and_then(EnumNumber::new) {
+                            Some(EnumValue::Number(value))
+                        } else {
+                            pass.emit_diagnostic(Diagnostic::enum_member_requires_initializer(
+                                Span::from_oxc(member.id.span()),
+                            ));
+                            None
+                        };
+                        let Some(value) = value else {
+                            seen_names.insert(member_name);
+                            next_auto = None;
+                            continue;
+                        };
+                        next_auto = match &value {
+                            EnumValue::Number(number)
+                                if !enumeration.declare || enumeration.r#const =>
+                            {
+                                Some(number.get() + 1.0)
+                            }
+                            EnumValue::Number(_)
+                            | EnumValue::String(_)
+                            | EnumValue::OpaqueNumber => None,
+                        };
+                        seen_names.insert(member_name.clone());
+                        if duplicate_after_first {
+                            continue;
+                        }
+                        let member_id = EnumMemberId(
+                            u32::try_from(facts.len()).expect("enum member identity fits u32"),
+                        );
+                        values.insert(member_name.clone(), value.clone());
+                        facts.push(EnumMemberFact {
+                            id: member_id,
+                            name: member_name,
+                            value,
+                        });
+                    }
+                })
+            });
+        }
+        let numeric_open = all_names.is_empty()
+            || facts
+                .iter()
+                .any(|member| member.value == EnumValue::OpaqueNumber);
+        Some(EnumType {
+            id: enum_id,
+            name: name.to_owned(),
+            members: facts,
+            numeric_open,
+        })
+    }
+
+    fn infer_enum_initializer(
+        &mut self,
+        scope: ScopeId,
+        initializer: &Expression<'ast>,
+    ) -> Option<(TypeId, Span)> {
+        if let Expression::TemplateLiteral(template) = initializer {
+            for interpolation in &template.expressions {
+                self.infer_expr(scope, interpolation);
+            }
+            return Some((
+                self.interner.well_known().string,
+                Span::from_oxc(template.span),
+            ));
+        }
+        self.infer_expr(scope, initializer)
+    }
+
+    fn visit_enum_initializer_children(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'ast>,
+        enum_name: &str,
+        current_name: &str,
+        all_names: &[String],
+    ) {
+        match expression {
+            Expression::Identifier(identifier)
+                if identifier.name == current_name
+                    || all_names
+                        .iter()
+                        .any(|name| name == identifier.name.as_str()) => {}
+            Expression::StaticMemberExpression(member)
+                if matches!(&member.object, Expression::Identifier(owner) if owner.name == enum_name)
+                    && all_names
+                        .iter()
+                        .any(|name| name == member.property.name.as_str()) => {}
+            Expression::ParenthesizedExpression(parenthesized) => self
+                .visit_enum_initializer_children(
+                    scope,
+                    &parenthesized.expression,
+                    enum_name,
+                    current_name,
+                    all_names,
+                ),
+            Expression::UnaryExpression(unary) => self.visit_enum_initializer_children(
+                scope,
+                &unary.argument,
+                enum_name,
+                current_name,
+                all_names,
+            ),
+            Expression::BinaryExpression(binary) => {
+                self.visit_enum_initializer_children(
+                    scope,
+                    &binary.left,
+                    enum_name,
+                    current_name,
+                    all_names,
+                );
+                self.visit_enum_initializer_children(
+                    scope,
+                    &binary.right,
+                    enum_name,
+                    current_name,
+                    all_names,
+                );
+            }
+            _ => {
+                self.infer_enum_initializer(scope, expression);
+            }
+        }
     }
 
     pub(in crate::check::checker) fn fill_pending_interfaces_range(
@@ -3279,6 +3703,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         for declaration in self.type_decls.iter() {
             match declaration {
+                TypeDecl::Enum { .. } => {}
                 TypeDecl::Interface {
                     defaults,
                     recovery_defaults,
@@ -3727,7 +4152,7 @@ fn plan_heritage_group_application(
                 .rposition(|default| *default == PublishedTypeParameterDefault::Absent)
                 .map_or(0, |index| index + 1),
         ),
-        TypeDecl::Unavailable { .. } => (0, 0),
+        TypeDecl::Enum { .. } | TypeDecl::Unavailable { .. } => (0, 0),
     };
     let actual_count = arguments.map_or(0, |arguments| arguments.params.len());
     if actual_count < required_count || actual_count > parameter_count {
@@ -3735,7 +4160,9 @@ fn plan_heritage_group_application(
     }
 
     match declaration {
-        TypeDecl::Interface { .. } => HeritageTypePlan::complete(BTreeSet::from([group])),
+        TypeDecl::Enum { .. } | TypeDecl::Interface { .. } => {
+            HeritageTypePlan::complete(BTreeSet::from([group]))
+        }
         TypeDecl::Alias {
             annotation,
             scope: alias_scope,
@@ -4206,15 +4633,39 @@ fn reserve_type_decls_with_selection<'ast>(
         decls,
         resolved,
     } = state;
+    let direct_scope = binder.statement_lexical_root(module);
     // The AST walk is joined to the binder through the exact lexical declaration,
     // never by selecting a first/last declaration from a same-name group.
     walk_type_decls(
         binder,
         module,
         program,
-        &mut |_walk_scope, _, declaration| {
+        &mut |walk_scope, _, declaration| {
+            if let TopTypeDecl::Enum(enumeration) = declaration {
+                if walk_scope != module && walk_scope != direct_scope {
+                    if let Some(exact) = binder.exact_declaration_at(
+                        module,
+                        enumeration.id.span.start,
+                        BinderDeclarationKind::Enum,
+                    ) {
+                        if let Some(group) = exact.type_group {
+                            ensure_type_group_slot(decls, group.index());
+                            decls[group.index()] = TypeDecl::Unavailable {
+                                declaration: exact.id,
+                            };
+                            if let Some(slot) = resolved.get_mut(group.index()) {
+                                *slot = None;
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
             if let Some(selected) = selected {
                 let (binding_start, kind) = match declaration {
+                    TopTypeDecl::Enum(enumeration) => {
+                        (enumeration.id.span.start, BinderDeclarationKind::Enum)
+                    }
                     TopTypeDecl::Interface(interface) => {
                         (interface.id.span.start, BinderDeclarationKind::Interface)
                     }
@@ -4244,6 +4695,56 @@ fn reserve_type_decls_with_selection<'ast>(
                 }
             }
             match declaration {
+                TopTypeDecl::Enum(enumeration) => {
+                    let Some(exact) = binder.exact_declaration_at(
+                        module,
+                        enumeration.id.span.start,
+                        BinderDeclarationKind::Enum,
+                    ) else {
+                        return;
+                    };
+                    let (Some(group), Some(scope)) = (exact.type_group, exact.site.scope) else {
+                        return;
+                    };
+                    let declaration = exact.id;
+                    ensure_type_group_slot(decls, group.index());
+                    match decls.get_mut(group.index()) {
+                        Some(TypeDecl::Resolved { .. }) => {
+                            let enum_id = interner.next_enum_id();
+                            let reserved =
+                                interner.reserve_enum(enum_id, enumeration.id.name.as_str());
+                            super::record_enum_reservation_for_test();
+                            if let Some(slot) = resolved.get_mut(group.index()) {
+                                *slot = Some(reserved);
+                            }
+                            decls[group.index()] = TypeDecl::Enum {
+                                declaration,
+                                enum_id,
+                                reserved,
+                                fragments: vec![EnumFragment {
+                                    declaration,
+                                    scope,
+                                    enumeration,
+                                }],
+                            };
+                        }
+                        Some(TypeDecl::Enum { fragments, .. }) => {
+                            fragments.push(EnumFragment {
+                                declaration,
+                                scope,
+                                enumeration,
+                            });
+                        }
+                        Some(_) => {
+                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                            decls[group.index()] = TypeDecl::Unavailable { declaration };
+                            if let Some(slot) = resolved.get_mut(group.index()) {
+                                *slot = None;
+                            }
+                        }
+                        None => unreachable!("type group slot was extended"),
+                    }
+                }
                 TopTypeDecl::Interface(iface) => {
                     let Some(exact) = binder.exact_declaration_at(
                         module,
@@ -4392,7 +4893,8 @@ fn reserve_type_decls_with_selection<'ast>(
                                 fragments: vec![fragment],
                             };
                         }
-                        Some(displaced @ TypeDecl::Alias { .. })
+                        Some(displaced @ TypeDecl::Enum { .. })
+                        | Some(displaced @ TypeDecl::Alias { .. })
                         | Some(displaced @ TypeDecl::Unavailable { .. }) => {
                             terminalize_displaced_type_draft(interner, displaced);
                             *displaced = TypeDecl::Unavailable { declaration };
@@ -4412,9 +4914,9 @@ fn reserve_type_decls_with_selection<'ast>(
                     let (group, declaration, scope) = match exact {
                         Some(exact) => match (exact.type_group, exact.site.scope) {
                             (Some(group), Some(scope)) => (Some(group), Some(exact.id), scope),
-                            _ => (None, None, _walk_scope),
+                            _ => (None, None, walk_scope),
                         },
-                        None => (None, None, _walk_scope),
+                        None => (None, None, walk_scope),
                     };
                     let params =
                         alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
@@ -4538,9 +5040,9 @@ fn reserve_type_decls_with_selection<'ast>(
                         let (group, declaration, scope) = match exact {
                             Some(exact) => match (exact.type_group, exact.site.scope) {
                                 (Some(group), Some(scope)) => (Some(group), Some(exact.id), scope),
-                                _ => (None, None, _walk_scope),
+                                _ => (None, None, walk_scope),
                             },
-                            None => (None, None, _walk_scope),
+                            None => (None, None, walk_scope),
                         };
                         if let (Some(group), Some(declaration)) = (group, declaration) {
                             let rejected_global_merge = selected.is_none()
@@ -4762,6 +5264,9 @@ fn terminalize_displaced_type_draft(interner: &mut Interner, declaration: &TypeD
                     .expect("displaced object alias owns one pending reservation");
             }
         }
+        TypeDecl::Enum { reserved, .. } => interner
+            .poison_reserved_enum(*reserved)
+            .expect("displaced enum owns one pending reservation"),
         TypeDecl::Class { .. } | TypeDecl::Resolved { .. } | TypeDecl::Unavailable { .. } => {}
     }
 }
@@ -4785,9 +5290,186 @@ fn sort_interface_fragments(
 
 #[derive(Copy, Clone)]
 pub(in crate::check::checker) enum TopTypeDecl<'ast> {
+    Enum(&'ast TSEnumDeclaration<'ast>),
     Interface(&'ast TSInterfaceDeclaration<'ast>),
     Alias(&'ast TSTypeAliasDeclaration<'ast>),
     Class(&'ast Class<'ast>),
+}
+
+enum EnumFold {
+    Value(crate::types::repr::EnumValue),
+    Computed,
+    NonFinite,
+    Nan,
+    SelfReference(Span),
+    LaterReference(Span),
+}
+
+fn fold_enum_constant(
+    expression: &Expression<'_>,
+    enum_name: &str,
+    current_name: &str,
+    all_names: &[String],
+    seen_names: &BTreeSet<String>,
+    values: &BTreeMap<String, crate::types::repr::EnumValue>,
+) -> EnumFold {
+    use crate::types::repr::{EnumNumber, EnumValue};
+    match expression {
+        Expression::NumericLiteral(literal) => EnumNumber::new(literal.value)
+            .map(|value| EnumFold::Value(EnumValue::Number(value)))
+            .unwrap_or(if literal.value.is_nan() {
+                EnumFold::Nan
+            } else {
+                EnumFold::NonFinite
+            }),
+        Expression::StringLiteral(literal) => {
+            EnumFold::Value(EnumValue::String(literal.value.to_string()))
+        }
+        Expression::TemplateLiteral(template) => {
+            template.single_quasi().map_or(EnumFold::Computed, |value| {
+                EnumFold::Value(EnumValue::String(value.to_string()))
+            })
+        }
+        Expression::ParenthesizedExpression(parenthesized) => fold_enum_constant(
+            &parenthesized.expression,
+            enum_name,
+            current_name,
+            all_names,
+            seen_names,
+            values,
+        ),
+        Expression::UnaryExpression(unary)
+            if matches!(
+                unary.operator,
+                UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot
+            ) =>
+        {
+            match fold_enum_constant(
+                &unary.argument,
+                enum_name,
+                current_name,
+                all_names,
+                seen_names,
+                values,
+            ) {
+                EnumFold::Value(EnumValue::Number(number)) => {
+                    let value = match unary.operator {
+                        UnaryOperator::UnaryNegation => -number.get(),
+                        UnaryOperator::UnaryPlus => number.get(),
+                        UnaryOperator::BitwiseNot => f64::from(!(number.get() as i32)),
+                        _ => unreachable!(),
+                    };
+                    EnumNumber::new(value)
+                        .map(|value| EnumFold::Value(EnumValue::Number(value)))
+                        .unwrap_or(EnumFold::NonFinite)
+                }
+                EnumFold::SelfReference(span) => EnumFold::SelfReference(span),
+                EnumFold::LaterReference(span) => EnumFold::LaterReference(span),
+                _ => EnumFold::Computed,
+            }
+        }
+        Expression::Identifier(identifier) => {
+            let referenced = identifier.name.as_str();
+            if let Some(value) = values.get(referenced) {
+                EnumFold::Value(value.clone())
+            } else if seen_names.contains(referenced) {
+                EnumFold::Computed
+            } else if referenced == current_name {
+                EnumFold::SelfReference(Span::from_oxc(identifier.span))
+            } else if all_names.iter().any(|name| name == referenced) {
+                EnumFold::LaterReference(Span::from_oxc(identifier.span))
+            } else {
+                EnumFold::Computed
+            }
+        }
+        Expression::StaticMemberExpression(member) => {
+            if let Expression::Identifier(owner) = &member.object {
+                if owner.name == enum_name {
+                    let referenced = member.property.name.as_str();
+                    return if let Some(value) = values.get(referenced) {
+                        EnumFold::Value(value.clone())
+                    } else if seen_names.contains(referenced) {
+                        EnumFold::Computed
+                    } else if referenced == current_name {
+                        EnumFold::SelfReference(Span::from_oxc(member.span))
+                    } else {
+                        if all_names.iter().any(|name| name == referenced) {
+                            EnumFold::LaterReference(Span::from_oxc(member.span))
+                        } else {
+                            EnumFold::Computed
+                        }
+                    };
+                }
+            }
+            EnumFold::Computed
+        }
+        Expression::BinaryExpression(binary) => {
+            let left = fold_enum_constant(
+                &binary.left,
+                enum_name,
+                current_name,
+                all_names,
+                seen_names,
+                values,
+            );
+            let right = fold_enum_constant(
+                &binary.right,
+                enum_name,
+                current_name,
+                all_names,
+                seen_names,
+                values,
+            );
+            fold_enum_binary(binary.operator, left, right)
+        }
+        _ => EnumFold::Computed,
+    }
+}
+
+fn fold_enum_binary(operator: BinaryOperator, left: EnumFold, right: EnumFold) -> EnumFold {
+    use crate::types::repr::{EnumNumber, EnumValue};
+    let (left, right) = match (left, right) {
+        (EnumFold::SelfReference(span), _) | (_, EnumFold::SelfReference(span)) => {
+            return EnumFold::SelfReference(span)
+        }
+        (EnumFold::LaterReference(span), _) | (_, EnumFold::LaterReference(span)) => {
+            return EnumFold::LaterReference(span)
+        }
+        (EnumFold::Value(left), EnumFold::Value(right)) => (left, right),
+        _ => return EnumFold::Computed,
+    };
+    if operator == BinaryOperator::Addition {
+        if let (EnumValue::String(left), EnumValue::String(right)) = (&left, &right) {
+            return EnumFold::Value(EnumValue::String(format!("{left}{right}")));
+        }
+    }
+    let (EnumValue::Number(left), EnumValue::Number(right)) = (left, right) else {
+        return EnumFold::Computed;
+    };
+    let left = left.get();
+    let right = right.get();
+    let value = match operator {
+        BinaryOperator::Addition => left + right,
+        BinaryOperator::Subtraction => left - right,
+        BinaryOperator::Multiplication => left * right,
+        BinaryOperator::Division => left / right,
+        BinaryOperator::Remainder => left % right,
+        BinaryOperator::Exponential => left.powf(right),
+        BinaryOperator::ShiftLeft => f64::from((left as i32) << ((right as u32) & 31)),
+        BinaryOperator::ShiftRight => f64::from((left as i32) >> ((right as u32) & 31)),
+        BinaryOperator::ShiftRightZeroFill => f64::from((left as u32) >> ((right as u32) & 31)),
+        BinaryOperator::BitwiseOR => f64::from((left as i32) | (right as i32)),
+        BinaryOperator::BitwiseXOR => f64::from((left as i32) ^ (right as i32)),
+        BinaryOperator::BitwiseAnd => f64::from((left as i32) & (right as i32)),
+        _ => return EnumFold::Computed,
+    };
+    if value.is_nan() {
+        EnumFold::Nan
+    } else if let Some(value) = EnumNumber::new(value) {
+        EnumFold::Value(EnumValue::Number(value))
+    } else {
+        EnumFold::NonFinite
+    }
 }
 
 /// Visit every named type declaration with the exact lexical scope allocated by
@@ -4822,6 +5504,18 @@ fn walk_type_decl_statement<'ast>(
     visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
 ) {
     match statement {
+        Statement::TSEnumDeclaration(enumeration) => {
+            visit_bound_type(
+                binder,
+                module,
+                scope,
+                enumeration.span.start,
+                BinderDeclarationKind::Enum,
+                enumeration.id.span.start,
+                TopTypeDecl::Enum(enumeration),
+                visit,
+            );
+        }
         Statement::TSInterfaceDeclaration(interface) => {
             visit_bound_type(
                 binder,
@@ -4878,6 +5572,16 @@ fn walk_type_decl_statement<'ast>(
                 return;
             };
             match declaration {
+                Declaration::TSEnumDeclaration(enumeration) => visit_bound_type(
+                    binder,
+                    module,
+                    scope,
+                    export.span.start,
+                    BinderDeclarationKind::Enum,
+                    enumeration.id.span.start,
+                    TopTypeDecl::Enum(enumeration),
+                    visit,
+                ),
                 Declaration::TSInterfaceDeclaration(interface) => visit_bound_type(
                     binder,
                     module,

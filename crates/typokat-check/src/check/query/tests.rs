@@ -2,9 +2,10 @@ use super::*;
 use crate::class_semantics::{ClassConstructionState, PublishedClassPoison, PublishedClassSurface};
 use crate::relate::Reason;
 use crate::types::repr::{
-    ClassId, ConditionalType, DeclaredRecipeNode, FunctionType, GenericTypeParam, LiteralValue,
-    MappedType, ModifierOp, ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType,
-    TupleType, TypeParamId, Visibility,
+    ClassId, ConditionalType, DeclaredRecipeNode, EnumId, EnumMemberFact, EnumMemberId, EnumNumber,
+    EnumType, EnumValue, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
+    ObjectType, ParameterType, PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId,
+    Visibility,
 };
 use crate::types::DerivationEdge;
 
@@ -2126,7 +2127,7 @@ fn publication_clean_cache_skips_repeated_acyclic_and_recursive_graphs() {
     let guard = start_query_source_cold_measure();
 
     assert_eq!(
-        publication_exhaustion(interner.store(), &[first], &published, &mut state),
+        publication_exhaustion(&interner, &[first], &published, &mut state),
         None
     );
     let cold = query_source_cold_measure().expect("measurement is active");
@@ -2134,12 +2135,158 @@ fn publication_clean_cache_skips_repeated_acyclic_and_recursive_graphs() {
     assert_eq!(state.publication_clean.len(), 2);
 
     assert_eq!(
-        publication_exhaustion(interner.store(), &[second], &published, &mut state),
+        publication_exhaustion(&interner, &[second], &published, &mut state),
         None
     );
     let warm = query_source_cold_measure().expect("measurement is active");
     assert_eq!(warm.publication_edge_visits, cold.publication_edge_visits);
     drop(guard);
+}
+
+#[test]
+fn pending_enum_is_rejected_directly_and_through_nested_union_before_identity_cache() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = EnumId(70_001);
+    let shell = interner.reserve_enum(enum_id, "Pending");
+    let number = interner.well_known().number;
+    let nested = interner.union(vec![shell, number]);
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    for root in [shell, nested] {
+        assert_eq!(
+            publication_exhaustion(&interner, &[root, root], &published, &mut state),
+            Some(Exhaustion::EvaluationInvalidNode { ty: shell })
+        );
+        assert!(!state.publication_clean.contains(&root));
+    }
+}
+
+#[test]
+fn demand_rejects_pending_enum_through_every_fast_path_without_durable_writes() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let enum_id = EnumId(70_004);
+    let shell = interner.reserve_enum(enum_id, "PendingDemand");
+    let object = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", shell)],
+        ..Default::default()
+    });
+    let function = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: Vec::new(),
+        ret: shell,
+    });
+    let union = interner.union(vec![shell, wk.number]);
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: shell,
+        extends_ty: wk.number,
+        true_branch: wk.number,
+        false_branch: wk.string,
+        infer_count: 0,
+        distributive: false,
+        poisoned: false,
+    });
+    let roots = [object, function, union, conditional];
+    let published = PublishedClasses::empty();
+    let mut states = roots.map(|_| SemanticQueryState::default());
+    let mut next_type_params = [0; 4];
+
+    for ((root, state), next_type_param) in roots
+        .into_iter()
+        .zip(&mut states)
+        .zip(&mut next_type_params)
+    {
+        let outcome =
+            SemanticQueryCoordinator::new(&mut interner, &published, state, next_type_param)
+                .demand(root);
+        assert_eq!(
+            outcome,
+            DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: shell })
+        );
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+    }
+
+    interner
+        .fill_enum(
+            shell,
+            EnumType {
+                id: enum_id,
+                name: "PendingDemand".to_owned(),
+                members: vec![EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "Zero".to_owned(),
+                    value: EnumValue::Number(EnumNumber::new(0.0).expect("finite")),
+                }],
+                numeric_open: false,
+            },
+        )
+        .expect("matching enum fills");
+
+    for ((root, state), next_type_param) in roots
+        .into_iter()
+        .zip(&mut states)
+        .zip(&mut next_type_params)
+    {
+        assert!(matches!(
+            SemanticQueryCoordinator::new(&mut interner, &published, state, next_type_param,)
+                .demand(root),
+            DemandOutcome::Ready(_)
+        ));
+    }
+}
+
+#[test]
+fn pending_enum_in_published_class_templates_is_rejected_before_relation_cache() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let enum_id = EnumId(70_003);
+    let shell = interner.reserve_enum(enum_id, "PendingThroughClass");
+    let nested = interner.union(vec![shell, wk.number]);
+    let class = ClassId(81_008);
+    let application = interner.intern_class_instance(class, Vec::new());
+    let template = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", nested)],
+        ..Default::default()
+    });
+    let published = published(class, Vec::new(), template, wk.error);
+    let mut state = SemanticQueryState::default();
+
+    assert_eq!(
+        publication_exhaustion(&interner, &[application], &published, &mut state),
+        Some(Exhaustion::EvaluationInvalidNode { ty: shell })
+    );
+    assert!(!state.publication_clean.contains(&application));
+    assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
+}
+
+#[test]
+fn enum_query_before_fill_is_not_cached_and_query_after_fill_succeeds() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = EnumId(70_002);
+    let shell = interner.reserve_enum(enum_id, "ReadyLater");
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    assert!(publication_exhaustion(&interner, &[shell], &published, &mut state).is_some());
+    interner
+        .fill_enum(
+            shell,
+            EnumType {
+                id: enum_id,
+                name: "ReadyLater".to_owned(),
+                members: vec![EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "Zero".to_owned(),
+                    value: EnumValue::Number(EnumNumber::new(0.0).expect("finite")),
+                }],
+                numeric_open: false,
+            },
+        )
+        .expect("matching enum fills");
+    assert_eq!(
+        publication_exhaustion(&interner, &[shell], &published, &mut state),
+        None
+    );
 }
 
 #[test]
@@ -2179,7 +2326,7 @@ fn publication_clean_cache_preserves_first_poison_in_cyclic_order() {
 
     for _ in 0..3 {
         assert_eq!(
-            publication_exhaustion(interner.store(), &[first], &published, &mut state),
+            publication_exhaustion(&interner, &[first], &published, &mut state),
             Some(Exhaustion::ClassSurfacePoison {
                 class: second_poison
             })
@@ -2187,7 +2334,7 @@ fn publication_clean_cache_preserves_first_poison_in_cyclic_order() {
         assert!(state.publication_clean.is_empty());
     }
     assert_eq!(
-        publication_exhaustion(interner.store(), &[second], &published, &mut state),
+        publication_exhaustion(&interner, &[second], &published, &mut state),
         Some(Exhaustion::ClassHeritagePoison {
             class: first_poison
         })
@@ -2206,13 +2353,13 @@ fn publication_clean_cache_invalidates_after_type_param_constraint_change() {
     let mut state = SemanticQueryState::default();
 
     assert_eq!(
-        publication_exhaustion(interner.store(), &[parameter_type], &published, &mut state),
+        publication_exhaustion(&interner, &[parameter_type], &published, &mut state),
         None
     );
     assert!(state.publication_clean.contains(&parameter_type));
     assert!(interner.set_type_param_constraint(parameter, poison_application));
     assert_eq!(
-        publication_exhaustion(interner.store(), &[parameter_type], &published, &mut state),
+        publication_exhaustion(&interner, &[parameter_type], &published, &mut state),
         Some(Exhaustion::ClassInitializerPoison { class: poison })
     );
     assert!(state.publication_clean.is_empty());
@@ -2228,7 +2375,7 @@ fn publication_clean_cache_invalidates_after_reserved_type_fill() {
     let mut state = SemanticQueryState::default();
 
     assert_eq!(
-        publication_exhaustion(interner.store(), &[root], &published, &mut state),
+        publication_exhaustion(&interner, &[root], &published, &mut state),
         None
     );
     assert!(state.publication_clean.contains(&root));
@@ -2240,7 +2387,7 @@ fn publication_clean_cache_invalidates_after_reserved_type_fill() {
         },
     );
     assert_eq!(
-        publication_exhaustion(interner.store(), &[root], &published, &mut state),
+        publication_exhaustion(&interner, &[root], &published, &mut state),
         Some(Exhaustion::ClassHeritagePoison { class: poison })
     );
     assert!(state.publication_clean.is_empty());
@@ -2264,19 +2411,19 @@ fn publication_clean_cache_uses_snapshot_identity_and_clone_stability() {
     let guard = start_query_source_cold_measure();
 
     assert_eq!(
-        publication_exhaustion(interner.store(), &[root], &base_publication, &mut state),
+        publication_exhaustion(&interner, &[root], &base_publication, &mut state),
         None
     );
     let cold = query_source_cold_measure().expect("measurement is active");
     assert_eq!(cold.publication_edge_visits, 1);
     assert_eq!(
-        publication_exhaustion(interner.store(), &[root], &cloned, &mut state),
+        publication_exhaustion(&interner, &[root], &cloned, &mut state),
         None
     );
     let cloned_warm = query_source_cold_measure().expect("measurement is active");
     assert_eq!(cloned_warm.publication_edge_visits, 1);
     assert_eq!(
-        publication_exhaustion(interner.store(), &[root], &extended, &mut state),
+        publication_exhaustion(&interner, &[root], &extended, &mut state),
         None
     );
     let extended_cold = query_source_cold_measure().expect("measurement is active");
@@ -2285,7 +2432,7 @@ fn publication_clean_cache_uses_snapshot_identity_and_clone_stability() {
 }
 
 #[test]
-fn publication_clean_cache_never_certifies_projection_overlays() {
+fn publication_guard_rejects_poison_reachable_through_class_templates() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
     let ready = ClassId(81_006);
@@ -2311,10 +2458,10 @@ fn publication_clean_cache_never_certifies_projection_overlays() {
     let mut state = SemanticQueryState::default();
 
     assert_eq!(
-        publication_exhaustion(interner.store(), &[application], &published, &mut state),
-        None
+        publication_exhaustion(&interner, &[application], &published, &mut state),
+        Some(Exhaustion::ClassSurfacePoison { class: poison })
     );
-    assert!(state.publication_clean.contains(&application));
+    assert!(!state.publication_clean.contains(&application));
     assert!(!state.publication_clean.contains(&template));
     assert!(!state.publication_clean.contains(&poison_application));
 

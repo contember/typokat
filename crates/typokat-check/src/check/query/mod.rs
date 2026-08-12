@@ -942,6 +942,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         self.observe_outer_class(root);
         #[cfg(any(test, feature = "test-utils"))]
         measure_query_demand(|measure| measure.root_calls += 1);
+        if let Some(reason) = pending_enum_exhaustion(self.interner, &[root], self.published) {
+            return DemandOutcome::Exhausted(reason);
+        }
         if matches!(
             self.interner.store().tag(root),
             TypeTag::Intrinsic
@@ -1012,12 +1015,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     pub fn is_identical(&mut self, left: TypeId, right: TypeId) -> DemandOutcome<bool> {
         self.observe_outer_class(left);
         self.observe_outer_class(right);
-        if let Some(reason) = publication_exhaustion(
-            self.interner.store(),
-            &[left, right],
-            self.published,
-            self.state,
-        ) {
+        if let Some(reason) =
+            publication_exhaustion(self.interner, &[left, right], self.published, self.state)
+        {
             return DemandOutcome::Exhausted(reason);
         }
         if left == right {
@@ -1869,12 +1869,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
     pub fn is_assignable(&mut self, src: TypeId, tgt: TypeId) -> RelationOutcome {
         self.observe_outer_class(src);
         self.observe_outer_class(tgt);
-        if let Some(reason) = publication_exhaustion(
-            self.interner.store(),
-            &[src, tgt],
-            self.published,
-            self.state,
-        ) {
+        if let Some(reason) =
+            publication_exhaustion(self.interner, &[src, tgt], self.published, self.state)
+        {
             return RelationOutcome::Exhausted(reason);
         }
         let completed_key = CompletedRelationKey::assignable(src, tgt);
@@ -2110,7 +2107,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         self.observe_outer_class(implementation);
         self.observe_outer_class(overload);
         if let Some(reason) = publication_exhaustion(
-            self.interner.store(),
+            self.interner,
             &[overload, implementation],
             self.published,
             self.state,
@@ -3251,12 +3248,38 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 }
 
+fn pending_enum_exhaustion<L: PublishedClassLookup + ?Sized>(
+    interner: &Interner,
+    roots: &[TypeId],
+    published: &L,
+) -> Option<Exhaustion> {
+    let store = interner.store();
+    let mut stack = roots.to_vec();
+    let mut seen = FxHashSet::default();
+    while let Some(ty) = stack.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        if interner.pending_reserved_enum(ty) {
+            return Some(Exhaustion::EvaluationInvalidNode { ty });
+        }
+        if let Some(instance) = store.class_instance_type(ty) {
+            if let DemandOutcome::Ready(surface) = published.published_class(instance.class) {
+                stack.push(surface.instance_template());
+            }
+        }
+        stack.extend(query_children(store, ty));
+    }
+    None
+}
+
 fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
-    store: &Store,
+    interner: &Interner,
     roots: &[TypeId],
     published: &L,
     state: &mut SemanticQueryState,
 ) -> Option<Exhaustion> {
+    let store = interner.store();
     #[cfg(any(test, feature = "test-utils"))]
     measure_query_source_cold(|measure| {
         measure.publication_calls += 1;
@@ -3266,12 +3289,23 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
-        if state.publication_clean.contains(&ty) || !seen.insert(ty) {
+        if !seen.insert(ty) {
+            continue;
+        }
+        // Enum shells are never safe relation operands, including through a
+        // structural wrapper or an identity fast path.
+        if interner.pending_reserved_enum(ty) {
+            return Some(Exhaustion::EvaluationInvalidNode { ty });
+        }
+        if state.publication_clean.contains(&ty) {
             continue;
         }
         if let Some(instance) = store.class_instance_type(ty) {
-            if let DemandOutcome::Exhausted(reason) = published.published_class(instance.class) {
-                return Some(reason);
+            match published.published_class(instance.class) {
+                DemandOutcome::Ready(surface) => {
+                    stack.push(surface.instance_template());
+                }
+                DemandOutcome::Exhausted(reason) => return Some(reason),
             }
         }
         let children = query_children(store, ty);

@@ -998,6 +998,18 @@ impl Store {
         id
     }
 
+    /// Replace a prevalidated reserved enum family while preserving its `TypeId`.
+    pub(super) fn set_enum(&mut self, id: TypeId, enum_type: EnumType) {
+        assert_eq!(self.tag(id), TypeTag::Enum);
+        let payload = self.payload(id) as usize;
+        let slot = self
+            .enums
+            .get_mut_local(payload)
+            .expect("validated enum row must have a side-table entry");
+        assert_eq!(slot.id, enum_type.id);
+        *slot = enum_type;
+    }
+
     /// Append an exact enum-member row. Internal — `Interner` owns dedup.
     pub fn push_enum_member(&mut self, member: EnumMemberType, flags: TypeFlags) -> TypeId {
         let member_key = (member.enum_id, member.member_id);

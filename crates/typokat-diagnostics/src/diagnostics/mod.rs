@@ -23,6 +23,8 @@ use crate::span::Span;
 /// listed; later milestones add variants.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum DiagnosticCode {
+    TK1061,
+    TK1066,
     /// Resolved module has no default export.
     TK1192,
     /// `export as namespace` appears outside an external module.
@@ -93,6 +95,10 @@ pub enum DiagnosticCode {
     TK2430,
     /// A runtime namespace precedes the class or function it augments.
     TK2434,
+    TK2432,
+    TK2474,
+    TK2477,
+    TK2478,
     /// Property is protected (accessed outside the class and its subclasses) —
     /// M13.
     TK2445,
@@ -109,9 +115,12 @@ pub enum DiagnosticCode {
     /// Non-abstract class does not implement one inherited abstract member —
     /// backlog 06.
     TK2515,
+    TK2565,
+    TK2567,
     /// Non-abstract class is missing implementations for two or more inherited
     /// abstract members (aggregated) — backlog 06.
     TK2654,
+    TK2651,
     /// A namespace binding is not an assignable variable.
     TK2631,
     /// An ambient export list references an alias output instead of a local declaration.
@@ -165,12 +174,15 @@ pub enum DiagnosticCode {
     /// No overload matches this call.
     TK2769,
     TK2852,
+    TK18033,
 }
 
 impl DiagnosticCode {
     /// The rendered code string, e.g. `"TK2322"`.
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagnosticCode::TK1061 => "TK1061",
+            DiagnosticCode::TK1066 => "TK1066",
             DiagnosticCode::TK1192 => "TK1192",
             DiagnosticCode::TK1314 => "TK1314",
             DiagnosticCode::TK1315 => "TK1315",
@@ -209,6 +221,10 @@ impl DiagnosticCode {
             DiagnosticCode::TK2428 => "TK2428",
             DiagnosticCode::TK2430 => "TK2430",
             DiagnosticCode::TK2434 => "TK2434",
+            DiagnosticCode::TK2432 => "TK2432",
+            DiagnosticCode::TK2474 => "TK2474",
+            DiagnosticCode::TK2477 => "TK2477",
+            DiagnosticCode::TK2478 => "TK2478",
             DiagnosticCode::TK2445 => "TK2445",
             DiagnosticCode::TK2451 => "TK2451",
             DiagnosticCode::TK2454 => "TK2454",
@@ -216,7 +232,10 @@ impl DiagnosticCode {
             DiagnosticCode::TK2503 => "TK2503",
             DiagnosticCode::TK2511 => "TK2511",
             DiagnosticCode::TK2515 => "TK2515",
+            DiagnosticCode::TK2565 => "TK2565",
+            DiagnosticCode::TK2567 => "TK2567",
             DiagnosticCode::TK2654 => "TK2654",
+            DiagnosticCode::TK2651 => "TK2651",
             DiagnosticCode::TK2631 => "TK2631",
             DiagnosticCode::TK2661 => "TK2661",
             DiagnosticCode::TK2669 => "TK2669",
@@ -244,6 +263,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2749 => "TK2749",
             DiagnosticCode::TK2769 => "TK2769",
             DiagnosticCode::TK2852 => "TK2852",
+            DiagnosticCode::TK18033 => "TK18033",
         }
     }
 }
@@ -393,6 +413,82 @@ impl Diagnostic {
             span,
             elaboration: Vec::new(),
         }
+    }
+
+    fn enum_declaration(code: DiagnosticCode, span: Span, message: &'static str) -> Self {
+        Self::declaration_merge(code, span, message.to_owned())
+    }
+
+    pub fn enum_member_requires_initializer(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK1061,
+            span,
+            "Enum member must have initializer.",
+        )
+    }
+
+    pub fn ambient_enum_initializer_not_constant(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK1066,
+            span,
+            "In ambient enum declarations member initializer must be constant expression.",
+        )
+    }
+
+    pub fn enum_first_member_requires_initializer(span: Span) -> Self {
+        Self::enum_declaration(DiagnosticCode::TK2432, span, "In an enum with multiple declarations, only one declaration can omit an initializer for its first enum element.")
+    }
+
+    pub fn const_enum_initializer_not_constant(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK2474,
+            span,
+            "const enum member initializers must be constant expressions.",
+        )
+    }
+
+    pub fn const_enum_non_finite(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK2477,
+            span,
+            "const enum member initializer was evaluated to a non-finite value.",
+        )
+    }
+
+    pub fn const_enum_nan(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK2478,
+            span,
+            "const enum member initializer was evaluated to disallowed value 'NaN'.",
+        )
+    }
+
+    pub fn enum_member_used_before_initialized(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK2565,
+            span,
+            "Property is used before being assigned.",
+        )
+    }
+
+    pub fn enum_member_used_before_declared(span: Span) -> Self {
+        Self::enum_declaration(DiagnosticCode::TK2651, span, "A member initializer in a enum declaration cannot reference members declared after it.")
+    }
+
+    pub fn computed_enum_member_not_numeric(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK18033,
+            span,
+            "Type is not assignable to type 'number' as required for computed enum member values.",
+        )
+    }
+
+    pub fn enum_merge_incompatible(span: Span) -> Self {
+        Self::enum_declaration(
+            DiagnosticCode::TK2567,
+            span,
+            "Enum declarations can only merge with namespace or other enum declarations.",
+        )
     }
 
     pub fn global_module_export_requires_module(span: Span) -> Self {

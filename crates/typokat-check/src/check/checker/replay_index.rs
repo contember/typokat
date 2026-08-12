@@ -7,7 +7,7 @@ use crate::binder::declaration::{
 };
 use crate::binder::namespace::{DeclarationOwner, NamespaceId};
 use crate::check::query::PublishedClassLookup;
-use crate::class_semantics::{DemandOutcome, PublishedClassSurface, PublishedClasses};
+use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClassSurface, PublishedClasses};
 use crate::source::LibraryFileOrdinal;
 use crate::span::Span;
 use crate::types::repr::ClassId;
@@ -2871,6 +2871,69 @@ pub struct ReplayClassLookup<'a> {
     trace: Option<ReplayDependencyTrace>,
 }
 
+pub struct ConstructionReplayClassLookup<'a> {
+    staged: &'a PublishedClasses,
+    inherited: Option<&'a PublishedClasses>,
+    trace: Option<ReplayDependencyTrace>,
+}
+
+impl<'a> ConstructionReplayClassLookup<'a> {
+    pub fn new(
+        staged: &'a PublishedClasses,
+        inherited: Option<&'a PublishedClasses>,
+        trace: Option<ReplayDependencyTrace>,
+    ) -> Self {
+        Self {
+            staged,
+            inherited,
+            trace,
+        }
+    }
+}
+
+impl PublishedClassLookup for ConstructionReplayClassLookup<'_> {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        if let Some(trace) = &self.trace {
+            let _observation = trace.observe_typed_demand("construction-class-terminal");
+            trace.demand_at(ReplayOwner::Class(class), "construction-class-terminal");
+        }
+        match self.staged.published_class(class) {
+            outcome @ DemandOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: missing,
+                ..
+            }) if missing == class => match self.inherited {
+                Some(inherited) => inherited.published_class(class),
+                None => outcome,
+            },
+            outcome => outcome,
+        }
+    }
+
+    fn publication_identity(&self) -> &Arc<()> {
+        self.staged.identity()
+    }
+
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
+        self.observe_class_demand(class);
+        match self.staged.require(class) {
+            outcome @ DemandOutcome::Exhausted(Exhaustion::ClassNotPublished {
+                class: missing,
+                ..
+            }) if missing == class => match self.inherited {
+                Some(inherited) => inherited.require(class),
+                None => outcome,
+            },
+            outcome => outcome,
+        }
+    }
+
+    fn observe_class_demand(&self, class: ClassId) {
+        if let Some(trace) = &self.trace {
+            trace.demand_at(ReplayOwner::Class(class), "construction-class-observation");
+        }
+    }
+}
+
 impl<'a> ReplayClassLookup<'a> {
     pub fn new(published: &'a PublishedClasses, trace: Option<ReplayDependencyTrace>) -> Self {
         Self { published, trace }
@@ -3712,6 +3775,53 @@ mod tests {
             4,
             "standalone and both overload publications use the central helper"
         );
+    }
+
+    #[test]
+    fn enum_type_group_and_value_publication_form_one_replay_component() {
+        let group = ReplayOwner::TypeGroup(TypeGroupId(7));
+        let values = [
+            ReplayOwner::Value(ValueStorageId(11)),
+            ReplayOwner::Value(ValueStorageId(12)),
+        ];
+        let trace = ReplayDependencyTrace::default();
+        trace.enter(group);
+        for value in values {
+            trace.demand(value);
+            trace.enter(value);
+            trace.demand(group);
+            trace.leave(value);
+        }
+        trace.leave(group);
+        let owners = [vec![group], values.to_vec()].concat();
+        let index = trace
+            .finish(
+                owners.clone(),
+                Vec::new(),
+                owners.iter().copied().map(site).collect(),
+                baselines(&owners),
+                0,
+            )
+            .expect("enum endpoints form a valid replay index");
+        assert_eq!(index.scc_membership.len(), 1);
+        assert_eq!(
+            index.scc_membership[0]
+                .owners
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            owners.into_iter().collect()
+        );
+
+        let declarations = include_str!("decls/mod.rs");
+        let builder = declarations
+            .split_once("    fn fill_enum_descriptor(")
+            .and_then(|(_, suffix)| suffix.split_once("\n    fn build_enum_family("))
+            .map(|(body, _)| body)
+            .expect("enum terminal builder");
+        assert!(builder.contains("self.with_type_decl_effects(group, |pass|"));
+        assert!(builder.contains("pass.publish_copied_decl_type_replay(storage, value_object)"));
+        assert!(builder.contains("pass.freeze_type_group(group)"));
     }
 
     #[test]
@@ -4559,10 +4669,14 @@ mod raw_access_audit {
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/library_compiler.rs", snippet: "parts.runtime.class_parents.iter()", count: 2, reason: "snapshot structural validation" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "self.published.published_class(class)", count: 1, reason: "instrumented replay class delegate" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "self.published.require(class)", count: 1, reason: "instrumented replay class requirement" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "self.staged.published_class(class)", count: 1, reason: "instrumented construction class delegate" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "inherited.published_class(class)", count: 1, reason: "instrumented inherited class fallback" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "self.staged.require(class)", count: 1, reason: "instrumented construction class requirement" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/checker/replay_index.rs", snippet: "inherited.require(class)", count: 1, reason: "instrumented inherited class requirement" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/checker/type_groups.rs", snippet: "PublishedClassLookup::published_class(&class_lookup, class)", count: 1, reason: "instrumented inherited-class replay delegate" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "self.published.published_class(source.class)", count: 1, reason: "relation query class projection" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "self.published.published_class(instance.class)", count: 1, reason: "query application class projection" },
-            RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "published.published_class(instance.class)", count: 1, reason: "query publication frontier" },
+            RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "published.published_class(instance.class)", count: 2, reason: "pending-enum and full publication frontiers" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "PublishedClasses::published_class(self, class)", count: 1, reason: "published-class trait adapter" },
             RawAccessAllowance { path: "crates/typokat-check/src/check/query/mod.rs", snippet: "self.require(class)", count: 1, reason: "published-class trait adapter" },
         ];

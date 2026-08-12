@@ -3581,9 +3581,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 match self.type_environment.published().groups().get(group) {
                     Some(PublishedTypeGroupTerminal::Ready(group)) => match group.surface {
                         PublishedTypeGroupSurface::Class(class_id) => class_id,
-                        PublishedTypeGroupSurface::Template(_) => {
-                            return DemandOutcome::Ready(None)
-                        }
+                        PublishedTypeGroupSurface::Template(_)
+                        | PublishedTypeGroupSurface::Enum(_) => return DemandOutcome::Ready(None),
                     },
                     Some(PublishedTypeGroupTerminal::Unavailable(_)) | None => {
                         return DemandOutcome::Ready(None)

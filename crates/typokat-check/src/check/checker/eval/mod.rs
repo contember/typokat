@@ -72,6 +72,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 None
             }
             DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { .. }) => {
+                self.enum_initializer_invalid_semantic_query = true;
                 self.record_incomplete(
                     "semantic-query/invalid-evaluation-node",
                     span,

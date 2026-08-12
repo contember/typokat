@@ -14,9 +14,9 @@ pub use declared::DeclaredMaterializationError;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumMemberType, EnumType, IntrinsicKind,
-    LiteralValue, MappedType, ObjectType, ParameterType, PropertyType, TypeFlags, TypeParamId,
-    TypeParamType, TypeTag,
+    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumId, EnumMemberType, EnumType,
+    IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType, PropertyType, TypeFlags,
+    TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -347,6 +347,7 @@ pub enum ReservedTypeKind {
     Object,
     Conditional,
     Mapped,
+    Enum,
 }
 
 #[derive(Clone, Debug)]
@@ -354,6 +355,7 @@ pub enum ReservedTypeFill {
     Object(TypeId, ObjectType),
     Conditional(TypeId, ConditionalType),
     Mapped(TypeId, MappedType),
+    Enum(TypeId, EnumType),
 }
 
 impl ReservedTypeFill {
@@ -361,7 +363,8 @@ impl ReservedTypeFill {
         match self {
             ReservedTypeFill::Object(id, _)
             | ReservedTypeFill::Conditional(id, _)
-            | ReservedTypeFill::Mapped(id, _) => *id,
+            | ReservedTypeFill::Mapped(id, _)
+            | ReservedTypeFill::Enum(id, _) => *id,
         }
     }
 
@@ -370,6 +373,7 @@ impl ReservedTypeFill {
             ReservedTypeFill::Object(_, _) => ReservedTypeKind::Object,
             ReservedTypeFill::Conditional(_, _) => ReservedTypeKind::Conditional,
             ReservedTypeFill::Mapped(_, _) => ReservedTypeKind::Mapped,
+            ReservedTypeFill::Enum(_, _) => ReservedTypeKind::Enum,
         }
     }
 }
@@ -481,6 +485,7 @@ pub struct Interner {
     reserved_types_base: Arc<FxHashMap<TypeId, ReservedType>>,
     /// Nominal placeholder rows are mutable exactly once, as one validated batch.
     reserved_types: FxHashMap<TypeId, ReservedType>,
+    next_enum_id: u32,
     well_known: WellKnown,
     #[cfg(any(test, feature = "test-utils"))]
     user_delta_drop_witness: Option<UserDeltaDropWitness>,
@@ -506,6 +511,7 @@ impl Interner {
             declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types: FxHashMap::default(),
+            next_enum_id: 0,
             // Placeholder; overwritten below before any use.
             well_known: WellKnown {
                 error: TypeId(0),
@@ -842,6 +848,7 @@ impl Interner {
             declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::clone(&self.reserved_types_base),
             reserved_types: FxHashMap::default(),
+            next_enum_id: self.next_enum_id,
             well_known: self.well_known,
             #[cfg(any(test, feature = "test-utils"))]
             user_delta_drop_witness: None,
@@ -858,6 +865,12 @@ impl Interner {
             .get(&id)
             .or_else(|| self.reserved_types.get(&id))
             .copied()
+    }
+
+    pub fn pending_reserved_enum(&self, id: TypeId) -> bool {
+        self.reserved_type(id).is_some_and(|reserved| {
+            reserved.kind == ReservedTypeKind::Enum && reserved.state == ReservedTypeState::Pending
+        })
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1020,6 +1033,7 @@ impl Interner {
                 ReservedTypeKind::Object => self.store.object_type(id).is_some(),
                 ReservedTypeKind::Conditional => self.store.conditional_type(id).is_some(),
                 ReservedTypeKind::Mapped => self.store.mapped_type(id).is_some(),
+                ReservedTypeKind::Enum => self.store.enum_type(id).is_some(),
             };
             if !valid_backing_row {
                 return Err(ReservedTypeFillError::InvalidBackingRow(id));
@@ -1045,6 +1059,7 @@ impl Interner {
                     self.store.set_conditional(id, conditional);
                 }
                 ReservedTypeFill::Mapped(_, mapped) => self.store.set_mapped(id, mapped),
+                ReservedTypeFill::Enum(_, enumeration) => self.store.set_enum(id, enumeration),
             }
             self.reserved_types
                 .get_mut(&id)
@@ -1138,6 +1153,13 @@ impl Interner {
     /// Intern one complete enum family. Callers construct the canonical declaration-
     /// order member list once, after initializer analysis is complete.
     pub fn intern_enum(&mut self, enum_type: EnumType) -> TypeId {
+        self.next_enum_id = self.next_enum_id.max(
+            enum_type
+                .id
+                .0
+                .checked_add(1)
+                .expect("enum identity domain exhausted"),
+        );
         if let Some(existing) = self.store.enum_whole_type_id(enum_type.id) {
             let current = self
                 .store
@@ -1185,6 +1207,107 @@ impl Interner {
         let id = self.store.push_enum(enum_type, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
+    }
+
+    /// Reserve one nominal enum shell before its initializer dependencies are typed.
+    pub fn next_enum_id(&self) -> EnumId {
+        EnumId(self.next_enum_id)
+    }
+
+    /// Reserve one nominal enum shell before its initializer dependencies are typed.
+    pub fn reserve_enum(&mut self, enum_id: EnumId, name: impl Into<String>) -> TypeId {
+        assert!(
+            self.store.enum_whole_type_id(enum_id).is_none(),
+            "one EnumId reserves exactly one whole type"
+        );
+        self.next_enum_id = self.next_enum_id.max(
+            enum_id
+                .0
+                .checked_add(1)
+                .expect("enum identity domain exhausted"),
+        );
+        let id = self.store.push_enum(
+            EnumType {
+                id: enum_id,
+                name: name.into(),
+                members: Vec::new(),
+                numeric_open: false,
+            },
+            TypeFlags::EMPTY,
+        );
+        self.register_reserved_type(id, ReservedTypeKind::Enum)
+    }
+
+    /// Fill a reserved enum shell after all member facts are known.
+    pub fn fill_enum(
+        &mut self,
+        id: TypeId,
+        enum_type: EnumType,
+    ) -> Result<(), ReservedTypeFillError> {
+        let Some(reservation) = self.reserved_type(id) else {
+            return Err(ReservedTypeFillError::NotReserved(id));
+        };
+        if reservation.kind != ReservedTypeKind::Enum {
+            return Err(ReservedTypeFillError::KindMismatch {
+                id,
+                reserved: reservation.kind,
+                supplied: ReservedTypeKind::Enum,
+            });
+        }
+        if reservation.state == ReservedTypeState::Frozen {
+            return Err(ReservedTypeFillError::AlreadyFrozen(id));
+        }
+        let current = self
+            .store
+            .enum_type(id)
+            .ok_or(ReservedTypeFillError::InvalidBackingRow(id))?;
+        if current.id != enum_type.id {
+            return Err(ReservedTypeFillError::InvalidBackingRow(id));
+        }
+        let mut member_ids = FxHashSet::default();
+        if enum_type
+            .members
+            .iter()
+            .any(|member| !member_ids.insert(member.id))
+        {
+            return Err(ReservedTypeFillError::InvalidBackingRow(id));
+        }
+        if enum_type.members.iter().any(|member| {
+            self.store
+                .enum_member_type_id(enum_type.id, member.id)
+                .is_some()
+        }) {
+            return Err(ReservedTypeFillError::InvalidBackingRow(id));
+        }
+        for member in &enum_type.members {
+            self.intern_enum_member(EnumMemberType {
+                enum_id: enum_type.id,
+                member_id: member.id,
+                enum_name: enum_type.name.clone(),
+                member_name: member.name.clone(),
+                value: member.value.clone(),
+                numeric_open: enum_type.numeric_open,
+            });
+        }
+        self.fill_reserved_type_batch(vec![ReservedTypeFill::Enum(id, enum_type)])
+    }
+
+    /// Freeze a failed enum reservation as an uninhabited nominal shell.
+    pub fn poison_reserved_enum(&mut self, id: TypeId) -> Result<(), ReservedTypeFillError> {
+        let shell = self
+            .store
+            .enum_type(id)
+            .cloned()
+            .ok_or(ReservedTypeFillError::InvalidBackingRow(id))?;
+        self.fill_reserved_type_batch(vec![ReservedTypeFill::Enum(
+            id,
+            EnumType {
+                id: shell.id,
+                name: shell.name,
+                members: Vec::new(),
+                numeric_open: false,
+            },
+        )])
     }
 
     /// Intern one exact nominal enum member.

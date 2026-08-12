@@ -479,6 +479,7 @@ impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
             TypeDeclView::Local(declaration) => declaration,
         };
         match declaration {
+            TypeDecl::Enum { reserved, .. } => SurfaceNameResolution::Direct(*reserved),
             TypeDecl::Class { class_id, .. } => SurfaceNameResolution::Class {
                 class: *class_id,
                 parameters: self.class_parameters(declaration),
@@ -3387,7 +3388,8 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                                     }
                                 }
                             }
-                            TypeDecl::Interface { reserved, .. } => Some(*reserved),
+                            TypeDecl::Interface { reserved, .. }
+                            | TypeDecl::Enum { reserved, .. } => Some(*reserved),
                             TypeDecl::Alias { .. } | TypeDecl::Resolved { .. } => resolved
                                 .get(target_id.index())
                                 .copied()
@@ -3404,7 +3406,10 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                     children,
                 );
             }
-            TypeDecl::Class { .. } | TypeDecl::Resolved { .. } | TypeDecl::Unavailable { .. } => {}
+            TypeDecl::Enum { .. }
+            | TypeDecl::Class { .. }
+            | TypeDecl::Resolved { .. }
+            | TypeDecl::Unavailable { .. } => {}
         }
     }
 }

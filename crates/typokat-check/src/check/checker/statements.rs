@@ -788,13 +788,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // (owners on each backlog) instead of exiting clean (WU4). `import`,
             // `export {…}`, type-alias, and interface are handled elsewhere (binder /
             // type-fill / the ExportNamedDeclaration arm) and skip silently.
-            Statement::TSEnumDeclaration(_) => {
+            Statement::TSEnumDeclaration(declaration)
+                if scope != self.current_module
+                    && scope != self.binder.statement_lexical_root(self.current_module) =>
+            {
                 self.record_incomplete(
                     "decl/enum-declaration/self",
-                    Span::from_oxc(stmt.span()),
-                    "enum declaration not modeled",
+                    Span::from_oxc(declaration.span),
+                    "nested enum declaration is not modeled",
                 );
             }
+            Statement::TSEnumDeclaration(_) => {}
             Statement::TSModuleDeclaration(declaration) => {
                 let consumed = self.check_prepared_namespace_declaration(declaration);
                 if !consumed
@@ -958,13 +962,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // Exported declaration forms the statement checker does not model — account
             // for them before dropping (WU4). Type-alias / interface are handled by
             // type-fill and skip silently.
-            Declaration::TSEnumDeclaration(_) => {
+            Declaration::TSEnumDeclaration(declaration)
+                if scope != self.current_module
+                    && scope != self.binder.statement_lexical_root(self.current_module) =>
+            {
                 self.record_incomplete(
                     "decl/enum-declaration/self",
-                    Span::from_oxc(decl.span()),
-                    "enum declaration not modeled",
+                    Span::from_oxc(declaration.span),
+                    "nested enum declaration is not modeled",
                 );
             }
+            Declaration::TSEnumDeclaration(_) => {}
             Declaration::TSModuleDeclaration(declaration) => {
                 let consumed = self.check_prepared_namespace_declaration(declaration);
                 if !consumed

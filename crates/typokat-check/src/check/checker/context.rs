@@ -12,10 +12,12 @@ use crate::check::query::SemanticQueryState;
 use crate::source::{LibraryFileOrdinal, SourceUnit};
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
-use crate::types::repr::{ClassId, PropertyType, TypeParamId, Visibility};
+use crate::types::repr::{ClassId, EnumId, PropertyType, TypeParamId, Visibility};
 use crate::types::store::TypeId;
 use crate::types::Interner;
-use oxc_ast::ast::{Class, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration};
+use oxc_ast::ast::{
+    Class, TSEnumDeclaration, TSInterfaceHeritage, TSType, TSTypeParameterDeclaration,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1061,6 +1063,14 @@ pub(in crate::check::checker) struct TypeGroupParameterDescriptors {
 
 #[derive(Clone)]
 pub(in crate::check::checker) enum TypeDecl<'ast> {
+    /// An enum reserves one nominal shell before callable initializer dependencies
+    /// are lowered, then fills the complete member family exactly once.
+    Enum {
+        declaration: DeclId,
+        enum_id: EnumId,
+        reserved: TypeId,
+        fragments: Vec<EnumFragment<'ast>>,
+    },
     /// An interface reserves an object id, then fills own and inherited members into it.
     /// Generic interfaces fill a template that type references instantiate later.
     Interface {
@@ -1131,6 +1141,13 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         params: Vec<TypeParamId>,
         defaults: Vec<PublishedTypeParameterDefault>,
     },
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct EnumFragment<'ast> {
+    pub(in crate::check::checker) declaration: DeclId,
+    pub(in crate::check::checker) scope: ScopeId,
+    pub(in crate::check::checker) enumeration: &'ast TSEnumDeclaration<'ast>,
 }
 
 #[derive(Clone)]
@@ -2025,6 +2042,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// While true, concrete conditionals stay interned templates until a value-position
     /// demand evaluates them.
     pub(in crate::check::checker) building_template: bool,
+    /// The current enum initializer reached a semantically invalid reserved node.
+    pub(in crate::check::checker) enum_initializer_invalid_semantic_query: bool,
     /// The **conditional-alias declaration currently being resolved** (M25): its type
     /// storage id, name-declaration span, and name. Set while a `type A = C extends E ? …`
     /// body is lowered, so a check type that surface-references `A` itself is caught as
