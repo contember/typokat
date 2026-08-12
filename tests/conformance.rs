@@ -304,6 +304,13 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 /// full. Keep this list path-sorted so execution and failure aggregation stay
 /// deterministic.
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
+    ("b42_enum_type_value_model", "ambient_and_const.ts"),
+    ("b42_enum_type_value_model", "computed_initializers.ts"),
+    ("b42_enum_type_value_model", "member_names_and_constants.ts"),
+    ("b42_enum_type_value_model", "narrowing.ts"),
+    ("b42_enum_type_value_model", "numeric_identity.ts"),
+    ("b42_enum_type_value_model", "string_heterogeneous.ts"),
+    ("b42_enum_type_value_model", "structural_transport.ts"),
     (
         "b43_namespaces_declaration_merging",
         "class_interface_conflicts.ts",

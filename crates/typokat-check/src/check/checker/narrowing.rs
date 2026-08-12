@@ -6,12 +6,14 @@ use super::context::*;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{NarrowOp, TypeofTag};
+use crate::diagnostics::Diagnostic;
 use crate::types::repr::LiteralValue;
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
     AssignmentOperator, AssignmentTarget, BinaryExpression, BinaryOperator, Expression,
     IfStatement, Statement, SwitchStatement, UnaryOperator, WhileStatement,
 };
+use oxc_span::GetSpan;
 
 /// A recognized guard fact: the specific symbol, operation, and then-branch
 /// polarity. Symbol-keying here keeps a narrowing of `x` from touching any other
@@ -61,7 +63,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // The discriminant is evaluated in the enclosing scope; the case block is one
         // switch-local lexical scope (binder-created, keyed by span) that the clauses
         // share so their block-scoped declarations do not leak past the switch.
-        self.infer_expr(scope, &switch.discriminant);
+        let discriminant_ty = self
+            .infer_expr(scope, &switch.discriminant)
+            .map(|(ty, _)| ty);
         let switch_scope = self
             .binder
             .block_scopes
@@ -76,7 +80,30 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let mut surfaces = self.reserve_function_surfaces_for_lists(switch_scope, &consequents);
         for case in &switch.cases {
             if let Some(test) = &case.test {
-                self.infer_expr(switch_scope, test);
+                let case_ty = self.infer_expr(switch_scope, test).map(|(ty, _)| ty);
+                if let (Some(discriminant_ty), Some(case_ty)) = (discriminant_ty, case_ty) {
+                    if (super::expr::type_contains_enum(self.interner.store(), discriminant_ty)
+                        || super::expr::type_contains_enum(self.interner.store(), case_ty))
+                        && crate::check::flow::enum_equality_overlap(
+                            self.interner.store(),
+                            discriminant_ty,
+                            case_ty,
+                        ) == crate::check::flow::EqualityOverlap::Never
+                    {
+                        let case_display =
+                            crate::diagnostics::render_type(self.interner.store(), case_ty, false);
+                        let discriminant_display = crate::diagnostics::render_type(
+                            self.interner.store(),
+                            discriminant_ty,
+                            false,
+                        );
+                        self.emit_diagnostic(Diagnostic::switch_case_not_comparable(
+                            crate::span::Span::from_oxc(test.span()),
+                            &case_display,
+                            &discriminant_display,
+                        ));
+                    }
+                }
             }
             // Every clause shares one lexical scope, but consecutive overload grouping
             // remains local to the clause's own statement list.
@@ -218,6 +245,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             if let Some(fact) = self.discriminant_guard(scope, right, left, eq_positive) {
                 return Some(fact);
             }
+            if let Some(fact) = self.direct_equality_guard(scope, left, right, eq_positive) {
+                return Some(fact);
+            }
+            if let Some(fact) = self.direct_equality_guard(scope, right, left, eq_positive) {
+                return Some(fact);
+            }
         }
 
         None
@@ -289,10 +322,26 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         eq_positive: bool,
     ) -> Option<GuardFact> {
         let (symbol, property) = self.member_discriminant(scope, member_side)?;
-        let literal = self.literal_expr_type(literal_side)?;
+        let literal = self.literal_expr_type(scope, literal_side)?;
         Some(GuardFact {
             symbol,
             op: NarrowOp::Discriminant { property, literal },
+            then_positive: eq_positive,
+        })
+    }
+
+    fn direct_equality_guard(
+        &mut self,
+        scope: ScopeId,
+        symbol_side: &Expression<'_>,
+        compared_side: &Expression<'_>,
+        eq_positive: bool,
+    ) -> Option<GuardFact> {
+        let symbol = self.condition_symbol(scope, symbol_side)?;
+        let compared = self.literal_expr_type(scope, compared_side)?;
+        Some(GuardFact {
+            symbol,
+            op: NarrowOp::Equality { compared },
             then_positive: eq_positive,
         })
     }
@@ -322,8 +371,14 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// narrows against a literal). Mirrors the literal arms of [`infer_expr`].
     pub(in crate::check::checker) fn literal_expr_type(
         &mut self,
+        scope: ScopeId,
         expr: &Expression<'_>,
     ) -> Option<TypeId> {
+        if let Some(super::decls::EnumMemberEndpoint::Found { member, .. }) =
+            self.enum_member_expression_endpoint(scope, expr)
+        {
+            return Some(member);
+        }
         let value = match expr {
             Expression::StringLiteral(s) => LiteralValue::String(s.value.to_string()),
             Expression::NumericLiteral(n) => LiteralValue::Number(n.value),
@@ -337,7 +392,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// is not a narrowable plain identifier in scope. A non-identifier operand (member
     /// access, call, literal, the `undefined` keyword, …) is not narrowable — returning
     /// `None` keeps narrowing keyed strictly to a real local/parameter binding.
-    fn condition_symbol(&self, scope: ScopeId, expr: &Expression<'_>) -> Option<SymbolId> {
+    pub(in crate::check::checker) fn condition_symbol(
+        &self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+    ) -> Option<SymbolId> {
         let Expression::Identifier(ident) = expr else {
             return None;
         };

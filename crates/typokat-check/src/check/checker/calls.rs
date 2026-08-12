@@ -1006,6 +1006,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             _ => None,
         };
         let direct_standalone = self.complete_standalone_namespace_value(scope, callee);
+        let direct_enum = self.direct_enum_value_expression(scope, callee);
         let mut function_group_blocked = false;
         let (inferred_callee, call_receiver) =
             match direct_function_group {
@@ -1105,7 +1106,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 return Some((wk.error, call_span));
             }
             DemandOutcome::Ready(CallableSignatures::Unavailable) => {
-                if direct_standalone || self.provably_non_callable(callee_ty) {
+                if direct_standalone || direct_enum || self.provably_non_callable(callee_ty) {
                     self.emit_diagnostic(Diagnostic::expression_is_not_callable(call_span));
                 }
                 return Some((wk.error, call_span));
@@ -1932,7 +1933,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// structural types may have dropped unsupported signatures, so they stay silent.
     fn provably_non_callable(&self, callee_ty: TypeId) -> bool {
         match self.interner.store().tag(callee_ty) {
-            TypeTag::Literal => true,
+            TypeTag::Literal | TypeTag::Enum | TypeTag::EnumMember => true,
             TypeTag::Intrinsic => matches!(
                 self.interner.store().intrinsic_kind(callee_ty),
                 Some(

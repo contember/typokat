@@ -3,6 +3,7 @@
 use super::calls::widen;
 use super::classes::body::BodyMemberLookup;
 use super::context::*;
+use super::decls::EnumMemberEndpoint;
 use super::function_groups::FunctionGroupDemand;
 use super::library_identities::{LibraryComposedMember, LibraryMemberProjection};
 use crate::binder::bind::{ResolvedValueKind, ValueResolution};
@@ -789,6 +790,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .infer_expr(scope, &binary.right)
             .map(|(ty, _)| ty)
             .unwrap_or(wk.error);
+        if matches!(
+            binary.operator,
+            BinaryOperator::StrictEquality
+                | BinaryOperator::StrictInequality
+                | BinaryOperator::Equality
+                | BinaryOperator::Inequality
+        ) && (type_contains_enum(self.interner.store(), left)
+            || type_contains_enum(self.interner.store(), right))
+            && crate::check::flow::enum_equality_overlap(self.interner.store(), left, right)
+                == crate::check::flow::EqualityOverlap::Never
+        {
+            let left = render_type(self.interner.store(), left, false);
+            let right = render_type(self.interner.store(), right, false);
+            self.emit_diagnostic(Diagnostic::comparison_has_no_overlap(span, &left, &right));
+        }
         let ty = if is_comparison_operator(binary.operator) {
             wk.boolean
         } else if binary.operator == BinaryOperator::Addition {
@@ -1512,6 +1528,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let wk = self.interner.well_known();
         let span = Span::from_oxc(member.span);
 
+        if let Some(endpoint) = self.enum_computed_member_endpoint(scope, member) {
+            return Some(match endpoint {
+                EnumMemberEndpoint::Found { member, .. } => (member, span),
+                EnumMemberEndpoint::Missing { whole } => {
+                    let name = enum_computed_static_name(&member.expression)
+                        .expect("authenticated enum key remains static");
+                    let target = render_type(self.interner.store(), whole, false);
+                    self.emit_diagnostic(Diagnostic::property_does_not_exist(span, name, &target));
+                    (wk.error, span)
+                }
+            });
+        }
+
         // Authenticated well-known symbols are exact key literals. Certification
         // resolves the `Symbol` binding itself, so the generic member walker must not
         // reinterpret the trusted key as an ordinary static-property access.
@@ -2010,6 +2039,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         member: &StaticMemberExpression<'_>,
     ) -> Option<(TypeId, Span)> {
         let (base_ty, _) = self.infer_expr(scope, &member.object)?;
+        if !member.optional {
+            if let Some(EnumMemberEndpoint::Found { member: ty, .. }) = self
+                .enum_member_access_endpoint(scope, &member.object, member.property.name.as_str())
+            {
+                return Some((ty, Span::from_oxc(member.property.span)));
+            }
+        }
         if let Some(DemandOutcome::Exhausted(exhaustion)) =
             self.demand_class_value_surface(scope, &member.object)
         {
@@ -2817,6 +2853,47 @@ fn is_numeric_property_name(name: &str) -> bool {
     name.parse::<f64>().map(|n| n.is_finite()).unwrap_or(false)
 }
 
+pub(in crate::check::checker) fn type_contains_enum(store: &Store, ty: TypeId) -> bool {
+    type_contains_enum_inner(store, ty, &mut rustc_hash::FxHashSet::default())
+}
+
+fn type_contains_enum_inner(
+    store: &Store,
+    ty: TypeId,
+    seen: &mut rustc_hash::FxHashSet<crate::types::repr::TypeParamId>,
+) -> bool {
+    match store.tag(ty) {
+        TypeTag::Enum | TypeTag::EnumMember => true,
+        TypeTag::Union => store.union_members(ty).is_some_and(|members| {
+            members
+                .iter()
+                .any(|member| type_contains_enum_inner(store, *member, &mut seen.clone()))
+        }),
+        TypeTag::TypeParam => store.type_param(ty).is_some_and(|parameter| {
+            seen.insert(parameter.id)
+                && store
+                    .type_param_constraint(parameter.id)
+                    .is_some_and(|constraint| type_contains_enum_inner(store, constraint, seen))
+        }),
+        _ => false,
+    }
+}
+
+fn enum_computed_static_name<'node>(expression: &'node Expression<'_>) -> Option<&'node str> {
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|value| value.as_str()),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            enum_computed_static_name(&parenthesized.expression)
+        }
+        _ => None,
+    }
+}
+
 /// Read a non-negative integer literal tuple index, or `None` for non-literal,
 /// fractional, negative, non-finite, or out-of-`usize` indices.
 fn literal_index(expr: &Expression<'_>) -> Option<usize> {
@@ -2834,4 +2911,19 @@ fn literal_index(expr: &Expression<'_>) -> Option<usize> {
         return None;
     }
     Some(value as usize)
+}
+
+#[cfg(test)]
+mod enum_type_contains_tests {
+    use super::type_contains_enum;
+    use crate::types::repr::TypeParamId;
+    use crate::types::Interner;
+
+    #[test]
+    fn cyclic_type_parameter_constraint_is_not_an_enum() {
+        let mut interner = Interner::with_intrinsics();
+        let parameter = interner.intern_type_param(TypeParamId(0), "T");
+        assert!(interner.set_type_param_constraint(TypeParamId(0), parameter));
+        assert!(!type_contains_enum(interner.store(), parameter));
+    }
 }

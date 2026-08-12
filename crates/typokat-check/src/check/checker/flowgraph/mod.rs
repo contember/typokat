@@ -194,6 +194,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn build_flow_switch(&mut self, scope: ScopeId, switch: &SwitchStatement<'_>) {
         self.build_flow_expr(scope, &switch.discriminant);
         let discriminant = self.member_discriminant(scope, &switch.discriminant);
+        let direct_symbol = self.condition_symbol(scope, &switch.discriminant);
         let pre = self.flow_cursor;
 
         // Intern each case's literal label up front (a non-literal / `default` is `None`).
@@ -203,7 +204,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .map(|case| {
                 case.test
                     .as_ref()
-                    .and_then(|test| self.literal_expr_type(test))
+                    .and_then(|test| self.literal_expr_type(scope, test))
             })
             .collect();
         // The labeled cases' literals, for the `default` complement.
@@ -223,6 +224,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let direct = self.switch_case_entry(
                 pre,
                 &discriminant,
+                direct_symbol,
                 case.test.is_some(),
                 *label,
                 &case_labels,
@@ -262,6 +264,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         pre: FlowNodeId,
         discriminant: &Option<(SymbolId, String)>,
+        direct_symbol: Option<SymbolId>,
         has_test: bool,
         label: Option<TypeId>,
         case_labels: &[TypeId],
@@ -269,33 +272,49 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if pre == FlowNodeId::UNREACHABLE {
             return FlowNodeId::UNREACHABLE;
         }
-        let Some((symbol, property)) = discriminant else {
-            return pre;
+        let narrowing = |label| {
+            discriminant.as_ref().map_or_else(
+                || {
+                    direct_symbol.map(|symbol| {
+                        (
+                            symbol,
+                            crate::check::flow::NarrowOp::Equality { compared: label },
+                        )
+                    })
+                },
+                |(symbol, property)| {
+                    Some((
+                        *symbol,
+                        crate::check::flow::NarrowOp::Discriminant {
+                            property: property.clone(),
+                            literal: label,
+                        },
+                    ))
+                },
+            )
         };
         match (has_test, label) {
             // `case <literal>:` — narrow to the matching members.
-            (true, Some(lit)) => self.new_flow(FlowNode::Condition {
-                symbol: *symbol,
-                op: crate::check::flow::NarrowOp::Discriminant {
-                    property: property.clone(),
-                    literal: lit,
-                },
-                positive: true,
-                antecedent: pre,
+            (true, Some(lit)) => narrowing(lit).map_or(pre, |(symbol, op)| {
+                self.new_flow(FlowNode::Condition {
+                    symbol,
+                    op,
+                    positive: true,
+                    antecedent: pre,
+                })
             }),
             // `default:` — remove each label's member in turn (the complement chain).
             (false, _) => {
                 let mut node = pre;
                 for &lit in case_labels {
-                    node = self.new_flow(FlowNode::Condition {
-                        symbol: *symbol,
-                        op: crate::check::flow::NarrowOp::Discriminant {
-                            property: property.clone(),
-                            literal: lit,
-                        },
-                        positive: false,
-                        antecedent: node,
-                    });
+                    if let Some((symbol, op)) = narrowing(lit) {
+                        node = self.new_flow(FlowNode::Condition {
+                            symbol,
+                            op,
+                            positive: false,
+                            antecedent: node,
+                        });
+                    }
                 }
                 node
             }

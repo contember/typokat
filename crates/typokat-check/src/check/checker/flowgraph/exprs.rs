@@ -217,7 +217,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
 
         let assigned = if assign.operator == AssignmentOperator::Assign {
-            self.flow_assigned(&assign.right)
+            self.flow_assigned(scope, &assign.right)
         } else {
             // Compound (`+=`, `||=`, …): the result type is out of the value subset —
             // reset to the declared type so a later reference is not over-narrowed.
@@ -341,7 +341,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// base (`"s"` → `string`, `5` → `number`), `null`/`undefined` as-is, or `None`
     /// (reset to the declared type) for any richer RHS — the sound over-report, and
     /// enough for the corpus. Uses only well-known ids (no interning).
-    fn flow_assigned(&self, rhs: &Expression<'_>) -> Option<TypeId> {
+    fn flow_assigned(&self, scope: ScopeId, rhs: &Expression<'_>) -> Option<TypeId> {
+        if let Some(super::super::decls::EnumMemberEndpoint::Found { member, .. }) =
+            self.enum_member_expression_endpoint(scope, rhs)
+        {
+            return Some(member);
+        }
         let wk = self.interner.well_known();
         match rhs {
             Expression::StringLiteral(_) => Some(wk.string),
@@ -351,7 +356,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::Identifier(ident) if ident.name.as_str() == "undefined" => {
                 Some(wk.undefined)
             }
-            Expression::ParenthesizedExpression(paren) => self.flow_assigned(&paren.expression),
+            Expression::ParenthesizedExpression(paren) => {
+                self.flow_assigned(scope, &paren.expression)
+            }
             _ => None,
         }
     }

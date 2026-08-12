@@ -911,6 +911,10 @@ pub struct SemanticQueryCoordinator<'a, L: PublishedClassLookup + ?Sized> {
 }
 
 impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
+    pub(crate) fn store(&self) -> &crate::types::store::Store {
+        self.interner.store()
+    }
+
     pub fn new(
         interner: &'a mut Interner,
         published: &'a L,

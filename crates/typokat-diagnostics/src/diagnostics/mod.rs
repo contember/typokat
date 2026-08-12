@@ -74,6 +74,8 @@ pub enum DiagnosticCode {
     TK2363,
     /// An operator cannot be applied to the two operand types (`+` general mismatch).
     TK2365,
+    /// Equality comparison operands have no possible overlapping value.
+    TK2367,
     /// Function implementation is missing or not immediately following the declaration.
     TK2391,
     /// Overload signatures disagree on whether they are exported.
@@ -135,6 +137,8 @@ pub enum DiagnosticCode {
     /// Constructor of class is protected (constructed outside the class and its
     /// subclasses) — backlog 20.
     TK2674,
+    /// A switch case value is not comparable to the discriminant type.
+    TK2678,
     /// The call receiver is not assignable to an explicit `this` parameter.
     TK2684,
     TK2687,
@@ -209,6 +213,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2362 => "TK2362",
             DiagnosticCode::TK2363 => "TK2363",
             DiagnosticCode::TK2365 => "TK2365",
+            DiagnosticCode::TK2367 => "TK2367",
             DiagnosticCode::TK2383 => "TK2383",
             DiagnosticCode::TK2385 => "TK2385",
             DiagnosticCode::TK2391 => "TK2391",
@@ -242,6 +247,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2670 => "TK2670",
             DiagnosticCode::TK2673 => "TK2673",
             DiagnosticCode::TK2674 => "TK2674",
+            DiagnosticCode::TK2678 => "TK2678",
             DiagnosticCode::TK2684 => "TK2684",
             DiagnosticCode::TK2687 => "TK2687",
             DiagnosticCode::TK2693 => "TK2693",
@@ -1114,6 +1120,28 @@ impl Diagnostic {
             message: format!(
                 "Operator '{operator}' cannot be applied to types '{left}' and '{right}'."
             ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn comparison_has_no_overlap(span: Span, left: &str, right: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2367,
+            severity: Severity::Error,
+            message: format!(
+                "This comparison appears to be unintentional because the types '{left}' and '{right}' have no overlap."
+            ),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn switch_case_not_comparable(span: Span, case: &str, discriminant: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2678,
+            severity: Severity::Error,
+            message: format!("Type '{case}' is not comparable to type '{discriminant}'."),
             span,
             elaboration: Vec::new(),
         }

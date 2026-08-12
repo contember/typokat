@@ -270,3 +270,279 @@ fn project_enum_initializer_is_deterministic_across_root_order() {
         );
     }
 }
+
+#[test]
+fn enum_annotations_are_stable_across_source_order_and_composition() {
+    for source in [
+        "enum E { A } function f<T extends E>(xs: E[], x: T): E { return x; }",
+        "function f<T extends E>(xs: E[], x: T): E { return x; } enum E { A }",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+
+    for source in [
+        "declare function consume(x: E): number; enum E { A, B = consume(E.A) }",
+        "enum E { A, B = consume(E.A) } declare function consume(x: E): number;",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert_eq!(out.incomplete.len(), 1, "{:?}", out.incomplete);
+        assert_eq!(
+            out.incomplete[0].id,
+            "semantic-query/invalid-evaluation-node"
+        );
+    }
+}
+
+#[test]
+fn enum_type_arguments_are_rejected_before_publication() {
+    for source in [
+        "enum E { A } type Bad = E<number>;",
+        "type Bad = E<number>; enum E { A }",
+    ] {
+        let out = check_source(source);
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["TK2315"]
+        );
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+}
+
+#[test]
+fn enum_members_drive_access_calls_and_existing_operators() {
+    let source = r#"
+        enum Numeric { Zero }
+        enum Text { Value = "value" }
+        const zero: Numeric.Zero = Numeric["Zero"];
+        const text: Text.Value = Text[`Value`];
+        const n: number = Numeric.Zero - 1;
+        const s: string = Text.Value + "!";
+        Numeric.Missing;
+        Numeric["Missing"];
+        Numeric[`Missing`];
+        Numeric();
+        Numeric.Zero();
+        Text.Value();
+    "#;
+    let out = check_source(source);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2339", "TK2339", "TK2339", "TK2349", "TK2349", "TK2349"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn heterogeneous_enum_typeof_splits_exact_members() {
+    let source = r#"
+        enum Mixed { Numeric = 0, Text = "text" }
+        function inspect(value: Mixed) {
+            if (typeof value === "number") {
+                const ok: Mixed.Numeric = value;
+                const bad: Mixed.Text = value;
+            } else {
+                const ok: Mixed.Text = value;
+                const bad: Mixed.Numeric = value;
+            }
+        }
+    "#;
+    let out = check_source(source);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322", "TK2322"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn enum_consumer_queries_are_deterministic_across_source_order() {
+    for source in [
+        r#"
+            enum State { Ready = "ready", Done = "done" }
+            function inspect(state: State) {
+                if (state === State.Ready) {
+                    const bad: State.Done = state;
+                }
+            }
+            const missing = State.Missing;
+        "#,
+        r#"
+            function inspect(state: State) {
+                if (state === State.Ready) {
+                    const bad: State.Done = state;
+                }
+            }
+            const missing = State.Missing;
+            enum State { Ready = "ready", Done = "done" }
+        "#,
+    ] {
+        let out = check_source(source);
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["TK2322", "TK2339"]
+        );
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+}
+
+#[test]
+fn distinct_opaque_enum_members_do_not_overlap() {
+    let source = r#"
+        declare function next(): number;
+        enum Opaque { First = next(), Second = next() }
+        function inspect() {
+            const value: Opaque.Second = Opaque.Second;
+            if (value === Opaque.First) {
+                const unreachable: never = value;
+            } else {
+                const kept: Opaque.Second = value;
+            }
+            switch (value) {
+                case Opaque.First: {
+                    const unreachable: never = value;
+                    break;
+                }
+                default: {
+                    const kept: Opaque.Second = value;
+                }
+            }
+        }
+    "#;
+    let out = check_source(source);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2367", "TK2678"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn enum_equality_respects_type_parameter_constraints() {
+    let source = r#"
+        enum E { First, Second }
+        enum S { First = "first" }
+        function broad<T extends E>(value: T) {
+            if (value === E.First) {
+                const exact: E.First = value;
+                const bad: E.Second = value;
+            }
+        }
+        function unconstrained<T>(value: T) {
+            if (value === E.First) {
+                const stillGeneric: E.First = value;
+            }
+        }
+        function primitive<T extends string>(value: T) {
+            if (value === S.First) {
+                const stillGeneric: S.First = value;
+            }
+        }
+    "#;
+    let out = check_source(source);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322", "TK2322", "TK2322"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn enum_equality_refines_broad_primitives_to_exact_members() {
+    let source = r#"
+        enum Numeric { First, Second }
+        enum Text { First = "first", Second = "second" }
+        function numeric(value: number) {
+            if (value === Numeric.First) {
+                const exact: Numeric.First = value;
+                const bad: Numeric.Second = value;
+            }
+        }
+        function text(value: string) {
+            if (value === Text.First) {
+                const exact: Text.First = value;
+                const bad: Text.Second = value;
+            }
+        }
+        function rawLiteral(value: "first") {
+            if (value === Text.First) {
+                const stillRaw: Text.First = value;
+            }
+        }
+    "#;
+    let out = check_source(source);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2322", "TK2322", "TK2322"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn enum_typeof_respects_type_parameter_constraints() {
+    let source = r#"
+        enum Numeric { First, Second }
+        function inspect<T extends Numeric>(value: T) {
+            if (typeof value === "number") {
+                const kept: T = value;
+            } else {
+                const unreachable: never = value;
+            }
+        }
+    "#;
+    let out = check_source(source);
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn enum_constrained_comparisons_emit_disjoint_raw_diagnostics() {
+    let source = r#"
+        enum Numeric { Zero = 0, One = 1 }
+        function inspect<T extends Numeric>(value: T) {
+            if (value === 99) {
+                const unreachable: never = value;
+            }
+            switch (value) {
+                case 99: {
+                    const unreachable: never = value;
+                    break;
+                }
+            }
+        }
+    "#;
+    let out = check_source(source);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2367", "TK2678"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}

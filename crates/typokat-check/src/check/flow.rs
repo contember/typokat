@@ -115,6 +115,9 @@ pub enum NarrowOp {
     /// only that nullish member; the else-branch removes it. The target nullish
     /// intrinsic is identified by `is_undefined`.
     EqNullish { is_undefined: bool },
+    /// Direct enum/value equality. The compared endpoint may be an exact enum
+    /// member or an overlapping raw primitive literal.
+    Equality { compared: TypeId },
     /// Literal discriminant (M8): then keeps members whose property could equal the
     /// literal; else removes members whose property is exactly that literal.
     Discriminant { property: String, literal: TypeId },
@@ -139,6 +142,9 @@ pub fn narrow(interner: &mut Interner, ty: TypeId, op: &NarrowOp, positive: bool
         NarrowOp::Truthy => narrow_by_truthiness(interner, ty, positive),
         NarrowOp::EqNullish { is_undefined } => {
             narrow_by_nullish_equality(interner, ty, *is_undefined, positive)
+        }
+        NarrowOp::Equality { compared } => {
+            narrow_by_enum_equality(interner, ty, *compared, positive)
         }
         NarrowOp::Discriminant { property, literal } => {
             narrow_by_discriminant(interner, ty, property, *literal, positive)
@@ -195,11 +201,80 @@ pub(crate) fn narrow_query<L: PublishedClassLookup + ?Sized>(
 /// Narrow by `typeof x === <tag>`. Then keeps matching primitive/literal members;
 /// else keeps the complement. `any` stays un-narrowable.
 pub fn narrow_by_typeof(interner: &mut Interner, ty: TypeId, tag: TypeofTag, keep: bool) -> TypeId {
-    filter_union(interner, ty, |store, member| {
-        let matches = member_matches_typeof(store, member, tag);
-        // Keep matching members in the then-branch, the complement in the else.
-        matches == keep
-    })
+    let wk = interner.well_known();
+    if ty == wk.any || ty == wk.error {
+        return ty;
+    }
+    let members = enum_expanded_members(interner.store(), ty);
+    let narrowed = members
+        .into_iter()
+        .filter(
+            |member| match typeof_overlap(interner.store(), *member, tag) {
+                EqualityOverlap::Always => keep,
+                EqualityOverlap::Never => !keep,
+                EqualityOverlap::Maybe => true,
+            },
+        )
+        .collect();
+    interner.union(narrowed)
+}
+
+/// Narrow a direct enum equality without borrowing assignment compatibility. Raw
+/// string literals overlap string members even though they are not assignable.
+pub fn narrow_by_enum_equality(
+    interner: &mut Interner,
+    ty: TypeId,
+    compared: TypeId,
+    positive: bool,
+) -> TypeId {
+    let wk = interner.well_known();
+    if ty == wk.any || ty == wk.error {
+        return ty;
+    }
+    let members = enum_expanded_members(interner.store(), ty);
+    let mut narrowed = Vec::with_capacity(members.len());
+    for member in members {
+        let overlap = enum_equality_overlap(interner.store(), member, compared);
+        let keep = match overlap {
+            EqualityOverlap::Always => positive,
+            EqualityOverlap::Never => !positive,
+            EqualityOverlap::Maybe => true,
+        };
+        if !keep {
+            continue;
+        }
+        let refine_to_compared =
+            positive && equality_subject_refines_to_member(interner.store(), member, compared);
+        narrowed.push(if refine_to_compared { compared } else { member });
+    }
+    interner.union(narrowed)
+}
+
+fn equality_subject_refines_to_member(
+    store: &crate::types::store::Store,
+    subject: TypeId,
+    compared: TypeId,
+) -> bool {
+    let compared_ty = compared;
+    let Some(compared) = store.enum_member_type(compared) else {
+        return false;
+    };
+    if store.intrinsic_kind(subject) == Some(compared.value.base_kind()) {
+        return true;
+    }
+    let mut current = subject;
+    let mut seen = rustc_hash::FxHashSet::default();
+    while let Some(parameter) = store.type_param(current) {
+        if !seen.insert(parameter.id) {
+            return false;
+        }
+        let Some(constraint) = store.type_param_constraint(parameter.id) else {
+            return false;
+        };
+        current = constraint;
+    }
+    matches!(store.tag(current), TypeTag::Enum | TypeTag::EnumMember)
+        && enum_equality_overlap(store, current, compared_ty) != EqualityOverlap::Never
 }
 
 /// Narrow by truthiness. Boolean is split into its exact literal branch. Broad
@@ -342,6 +417,16 @@ fn discriminant_keeps(
         // either branch → keep it (conservative, sound).
         return true;
     };
+    if matches!(store.tag(prop_ty), TypeTag::Enum | TypeTag::EnumMember)
+        || matches!(store.tag(literal), TypeTag::Enum | TypeTag::EnumMember)
+    {
+        let overlap = enum_equality_overlap(store, prop_ty, literal);
+        return if positive {
+            overlap != EqualityOverlap::Never
+        } else {
+            overlap != EqualityOverlap::Always
+        };
+    }
     if positive {
         // then-branch: drop only when `literal` provably cannot be a value of
         // `m.prop` (so `m.prop === literal` is impossible).
@@ -418,6 +503,20 @@ pub(crate) fn discriminant_keeps_query<L: PublishedClassLookup + ?Sized>(
     let Some(prop_ty) = prop_ty else {
         return DemandOutcome::Ready(true);
     };
+    if matches!(
+        coordinator.store().tag(prop_ty),
+        TypeTag::Enum | TypeTag::EnumMember
+    ) || matches!(
+        coordinator.store().tag(literal),
+        TypeTag::Enum | TypeTag::EnumMember
+    ) {
+        let overlap = enum_equality_overlap(coordinator.store(), prop_ty, literal);
+        return DemandOutcome::Ready(if positive {
+            overlap != EqualityOverlap::Never
+        } else {
+            overlap != EqualityOverlap::Always
+        });
+    }
     if !positive {
         return DemandOutcome::Ready(prop_ty != literal);
     }
@@ -661,6 +760,299 @@ fn member_matches_typeof(
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum EqualityOverlap {
+    Always,
+    Maybe,
+    Never,
+}
+
+fn enum_expanded_members(store: &crate::types::store::Store, ty: TypeId) -> Vec<TypeId> {
+    if let Some(members) = store.union_members(ty) {
+        return members
+            .iter()
+            .flat_map(|member| enum_expanded_members(store, *member))
+            .collect();
+    }
+    store
+        .closed_enum_member_types(ty)
+        .unwrap_or_else(|| vec![ty])
+}
+
+fn typeof_overlap(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+    tag: TypeofTag,
+) -> EqualityOverlap {
+    typeof_overlap_inner(store, ty, tag, &mut rustc_hash::FxHashSet::default())
+}
+
+fn typeof_overlap_inner(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+    tag: TypeofTag,
+    seen: &mut rustc_hash::FxHashSet<crate::types::repr::TypeParamId>,
+) -> EqualityOverlap {
+    if let Some(parameter) = store.type_param(ty) {
+        if !seen.insert(parameter.id) {
+            return EqualityOverlap::Maybe;
+        }
+        return store
+            .type_param_constraint(parameter.id)
+            .map_or(EqualityOverlap::Maybe, |constraint| {
+                typeof_overlap_inner(store, constraint, tag, seen)
+            });
+    }
+    match store.tag(ty) {
+        TypeTag::EnumMember => {
+            store
+                .enum_member_type(ty)
+                .map_or(EqualityOverlap::Maybe, |member| {
+                    if member.value.base_kind() == tag.intrinsic() {
+                        EqualityOverlap::Always
+                    } else {
+                        EqualityOverlap::Never
+                    }
+                })
+        }
+        TypeTag::Enum => store
+            .enum_type(ty)
+            .map_or(EqualityOverlap::Maybe, |family| {
+                let mut matching = false;
+                let mut other = false;
+                for member in &family.members {
+                    if member.value.base_kind() == tag.intrinsic() {
+                        matching = true;
+                    } else {
+                        other = true;
+                    }
+                }
+                if family.numeric_open {
+                    if tag == TypeofTag::Number {
+                        matching = true;
+                    } else {
+                        other = true;
+                    }
+                }
+                match (matching, other) {
+                    (true, false) => EqualityOverlap::Always,
+                    (false, true) => EqualityOverlap::Never,
+                    _ => EqualityOverlap::Maybe,
+                }
+            }),
+        _ if member_matches_typeof(store, ty, tag) => EqualityOverlap::Always,
+        _ => EqualityOverlap::Never,
+    }
+}
+
+pub(crate) fn enum_equality_overlap(
+    store: &crate::types::store::Store,
+    left: TypeId,
+    right: TypeId,
+) -> EqualityOverlap {
+    enum_equality_overlap_inner(store, left, right, &mut rustc_hash::FxHashSet::default())
+}
+
+fn enum_equality_overlap_inner(
+    store: &crate::types::store::Store,
+    left: TypeId,
+    right: TypeId,
+    seen: &mut rustc_hash::FxHashSet<(TypeId, TypeId)>,
+) -> EqualityOverlap {
+    if !seen.insert((left, right)) {
+        return EqualityOverlap::Maybe;
+    }
+    if let Some(parameter) = store.type_param(left) {
+        return store
+            .type_param_constraint(parameter.id)
+            .map_or(EqualityOverlap::Maybe, |constraint| {
+                enum_equality_overlap_inner(store, constraint, right, seen)
+            });
+    }
+    if let Some(parameter) = store.type_param(right) {
+        return store
+            .type_param_constraint(parameter.id)
+            .map_or(EqualityOverlap::Maybe, |constraint| {
+                enum_equality_overlap_inner(store, left, constraint, seen)
+            });
+    }
+    if [left, right].into_iter().any(|ty| {
+        matches!(
+            store.intrinsic_kind(ty),
+            Some(
+                crate::types::repr::IntrinsicKind::Error
+                    | crate::types::repr::IntrinsicKind::Any
+                    | crate::types::repr::IntrinsicKind::Unknown
+            )
+        )
+    }) {
+        return EqualityOverlap::Maybe;
+    }
+    if let Some(members) = store.union_members(left) {
+        let outcomes = members
+            .iter()
+            .map(|member| enum_equality_overlap_inner(store, *member, right, &mut seen.clone()))
+            .collect::<Vec<_>>();
+        return combine_equality_overlaps(&outcomes);
+    }
+    if let Some(members) = store.union_members(right) {
+        let outcomes = members
+            .iter()
+            .map(|member| enum_equality_overlap_inner(store, left, *member, &mut seen.clone()))
+            .collect::<Vec<_>>();
+        return combine_equality_overlaps(&outcomes);
+    }
+    if left == right {
+        return match store.tag(left) {
+            TypeTag::Literal | TypeTag::EnumMember => EqualityOverlap::Always,
+            _ => EqualityOverlap::Maybe,
+        };
+    }
+    if let Some(family) = store.enum_type(left) {
+        return whole_enum_overlap(store, family, right);
+    }
+    if let Some(family) = store.enum_type(right) {
+        return whole_enum_overlap(store, family, left);
+    }
+    match (store.enum_member_type(left), store.enum_member_type(right)) {
+        (Some(left), Some(right)) => {
+            if left.enum_id != right.enum_id {
+                EqualityOverlap::Never
+            } else {
+                match (&left.value, &right.value) {
+                    (
+                        crate::types::repr::EnumValue::Number(left),
+                        crate::types::repr::EnumValue::Number(right),
+                    ) if left == right => EqualityOverlap::Always,
+                    (
+                        crate::types::repr::EnumValue::String(left),
+                        crate::types::repr::EnumValue::String(right),
+                    ) if left == right => EqualityOverlap::Always,
+                    _ => EqualityOverlap::Never,
+                }
+            }
+        }
+        (Some(member), None) | (None, Some(member)) => {
+            let primitive = if store.enum_member_type(left).is_some() {
+                right
+            } else {
+                left
+            };
+            enum_value_primitive_overlap(store, &member.value, primitive)
+        }
+        (None, None) => primitive_equality_overlap(store, left, right),
+    }
+}
+
+fn combine_equality_overlaps(outcomes: &[EqualityOverlap]) -> EqualityOverlap {
+    if outcomes
+        .iter()
+        .all(|outcome| *outcome == EqualityOverlap::Never)
+    {
+        EqualityOverlap::Never
+    } else if outcomes.len() == 1 && outcomes[0] == EqualityOverlap::Always {
+        EqualityOverlap::Always
+    } else {
+        EqualityOverlap::Maybe
+    }
+}
+
+fn whole_enum_overlap(
+    store: &crate::types::store::Store,
+    family: &crate::types::repr::EnumType,
+    compared: TypeId,
+) -> EqualityOverlap {
+    if let Some(other) = store.enum_type(compared) {
+        return if family.id == other.id {
+            EqualityOverlap::Maybe
+        } else {
+            EqualityOverlap::Never
+        };
+    }
+    if let Some(member) = store.enum_member_type(compared) {
+        return if family.id == member.enum_id {
+            EqualityOverlap::Maybe
+        } else {
+            EqualityOverlap::Never
+        };
+    }
+    let overlaps = family.members.iter().any(|member| {
+        enum_value_primitive_overlap(store, &member.value, compared) != EqualityOverlap::Never
+    });
+    if overlaps
+        || (family.numeric_open
+            && primitive_base_kind(store, compared)
+                == Some(crate::types::repr::IntrinsicKind::Number))
+    {
+        EqualityOverlap::Maybe
+    } else {
+        EqualityOverlap::Never
+    }
+}
+
+fn primitive_equality_overlap(
+    store: &crate::types::store::Store,
+    left: TypeId,
+    right: TypeId,
+) -> EqualityOverlap {
+    match (store.literal_value(left), store.literal_value(right)) {
+        (Some(left), Some(right)) => {
+            if left == right {
+                EqualityOverlap::Always
+            } else {
+                EqualityOverlap::Never
+            }
+        }
+        _ => match (
+            primitive_base_kind(store, left),
+            primitive_base_kind(store, right),
+        ) {
+            (Some(left), Some(right)) if left == right => EqualityOverlap::Maybe,
+            _ => EqualityOverlap::Never,
+        },
+    }
+}
+
+fn primitive_base_kind(
+    store: &crate::types::store::Store,
+    ty: TypeId,
+) -> Option<crate::types::repr::IntrinsicKind> {
+    store
+        .literal_value(ty)
+        .map(LiteralValue::base_kind)
+        .or_else(|| store.intrinsic_kind(ty))
+}
+
+fn enum_value_primitive_overlap(
+    store: &crate::types::store::Store,
+    value: &crate::types::repr::EnumValue,
+    primitive: TypeId,
+) -> EqualityOverlap {
+    use crate::types::repr::EnumValue;
+
+    match (value, store.literal_value(primitive)) {
+        (EnumValue::String(left), Some(LiteralValue::String(right))) => {
+            if left == right {
+                EqualityOverlap::Always
+            } else {
+                EqualityOverlap::Never
+            }
+        }
+        (EnumValue::Number(left), Some(LiteralValue::Number(right))) => {
+            if left.get() == *right {
+                EqualityOverlap::Always
+            } else {
+                EqualityOverlap::Never
+            }
+        }
+        (EnumValue::OpaqueNumber, Some(LiteralValue::Number(_))) => EqualityOverlap::Maybe,
+        (value, _) if store.intrinsic_kind(primitive) == Some(value.base_kind()) => {
+            EqualityOverlap::Maybe
+        }
+        _ => EqualityOverlap::Never,
+    }
+}
+
 /// Whether a type is always truthy; everything else is kept in the falsy branch.
 fn is_always_truthy(store: &crate::types::store::Store, member: TypeId) -> bool {
     // M17: an array value is always truthy in JS (like an object/function), so it is
@@ -711,7 +1103,10 @@ fn filter_union(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::repr::{LiteralValue, ObjectType, PropertyType};
+    use crate::types::repr::{
+        EnumId, EnumMemberFact, EnumMemberId, EnumNumber, EnumType, EnumValue, LiteralValue,
+        ObjectType, PropertyType, TypeParamId,
+    };
 
     fn object_a(interner: &mut Interner) -> TypeId {
         let wk = interner.well_known();
@@ -1087,6 +1482,213 @@ mod tests {
         assert_eq!(
             narrow_by_in_operator(&mut interner, wk.error, "a", false),
             wk.error
+        );
+    }
+
+    #[test]
+    fn enum_typeof_splits_a_closed_heterogeneous_family() {
+        let mut interner = Interner::with_intrinsics();
+        let whole = interner.intern_enum(EnumType {
+            id: EnumId(1),
+            name: "Mixed".to_owned(),
+            members: vec![
+                EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "Numeric".to_owned(),
+                    value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+                },
+                EnumMemberFact {
+                    id: EnumMemberId(1),
+                    name: "Text".to_owned(),
+                    value: EnumValue::String("text".to_owned()),
+                },
+            ],
+            numeric_open: false,
+        });
+        let numeric = interner
+            .store()
+            .enum_member_type_id(EnumId(1), EnumMemberId(0))
+            .expect("numeric member");
+        let text = interner
+            .store()
+            .enum_member_type_id(EnumId(1), EnumMemberId(1))
+            .expect("string member");
+
+        assert_eq!(
+            narrow_by_typeof(&mut interner, whole, TypeofTag::Number, true),
+            numeric
+        );
+        assert_eq!(
+            narrow_by_typeof(&mut interner, whole, TypeofTag::Number, false),
+            text
+        );
+    }
+
+    #[test]
+    fn enum_equality_keeps_equal_aliases_and_open_numeric_remainders() {
+        let mut interner = Interner::with_intrinsics();
+        let aliases = interner.intern_enum(EnumType {
+            id: EnumId(2),
+            name: "Aliases".to_owned(),
+            members: vec![
+                EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "First".to_owned(),
+                    value: EnumValue::String("same".to_owned()),
+                },
+                EnumMemberFact {
+                    id: EnumMemberId(1),
+                    name: "Second".to_owned(),
+                    value: EnumValue::String("same".to_owned()),
+                },
+            ],
+            numeric_open: false,
+        });
+        let raw_same = interner.intern_literal(LiteralValue::String("same".to_owned()));
+        let alias_members = interner.store().closed_enum_member_types(aliases).unwrap();
+        let aliases_narrowed = interner.union(alias_members);
+        assert_eq!(
+            narrow(
+                &mut interner,
+                aliases,
+                &NarrowOp::Equality { compared: raw_same },
+                true,
+            ),
+            aliases_narrowed
+        );
+        let wk = interner.well_known();
+        assert_eq!(
+            narrow(
+                &mut interner,
+                aliases,
+                &NarrowOp::Equality { compared: raw_same },
+                false,
+            ),
+            wk.never
+        );
+
+        let open = interner.intern_enum(EnumType {
+            id: EnumId(3),
+            name: "Open".to_owned(),
+            members: vec![EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "Unknown".to_owned(),
+                value: EnumValue::OpaqueNumber,
+            }],
+            numeric_open: true,
+        });
+        let raw_number = interner.intern_literal(LiteralValue::Number(99.0));
+        for positive in [true, false] {
+            assert_eq!(
+                narrow(
+                    &mut interner,
+                    open,
+                    &NarrowOp::Equality {
+                        compared: raw_number,
+                    },
+                    positive,
+                ),
+                open
+            );
+        }
+    }
+
+    #[test]
+    fn enum_discriminants_compare_raw_values_and_equal_aliases() {
+        let mut interner = Interner::with_intrinsics();
+        let aliases = interner.intern_enum(EnumType {
+            id: EnumId(4),
+            name: "Aliases".to_owned(),
+            members: vec![
+                EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "First".to_owned(),
+                    value: EnumValue::String("same".to_owned()),
+                },
+                EnumMemberFact {
+                    id: EnumMemberId(1),
+                    name: "Second".to_owned(),
+                    value: EnumValue::String("same".to_owned()),
+                },
+            ],
+            numeric_open: false,
+        });
+        let first = interner
+            .store()
+            .enum_member_type_id(EnumId(4), EnumMemberId(0))
+            .expect("first alias");
+        let second = interner
+            .store()
+            .enum_member_type_id(EnumId(4), EnumMemberId(1))
+            .expect("second alias");
+        let first_object = member(&mut interner, "kind", first, "first");
+        let second_object = member(&mut interner, "kind", second, "second");
+        let objects = interner.union(vec![first_object, second_object]);
+        let raw_same = interner.intern_literal(LiteralValue::String("same".to_owned()));
+
+        assert_eq!(
+            narrow_by_discriminant(&mut interner, objects, "kind", raw_same, true),
+            objects
+        );
+        let wk = interner.well_known();
+        assert_eq!(
+            narrow_by_discriminant(&mut interner, objects, "kind", raw_same, false),
+            wk.never
+        );
+        assert!(interner.store().enum_type(aliases).is_some());
+    }
+
+    #[test]
+    fn enum_overlap_follows_type_parameter_constraints_without_cycles() {
+        let mut interner = Interner::with_intrinsics();
+        interner.intern_enum(EnumType {
+            id: EnumId(5),
+            name: "Exact".to_owned(),
+            members: vec![
+                EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "First".to_owned(),
+                    value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+                },
+                EnumMemberFact {
+                    id: EnumMemberId(1),
+                    name: "Second".to_owned(),
+                    value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+                },
+            ],
+            numeric_open: false,
+        });
+        let first = interner
+            .store()
+            .enum_member_type_id(EnumId(5), EnumMemberId(0))
+            .expect("first member");
+        let second = interner
+            .store()
+            .enum_member_type_id(EnumId(5), EnumMemberId(1))
+            .expect("second member");
+
+        let constrained = interner.intern_type_param(TypeParamId(0), "T");
+        assert!(interner.set_type_param_constraint(TypeParamId(0), second));
+        assert_eq!(
+            enum_equality_overlap(interner.store(), constrained, first),
+            EqualityOverlap::Never
+        );
+
+        let unconstrained = interner.intern_type_param(TypeParamId(1), "U");
+        assert_eq!(
+            enum_equality_overlap(interner.store(), unconstrained, first),
+            EqualityOverlap::Maybe
+        );
+
+        let cyclic = interner.intern_type_param(TypeParamId(2), "C");
+        assert!(interner.set_type_param_constraint(TypeParamId(2), cyclic));
+        assert_eq!(
+            enum_equality_overlap(interner.store(), cyclic, first),
+            EqualityOverlap::Maybe
+        );
+        assert_eq!(
+            typeof_overlap(interner.store(), cyclic, TypeofTag::Number),
+            EqualityOverlap::Maybe
         );
     }
 }

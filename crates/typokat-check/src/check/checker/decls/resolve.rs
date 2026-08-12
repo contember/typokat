@@ -1,7 +1,8 @@
 use super::*;
-use crate::binder::declaration::TypeGroupId;
+use crate::binder::declaration::{DeclarationKind, TypeGroupId};
 use crate::binder::namespace::QualifiedTypePathResolution;
 use crate::binder::scope::ScopeId;
+use crate::binder::symbol::SymbolId;
 use crate::check::checker::classes::application::{
     build_class_application, complete_class_arguments, required_type_argument_count,
     ClassApplicationKind, ClassApplicationRequest, ClassTypeParameter, ClassTypeParameterDefault,
@@ -58,6 +59,12 @@ pub(super) enum QualifiedTypeDisposition {
     UnavailableEndpoint,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum EnumMemberEndpoint {
+    Found { whole: TypeId, member: TypeId },
+    Missing { whole: TypeId },
+}
+
 fn flatten_qualified_type_name<'a>(
     type_name: &'a TSTypeName<'_>,
     segments: &mut Vec<QualifiedTypeSegment<'a>>,
@@ -85,6 +92,132 @@ fn flatten_qualified_type_name<'a>(
 }
 
 impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
+    /// Resolve the enum type group owned by one value-space symbol. This is narrower
+    /// than namespace lookup: it authenticates the exact lexical enum declaration.
+    pub(in crate::check::checker) fn enum_value_group(
+        &self,
+        symbol: SymbolId,
+    ) -> Option<(TypeGroupId, TypeId)> {
+        let binding = self.binder.symbols.get(symbol)?;
+        let group = binding.declarations.iter().find_map(|declaration| {
+            let declaration = self.binder.declarations.get(*declaration)?;
+            (declaration.kind == DeclarationKind::Enum)
+                .then_some(declaration.type_group)
+                .flatten()
+        })?;
+        let terminal = self
+            .type_environment
+            .resolution_environment()
+            .groups()
+            .get(group)?;
+        let PublishedTypeGroupTerminal::Ready(published) = terminal else {
+            return None;
+        };
+        let PublishedTypeGroupSurface::Enum(whole) = published.surface else {
+            return None;
+        };
+        self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
+        Some((group, whole))
+    }
+
+    pub(in crate::check::checker) fn enum_member_endpoint(
+        &self,
+        symbol: SymbolId,
+        name: &str,
+    ) -> Option<EnumMemberEndpoint> {
+        let (_, whole) = self.enum_value_group(symbol)?;
+        let family = self.interner.store().enum_type(whole)?;
+        let member = family
+            .members
+            .iter()
+            .find(|member| member.name == name)
+            .and_then(|member| {
+                self.interner
+                    .store()
+                    .enum_member_type_id(family.id, member.id)
+            });
+        Some(match member {
+            Some(member) => EnumMemberEndpoint::Found { whole, member },
+            None => EnumMemberEndpoint::Missing { whole },
+        })
+    }
+
+    pub(in crate::check::checker) fn enum_member_expression_endpoint(
+        &self,
+        scope: ScopeId,
+        expression: &oxc_ast::ast::Expression<'_>,
+    ) -> Option<EnumMemberEndpoint> {
+        use oxc_ast::ast::Expression;
+
+        let (object, name) = match expression {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                return self.enum_member_expression_endpoint(scope, &parenthesized.expression);
+            }
+            Expression::StaticMemberExpression(member) if !member.optional => {
+                (&member.object, member.property.name.as_str())
+            }
+            Expression::ComputedMemberExpression(member) if !member.optional => {
+                let name = enum_static_key(&member.expression)?;
+                (&member.object, name)
+            }
+            _ => return None,
+        };
+        self.enum_member_access_endpoint(scope, object, name)
+    }
+
+    pub(in crate::check::checker) fn enum_member_access_endpoint(
+        &self,
+        scope: ScopeId,
+        object: &oxc_ast::ast::Expression<'_>,
+        name: &str,
+    ) -> Option<EnumMemberEndpoint> {
+        use oxc_ast::ast::Expression;
+
+        let object = match object {
+            Expression::ParenthesizedExpression(parenthesized) => &parenthesized.expression,
+            object => object,
+        };
+        let Expression::Identifier(identifier) = object else {
+            return None;
+        };
+        let symbol = self.resolve_value_replay(scope, identifier.name.as_str())?;
+        self.enum_member_endpoint(symbol, name)
+    }
+
+    pub(in crate::check::checker) fn enum_computed_member_endpoint(
+        &self,
+        scope: ScopeId,
+        member: &oxc_ast::ast::ComputedMemberExpression<'_>,
+    ) -> Option<EnumMemberEndpoint> {
+        if member.optional {
+            return None;
+        }
+        let name = enum_static_key(&member.expression)?;
+        self.enum_member_access_endpoint(scope, &member.object, name)
+    }
+
+    pub(in crate::check::checker) fn direct_enum_value_expression(
+        &self,
+        scope: ScopeId,
+        expression: &oxc_ast::ast::Expression<'_>,
+    ) -> bool {
+        use oxc_ast::ast::Expression;
+
+        match expression {
+            Expression::ParenthesizedExpression(parenthesized) => {
+                self.direct_enum_value_expression(scope, &parenthesized.expression)
+            }
+            Expression::Identifier(identifier) => self
+                .resolve_value_replay(scope, identifier.name.as_str())
+                .and_then(|symbol| self.enum_value_group(symbol))
+                .is_some(),
+            _ => matches!(
+                self.enum_member_expression_endpoint(scope, expression),
+                Some(EnumMemberEndpoint::Found { .. })
+            ),
+        }
+    }
+
     /// Resolve one type declaration to a memoized `TypeId`.
     /// Surface alias cycles report `TK2456` at every alias in the cycle and become
     /// error types; legal recursion through members uses seeded reserved ids instead
@@ -357,7 +490,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             || (!self.type_environment.is_published()
                 && matches!(
                     self.type_decls.get(decl_id.index()),
-                    Some(TypeDecl::Class { .. })
+                    Some(TypeDecl::Class { .. } | TypeDecl::Enum { .. })
                 ));
         let resolved = self.resolve_type_group_reference(
             scope,
@@ -394,6 +527,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             name: qualified.right.name.as_str(),
             span: Span::from_oxc(qualified.right.span),
         });
+
+        if segments.len() == 2 {
+            let root = segments[0];
+            if let Some(symbol) = self.resolve_type_replay(scope, root.name) {
+                if let Some(EnumMemberEndpoint::Found { member, .. }) =
+                    self.enum_member_endpoint(symbol, segments[1].name)
+                {
+                    if let Some(arguments) = type_arguments {
+                        for argument in &arguments.params {
+                            let _ = self.lower_annotation(scope, argument);
+                        }
+                        self.emit_diagnostic(Diagnostic::type_is_not_generic(
+                            reference_span,
+                            &format!("{}.{}", root.name, segments[1].name),
+                        ));
+                        return Some(self.interner.well_known().error);
+                    }
+                    return Some(member);
+                }
+            }
+        }
 
         match self.classify_qualified_type_path(
             scope,
@@ -468,6 +622,36 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 Some(ty) => QualifiedTypeDisposition::Ready(ty),
                 None => QualifiedTypeDisposition::UnavailableEndpoint,
             };
+        }
+
+        if matches!(
+            resolution,
+            QualifiedTypePathResolution::Deferred {
+                reason: crate::binder::namespace::QualifiedTypePathDeferredReason::Enum,
+                ..
+            }
+        ) && segments.len() == 2
+        {
+            if let Some(symbol) = self.resolve_type_replay(scope, segments[0].name) {
+                let is_bare_enum = self
+                    .binder
+                    .symbols
+                    .get(symbol)
+                    .is_some_and(|binding| binding.ns.is_none());
+                if is_bare_enum
+                    && matches!(
+                        self.enum_member_endpoint(symbol, segments[1].name),
+                        Some(EnumMemberEndpoint::Missing { .. })
+                    )
+                {
+                    self.emit_diagnostic(Diagnostic::namespace_has_no_exported_member(
+                        segments[1].span,
+                        segments[0].name,
+                        segments[1].name,
+                    ));
+                    return QualifiedTypeDisposition::RecoveredTopologyFailure;
+                }
+            }
         }
 
         let disposition = if matches!(resolution, QualifiedTypePathResolution::Unavailable { .. }) {
@@ -549,7 +733,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut instantiate_omitted_defaults = false;
             if matches!(
                 self.type_decls.get(group.index()),
-                Some(TypeDecl::Interface { .. } | TypeDecl::Alias { .. })
+                Some(TypeDecl::Enum { .. } | TypeDecl::Interface { .. } | TypeDecl::Alias { .. })
             ) {
                 let parameters = self.type_decl_params(group);
                 let defaults = self.type_decl_defaults(group);
@@ -1624,6 +1808,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     }
 }
 
+fn enum_static_key<'node>(expression: &'node oxc_ast::ast::Expression<'_>) -> Option<&'node str> {
+    use oxc_ast::ast::Expression;
+
+    match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|value| value.as_str()),
+        Expression::ParenthesizedExpression(parenthesized) => {
+            enum_static_key(&parenthesized.expression)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod qualified_name_tests {
     use crate::check::test_support::{check_project, check_source, CheckOutput};
@@ -1862,21 +2063,18 @@ type ClassMissingArgument = Root.RequiredClass;
     }
 
     #[test]
-    fn deferred_qualified_enum_endpoint_has_one_backlog_42_incomplete() {
+    fn missing_qualified_enum_endpoint_reports_namespace_member_error() {
         let source = "enum DeferredRoot { Item }\nlet value: DeferredRoot.Member;";
         let output = checked(source);
-        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-        let records = output
-            .incomplete
-            .iter()
-            .filter(|record| record.id == "annotation-lower/type-name/qualified-enum")
-            .collect::<Vec<_>>();
-        assert_eq!(records.len(), 1, "{records:?}");
         assert_eq!(
-            records[0].context,
-            "qualified enum type resolution deferred to backlog 42"
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.code, span_text(source, diagnostic.span)))
+                .collect::<Vec<_>>(),
+            [(DiagnosticCode::TK2694, "Member")]
         );
-        assert_eq!(span_text(source, records[0].span), "DeferredRoot.Member");
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
     }
 
     #[test]

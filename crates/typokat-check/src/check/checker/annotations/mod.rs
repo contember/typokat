@@ -376,7 +376,7 @@ mod multi_child_recovery_tests {
     }
 
     #[test]
-    fn unavailable_child_withholds_the_whole_annotation_callable() {
+    fn enum_member_child_publishes_the_whole_annotation_callable() {
         let source = r#"
             enum DeferredCallable { Parameter }
             declare const unavailable: (value: DeferredCallable.Parameter) => string;
@@ -384,19 +384,15 @@ mod multi_child_recovery_tests {
         "#;
         let output = check_source(source);
         assert!(output.parse_errors.is_empty());
-        assert!(
-            output.diagnostics.is_empty(),
-            "a TK2322 from the call result would expose a partial callable: {:?}",
-            output.diagnostics
-        );
         assert_eq!(
             output
-                .incomplete
+                .diagnostics
                 .iter()
-                .map(|record| record.id.as_str())
+                .map(|diagnostic| diagnostic.code)
                 .collect::<Vec<_>>(),
-            ["annotation-lower/type-name/qualified-enum"]
+            [DiagnosticCode::TK2345, DiagnosticCode::TK2322]
         );
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
     }
 
     #[test]

@@ -95,6 +95,7 @@ pub(in crate::check::checker) mod interface;
 mod interface_scc_pending_spec;
 mod params;
 mod resolve;
+pub(in crate::check::checker) use resolve::EnumMemberEndpoint;
 
 struct InterfaceOwnMemberOwners<Ticket: Copy> {
     properties: BTreeMap<crate::types::repr::PropertyKey, (Ticket, Span)>,
