@@ -119,6 +119,28 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
   and exhaustive type walkers selected by compiler errors/tests. No binder/checker AST behavior in
   this WU.
 
+### WU1B — freeze canonical enum groups and merge legality (effort M)
+
+- **Problem.** Descriptor construction needs one canonical declaration group and a settled legality
+  result before it can allocate identity. Leaving that decision to the later namespace integration
+  would create a cycle: publication would depend on merge legality while merge recovery would depend
+  on publication.
+- **Verify first.** Turn WU0's repeated-enum, enum+namespace, enum+function, and three-way order
+  matrix into binder-only table tests. Assert the canonical group key, ordered enum participants,
+  attached namespace identity, classification, placement issues, and exact diagnostic-owner sites
+  without constructing any types.
+- **Scope.** Expose one binder-owned canonical enum-group view keyed by the existing `TypeGroupId` and
+  containing the ordered enum declaration participants plus any admitted namespace composition.
+  Replace the blanket `DeferredBacklog42` classification with the exact WU0 legality matrix and
+  preserve independent placement issues. This seam states what may be built; it does not allocate
+  `EnumId`, lower members, publish values, or emit checker diagnostics.
+- **Acceptance / witness.** Named binder tests cover every WU0 merge-order row. Root/module insertion
+  permutations that preserve source order produce the same normalized group; changing source order
+  changes only the ordered participant list and the tsc-prescribed owner sites. Illegal
+  enum+function groups never appear buildable, while legal repeated-enum and enum+namespace groups
+  expose one canonical build input.
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs` and binder tests only.
+
 ### WU2 — build and publish one enum descriptor (effort L)
 
 - **Problem.** The binder has value/type slots, but the checker publishes neither a canonical enum
@@ -127,7 +149,8 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
 - **Verify first.** Construct one descriptor in a checker unit test from numeric, string, mixed,
   ambient, and merged enum declarations. Assert that its whole type, member types, value-object
   properties, declaration order, and diagnostic owners agree before exposing it to lookup.
-- **Scope.** Reserve one enum identity per legal canonical merge group. Analyze members in source
+- **Scope.** Consume WU1B's frozen canonical group and reserve one enum identity per legal group.
+  Analyze members in source
   order across merged declarations. Fold the WU0-approved constant forms; type-check every computed
   initializer exactly once; retain an opaque nominal numeric member where tsc does; and emit the
   exact initializer/auto-increment diagnostics without publishing a permissive partial member.
@@ -136,16 +159,19 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
   existing `ValueStorageId` and the enum endpoint to the existing `TypeGroupId` atomically. Treat
   `declare` and `const enum` as checker-visible type/value declarations; no emit decision enters the
   semantic identity.
-- **Acceptance / witness.** `E`, `E.Member`, and `E.Member` as a value all refer to the same member
-  identity; forward annotations and project dependency ordering do not observe a half-filled
-  descriptor; invalid members keep independent child diagnostics and suppress only their own
-  cascade; query order and source order do not change type ids or diagnostics. The three enum
-  incomplete records disappear only when the corresponding surface is genuinely published.
+- **Acceptance / witness.** Named checker tests instrument reservation/fill/publication phases:
+  every descriptor has one reservation, every initializer span has one typed walk, and no lookup can
+  observe the descriptor before its single terminal publication. `E`, `E.Member`, and `E.Member` as
+  a value all refer to the same member identity; forward annotations and project dependency ordering
+  do not observe a half-filled descriptor; invalid members keep independent child diagnostics and
+  suppress only their own cascade. Query-order and project-root-order permutations preserve type ids
+  and diagnostics; source order remains semantic and is not permuted. The three enum incomplete
+  records disappear only when the corresponding surface is genuinely published.
 - **Touch points.** `crates/typokat-check/src/check/checker/decls/`,
   `crates/typokat-check/src/check/checker/type_groups.rs`,
-  `crates/typokat-check/src/check/checker/statements.rs`, checker context/replay ownership,
-  `crates/typokat-binder/src/binder/` only for descriptor/merge metadata proven necessary by WU0,
-  and diagnostics for tsc-compatible enum declaration errors.
+  `crates/typokat-check/src/check/checker/statements.rs`, checker context/replay ownership, and
+  diagnostics for tsc-compatible enum declaration errors. The frozen binder seam changes only via a
+  leader-owned replan.
 
 ### WU3 — consume enum members in annotations, expressions, and flow (effort M)
 
@@ -155,8 +181,8 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
   resolution, expression inference, equality narrowing, `switch` case/default flow, assignment, and
   diagnostic rendering. Confirm no path re-infers an initializer or enum member expression for
   effects.
-- **Scope.** Resolve `E` to the whole enum and `E.Member` to the exact member endpoint, including
-  enum members inside legal namespace compositions. Resolve static and statically keyed computed
+- **Scope.** Resolve bare `E` to the whole enum and bare `E.Member` to the exact member endpoint.
+  Resolve static and statically keyed computed
   value access through the descriptor while preserving ordinary missing-member diagnostics. Extend
   equality and `switch` label extraction to exact enum member expressions with a side-effect-free
   lookup; reuse the existing union/discriminant narrowing machinery. Wire numeric-enum operand
@@ -172,7 +198,7 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
   `crates/typokat-check/src/check/checker/narrowing.rs`,
   `crates/typokat-check/src/check/checker/flowgraph/`, and focused diagnostics.
 
-### WU4 — settle merging, namespaces, and Bundler slot publication (effort L)
+### WU4 — integrate namespaces and Bundler slot publication (effort L)
 
 - **Problem.** Every enum composition is currently deferred, namespace value assembly rejects enum
   payloads, and the project route therefore cannot carry an enum's paired value/type slots through
@@ -180,18 +206,20 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
 - **Verify first.** Run WU0's complete merge-order and project root-order matrices against the
   published descriptor. Compare exact slot availability and diagnostic identities, not only whether
   a file exits clean.
-- **Scope.** Replace `DeferredBacklog42` with the exact WU0 legality matrix: repeated enums and legal
-  enum+namespace groups share one descriptor; enum+function combinations emit `TK2567` at the tsc
-  sites; namespace placement diagnostics and typed recovery remain independent. Allow enum value
+- **Scope.** Consume WU1B's frozen legality: repeated enums and legal enum+namespace groups share one
+  descriptor; enum+function combinations emit `TK2567` at the tsc sites; namespace placement
+  diagnostics and typed recovery remain independent. Resolve enum members inside legal namespace
+  compositions through the descriptor. Allow enum value
   dependencies in standalone namespace assembly without synthesizing a namespace for bare enums.
   Publish direct named enum exports/imports and acyclic named source re-exports as paired slots,
   with type-only syntax erasing only the value slot. Admit only enum default forms whose namespace
   absence the existing frontend/checker evidence proves; actual enum+namespace defaults remain
   fail-closed under backlog `15`'s current default/namespace boundary. Preserve project dependency
   order, source identity, and byte-identical summaries across root order.
-- **Acceptance / witness.** Enable the project/merge portion of WU0 and update the existing `b15`
-  enum contracts. No legal enum path reports `TK2304`, `TK2305`, or an enum incomplete. Illegal
-  groups retain exact `TK2567`/`TK2434` plus the usable recovery surface tsc proves. Named, type-only,
+- **Acceptance / witness.** Enable the namespace/project/merge portion of WU0 and update the
+  existing `b15` enum contracts. No legal enum path reports `TK2304`, `TK2305`, or an enum
+  incomplete. Illegal groups retain exact `TK2567`/`TK2434` plus the usable recovery surface tsc
+  proves. Named, type-only,
   source-re-export, namespace-payload, and admitted default cases publish exactly the intended slots;
   no unsupported namespace/default bridge becomes clean.
 - **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`,
@@ -214,8 +242,13 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
   every exhaustive `TypeTag` consumer. Remove the official `syntax:enum` gate only after triaging all
   34 revealed files; retain independent OOS/incomplete owners where another backlog genuinely owns
   the remaining syntax or semantic family. Update the surface inventory, completion manifest,
-  architecture/current limitations, and divergence ledger to the shipped truth.
-- **Acceptance / witness.** Independent review returns no HIGH or MEDIUM finding. Run focused tests,
+  architecture/current limitations, and divergence ledger to the shipped truth. Compare WU0's
+  committed fixture-family checklist against enabled cases so no planned family disappears between
+  specification and closure.
+- **Acceptance / witness.** Independent review returns no HIGH or MEDIUM finding and lists the
+  concrete probes it ran. A source-level exhaustiveness guard enumerates every production
+  `TypeTag` match site and fails if the new enum-member tag reaches an unadjudicated wildcard or
+  error fallback. Run focused tests,
   `cargo fmt --check`, `cpu-lease run -n 2 -- cargo test`, and
   `cpu-lease run -n 2 -- cargo clippy --all-targets -- -D warnings`. Build a current release binary
   under a CPU lease and run the full official-suite identity ratchet; inspect every enum-gate status
@@ -289,14 +322,22 @@ Planning HEAD is `33c7e5e4ae8e9e5e91bb3080f4b90a4fb792e5c1`.
 
 ## Sequencing
 
-WU0 → WU1 → WU2 → WU3 → WU4 → WU5 → WU6.
+WU0 → (WU1 + WU1B in parallel) → WU2 → WU3 → WU4 → WU5 → WU6.
 
-Implementation follows the mandatory spec-first method. WU0 is committed alone. WU1-WU4 each land
-as independently reviewable implementation commits with their focused witnesses; implementation is
-performed through subagents under leader supervision. WU5 uses a fresh reviewer. Only read-only tsc
-probes and official-suite triage may run in parallel with implementation; publication, project
-contracts, review, and immutable evidence remain ordered because each consumes the prior semantic
-identity.
+Implementation follows the mandatory spec-first method. WU0 is committed alone and includes a
+fixture-family checklist. WU1 owns `crates/typokat-types/src/types/`,
+`crates/typokat-relate/src/relate/`, and enum rendering; WU1B owns
+`crates/typokat-binder/src/binder/namespace.rs`. Their territories are disjoint and their contracts
+meet only at the existing `TypeGroupId`; both seams freeze before WU2. WU2 then owns enum
+construction/publication under `checker/decls/`, `type_groups.rs`, and `statements.rs`; WU3 owns
+bare annotation/expression/flow consumers and runs only after WU2; WU4 owns namespace/project
+integration and runs only after WU3. WU1-WU4 each land as independently reviewable implementation
+commits with focused witnesses. Implementation is performed through subagents under leader
+supervision. WU5 uses a fresh reviewer and may route a discovered corpus omission back through a
+new spec commit before any production fix; it may not weaken an existing expectation. Only
+read-only tsc probes and official-suite triage may run in parallel with implementation; publication,
+project contracts, review, and immutable evidence remain ordered because each consumes the prior
+semantic identity.
 
 ## Run log
 
