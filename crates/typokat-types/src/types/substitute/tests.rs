@@ -1,7 +1,8 @@
 use super::*;
 use crate::types::repr::{
-    ClassId, FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
-    TupleRestType, TupleType, WellKnownSymbol,
+    ClassId, EnumId, EnumMemberId, EnumMemberType, EnumValue, FunctionType, GenericTypeParam,
+    LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
+    WellKnownSymbol,
 };
 use crate::types::DerivationEdge;
 
@@ -29,6 +30,22 @@ fn type_param_is_replaced() {
     );
     // An intrinsic is unaffected.
     assert_eq!(substitute(&mut interner, wk.string, &map), wk.string);
+}
+
+#[test]
+fn substitution_preserves_nominal_enum_member_identity() {
+    let mut interner = Interner::with_intrinsics();
+    let member = interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(1),
+        member_id: EnumMemberId(2),
+        enum_name: "Mode".to_owned(),
+        member_name: "Read".to_owned(),
+        value: EnumValue::String("read".to_owned()),
+        numeric_open: false,
+    });
+    let mut map = FxHashMap::default();
+    map.insert(TypeParamId(99), interner.well_known().number);
+    assert_eq!(substitute(&mut interner, member, &map), member);
 }
 
 #[test]

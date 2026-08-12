@@ -1,14 +1,511 @@
 use super::*;
 use crate::class_semantics::Exhaustion;
 use crate::types::repr::{
-    ClassId, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyKey, PropertyType,
-    Visibility, WellKnownSymbol,
+    ClassId, EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType, EnumValue,
+    FunctionType, LiteralValue, ObjectType, ParameterType, PropertyKey, PropertyType, Visibility,
+    WellKnownSymbol,
 };
 use crate::types::Interner;
 use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+fn enum_member(
+    interner: &mut Interner,
+    enum_id: u32,
+    member_id: u32,
+    enum_name: &str,
+    member_name: &str,
+    value: EnumValue,
+    numeric_open: bool,
+) -> TypeId {
+    interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(enum_id),
+        member_id: EnumMemberId(member_id),
+        enum_name: enum_name.to_owned(),
+        member_name: member_name.to_owned(),
+        value,
+        numeric_open,
+    })
+}
+
+fn enum_number(value: f64) -> EnumValue {
+    EnumValue::Number(EnumNumber::new(value).expect("finite enum constant"))
+}
+
+#[test]
+fn enum_relation_matrix_preserves_nominal_and_primitive_boundaries() {
+    let mut interner = Interner::with_intrinsics();
+    let zero = enum_member(
+        &mut interner,
+        1,
+        0,
+        "Numeric",
+        "Zero",
+        enum_number(0.0),
+        false,
+    );
+    let two = enum_member(
+        &mut interner,
+        1,
+        1,
+        "Numeric",
+        "Two",
+        enum_number(2.0),
+        false,
+    );
+    let two_alias = enum_member(
+        &mut interner,
+        1,
+        2,
+        "Numeric",
+        "TwoAlias",
+        enum_number(2.0),
+        false,
+    );
+    let other_zero = enum_member(
+        &mut interner,
+        2,
+        0,
+        "Other",
+        "Zero",
+        enum_number(0.0),
+        false,
+    );
+    let read = enum_member(
+        &mut interner,
+        3,
+        0,
+        "Mode",
+        "Read",
+        EnumValue::String("read".to_owned()),
+        false,
+    );
+    let numeric = interner.intern_enum(EnumType {
+        id: EnumId(1),
+        name: "Numeric".to_owned(),
+        members: vec![
+            EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "Zero".to_owned(),
+                value: enum_number(0.0),
+            },
+            EnumMemberFact {
+                id: EnumMemberId(1),
+                name: "Two".to_owned(),
+                value: enum_number(2.0),
+            },
+        ],
+        numeric_open: false,
+    });
+    let other_numeric = interner.intern_enum(EnumType {
+        id: EnumId(2),
+        name: "Other".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Zero".to_owned(),
+            value: enum_number(0.0),
+        }],
+        numeric_open: false,
+    });
+    let empty_open = interner.intern_enum(EnumType {
+        id: EnumId(4),
+        name: "Empty".to_owned(),
+        members: Vec::new(),
+        numeric_open: true,
+    });
+    let opaque = enum_member(
+        &mut interner,
+        5,
+        0,
+        "Opaque",
+        "Value",
+        EnumValue::OpaqueNumber,
+        true,
+    );
+    let raw_zero = interner.intern_literal(LiteralValue::Number(0.0));
+    let raw_two = interner.intern_literal(LiteralValue::Number(2.0));
+    let raw_three = interner.intern_literal(LiteralValue::Number(3.0));
+    let raw_read = interner.intern_literal(LiteralValue::String("read".to_owned()));
+    let literal_union = interner.union(vec![raw_zero, raw_two]);
+    let member_union = interner.union(vec![zero, two]);
+    let empty_object = interner.intern_object(ObjectType::default());
+    let wk = interner.well_known();
+    let whole_and_number = interner.intersection(vec![numeric, wk.number]);
+    let whole_and_string = interner.intersection(vec![numeric, wk.string]);
+    let member_and_number = interner.intersection(vec![two, wk.number]);
+    let member_and_string = interner.intersection(vec![two, wk.string]);
+    let whole_or_zero = interner.union(vec![numeric, raw_zero]);
+    let member_or_zero = interner.union(vec![zero, raw_zero]);
+    let whole_union_and_number = interner.intersection(vec![whole_or_zero, wk.number]);
+    let member_union_and_number = interner.intersection(vec![member_or_zero, wk.number]);
+    assert_eq!(whole_and_string, wk.never);
+    assert_eq!(member_and_string, wk.never);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    assert!(relater.is_assignable(two, numeric).is_yes());
+    assert!(relater.is_assignable(two, raw_two).is_yes());
+    assert!(relater.is_assignable(numeric, literal_union).is_yes());
+    assert!(relater.is_assignable(literal_union, numeric).is_yes());
+    assert!(relater.is_assignable(numeric, member_union).is_yes());
+    assert!(relater.is_assignable(member_union, numeric).is_yes());
+    assert!(relater.is_assignable(zero, member_union).is_yes());
+    assert!(!relater.is_assignable(numeric, two).is_yes());
+    assert!(relater.is_assignable(two_alias, two).is_yes());
+    assert!(relater.is_assignable(two, two_alias).is_yes());
+    assert!(!relater.is_assignable(other_zero, zero).is_yes());
+    assert!(relater.is_assignable(raw_two, numeric).is_yes());
+    assert!(!relater.is_assignable(raw_three, numeric).is_yes());
+    assert!(relater.is_assignable(wk.number, numeric).is_yes());
+    assert!(relater.is_assignable(wk.number, two).is_yes());
+    assert!(!relater.is_assignable(raw_three, two).is_yes());
+    assert!(relater.is_assignable(raw_three, empty_open).is_yes());
+    assert!(relater.is_assignable(wk.number, empty_open).is_yes());
+    assert!(relater.is_assignable(empty_open, wk.number).is_yes());
+    assert!(relater.is_assignable(raw_three, opaque).is_yes());
+    assert!(relater.is_assignable(wk.number, opaque).is_yes());
+    assert!(relater.is_assignable(read, raw_read).is_yes());
+    assert!(!relater.is_assignable(raw_read, read).is_yes());
+    assert!(relater.is_assignable(read, empty_object).is_yes());
+    assert!(relater.is_assignable(numeric, empty_object).is_yes());
+    assert!(!relater.is_assignable(read, wk.object).is_yes());
+    assert!(relater.is_assignable(numeric, whole_and_number).is_yes());
+    assert!(relater.is_assignable(two, member_and_number).is_yes());
+    assert!(!relater.is_assignable(numeric, whole_and_string).is_yes());
+    assert!(!relater.is_assignable(two, member_and_string).is_yes());
+    assert!(relater.is_assignable(whole_and_number, numeric).is_yes());
+    assert!(relater.is_assignable(whole_and_number, wk.number).is_yes());
+    assert!(!relater.is_assignable(whole_and_number, two).is_yes());
+    assert!(!relater.is_assignable(whole_and_number, other_zero).is_yes());
+    assert!(!relater
+        .is_assignable(whole_and_number, other_numeric)
+        .is_yes());
+    assert!(relater.is_assignable(member_and_number, two).is_yes());
+    assert!(relater.is_assignable(member_and_number, two_alias).is_yes());
+    assert!(!relater
+        .is_assignable(member_and_number, other_zero)
+        .is_yes());
+    assert!(!relater
+        .is_assignable(member_and_number, other_numeric)
+        .is_yes());
+    assert!(!relater.is_assignable(member_and_number, read).is_yes());
+    assert!(!relater.is_assignable(whole_union_and_number, zero).is_yes());
+    assert!(!relater
+        .is_assignable(whole_union_and_number, other_numeric)
+        .is_yes());
+    assert!(relater
+        .is_assignable(member_union_and_number, zero)
+        .is_yes());
+    assert!(relater.is_assignable(whole_and_string, other_zero).is_yes());
+    assert!(relater.is_assignable(member_and_string, read).is_yes());
+}
+
+#[test]
+fn open_enum_remainder_is_absorbed_only_by_its_own_whole_union_arm() {
+    let mut interner = Interner::with_intrinsics();
+    let known = interner.intern_enum(EnumType {
+        id: EnumId(30),
+        name: "Known".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "A".to_owned(),
+            value: enum_number(0.0),
+        }],
+        numeric_open: true,
+    });
+    let opaque = interner.intern_enum(EnumType {
+        id: EnumId(31),
+        name: "Opaque".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "A".to_owned(),
+            value: EnumValue::OpaqueNumber,
+        }],
+        numeric_open: true,
+    });
+    let distinct = interner.intern_enum(EnumType {
+        id: EnumId(32),
+        name: "Distinct".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "A".to_owned(),
+            value: enum_number(0.0),
+        }],
+        numeric_open: true,
+    });
+    let wk = interner.well_known();
+    let known_or_string = interner.union(vec![known, wk.string]);
+    let opaque_or_string = interner.union(vec![opaque, wk.string]);
+    let distinct_or_string = interner.union(vec![distinct, wk.string]);
+    let mut relater = Relater::new(interner.store(), wk);
+
+    assert!(relater.is_assignable(known, known_or_string).is_yes());
+    assert!(relater.is_assignable(opaque, opaque_or_string).is_yes());
+    assert!(!relater.is_assignable(known, distinct_or_string).is_yes());
+    assert!(!relater.is_assignable(opaque, distinct_or_string).is_yes());
+}
+
+#[test]
+fn enum_intersection_relations_are_query_order_independent() {
+    fn outcomes(reverse: bool) -> Vec<bool> {
+        let mut interner = Interner::with_intrinsics();
+        let whole = interner.intern_enum(EnumType {
+            id: EnumId(33),
+            name: "Numeric".to_owned(),
+            members: vec![
+                EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "A".to_owned(),
+                    value: enum_number(0.0),
+                },
+                EnumMemberFact {
+                    id: EnumMemberId(1),
+                    name: "B".to_owned(),
+                    value: enum_number(1.0),
+                },
+            ],
+            numeric_open: false,
+        });
+        let member = interner
+            .store()
+            .enum_member_type_id(EnumId(33), EnumMemberId(0))
+            .expect("enum family publishes its member");
+        let wk = interner.well_known();
+        let whole_and_number = interner.intersection(vec![whole, wk.number]);
+        let member_and_number = interner.intersection(vec![member, wk.number]);
+        let whole_and_string = interner.intersection(vec![whole, wk.string]);
+        let queries = if reverse {
+            [
+                (whole, whole_and_string),
+                (member, member_and_number),
+                (whole, whole_and_number),
+                (whole_and_number, member),
+            ]
+        } else {
+            [
+                (whole_and_number, member),
+                (whole, whole_and_number),
+                (member, member_and_number),
+                (whole, whole_and_string),
+            ]
+        };
+        let mut relater = Relater::new(interner.store(), wk);
+        queries
+            .into_iter()
+            .map(|(source, target)| relater.is_assignable(source, target).is_yes())
+            .collect()
+    }
+
+    assert_eq!(outcomes(false), vec![false, true, true, false]);
+    assert_eq!(outcomes(true), vec![false, true, true, false]);
+}
+
+#[test]
+fn nested_enum_set_intersections_preserve_union_semantics_in_any_query_order() {
+    fn outcomes(reverse_warmup: bool) -> Vec<bool> {
+        let mut interner = Interner::with_intrinsics();
+        let enum_id = EnumId(34);
+        let whole = interner.intern_enum(EnumType {
+            id: enum_id,
+            name: "Numeric".to_owned(),
+            members: vec![
+                EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "A".to_owned(),
+                    value: enum_number(0.0),
+                },
+                EnumMemberFact {
+                    id: EnumMemberId(1),
+                    name: "B".to_owned(),
+                    value: enum_number(1.0),
+                },
+            ],
+            numeric_open: false,
+        });
+        let member = interner
+            .store()
+            .enum_member_type_id(enum_id, EnumMemberId(0))
+            .expect("enum family publishes its member");
+        let other = interner.intern_enum(EnumType {
+            id: EnumId(35),
+            name: "Other".to_owned(),
+            members: vec![EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "A".to_owned(),
+                value: enum_number(0.0),
+            }],
+            numeric_open: false,
+        });
+        let raw_zero = interner.intern_literal(LiteralValue::Number(0.0));
+        let wk = interner.well_known();
+        let whole_or_zero = interner.union(vec![whole, raw_zero]);
+        let member_or_zero = interner.union(vec![member, raw_zero]);
+        let direct_whole = interner.intersection(vec![whole_or_zero, wk.number]);
+        let direct_member = interner.intersection(vec![member_or_zero, wk.number]);
+        let constrained_whole = interner.intersection(vec![whole, wk.number]);
+        let constrained_member = interner.intersection(vec![member, wk.number]);
+        let nested_whole_union = interner.union(vec![constrained_whole, raw_zero]);
+        let nested_member_union = interner.union(vec![constrained_member, raw_zero]);
+        let nested_whole = interner.intersection(vec![nested_whole_union, wk.number]);
+        let nested_member = interner.intersection(vec![nested_member_union, wk.number]);
+        let queries = [
+            (direct_whole, member),
+            (direct_whole, other),
+            (direct_member, member),
+            (nested_whole, member),
+            (nested_member, member),
+        ];
+        let mut relater = Relater::new(interner.store(), wk);
+        if reverse_warmup {
+            for &(source, target) in queries.iter().rev() {
+                let _ = relater.is_assignable(source, target);
+            }
+        }
+        queries
+            .into_iter()
+            .map(|(source, target)| relater.is_assignable(source, target).is_yes())
+            .collect()
+    }
+
+    let expected = vec![false, false, true, false, true];
+    assert_eq!(outcomes(false), expected);
+    assert_eq!(outcomes(true), expected);
+}
+
+#[test]
+fn enum_opaque_members_keep_identity_and_numeric_literal_openness_separate() {
+    let mut interner = Interner::with_intrinsics();
+    let one = enum_member(
+        &mut interner,
+        40,
+        0,
+        "OneOpaque",
+        "Only",
+        EnumValue::OpaqueNumber,
+        true,
+    );
+    let one_whole = interner.intern_enum(EnumType {
+        id: EnumId(40),
+        name: "OneOpaque".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Only".to_owned(),
+            value: EnumValue::OpaqueNumber,
+        }],
+        numeric_open: true,
+    });
+    let first = enum_member(
+        &mut interner,
+        41,
+        0,
+        "TwoOpaque",
+        "First",
+        EnumValue::OpaqueNumber,
+        false,
+    );
+    let second = enum_member(
+        &mut interner,
+        41,
+        1,
+        "TwoOpaque",
+        "Second",
+        EnumValue::OpaqueNumber,
+        false,
+    );
+    let two_whole = interner.intern_enum(EnumType {
+        id: EnumId(41),
+        name: "TwoOpaque".to_owned(),
+        members: vec![
+            EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "First".to_owned(),
+                value: EnumValue::OpaqueNumber,
+            },
+            EnumMemberFact {
+                id: EnumMemberId(1),
+                name: "Second".to_owned(),
+                value: EnumValue::OpaqueNumber,
+            },
+        ],
+        numeric_open: false,
+    });
+    let known_open_member = enum_member(
+        &mut interner,
+        42,
+        0,
+        "KnownOpen",
+        "Zero",
+        enum_number(0.0),
+        true,
+    );
+    let arbitrary = interner.intern_literal(LiteralValue::Number(7.0));
+    let wk = interner.well_known();
+    let mut relater = Relater::new(interner.store(), wk);
+
+    assert!(relater.is_assignable(one_whole, one).is_yes());
+    assert!(!relater.is_assignable(two_whole, first).is_yes());
+    assert!(!relater.is_assignable(two_whole, second).is_yes());
+    assert!(!relater.is_assignable(first, second).is_yes());
+    assert!(relater.is_assignable(arbitrary, one).is_yes());
+    assert!(!relater.is_assignable(arbitrary, known_open_member).is_yes());
+    assert!(relater.is_assignable(wk.number, known_open_member).is_yes());
+}
+
+#[test]
+fn enum_numeric_zero_relation_canonicalizes_negative_zero() {
+    let mut interner = Interner::with_intrinsics();
+    let zero = enum_member(
+        &mut interner,
+        43,
+        0,
+        "Zero",
+        "Value",
+        enum_number(-0.0),
+        false,
+    );
+    let raw_positive = interner.intern_literal(LiteralValue::Number(0.0));
+    let raw_negative = interner.intern_literal(LiteralValue::Number(-0.0));
+    let wk = interner.well_known();
+    let mut relater = Relater::new(interner.store(), wk);
+
+    assert!(relater.is_assignable(raw_positive, zero).is_yes());
+    assert!(relater.is_assignable(raw_negative, zero).is_yes());
+    assert!(relater.is_assignable(zero, raw_positive).is_yes());
+    assert!(relater.is_assignable(zero, raw_negative).is_yes());
+}
+
+#[test]
+fn enum_relation_cache_is_directional_and_query_order_independent() {
+    fn outcomes(reverse: bool) -> Vec<bool> {
+        let mut interner = Interner::with_intrinsics();
+        let member = enum_member(
+            &mut interner,
+            10,
+            0,
+            "Numeric",
+            "One",
+            enum_number(1.0),
+            false,
+        );
+        let raw = interner.intern_literal(LiteralValue::Number(1.0));
+        let string = interner.intern_literal(LiteralValue::String("1".to_owned()));
+        let wk = interner.well_known();
+        let mut relater = Relater::new(interner.store(), wk);
+        let queries = if reverse {
+            [(raw, member), (member, raw), (string, member)]
+        } else {
+            [(string, member), (member, raw), (raw, member)]
+        };
+        queries
+            .into_iter()
+            .map(|(source, target)| relater.is_assignable(source, target).is_yes())
+            .collect()
+    }
+
+    assert_eq!(outcomes(false), vec![false, true, true]);
+    assert_eq!(outcomes(true), vec![true, true, false]);
 }
 
 #[test]

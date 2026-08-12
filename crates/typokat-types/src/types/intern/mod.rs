@@ -14,8 +14,9 @@ pub use declared::DeclaredMaterializationError;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, IntrinsicKind, LiteralValue, MappedType,
-    ObjectType, ParameterType, PropertyType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
+    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumMemberType, EnumType, IntrinsicKind,
+    LiteralValue, MappedType, ObjectType, ParameterType, PropertyType, TypeFlags, TypeParamId,
+    TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1130,6 +1131,91 @@ impl Interner {
             return existing;
         }
         let id = self.store.push_literal(value, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern one complete enum family. Callers construct the canonical declaration-
+    /// order member list once, after initializer analysis is complete.
+    pub fn intern_enum(&mut self, enum_type: EnumType) -> TypeId {
+        if let Some(existing) = self.store.enum_whole_type_id(enum_type.id) {
+            let current = self
+                .store
+                .enum_type(existing)
+                .expect("enum identity lookup points to a whole enum");
+            assert!(
+                current == &enum_type,
+                "one EnumId cannot acquire a different canonical family"
+            );
+            return existing;
+        }
+
+        let mut member_ids = FxHashSet::default();
+        for member in &enum_type.members {
+            assert!(
+                member_ids.insert(member.id),
+                "one enum family cannot repeat an EnumMemberId"
+            );
+            self.intern_enum_member(EnumMemberType {
+                enum_id: enum_type.id,
+                member_id: member.id,
+                enum_name: enum_type.name.clone(),
+                member_name: member.name.clone(),
+                value: member.value.clone(),
+                numeric_open: enum_type.numeric_open,
+            });
+        }
+
+        let key = StructuralKey::Enum(&enum_type);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.enum_type(id).is_some_and(|existing| {
+                existing.id == enum_type.id
+                    && existing.numeric_open == enum_type.numeric_open
+                    && existing.members.len() == enum_type.members.len()
+                    && existing
+                        .members
+                        .iter()
+                        .zip(&enum_type.members)
+                        .all(|(left, right)| left.id == right.id && left.value == right.value)
+            })
+        }) {
+            return existing;
+        }
+        let id = self.store.push_enum(enum_type, TypeFlags::EMPTY);
+        self.dedup.entry(hash).or_default().push(id);
+        id
+    }
+
+    /// Intern one exact nominal enum member.
+    pub fn intern_enum_member(&mut self, member: EnumMemberType) -> TypeId {
+        if let Some(existing) = self
+            .store
+            .enum_member_type_id(member.enum_id, member.member_id)
+        {
+            let current = self
+                .store
+                .enum_member_type(existing)
+                .expect("enum-member identity lookup points to an enum member");
+            assert!(
+                current == &member,
+                "one enum-member identity cannot acquire different primitive facts"
+            );
+            return existing;
+        }
+        let key = StructuralKey::EnumMember(&member);
+        let hash = structural_hash(&key);
+        if let Some(existing) = self.lookup(hash, |store, id| {
+            store.enum_member_type(id).is_some_and(|existing| {
+                existing.enum_id == member.enum_id
+                    && existing.member_id == member.member_id
+                    && existing.value == member.value
+                    && existing.numeric_open == member.numeric_open
+            })
+        }) {
+            return existing;
+        }
+        let id = self.store.push_enum_member(member, TypeFlags::EMPTY);
         self.dedup.entry(hash).or_default().push(id);
         id
     }

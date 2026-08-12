@@ -2576,6 +2576,8 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             }
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::Enum
+            | TypeTag::EnumMember
             | TypeTag::TypeParam
             | TypeTag::Infer
             | TypeTag::MappedValue
@@ -3386,7 +3388,12 @@ fn query_children(store: &Store, ty: TypeId) -> Vec<TypeId> {
         TypeTag::Declared => store.declared_type(ty).map_or_else(Vec::new, |declared| {
             declared.mapper.iter().map(|(_, value)| *value).collect()
         }),
-        TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => Vec::new(),
+        TypeTag::Intrinsic
+        | TypeTag::Literal
+        | TypeTag::Enum
+        | TypeTag::EnumMember
+        | TypeTag::Infer
+        | TypeTag::MappedValue => Vec::new(),
     }
 }
 

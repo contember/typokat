@@ -360,7 +360,12 @@ fn free_type_params(store: &Store, root: TypeId) -> FxHashSet<TypeParamId> {
                     visit(store, *value, bound, free, seen);
                 }
             }
-            TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+            TypeTag::Intrinsic
+            | TypeTag::Literal
+            | TypeTag::Enum
+            | TypeTag::EnumMember
+            | TypeTag::Infer
+            | TypeTag::MappedValue => {}
         }
     }
 

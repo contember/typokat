@@ -97,7 +97,8 @@ use crate::types::repr::ClassId;
 use crate::types::repr::TypeParamId;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::types::repr::{
-    IntrinsicKind, LiteralValue, ModifierOp, PropertyKey, TypeTag, Visibility, WellKnownSymbol,
+    EnumValue, IntrinsicKind, LiteralValue, ModifierOp, PropertyKey, TypeTag, Visibility,
+    WellKnownSymbol,
 };
 use crate::types::repr::{ObjectType, PropertyType};
 #[cfg(any(test, feature = "test-utils"))]
@@ -4246,6 +4247,31 @@ fn encode_store_row(
                 bytes.byte(well_known_symbol_code(*symbol));
             }
         },
+        TypeTag::Enum => {
+            let enum_type = store.enum_type(id).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection("missing enum payload".to_owned())
+            })?;
+            bytes.u32(enum_type.id.0);
+            bytes.string(&enum_type.name)?;
+            bytes.bool(enum_type.numeric_open);
+            bytes.usize(enum_type.members.len())?;
+            for member in &enum_type.members {
+                bytes.u32(member.id.0);
+                bytes.string(&member.name)?;
+                encode_enum_value(bytes, &member.value)?;
+            }
+        }
+        TypeTag::EnumMember => {
+            let member = store.enum_member_type(id).ok_or_else(|| {
+                InjectedProfileError::CanonicalProjection("missing enum-member payload".to_owned())
+            })?;
+            bytes.u32(member.enum_id.0);
+            bytes.u32(member.member_id.0);
+            bytes.string(&member.enum_name)?;
+            bytes.string(&member.member_name)?;
+            encode_enum_value(bytes, &member.value)?;
+            bytes.bool(member.numeric_open);
+        }
         TypeTag::Object => {
             let object = store.object_type(id).ok_or_else(|| {
                 InjectedProfileError::CanonicalProjection("missing object payload".to_owned())
@@ -4411,6 +4437,25 @@ fn encode_store_row(
     bytes.bool(store.template_name(id).is_some());
     if let Some(name) = store.template_name(id) {
         bytes.string(name)?;
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn encode_enum_value(
+    bytes: &mut CanonicalBytes,
+    value: &EnumValue,
+) -> Result<(), InjectedProfileError> {
+    match value {
+        EnumValue::Number(value) => {
+            bytes.byte(0);
+            bytes.u64(value.canonical_bits());
+        }
+        EnumValue::String(value) => {
+            bytes.byte(1);
+            bytes.string(value)?;
+        }
+        EnumValue::OpaqueNumber => bytes.byte(2),
     }
     Ok(())
 }

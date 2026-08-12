@@ -10,7 +10,10 @@ mod set_types;
 
 use crate::class_semantics::Exhaustion;
 use crate::relate::cache::{RelationCache, RelationKey};
-use crate::types::repr::{GenericTypeParam, IntrinsicKind, PropertyKey, TypeParamId, TypeTag};
+use crate::types::repr::{
+    EnumMemberFact, EnumMemberType, EnumNumber, EnumType, EnumValue, GenericTypeParam,
+    IntrinsicKind, LiteralValue, PropertyKey, TypeParamId, TypeTag,
+};
 use crate::types::store::{Store, TypeId};
 use crate::types::{DerivedType, WellKnown};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1388,6 +1391,28 @@ impl<'a> Relater<'a> {
             return Relation::No(ReasonChain::leaf(src, tgt));
         }
 
+        // Enum identity and primitive facts are native relation rules. This precedes
+        // union dispatch because a whole enum is semantically a closed member family,
+        // not an ordinary arena union; each member fact must fit the union target.
+        let enum_involved = matches!(self.store.tag(src), TypeTag::Enum | TypeTag::EnumMember)
+            || matches!(self.store.tag(tgt), TypeTag::Enum | TypeTag::EnumMember);
+        if enum_involved && self.store.tag(src) == TypeTag::Union {
+            return self.relate_union_source(src, tgt, kind, assumed);
+        }
+        if enum_involved && self.store.tag(tgt) == TypeTag::Intersection {
+            return self.relate_intersection_target(src, tgt, kind, assumed);
+        }
+        if enum_involved && self.store.tag(src) == TypeTag::Intersection {
+            return self.relate_intersection_source(src, tgt, kind, assumed);
+        }
+        if enum_involved {
+            return if self.enum_assignable(src, tgt) {
+                Relation::Yes
+            } else {
+                Relation::No(ReasonChain::leaf(src, tgt))
+            };
+        }
+
         if self.store.tag(src) == TypeTag::Union {
             return self.relate_union_source(src, tgt, kind, assumed);
         }
@@ -1588,6 +1613,189 @@ impl<'a> Relater<'a> {
             && self.store.intrinsic_kind(id) == Some(IntrinsicKind::Any)
     }
 
+    fn enum_assignable(&self, src: TypeId, tgt: TypeId) -> bool {
+        let source_enum = self.store.enum_type(src);
+        let source_member = self.store.enum_member_type(src);
+
+        if let Some(targets) = self.store.union_members(tgt) {
+            if let Some(source_enum) = source_enum {
+                if source_enum.numeric_open
+                    && !targets.iter().any(|target| {
+                        self.store
+                            .enum_type(*target)
+                            .is_some_and(|target| target.id == source_enum.id)
+                            || self.target_accepts_numeric_enum_remainder(*target)
+                    })
+                {
+                    return false;
+                }
+                return source_enum.members.iter().all(|member| {
+                    targets.iter().any(|target| {
+                        self.enum_fact_assignable_to_target(source_enum, member, *target)
+                    })
+                });
+            }
+            if source_member.is_some() {
+                return targets
+                    .iter()
+                    .any(|target| self.enum_assignable(src, *target));
+            }
+        }
+
+        let target_enum = self.store.enum_type(tgt);
+        let target_member = self.store.enum_member_type(tgt);
+
+        if let Some(target_enum) = target_enum {
+            if let Some(source_member) = source_member {
+                return source_member.enum_id == target_enum.id;
+            }
+            if source_enum.is_some() {
+                // Whole-enum identity was handled by the TypeId fast path. A distinct
+                // declaration family is nominally incompatible regardless of values.
+                return false;
+            }
+            return self.raw_source_assignable_to_enum(src, target_enum);
+        }
+
+        if let Some(target_member) = target_member {
+            if let Some(source_member) = source_member {
+                return enum_members_are_compatible(source_member, target_member);
+            }
+            if let Some(source_enum) = source_enum {
+                if source_enum.id != target_member.enum_id || source_enum.members.is_empty() {
+                    return false;
+                }
+                if source_enum.members.len() == 1 {
+                    return enum_fact_matches_member(&source_enum.members[0], target_member);
+                }
+                return !source_enum.numeric_open
+                    && source_enum
+                        .members
+                        .iter()
+                        .all(|member| enum_fact_matches_member(member, target_member));
+            }
+            return self.raw_source_assignable_to_member(src, target_member);
+        }
+
+        if let Some(source_member) = source_member {
+            if self.is_empty_structural_object(tgt) {
+                return true;
+            }
+            return self.enum_value_assignable_to_target(&source_member.value, tgt);
+        }
+        if let Some(source_enum) = source_enum {
+            if self.is_empty_structural_object(tgt) {
+                return true;
+            }
+            if source_enum.members.is_empty() {
+                return source_enum.numeric_open && self.target_accepts_numeric_enum_remainder(tgt);
+            }
+            if source_enum.numeric_open && !self.target_accepts_numeric_enum_remainder(tgt) {
+                return false;
+            }
+            return source_enum
+                .members
+                .iter()
+                .all(|member| self.enum_value_assignable_to_target(&member.value, tgt));
+        }
+        false
+    }
+
+    fn raw_source_assignable_to_enum(&self, src: TypeId, target: &EnumType) -> bool {
+        if src == self.well_known.number {
+            return target.numeric_open || target.has_numeric_member();
+        }
+        let Some(LiteralValue::Number(source)) = self.store.literal_value(src) else {
+            return false;
+        };
+        target.numeric_open
+            || target.members.iter().any(
+                |member| matches!(member.value, EnumValue::Number(value) if enum_number_matches_literal(value, *source)),
+            )
+    }
+
+    fn raw_source_assignable_to_member(&self, src: TypeId, target: &EnumMemberType) -> bool {
+        if src == self.well_known.number {
+            return target.value.is_numeric();
+        }
+        let Some(LiteralValue::Number(source)) = self.store.literal_value(src) else {
+            return false;
+        };
+        match target.value {
+            EnumValue::Number(value) => enum_number_matches_literal(value, *source),
+            EnumValue::OpaqueNumber => source.is_finite(),
+            EnumValue::String(_) => false,
+        }
+    }
+
+    fn enum_fact_assignable_to_target(
+        &self,
+        source_enum: &EnumType,
+        source: &EnumMemberFact,
+        tgt: TypeId,
+    ) -> bool {
+        if self
+            .store
+            .enum_type(tgt)
+            .is_some_and(|target| target.id == source_enum.id)
+        {
+            return true;
+        }
+        if let Some(target) = self.store.enum_member_type(tgt) {
+            return target.enum_id == source_enum.id && enum_fact_matches_member(source, target);
+        }
+        self.enum_value_assignable_to_target(&source.value, tgt)
+    }
+
+    fn enum_value_assignable_to_target(&self, value: &EnumValue, tgt: TypeId) -> bool {
+        if tgt == self.well_known.unknown || tgt == self.well_known.any {
+            return true;
+        }
+        if let Some(members) = self.store.union_members(tgt) {
+            return members
+                .iter()
+                .any(|member| self.enum_value_assignable_to_target(value, *member));
+        }
+        match value {
+            EnumValue::Number(source) => {
+                tgt == self.well_known.number
+                    || matches!(
+                        self.store.literal_value(tgt),
+                        Some(LiteralValue::Number(target)) if enum_number_matches_literal(*source, *target)
+                    )
+            }
+            EnumValue::String(source) => {
+                tgt == self.well_known.string
+                    || matches!(
+                        self.store.literal_value(tgt),
+                        Some(LiteralValue::String(target)) if source == target
+                    )
+            }
+            EnumValue::OpaqueNumber => tgt == self.well_known.number,
+        }
+    }
+
+    fn target_accepts_numeric_enum_remainder(&self, tgt: TypeId) -> bool {
+        tgt == self.well_known.number
+            || tgt == self.well_known.unknown
+            || tgt == self.well_known.any
+            || self.store.union_members(tgt).is_some_and(|members| {
+                members
+                    .iter()
+                    .any(|member| self.target_accepts_numeric_enum_remainder(*member))
+            })
+    }
+
+    fn is_empty_structural_object(&self, ty: TypeId) -> bool {
+        self.store.object_type(ty).is_some_and(|object| {
+            object.properties.is_empty()
+                && object.string_index.is_none()
+                && object.number_index.is_none()
+                && object.call_signatures.is_empty()
+                && object.construct_signatures.is_empty()
+        })
+    }
+
     fn is_error_type(&self, id: TypeId) -> bool {
         if id == self.well_known.error {
             return true;
@@ -1646,6 +1854,31 @@ impl<'a> Relater<'a> {
             IntrinsicKind::Symbol => wk.symbol,
         }
     }
+}
+
+fn enum_members_are_compatible(source: &EnumMemberType, target: &EnumMemberType) -> bool {
+    source.enum_id == target.enum_id
+        && match (&source.value, &target.value) {
+            (EnumValue::Number(left), EnumValue::Number(right)) => left == right,
+            (EnumValue::String(left), EnumValue::String(right)) => left == right,
+            (EnumValue::OpaqueNumber, EnumValue::OpaqueNumber) => {
+                source.member_id == target.member_id
+            }
+            _ => false,
+        }
+}
+
+fn enum_fact_matches_member(source: &EnumMemberFact, target: &EnumMemberType) -> bool {
+    match (&source.value, &target.value) {
+        (EnumValue::Number(left), EnumValue::Number(right)) => left == right,
+        (EnumValue::String(left), EnumValue::String(right)) => left == right,
+        (EnumValue::OpaqueNumber, EnumValue::OpaqueNumber) => source.id == target.member_id,
+        _ => false,
+    }
+}
+
+fn enum_number_matches_literal(enum_number: EnumNumber, literal: f64) -> bool {
+    EnumNumber::new(literal).is_some_and(|literal| enum_number == literal)
 }
 
 #[cfg(test)]

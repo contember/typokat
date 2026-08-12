@@ -522,10 +522,13 @@ impl<'a> ConditionalEvaluator<'a> {
     /// own single member (evaluated once).
     pub(super) fn distribute_members(&mut self, ty: TypeId) -> Vec<TypeId> {
         let wk = self.interner.well_known();
-        let raw: Vec<TypeId> = match self.interner.store().union_members(ty) {
-            Some(members) => members.to_vec(),
-            None => vec![ty],
-        };
+        let raw: Vec<TypeId> = self
+            .interner
+            .store()
+            .union_members(ty)
+            .map(<[TypeId]>::to_vec)
+            .or_else(|| self.interner.store().closed_enum_member_types(ty))
+            .unwrap_or_else(|| vec![ty]);
         let mut out: Vec<TypeId> = Vec::with_capacity(raw.len());
         for m in raw {
             if m == wk.never {
@@ -678,6 +681,8 @@ impl<'a> ConditionalEvaluator<'a> {
             // value placeholder (M26) carries no conditional infer binder — all opaque.
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::Enum
+            | TypeTag::EnumMember
             | TypeTag::TypeParam
             | TypeTag::Conditional
             | TypeTag::Mapped

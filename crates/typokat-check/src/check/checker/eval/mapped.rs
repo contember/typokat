@@ -936,6 +936,8 @@ impl<'a> ConditionalEvaluator<'a> {
             TypeTag::MappedValue => identity(value),
             TypeTag::Intrinsic
             | TypeTag::Literal
+            | TypeTag::Enum
+            | TypeTag::EnumMember
             | TypeTag::TypeParam
             | TypeTag::Infer
             | TypeTag::Declared => identity(ty),

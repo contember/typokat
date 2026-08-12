@@ -128,6 +128,8 @@ impl<'a> Relater<'a> {
                 // its own infer binders), and a mapped-value placeholder is not an infer.
                 TypeTag::Intrinsic
                 | TypeTag::Literal
+                | TypeTag::Enum
+                | TypeTag::EnumMember
                 | TypeTag::TypeParam
                 | TypeTag::Conditional
                 | TypeTag::Mapped

@@ -1189,6 +1189,9 @@ pub(in crate::check::checker) fn declared_from_init(
 /// (tsc's `getWidenedLiteralType` maps over constituents), so `let x = c ? 1 : 2` is
 /// `number` and a later `x = 3` stays legal.
 fn widen_declared_literals(interner: &mut Interner, ty: TypeId) -> TypeId {
+    if let Some(whole) = interner.store().enum_member_whole_type_id(ty) {
+        return whole;
+    }
     if let Some(lit) = interner.store().literal_value(ty) {
         return intrinsic_id(interner.well_known(), lit.base_kind());
     }
@@ -1222,4 +1225,44 @@ pub(in crate::check::checker) fn binding_decl_id(
     };
     let symbol_id = binder.resolve_value(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.value)
+}
+
+#[cfg(test)]
+mod enum_widen_tests {
+    use super::*;
+    use crate::check::checker::calls::widen;
+    use crate::types::repr::{
+        EnumId, EnumMemberFact, EnumMemberId, EnumNumber, EnumType, EnumValue,
+    };
+
+    #[test]
+    fn mutable_bindings_and_expression_widening_use_the_owning_enum() {
+        let mut interner = Interner::with_intrinsics();
+        let enum_id = EnumId(90_001);
+        let member_id = EnumMemberId(0);
+        let whole = interner.intern_enum(EnumType {
+            id: enum_id,
+            name: "Mode".to_owned(),
+            members: vec![EnumMemberFact {
+                id: member_id,
+                name: "Read".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+            }],
+            numeric_open: false,
+        });
+        let member = interner
+            .store()
+            .enum_member_type_id(enum_id, member_id)
+            .expect("interning the family publishes its exact member");
+
+        assert_eq!(
+            declared_from_init(&mut interner, VariableDeclarationKind::Let, member),
+            whole
+        );
+        assert_eq!(
+            declared_from_init(&mut interner, VariableDeclarationKind::Const, member),
+            member
+        );
+        assert_eq!(widen(&mut interner, member), whole);
+    }
 }

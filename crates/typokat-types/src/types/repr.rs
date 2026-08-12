@@ -102,6 +102,13 @@ pub enum TypeTag {
     /// An AST-free declaration annotation recipe plus its canonical mapper.
     /// Materialization happens only at the semantic-query demand boundary.
     Declared = 19,
+    /// One complete enum declaration family. `payload` indexes `Store::enums`.
+    /// Identity includes a stable [`EnumId`] and the family's canonical member facts.
+    Enum = 20,
+    /// One nominal enum member. `payload` indexes `Store::enum_members`.
+    /// The member retains its declaration identity even when another member has the
+    /// same primitive value.
+    EnumMember = 21,
 }
 
 impl TypeTag {
@@ -127,6 +134,8 @@ impl TypeTag {
             TypeTag::ClassInstance => 17,
             TypeTag::DeferredIndexedAccess => 18,
             TypeTag::Declared => 19,
+            TypeTag::Enum => 20,
+            TypeTag::EnumMember => 21,
         }
     }
 }
@@ -286,6 +295,155 @@ impl ClassId {
         self.0 as usize
     }
 }
+
+/// Stable identity for one canonical enum declaration group.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct EnumId(pub u32);
+
+impl EnumId {
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Stable identity for one member declaration within an enum group.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub struct EnumMemberId(pub u32);
+
+/// A finite numeric enum constant. Construction canonicalizes signed zero so the
+/// identity follows JavaScript/TypeScript numeric equality and remains hash-safe.
+#[derive(Copy, Clone, Debug)]
+pub struct EnumNumber(f64);
+
+impl EnumNumber {
+    pub fn new(value: f64) -> Option<Self> {
+        value
+            .is_finite()
+            .then_some(Self(if value == 0.0 { 0.0 } else { value }))
+    }
+
+    pub fn get(self) -> f64 {
+        self.0
+    }
+
+    pub fn canonical_bits(self) -> u64 {
+        self.0.to_bits()
+    }
+}
+
+impl PartialEq for EnumNumber {
+    fn eq(&self, other: &Self) -> bool {
+        self.canonical_bits() == other.canonical_bits()
+    }
+}
+
+impl Eq for EnumNumber {}
+
+/// The primitive fact retained by an enum member.
+#[derive(Clone, Debug)]
+pub enum EnumValue {
+    Number(EnumNumber),
+    String(String),
+    /// A computed or ambient numeric value whose exact value is unavailable.
+    OpaqueNumber,
+}
+
+impl PartialEq for EnumValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (EnumValue::Number(left), EnumValue::Number(right)) => left == right,
+            (EnumValue::String(left), EnumValue::String(right)) => left == right,
+            (EnumValue::OpaqueNumber, EnumValue::OpaqueNumber) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for EnumValue {}
+
+impl EnumValue {
+    pub fn base_kind(&self) -> IntrinsicKind {
+        match self {
+            EnumValue::Number(_) | EnumValue::OpaqueNumber => IntrinsicKind::Number,
+            EnumValue::String(_) => IntrinsicKind::String,
+        }
+    }
+
+    pub fn is_numeric(&self) -> bool {
+        matches!(self, EnumValue::Number(_) | EnumValue::OpaqueNumber)
+    }
+}
+
+/// Canonical declaration fact for a member of a whole enum type.
+#[derive(Clone, Debug)]
+pub struct EnumMemberFact {
+    pub id: EnumMemberId,
+    /// Source member spelling used only for stable diagnostic rendering.
+    pub name: String,
+    pub value: EnumValue,
+}
+
+impl PartialEq for EnumMemberFact {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.value == other.value
+    }
+}
+
+impl Eq for EnumMemberFact {}
+
+/// Identity and closed primitive facts for one whole enum type.
+#[derive(Clone, Debug)]
+pub struct EnumType {
+    pub id: EnumId,
+    /// Source enum spelling used only for stable diagnostic rendering.
+    pub name: String,
+    /// Declaration-order facts across every admitted merged declaration.
+    pub members: Vec<EnumMemberFact>,
+    /// Whether an arbitrary numeric value may inhabit the enum. Empty, ambient,
+    /// and opaque-computed numeric enums set this explicitly.
+    pub numeric_open: bool,
+}
+
+impl PartialEq for EnumType {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.members == other.members
+            && self.numeric_open == other.numeric_open
+    }
+}
+
+impl Eq for EnumType {}
+
+impl EnumType {
+    pub fn has_numeric_member(&self) -> bool {
+        self.members.iter().any(|member| member.value.is_numeric())
+    }
+}
+
+/// Identity and primitive fact for one exact enum member type.
+#[derive(Clone, Debug)]
+pub struct EnumMemberType {
+    pub enum_id: EnumId,
+    pub member_id: EnumMemberId,
+    /// Source spellings used only for stable diagnostic rendering.
+    pub enum_name: String,
+    pub member_name: String,
+    pub value: EnumValue,
+    /// Mirrors the owning enum's numeric openness for raw-number compatibility.
+    pub numeric_open: bool,
+}
+
+impl PartialEq for EnumMemberType {
+    fn eq(&self, other: &Self) -> bool {
+        self.enum_id == other.enum_id
+            && self.member_id == other.member_id
+            && self.value == other.value
+            && self.numeric_open == other.numeric_open
+    }
+}
+
+impl Eq for EnumMemberType {}
 
 /// Class-member access modifier (M13). Together with
 /// [`PropertyType::declaring_class`], it is property identity and drives both
@@ -978,7 +1136,8 @@ pub struct MappedType {
 #[cfg(test)]
 mod tests {
     use super::{
-        decimal_number_to_string, number_to_string, PropertyKey, TypeTag, WellKnownSymbol,
+        decimal_number_to_string, number_to_string, EnumNumber, PropertyKey, TypeTag,
+        WellKnownSymbol,
     };
 
     #[test]
@@ -1052,11 +1211,25 @@ mod tests {
             TypeTag::Keyof,
             TypeTag::ClassInstance,
             TypeTag::DeferredIndexedAccess,
+            TypeTag::Declared,
+            TypeTag::Enum,
+            TypeTag::EnumMember,
         ];
         assert_eq!(
             tags.map(TypeTag::discriminant),
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,]
         );
+    }
+
+    #[test]
+    fn enum_numbers_are_finite_and_canonicalize_signed_zero() {
+        let positive_zero = EnumNumber::new(0.0).expect("finite zero");
+        let negative_zero = EnumNumber::new(-0.0).expect("finite zero");
+        assert_eq!(positive_zero, negative_zero);
+        assert_eq!(positive_zero.canonical_bits(), 0.0_f64.to_bits());
+        assert!(EnumNumber::new(f64::NAN).is_none());
+        assert!(EnumNumber::new(f64::INFINITY).is_none());
+        assert!(EnumNumber::new(f64::NEG_INFINITY).is_none());
     }
 
     /// ECMAScript Number::toString uses different fixed/exponential thresholds than

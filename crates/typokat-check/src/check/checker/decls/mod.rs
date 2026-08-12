@@ -193,7 +193,12 @@ impl ObjectAliasCanonicalizationGraph {
 
 fn for_each_object_alias_type_operand(store: &Store, owner: TypeId, mut visit: impl FnMut(TypeId)) {
     match store.tag(owner) {
-        TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+        TypeTag::Intrinsic
+        | TypeTag::Literal
+        | TypeTag::Enum
+        | TypeTag::EnumMember
+        | TypeTag::Infer
+        | TypeTag::MappedValue => {}
         TypeTag::Object => {
             let object = store.object_type(owner).expect("object payload");
             for property in &object.properties {

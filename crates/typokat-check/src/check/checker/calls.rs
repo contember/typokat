@@ -3171,6 +3171,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     fn call_source_is_concrete_non_nullish(&self, source: TypeId) -> bool {
         match self.interner.store().tag(source) {
             TypeTag::Literal
+            | TypeTag::Enum
+            | TypeTag::EnumMember
             | TypeTag::Object
             | TypeTag::Function
             | TypeTag::Array
@@ -5201,6 +5203,9 @@ fn parameter_from_shape(
 /// Widen a type: a literal widens to its base intrinsic (`1` → `number`); every
 /// other type passes through unchanged.
 pub(in crate::check::checker) fn widen(interner: &mut Interner, ty: TypeId) -> TypeId {
+    if let Some(whole) = interner.store().enum_member_whole_type_id(ty) {
+        return whole;
+    }
     match interner.store().literal_value(ty) {
         Some(lit) => intrinsic_id(interner.well_known(), lit.base_kind()),
         None => ty,

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 codespan-reporting.workspace = true
+oxc_syntax.workspace = true
 rustc-hash.workspace = true
 typokat-binder.workspace = true
 typokat-core.workspace = true

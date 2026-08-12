@@ -420,6 +420,8 @@ fn push_node_children(
         TypeTag::Declared => {}
         TypeTag::Intrinsic
         | TypeTag::Literal
+        | TypeTag::Enum
+        | TypeTag::EnumMember
         | TypeTag::TypeParam
         | TypeTag::Infer
         | TypeTag::MappedValue => {}

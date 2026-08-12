@@ -197,6 +197,26 @@ impl<'a> Relater<'a> {
                     .is_none()
             })
             .collect();
+        if matches!(self.store.tag(tgt), TypeTag::Enum | TypeTag::EnumMember) {
+            let enum_conjuncts: Vec<TypeId> = members
+                .iter()
+                .copied()
+                .filter(|member| set_type_contains_enum(self.store, *member))
+                .collect();
+            if !enum_conjuncts.is_empty() {
+                for member in enum_conjuncts {
+                    let mut member_assumed: AssumedSet = FxHashSet::default();
+                    if self
+                        .relate(member, tgt, kind, &mut member_assumed, false)
+                        .is_yes()
+                    {
+                        assumed.extend(member_assumed);
+                        return Relation::Yes;
+                    }
+                }
+                return Relation::No(ReasonChain::leaf(src, tgt));
+            }
+        }
         // A normalized union conjunct denotes a union of merged intersections. The
         // object collector below cannot silently drop it: that could accept an
         // optional target even though one union arm contributes a conflicting present
@@ -213,4 +233,31 @@ impl<'a> Relater<'a> {
         let mut in_flight: MergedInFlightSet = FxHashSet::default();
         self.relate_source_members_to(src, &members, tgt, kind, assumed, &mut in_flight)
     }
+}
+
+/// Whether a set-type constituent contains nominal enum identity. The enclosing set
+/// node remains intact for relation so its AND/OR semantics decide the verdict.
+fn set_type_contains_enum(store: &Store, root: TypeId) -> bool {
+    let mut pending = vec![root];
+    let mut visited = FxHashSet::default();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty) {
+            continue;
+        }
+        match store.tag(ty) {
+            TypeTag::Enum | TypeTag::EnumMember => return true,
+            TypeTag::Union => {
+                if let Some(members) = store.union_members(ty) {
+                    pending.extend(members.iter().copied());
+                }
+            }
+            TypeTag::Intersection => {
+                if let Some(members) = store.intersection_members(ty) {
+                    pending.extend(members.iter().copied());
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }

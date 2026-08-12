@@ -386,6 +386,8 @@ fn literal_could_equal_property(
             .is_none_or(|operand| literal_could_equal_property(store, literal, operand, wk)),
         TypeTag::Object | TypeTag::Function | TypeTag::Array | TypeTag::Tuple => false,
         TypeTag::TypeParam
+        | TypeTag::Enum
+        | TypeTag::EnumMember
         | TypeTag::Template
         | TypeTag::Conditional
         | TypeTag::Instantiation
@@ -654,6 +656,8 @@ fn member_matches_typeof(
         | TypeTag::Keyof
         | TypeTag::DeferredIndexedAccess
         | TypeTag::Declared => false,
+        | TypeTag::Enum
+        | TypeTag::EnumMember => false,
     }
 }
 

@@ -30,6 +30,32 @@ fn disjoint_domain(store: &Store, ty: TypeId) -> Option<DisjointDomain> {
         Some(IntrinsicKind::Symbol) => DisjointDomain::Symbol,
         Some(IntrinsicKind::Object) => DisjointDomain::NonPrimitive,
         Some(_) | None => {
+            if let Some(enum_type) = store.enum_type(ty) {
+                let has_number = enum_type.numeric_open
+                    || enum_type.members.iter().any(|member| {
+                        matches!(
+                            member.value,
+                            crate::types::repr::EnumValue::Number(_)
+                                | crate::types::repr::EnumValue::OpaqueNumber
+                        )
+                    });
+                let has_string = enum_type
+                    .members
+                    .iter()
+                    .any(|member| matches!(member.value, crate::types::repr::EnumValue::String(_)));
+                return match (has_number, has_string) {
+                    (true, false) => Some(DisjointDomain::Number),
+                    (false, true) => Some(DisjointDomain::String),
+                    _ => None,
+                };
+            }
+            if let Some(member) = store.enum_member_type(ty) {
+                return Some(match member.value {
+                    crate::types::repr::EnumValue::Number(_)
+                    | crate::types::repr::EnumValue::OpaqueNumber => DisjointDomain::Number,
+                    crate::types::repr::EnumValue::String(_) => DisjointDomain::String,
+                });
+            }
             return store.literal_value(ty).map(|literal| match literal {
                 LiteralValue::Boolean(_) => DisjointDomain::Boolean,
                 LiteralValue::Number(_) => DisjointDomain::Number,
@@ -66,8 +92,19 @@ fn definitely_disjoint(store: &Store, left: TypeId, right: TypeId) -> bool {
 
     match (store.literal_value(left), store.literal_value(right)) {
         (Some(left), Some(right)) => left != right,
-        _ => false,
+        _ => enum_string_member_and_literal_are_disjoint(store, left, right),
     }
+}
+
+fn enum_string_member_and_literal_are_disjoint(store: &Store, left: TypeId, right: TypeId) -> bool {
+    let member_and_literal = |member: TypeId, literal: TypeId| {
+        let is_string_enum = matches!(
+            store.enum_member_type(member).map(|member| &member.value),
+            Some(crate::types::repr::EnumValue::String(_))
+        ) || store.enum_type(member).is_some();
+        is_string_enum && matches!(store.literal_value(literal), Some(LiteralValue::String(_)))
+    };
+    member_and_literal(left, right) || member_and_literal(right, left)
 }
 
 fn has_definitely_disjoint_members(store: &Store, members: &[TypeId]) -> bool {

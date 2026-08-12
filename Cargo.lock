@@ -1149,6 +1149,7 @@ name = "typokat-diagnostics"
 version = "0.1.0"
 dependencies = [
  "codespan-reporting",
+ "oxc_syntax",
  "rustc-hash",
  "typokat-binder",
  "typokat-core",

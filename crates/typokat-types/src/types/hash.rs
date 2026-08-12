@@ -4,8 +4,9 @@
 //! cross-run content hash slot and deliberately returns a zero digest today.
 
 use crate::types::repr::{
-    ClassId, DeclaredRecipeId, GenericTypeParam, IntrinsicKind, LiteralValue, ModifierOp,
-    ParameterType, PropertyType, TupleType, TypeParamId, TypeTag,
+    ClassId, DeclaredRecipeId, EnumMemberType, EnumType, EnumValue, GenericTypeParam,
+    IntrinsicKind, LiteralValue, ModifierOp, ParameterType, PropertyType, TupleType, TypeParamId,
+    TypeTag,
 };
 use crate::types::store::TypeId;
 use rustc_hash::FxHasher;
@@ -17,6 +18,11 @@ use std::hash::{Hash, Hasher};
 pub enum StructuralKey<'a> {
     Intrinsic(IntrinsicKind),
     Literal(&'a LiteralValue),
+    /// One whole enum family. Stable identity and canonical facts are both part of
+    /// the key so an identity can never silently acquire a different member set.
+    Enum(&'a EnumType),
+    /// One exact enum member, including its owning identity and primitive fact.
+    EnumMember(&'a EnumMemberType),
     /// Object identity: canonical property list plus index and call/construct
     /// signatures. All identity-bearing `PropertyType` fields are hashed below.
     Object {
@@ -134,6 +140,23 @@ pub fn structural_hash(key: &StructuralKey<'_>) -> u64 {
         StructuralKey::Literal(value) => {
             TypeTag::Literal.hash_discriminant(&mut h);
             hash_literal(value, &mut h);
+        }
+        StructuralKey::Enum(enum_type) => {
+            TypeTag::Enum.hash_discriminant(&mut h);
+            enum_type.id.0.hash(&mut h);
+            enum_type.numeric_open.hash(&mut h);
+            enum_type.members.len().hash(&mut h);
+            for member in &enum_type.members {
+                member.id.0.hash(&mut h);
+                hash_enum_value(&member.value, &mut h);
+            }
+        }
+        StructuralKey::EnumMember(member) => {
+            TypeTag::EnumMember.hash_discriminant(&mut h);
+            member.enum_id.0.hash(&mut h);
+            member.member_id.0.hash(&mut h);
+            hash_enum_value(&member.value, &mut h);
+            member.numeric_open.hash(&mut h);
         }
         StructuralKey::Object {
             properties,
@@ -390,6 +413,20 @@ fn hash_literal(value: &LiteralValue, h: &mut impl Hasher) {
             3u8.hash(h);
             symbol.hash(h);
         }
+    }
+}
+
+fn hash_enum_value(value: &EnumValue, h: &mut impl Hasher) {
+    match value {
+        EnumValue::Number(number) => {
+            0u8.hash(h);
+            number.canonical_bits().hash(h);
+        }
+        EnumValue::String(string) => {
+            1u8.hash(h);
+            string.hash(h);
+        }
+        EnumValue::OpaqueNumber => 2u8.hash(h),
     }
 }
 

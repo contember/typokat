@@ -280,6 +280,8 @@ fn for_each_apply_child(
         TypeTag::TypeParam
         | TypeTag::Intrinsic
         | TypeTag::Literal
+        | TypeTag::Enum
+        | TypeTag::EnumMember
         | TypeTag::Infer
         | TypeTag::MappedValue => {}
         TypeTag::Declared => {
@@ -810,7 +812,7 @@ impl<'a> Substitution<'a> {
                     }
                 }
                 // Intrinsics and literals contain no type parameter — identity.
-                TypeTag::Intrinsic | TypeTag::Literal => ty,
+                TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Enum | TypeTag::EnumMember => ty,
                 TypeTag::Object => self.apply_object(interner, ty),
                 TypeTag::Function => self.apply_function(interner, ty),
                 TypeTag::Union => self.apply_union(interner, ty),
@@ -976,7 +978,10 @@ impl<'a> Substitution<'a> {
 /// rewrite path.
 fn distributes_over(interner: &Interner, arg: TypeId) -> bool {
     let wk = interner.well_known();
-    interner.store().tag(arg) == TypeTag::Union || arg == wk.never || arg == wk.boolean
+    interner.store().tag(arg) == TypeTag::Union
+        || interner.store().closed_enum_member_types(arg).is_some()
+        || arg == wk.never
+        || arg == wk.boolean
 }
 
 /// Convenience: instantiate `ty` with the given `TypeParamId → TypeId` map in one

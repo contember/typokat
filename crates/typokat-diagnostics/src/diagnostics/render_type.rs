@@ -4,6 +4,7 @@ use crate::types::repr::{
     DeclaredRecipeId, DeclaredRecipeNode, LiteralValue, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
+use oxc_syntax::identifier::is_identifier_name;
 use rustc_hash::FxHashMap;
 
 /// The name of the parameter at `index` of a function-typed id, if `id` is a
@@ -135,6 +136,27 @@ fn render_type_node(store: &Store, id: TypeId, widen: bool, context: &mut Render
                 None => context.append("unknown"),
             }
         }
+        TypeTag::Enum => context.append(
+            store
+                .enum_type(id)
+                .map(|enum_type| enum_type.name.as_str())
+                .unwrap_or("<unsupported>"),
+        ),
+        TypeTag::EnumMember => match store.enum_member_type(id) {
+            Some(member) if is_identifier_name(&member.member_name) => {
+                context.append(&member.enum_name);
+                context.append(".");
+                context.append(&member.member_name);
+            }
+            Some(member) => {
+                context.append("(typeof ");
+                context.append(&member.enum_name);
+                context.append(")[\"");
+                context.append(&escape_string_literal(&member.member_name));
+                context.append("\"]");
+            }
+            None => context.append("<unsupported>"),
+        },
         // Object: `{ a: number; b: string }` — members in stored (canonical)
         // order, `; `-separated (README "Type display format").
         TypeTag::Object => {
@@ -1018,7 +1040,6 @@ fn render_literal(lit: &crate::types::repr::LiteralValue, context: &mut RenderCo
 /// Escape control characters (and `\`/`"`) inside a string-literal type body, as tsc
 /// renders them — a raw newline would otherwise split a diagnostic across lines and,
 /// after WU3, could inject a phantom `incomplete[…]` line into an exit-3 identity list.
-#[cfg(test)]
 fn escape_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
@@ -1079,5 +1100,64 @@ mod stable_union_tests {
         assert_eq!(a_then_b, "\"a\" | \"b\"");
         assert_eq!(b_then_a, "\"a\" | \"b\"");
         assert_eq!(a_then_b.as_bytes(), b_then_a.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod enum_render_tests {
+    use super::render_type;
+    use crate::types::intern::Interner;
+    use crate::types::repr::{
+        EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType, EnumValue,
+    };
+
+    #[test]
+    fn whole_and_member_enum_types_have_unambiguous_displays() {
+        let mut interner = Interner::with_intrinsics();
+        let whole = interner.intern_enum(EnumType {
+            id: EnumId(1),
+            name: "Mode".to_owned(),
+            members: vec![EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "Read".to_owned(),
+                value: EnumValue::String("read".to_owned()),
+            }],
+            numeric_open: false,
+        });
+        let identifier = interner.intern_enum_member(EnumMemberType {
+            enum_id: EnumId(1),
+            member_id: EnumMemberId(0),
+            enum_name: "Mode".to_owned(),
+            member_name: "Read".to_owned(),
+            value: EnumValue::String("read".to_owned()),
+            numeric_open: false,
+        });
+        let quoted = interner.intern_enum_member(EnumMemberType {
+            enum_id: EnumId(1),
+            member_id: EnumMemberId(1),
+            enum_name: "Mode".to_owned(),
+            member_name: "quoted-\"name".to_owned(),
+            value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            numeric_open: false,
+        });
+        let unicode = interner.intern_enum_member(EnumMemberType {
+            enum_id: EnumId(1),
+            member_id: EnumMemberId(2),
+            enum_name: "Mode".to_owned(),
+            member_name: "é".to_owned(),
+            value: EnumValue::String("unicode".to_owned()),
+            numeric_open: false,
+        });
+
+        assert_eq!(render_type(interner.store(), whole, false), "Mode");
+        assert_eq!(
+            render_type(interner.store(), identifier, false),
+            "Mode.Read"
+        );
+        assert_eq!(
+            render_type(interner.store(), quoted, false),
+            "(typeof Mode)[\"quoted-\\\"name\"]"
+        );
+        assert_eq!(render_type(interner.store(), unicode, false), "Mode.é");
     }
 }

@@ -316,6 +316,16 @@ impl Interner {
 
             match store.tag(owner) {
                 TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+                TypeTag::Enum => {
+                    store
+                        .enum_type(owner)
+                        .ok_or("validated enum payload is missing")?;
+                }
+                TypeTag::EnumMember => {
+                    store
+                        .enum_member_type(owner)
+                        .ok_or("validated enum-member payload is missing")?;
+                }
                 TypeTag::Object => {
                     let object = store
                         .object_type(owner)

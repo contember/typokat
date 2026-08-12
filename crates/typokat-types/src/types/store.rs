@@ -7,9 +7,9 @@ use crate::types::hash::StableHash;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
 use crate::types::repr::{
     ArrayType, ClassInstanceType, ConditionalType, DeclaredRecipeId, DeclaredType,
-    DeclaredTypeRecipe, DeferredIndexedAccessType, FunctionType, InstantiationType, IntrinsicKind,
-    LiteralValue, MappedType, ObjectType, TemplateType, TupleType, TypeFlags, TypeParamId,
-    TypeParamType, TypeTag,
+    DeclaredTypeRecipe, DeferredIndexedAccessType, EnumId, EnumMemberId, EnumMemberType, EnumType,
+    FunctionType, InstantiationType, IntrinsicKind, LiteralValue, MappedType, ObjectType,
+    TemplateType, TupleType, TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -98,6 +98,14 @@ pub struct Store {
     /// row. The whole [`TemplateType`] (its text segments + hole ids) is its structural
     /// identity.
     templates: LayeredVec<TemplateType>,
+    /// Whole enum families keyed by their stable declaration-group identity.
+    enums: LayeredVec<EnumType>,
+    /// Exact nominal enum members.
+    enum_members: LayeredVec<EnumMemberType>,
+    /// Stable reverse lookup from declaration identity to the whole enum node.
+    enum_wholes_by_id: LayeredMap<EnumId, TypeId>,
+    /// Stable reverse lookup from declaration identity to an exact member node.
+    enum_members_by_id: LayeredMap<(EnumId, EnumMemberId), TypeId>,
 
     /// **Type-parameter constraint column** (M24): a type parameter's `extends`
     /// bound, keyed by its [`TypeParamId`]. A **side column**, NOT part of the
@@ -201,6 +209,10 @@ impl Store {
         self.declared_types.freeze_as_base()?;
         self.mapped.freeze_as_base()?;
         self.templates.freeze_as_base()?;
+        self.enums.freeze_as_base()?;
+        self.enum_members.freeze_as_base()?;
+        self.enum_wholes_by_id.freeze_as_base()?;
+        self.enum_members_by_id.freeze_as_base()?;
         self.type_param_constraints.freeze_as_base()?;
         self.frozen_type_params.freeze_as_base()?;
         self.template_names.freeze_as_base()?;
@@ -233,6 +245,10 @@ impl Store {
             declared_types: self.declared_types.fork_delta()?,
             mapped: self.mapped.fork_delta()?,
             templates: self.templates.fork_delta()?,
+            enums: self.enums.fork_delta()?,
+            enum_members: self.enum_members.fork_delta()?,
+            enum_wholes_by_id: self.enum_wholes_by_id.fork_delta()?,
+            enum_members_by_id: self.enum_members_by_id.fork_delta()?,
             type_param_constraints: self.type_param_constraints.fork_delta()?,
             frozen_type_params: self.frozen_type_params.fork_delta()?,
             template_names: self.template_names.fork_delta()?,
@@ -263,6 +279,10 @@ impl Store {
                 || self.declared_types.local_len() != 0
                 || self.mapped.local_len() != 0
                 || self.templates.local_len() != 0
+                || self.enums.local_len() != 0
+                || self.enum_members.local_len() != 0
+                || self.enum_wholes_by_id.local_len() != 0
+                || self.enum_members_by_id.local_len() != 0
                 || self.type_param_constraints.local_len() != 0
                 || self.frozen_type_params.local_len() != 0
                 || self.template_names.local_len() != 0
@@ -305,6 +325,14 @@ impl Store {
             && self.declared_types.shares_base_with(&other.declared_types)
             && self.mapped.shares_base_with(&other.mapped)
             && self.templates.shares_base_with(&other.templates)
+            && self.enums.shares_base_with(&other.enums)
+            && self.enum_members.shares_base_with(&other.enum_members)
+            && self
+                .enum_wholes_by_id
+                .shares_base_with(&other.enum_wholes_by_id)
+            && self
+                .enum_members_by_id
+                .shares_base_with(&other.enum_members_by_id)
             && self
                 .type_param_constraints
                 .shares_base_with(&other.type_param_constraints)
@@ -350,6 +378,14 @@ impl Store {
             && self.declared_types.shares_base_with(&other.declared_types)
             && self.mapped.shares_base_with(&other.mapped)
             && self.templates.shares_base_with(&other.templates)
+            && self.enums.shares_base_with(&other.enums)
+            && self.enum_members.shares_base_with(&other.enum_members)
+            && self
+                .enum_wholes_by_id
+                .shares_base_with(&other.enum_wholes_by_id)
+            && self
+                .enum_members_by_id
+                .shares_base_with(&other.enum_members_by_id)
             && self.stable_hash.shares_base_with(&other.stable_hash);
         [
             rows,
@@ -385,6 +421,10 @@ impl Store {
                 + self.declared_types.local_len()
                 + self.mapped.local_len()
                 + self.templates.local_len()
+                + self.enums.local_len()
+                + self.enum_members.local_len()
+                + self.enum_wholes_by_id.local_len()
+                + self.enum_members_by_id.local_len()
                 + self.stable_hash.local_len(),
             self.type_param_constraints.local_len(),
             self.frozen_type_params.local_len(),
@@ -558,6 +598,52 @@ impl Store {
             return None;
         }
         self.templates.get(self.payload(id) as usize)
+    }
+
+    /// The canonical whole-enum payload, or `None` for another tag.
+    pub fn enum_type(&self, id: TypeId) -> Option<&EnumType> {
+        if self.tag(id) != TypeTag::Enum {
+            return None;
+        }
+        self.enums.get(self.payload(id) as usize)
+    }
+
+    /// The exact enum-member payload, or `None` for another tag.
+    pub fn enum_member_type(&self, id: TypeId) -> Option<&EnumMemberType> {
+        if self.tag(id) != TypeTag::EnumMember {
+            return None;
+        }
+        self.enum_members.get(self.payload(id) as usize)
+    }
+
+    /// The canonical whole type for an enum declaration identity.
+    pub fn enum_whole_type_id(&self, enum_id: EnumId) -> Option<TypeId> {
+        self.enum_wholes_by_id.get(&enum_id).copied()
+    }
+
+    /// The canonical exact member type for an enum-member declaration identity.
+    pub fn enum_member_type_id(&self, enum_id: EnumId, member_id: EnumMemberId) -> Option<TypeId> {
+        self.enum_members_by_id.get(&(enum_id, member_id)).copied()
+    }
+
+    /// The owning whole type for an exact member, once its family is published.
+    pub fn enum_member_whole_type_id(&self, member: TypeId) -> Option<TypeId> {
+        self.enum_member_type(member)
+            .and_then(|member| self.enum_whole_type_id(member.enum_id))
+    }
+
+    /// Exact member types of a closed enum family. Open numeric families stay atomic
+    /// so distribution never drops their numeric remainder.
+    pub fn closed_enum_member_types(&self, whole: TypeId) -> Option<Vec<TypeId>> {
+        let enum_type = self.enum_type(whole)?;
+        if enum_type.numeric_open {
+            return None;
+        }
+        enum_type
+            .members
+            .iter()
+            .map(|member| self.enum_member_type_id(enum_type.id, member.id))
+            .collect()
     }
 
     /// The operand of a deferred `keyof` (M28), or `None` if `id` is not one. The
@@ -899,6 +985,28 @@ impl Store {
         let payload = self.templates.len() as u32;
         self.templates.push_local(template);
         self.push(TypeTag::Template, flags, payload)
+    }
+
+    /// Append a canonical whole-enum row. Internal — `Interner` owns dedup.
+    pub fn push_enum(&mut self, enum_type: EnumType, flags: TypeFlags) -> TypeId {
+        let enum_id = enum_type.id;
+        let payload = self.enums.len() as u32;
+        self.enums.push_local(enum_type);
+        let id = self.push(TypeTag::Enum, flags, payload);
+        let existing = self.enum_wholes_by_id.insert_append_only(enum_id, id);
+        debug_assert!(existing.is_none() || existing == Some(id));
+        id
+    }
+
+    /// Append an exact enum-member row. Internal — `Interner` owns dedup.
+    pub fn push_enum_member(&mut self, member: EnumMemberType, flags: TypeFlags) -> TypeId {
+        let member_key = (member.enum_id, member.member_id);
+        let payload = self.enum_members.len() as u32;
+        self.enum_members.push_local(member);
+        let id = self.push(TypeTag::EnumMember, flags, payload);
+        let existing = self.enum_members_by_id.insert_append_only(member_key, id);
+        debug_assert!(existing.is_none() || existing == Some(id));
+        id
     }
 }
 

@@ -1,8 +1,9 @@
 use super::*;
 use crate::check::checker::eval::keyof::{contains_deferred_keyof, keyof_of_object, keyof_of_type};
 use crate::types::repr::{
-    ConditionalType, FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp,
-    ObjectType, ParameterType, PropertyKey, PropertyType, TemplateType, WellKnownSymbol,
+    ConditionalType, EnumId, EnumMemberFact, EnumMemberId, EnumNumber, EnumType, EnumValue,
+    FunctionType, GenericTypeParam, LiteralValue, MappedType, ModifierOp, ObjectType,
+    ParameterType, PropertyKey, PropertyType, TemplateType, WellKnownSymbol,
 };
 use crate::types::ClassId;
 use rustc_hash::FxHashMap;
@@ -110,6 +111,95 @@ fn object_infer_conditional(interner: &mut Interner, check: TypeId) -> (Conditio
         },
         expected,
     )
+}
+
+#[test]
+fn distributive_conditional_expands_a_closed_atomic_enum_family() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = EnumId(80_001);
+    let first_id = EnumMemberId(0);
+    let second_id = EnumMemberId(1);
+    let whole = interner.intern_enum(EnumType {
+        id: enum_id,
+        name: "Choice".to_owned(),
+        members: vec![
+            EnumMemberFact {
+                id: first_id,
+                name: "First".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+            },
+            EnumMemberFact {
+                id: second_id,
+                name: "Second".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            },
+        ],
+        numeric_open: false,
+    });
+    let first = interner
+        .store()
+        .enum_member_type_id(enum_id, first_id)
+        .expect("interning the family publishes exact members");
+    let parameter_id = TypeParamId(80_002);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let yes = interner.intern_literal(LiteralValue::String("first".to_owned()));
+    let no = interner.intern_literal(LiteralValue::String("other".to_owned()));
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: parameter,
+        extends_ty: first,
+        true_branch: yes,
+        false_branch: no,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let instantiated = interner.intern_instantiation(conditional, vec![(parameter_id, whole)]);
+    let expected = interner.union(vec![yes, no]);
+    let open_enum_id = EnumId(80_003);
+    let open_first_id = EnumMemberId(0);
+    let open_whole = interner.intern_enum(EnumType {
+        id: open_enum_id,
+        name: "OpenChoice".to_owned(),
+        members: vec![
+            EnumMemberFact {
+                id: open_first_id,
+                name: "First".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+            },
+            EnumMemberFact {
+                id: EnumMemberId(1),
+                name: "Second".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            },
+        ],
+        numeric_open: true,
+    });
+    let open_first = interner
+        .store()
+        .enum_member_type_id(open_enum_id, open_first_id)
+        .expect("interning the open family publishes exact members");
+    let open_conditional = interner.intern_conditional(ConditionalType {
+        check: parameter,
+        extends_ty: open_first,
+        true_branch: yes,
+        false_branch: no,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let open_instantiated =
+        interner.intern_instantiation(open_conditional, vec![(parameter_id, open_whole)]);
+    let mut next = 80_003;
+    let mut memo = FxHashMap::default();
+    let mut evaluator =
+        ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+
+    assert_eq!(evaluate_ready(&mut evaluator, instantiated), expected);
+    assert_eq!(
+        evaluate_ready(&mut evaluator, open_instantiated),
+        no,
+        "an open enum stays atomic so distribution cannot drop its numeric remainder"
+    );
 }
 
 #[test]

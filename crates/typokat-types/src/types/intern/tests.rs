@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::repr::{
-    ClassId, ConditionalType, DeclaredRecipeId, DeclaredRecipeNode, FunctionType, GenericTypeParam,
+    ClassId, ConditionalType, DeclaredRecipeId, DeclaredRecipeNode, EnumId, EnumMemberFact,
+    EnumMemberId, EnumMemberType, EnumNumber, EnumType, EnumValue, FunctionType, GenericTypeParam,
     LiteralValue, MappedType, ModifierOp, ObjectType, ParameterType, PropertyKey, PropertyType,
     TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag, WellKnownSymbol,
 };
@@ -415,6 +416,166 @@ fn hash_consing_dedups_intrinsics_and_literals() {
     let f1 = interner.intern_literal(LiteralValue::Boolean(false));
     assert_eq!(t1, t2);
     assert_ne!(t1, f1);
+}
+
+#[test]
+fn enum_identity_hash_conses_without_display_names() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_type = EnumType {
+        id: EnumId(10),
+        name: "Mode".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Read".to_owned(),
+            value: EnumValue::String("read".to_owned()),
+        }],
+        numeric_open: false,
+    };
+    let first = interner.intern_enum(enum_type.clone());
+    let renamed = interner.intern_enum(EnumType {
+        name: "IgnoredAlias".to_owned(),
+        members: vec![EnumMemberFact {
+            name: "IgnoredMemberAlias".to_owned(),
+            ..enum_type.members[0].clone()
+        }],
+        ..enum_type
+    });
+    assert_eq!(first, renamed);
+
+    let first_member = interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(10),
+        member_id: EnumMemberId(0),
+        enum_name: "Mode".to_owned(),
+        member_name: "Read".to_owned(),
+        value: EnumValue::String("read".to_owned()),
+        numeric_open: false,
+    });
+    let renamed_member = interner.intern_enum_member(EnumMemberType {
+        enum_name: "IgnoredAlias".to_owned(),
+        member_name: "IgnoredMemberAlias".to_owned(),
+        ..interner
+            .store()
+            .enum_member_type(first_member)
+            .expect("enum member")
+            .clone()
+    });
+    assert_eq!(first_member, renamed_member);
+
+    let equal_value_alias = interner.intern_enum_member(EnumMemberType {
+        member_id: EnumMemberId(1),
+        member_name: "Alias".to_owned(),
+        ..interner
+            .store()
+            .enum_member_type(first_member)
+            .expect("enum member")
+            .clone()
+    });
+    let other_enum = interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(11),
+        enum_name: "Other".to_owned(),
+        ..interner
+            .store()
+            .enum_member_type(first_member)
+            .expect("enum member")
+            .clone()
+    });
+    assert_ne!(first_member, equal_value_alias);
+    assert_ne!(first_member, other_enum);
+}
+
+#[test]
+fn enum_intersections_reduce_only_proven_disjoint_primitive_domains() {
+    let mut interner = Interner::with_intrinsics();
+    let member = interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(20),
+        member_id: EnumMemberId(0),
+        enum_name: "Mode".to_owned(),
+        member_name: "Read".to_owned(),
+        value: EnumValue::String("read".to_owned()),
+        numeric_open: false,
+    });
+    let literal = interner.intern_literal(LiteralValue::String("read".to_owned()));
+    let whole_string = interner.intern_enum(EnumType {
+        id: EnumId(20),
+        name: "Mode".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Read".to_owned(),
+            value: EnumValue::String("read".to_owned()),
+        }],
+        numeric_open: false,
+    });
+    let whole_numeric = interner.intern_enum(EnumType {
+        id: EnumId(21),
+        name: "Numeric".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Zero".to_owned(),
+            value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+        }],
+        numeric_open: false,
+    });
+    let wk = interner.well_known();
+    assert_eq!(interner.intersection(vec![member, literal]), wk.never);
+    assert_eq!(interner.intersection(vec![whole_string, literal]), wk.never);
+    assert_eq!(
+        interner.intersection(vec![whole_numeric, wk.string]),
+        wk.never
+    );
+    assert_ne!(
+        interner.intersection(vec![whole_numeric, wk.number]),
+        wk.never
+    );
+}
+
+#[test]
+fn frozen_enum_rows_are_shared_and_readable_from_deltas() {
+    let mut base = Interner::with_intrinsics();
+    let whole = base.intern_enum(EnumType {
+        id: EnumId(30),
+        name: "Mode".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "Read".to_owned(),
+            value: EnumValue::String("read".to_owned()),
+        }],
+        numeric_open: false,
+    });
+    let member = base.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(30),
+        member_id: EnumMemberId(0),
+        enum_name: "Mode".to_owned(),
+        member_name: "Read".to_owned(),
+        value: EnumValue::String("read".to_owned()),
+        numeric_open: false,
+    });
+    base.freeze_as_base().expect("enum base freezes");
+    let delta = base.fork_delta().expect("enum base forks");
+
+    assert_eq!(
+        delta.store().enum_type(whole).map(|value| value.id),
+        Some(EnumId(30))
+    );
+    assert_eq!(
+        delta
+            .store()
+            .enum_member_type(member)
+            .map(|value| value.member_id),
+        Some(EnumMemberId(0))
+    );
+    assert_eq!(delta.store().enum_whole_type_id(EnumId(30)), Some(whole));
+    assert_eq!(
+        delta
+            .store()
+            .enum_member_type_id(EnumId(30), EnumMemberId(0)),
+        Some(member)
+    );
+    assert_eq!(delta.store().enum_member_whole_type_id(member), Some(whole));
+    assert_eq!(
+        delta.store().closed_enum_member_types(whole),
+        Some(vec![member])
+    );
+    assert!(base.store().shares_base_rows_with(delta.store()));
 }
 
 #[test]

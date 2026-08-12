@@ -1067,7 +1067,12 @@ impl<'a> Relater<'a> {
                         pending.extend(declared.mapper.iter().map(|(_, value)| *value));
                     }
                 }
-                TypeTag::Intrinsic | TypeTag::Literal | TypeTag::Infer | TypeTag::MappedValue => {}
+                TypeTag::Intrinsic
+                | TypeTag::Literal
+                | TypeTag::Enum
+                | TypeTag::EnumMember
+                | TypeTag::Infer
+                | TypeTag::MappedValue => {}
             }
         }
 
