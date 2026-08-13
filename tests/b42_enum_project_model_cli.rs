@@ -55,11 +55,31 @@ fn run(project: &Path) -> Output {
 
 #[test]
 fn enum_project_routes_are_cleanly_published_and_root_order_identical() {
-    for (case, expected_code) in [
-        ("default_identifier", "TK2322"),
-        ("named_import", "TK2322"),
-        ("namespace_payload", "TK2322"),
-        ("type_only", "TK2304"),
+    for (case, resolution, diagnostic, stderr) in [
+        (
+            "default_identifier",
+            "consumer.ts:1:1 default-import ./source.js -> source.ts",
+            "consumer.ts:5:7 TK2322",
+            "consumer.ts(5,7): error TK2322: Type 'string' is not assignable to type 'Local'\n",
+        ),
+        (
+            "named_import",
+            "consumer.ts:1:1 named-import ./source.js -> source.ts",
+            "consumer.ts:5:7 TK2322",
+            "consumer.ts(5,7): error TK2322: Type 'string' is not assignable to type 'Corpus'\n",
+        ),
+        (
+            "namespace_payload",
+            "consumer.ts:1:1 named-import ./source.js -> source.ts",
+            "consumer.ts:7:7 TK2322",
+            "consumer.ts(7,7): error TK2322: Type 'Status.Ready' is not assignable to type 'Status.Done'\n",
+        ),
+        (
+            "type_only",
+            "consumer.ts:1:1 named-import ./source.js -> source.ts",
+            "consumer.ts:5:21 TK2304",
+            "consumer.ts(5,21): error TK2304: Cannot find name 'Mode'\n",
+        ),
     ] {
         let project = TempProject::from_fixture(case);
         let mut outputs = Vec::new();
@@ -70,20 +90,29 @@ fn enum_project_routes_are_cleanly_published_and_root_order_identical() {
             let summary: Value = serde_json::from_slice(&output.stdout)
                 .unwrap_or_else(|error| panic!("{case}/{order}: {error}"));
             assert_eq!(
-                summary["roots"],
-                serde_json::json!(["consumer.ts", "source.ts"])
+                summary,
+                serde_json::json!({
+                    "schema": 1,
+                    "profile": "bundler",
+                    "config": "tsconfig.json",
+                    "roots": ["consumer.ts", "source.ts"],
+                    "files": {
+                        "checked": ["consumer.ts", "source.ts"],
+                        "skipped": [],
+                        "excluded": []
+                    },
+                    "resolutions": [resolution],
+                    "project_notices": [],
+                    "parse_errors": [],
+                    "incomplete": [],
+                    "diagnostics": [diagnostic]
+                }),
+                "{case}/{order} summary"
             );
-            assert_eq!(summary["project_notices"], serde_json::json!([]));
-            assert_eq!(summary["parse_errors"], serde_json::json!([]));
-            assert_eq!(summary["incomplete"], serde_json::json!([]));
-            let diagnostics = summary["diagnostics"].as_array().expect("diagnostics");
-            assert_eq!(diagnostics.len(), 1, "{case}/{order}");
-            assert!(
-                diagnostics[0]
-                    .as_str()
-                    .expect("diagnostic line")
-                    .ends_with(expected_code),
-                "{case}/{order}: {diagnostics:?}"
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                stderr,
+                "{case}/{order} stderr"
             );
             outputs.push((output.stdout, output.stderr));
         }

@@ -20,8 +20,8 @@
     "case_count": 38,
     "run_count": 76,
     "root_order_byte_identical_count": 38,
-    "admitted_case_count": 23,
-    "deferred_control_case_count": 15,
+    "admitted_case_count": 24,
+    "deferred_control_case_count": 14,
     "duplicate_producer_kind_count": 5,
     "duplicate_unordered_pair_count": 15,
     "duplicate_reverse_order_count": 10
@@ -48,6 +48,7 @@
       "13_default_named_isolation",
       "14_value_only_wrong_type",
       "24c_identifier_interface",
+      "24d_identifier_enum_unsupported",
       "24e_default_function_overload",
       "24f_default_function_overload_surface",
       "24g_default_function_export_mismatch"
@@ -57,8 +58,7 @@
       "16_named_default_function_namespace",
       "17_namespace_identifier_default",
       "18_class_namespace_identifier_default",
-      "19_function_namespace_identifier_default",
-      "24d_identifier_enum_unsupported"
+      "19_function_namespace_identifier_default"
     ],
     "deferred_syntax_controls": [
       "14b_default_interface_unsupported",
@@ -2509,7 +2509,7 @@
     },
     {
       "id": "24d_identifier_enum_unsupported",
-      "classification": "namespace-provenance-control",
+      "classification": "admitted",
       "files": [
         {
           "path": "consumer.ts",
@@ -2544,7 +2544,7 @@
       ],
       "root_order_byte_identical": true,
       "typokat_after_wu6": {
-        "exit": 3,
+        "exit": 0,
         "summary": {
           "schema": 1,
           "profile": "bundler",
@@ -2554,24 +2554,22 @@
             "source.ts"
           ],
           "files": {
-            "checked": [],
-            "skipped": [
+            "checked": [
               "consumer.ts",
               "source.ts"
             ],
+            "skipped": [],
             "excluded": []
           },
           "resolutions": [
             "consumer.ts:1:1 default-import ./source.js -> source.ts"
           ],
-          "project_notices": [
-            "unsupported-default-export-namespace-provenance source.ts:2:1 Local"
-          ],
+          "project_notices": [],
           "parse_errors": [],
           "incomplete": [],
           "diagnostics": []
         },
-        "stderr": "project: unsupported-default-export-namespace-provenance source.ts:2:1 Local\n"
+        "stderr": ""
       }
     },
     {

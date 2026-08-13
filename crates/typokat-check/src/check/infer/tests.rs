@@ -1,12 +1,168 @@
 use super::*;
 use crate::types::repr::{
-    DeclaredRecipeNode, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType,
-    TupleRestType, TupleType, TypeParamId, WellKnownSymbol,
+    DeclaredRecipeNode, EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType,
+    EnumValue, FunctionType, LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType,
+    TupleType, TypeParamId, WellKnownSymbol,
 };
 use std::time::Instant;
 
 fn prop(name: &str, ty: TypeId) -> PropertyType {
     PropertyType::public(name, ty)
+}
+
+fn intern_enum_family(
+    interner: &mut Interner,
+    enum_id: EnumId,
+    name: &str,
+    values: Vec<EnumValue>,
+    numeric_open: bool,
+) -> (TypeId, Vec<TypeId>) {
+    let facts = values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| EnumMemberFact {
+            id: EnumMemberId(u32::try_from(index).expect("test enum member count fits u32")),
+            name: format!("M{index}"),
+            value: value.clone(),
+        })
+        .collect();
+    let whole = interner.intern_enum(EnumType {
+        id: enum_id,
+        name: name.to_owned(),
+        members: facts,
+        numeric_open,
+    });
+    let members = values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            interner.intern_enum_member(EnumMemberType {
+                enum_id,
+                member_id: EnumMemberId(
+                    u32::try_from(index).expect("test enum member count fits u32"),
+                ),
+                enum_name: name.to_owned(),
+                member_name: format!("M{index}"),
+                value,
+                numeric_open,
+            })
+        })
+        .collect();
+    (whole, members)
+}
+
+#[test]
+fn enum_primitive_families_preserve_whole_and_member_facts() {
+    let mut interner = Interner::with_intrinsics();
+    let numeric_member = interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(1),
+        member_id: EnumMemberId(0),
+        enum_name: "Numeric".to_owned(),
+        member_name: "One".to_owned(),
+        value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+        numeric_open: false,
+    });
+    let string_member = interner.intern_enum_member(EnumMemberType {
+        enum_id: EnumId(2),
+        member_id: EnumMemberId(0),
+        enum_name: "Stringy".to_owned(),
+        member_name: "Ready".to_owned(),
+        value: EnumValue::String("ready".to_owned()),
+        numeric_open: false,
+    });
+    let numeric_whole = interner.intern_enum(EnumType {
+        id: EnumId(1),
+        name: "Numeric".to_owned(),
+        members: vec![EnumMemberFact {
+            id: EnumMemberId(0),
+            name: "One".to_owned(),
+            value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+        }],
+        numeric_open: false,
+    });
+    let heterogeneous = interner.intern_enum(EnumType {
+        id: EnumId(3),
+        name: "Mixed".to_owned(),
+        members: vec![
+            EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "One".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            },
+            EnumMemberFact {
+                id: EnumMemberId(1),
+                name: "Ready".to_owned(),
+                value: EnumValue::String("ready".to_owned()),
+            },
+        ],
+        numeric_open: false,
+    });
+    let empty_open = interner.intern_enum(EnumType {
+        id: EnumId(4),
+        name: "Empty".to_owned(),
+        members: Vec::new(),
+        numeric_open: true,
+    });
+
+    assert!(
+        primitive_families(interner.store(), numeric_member) == Some(vec![PrimitiveFamily::Number])
+    );
+    assert!(
+        primitive_families(interner.store(), string_member) == Some(vec![PrimitiveFamily::String])
+    );
+    assert!(
+        primitive_families(interner.store(), numeric_whole) == Some(vec![PrimitiveFamily::Number])
+    );
+    assert!(
+        primitive_families(interner.store(), heterogeneous)
+            == Some(vec![PrimitiveFamily::Number, PrimitiveFamily::String])
+    );
+    assert!(
+        primitive_families(interner.store(), empty_open) == Some(vec![PrimitiveFamily::Number])
+    );
+}
+
+#[test]
+fn enum_provenance_tracks_union_identity_and_raw_mixing() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (_, first) = intern_enum_family(
+        &mut interner,
+        EnumId(1),
+        "First",
+        vec![
+            EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            EnumValue::Number(EnumNumber::new(2.0).expect("finite enum constant")),
+        ],
+        false,
+    );
+    let (_, second) = intern_enum_family(
+        &mut interner,
+        EnumId(2),
+        "Second",
+        vec![EnumValue::Number(
+            EnumNumber::new(1.0).expect("finite enum constant"),
+        )],
+        false,
+    );
+    let same_enum = interner.union(vec![first[0], first[1]]);
+    let cross_enum = interner.union(vec![first[0], second[0]]);
+    let enum_and_raw = interner.union(vec![first[0], wk.number]);
+    let raw = interner.union(vec![wk.number, wk.null]);
+
+    assert_eq!(
+        enum_provenance(interner.store(), same_enum),
+        EnumProvenance::One(EnumId(1))
+    );
+    assert_eq!(
+        enum_provenance(interner.store(), cross_enum),
+        EnumProvenance::Mixed
+    );
+    assert_eq!(
+        enum_provenance(interner.store(), enum_and_raw),
+        EnumProvenance::Mixed
+    );
+    assert_eq!(enum_provenance(interner.store(), raw), EnumProvenance::None);
 }
 
 #[derive(Default)]
@@ -1498,6 +1654,264 @@ fn same_family_literal_candidates_union() {
         Some(expected),
         "T = 1 | 2"
     );
+}
+
+#[test]
+fn enum_candidates_merge_only_with_their_own_declaration_family() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (_, first_numeric) = intern_enum_family(
+        &mut interner,
+        EnumId(10),
+        "FirstNumeric",
+        vec![
+            EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            EnumValue::Number(EnumNumber::new(2.0).expect("finite enum constant")),
+        ],
+        false,
+    );
+    let (_, second_numeric) = intern_enum_family(
+        &mut interner,
+        EnumId(11),
+        "SecondNumeric",
+        vec![EnumValue::Number(
+            EnumNumber::new(3.0).expect("finite enum constant"),
+        )],
+        false,
+    );
+    let (_, first_string) = intern_enum_family(
+        &mut interner,
+        EnumId(12),
+        "FirstString",
+        vec![EnumValue::String("enum".to_owned())],
+        false,
+    );
+    let raw_number = interner.intern_literal(LiteralValue::Number(99.0));
+    let raw_string = interner.intern_literal(LiteralValue::String("raw".to_owned()));
+    let same_enum = interner.union(vec![first_numeric[0], first_numeric[1]]);
+
+    assert_eq!(
+        same_primitive_family(interner.store(), first_numeric[0], first_numeric[1]),
+        Some(PrimitiveFamily::Number),
+        "members of one enum may form a same-family inference candidate",
+    );
+    assert_eq!(
+        same_primitive_family(interner.store(), same_enum, first_numeric[0]),
+        Some(PrimitiveFamily::Number),
+        "same-enum provenance survives recursive unions",
+    );
+    assert_eq!(
+        same_primitive_family(interner.store(), first_numeric[0], raw_number),
+        None,
+        "a numeric enum and a raw numeric literal stay nominally distinct",
+    );
+    assert_eq!(
+        same_primitive_family(interner.store(), first_numeric[0], second_numeric[0]),
+        None,
+        "different numeric enum declarations stay nominally distinct",
+    );
+    assert_eq!(
+        same_primitive_family(interner.store(), first_string[0], raw_string),
+        None,
+        "a string enum and a raw string literal stay nominally distinct",
+    );
+
+    let t_id = TypeParamId(0);
+    let t = interner.intern_type_param(t_id, "T");
+    let mut next_type_param = 1;
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[t_id],
+        &[t, t],
+        &[first_numeric[0], first_numeric[1]],
+        &[],
+    );
+    assert_eq!(map.get(&t_id).copied(), Some(same_enum));
+
+    for incompatible in [raw_number, second_numeric[0]] {
+        let mut next_type_param = 1;
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[t_id],
+            &[t, t],
+            &[first_numeric[0], incompatible],
+            &[],
+        );
+        assert_eq!(
+            map.get(&t_id).copied(),
+            Some(first_numeric[0]),
+            "the first enum candidate remains the replay target",
+        );
+    }
+
+    let s_id = TypeParamId(1);
+    let s = interner.intern_type_param(s_id, "S");
+    let mut next_type_param = 2;
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[s_id],
+        &[s, s],
+        &[first_string[0], raw_string],
+        &[],
+    );
+    assert_eq!(map.get(&s_id).copied(), Some(first_string[0]));
+
+    let c_id = TypeParamId(2);
+    let c = interner.intern_type_param(c_id, "C");
+    interner.set_type_param_constraint(c_id, wk.number);
+    let mut next_type_param = 3;
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[c_id],
+        &[c, c],
+        &[first_numeric[0], raw_number],
+        &[],
+    );
+    assert_eq!(
+        map.get(&c_id).copied(),
+        Some(first_numeric[0]),
+        "a primitive constraint must not erase enum provenance",
+    );
+}
+
+#[test]
+fn enum_primitive_controls_keep_nullish_heterogeneous_and_open_behavior() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (heterogeneous, _) = intern_enum_family(
+        &mut interner,
+        EnumId(20),
+        "Heterogeneous",
+        vec![
+            EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            EnumValue::String("ready".to_owned()),
+        ],
+        false,
+    );
+    let (empty_open, _) =
+        intern_enum_family(&mut interner, EnumId(21), "EmptyOpen", Vec::new(), true);
+
+    assert_eq!(
+        same_primitive_family(interner.store(), heterogeneous, heterogeneous),
+        None,
+        "a heterogeneous enum does not collapse to one primitive family",
+    );
+    assert_eq!(
+        same_primitive_family(interner.store(), empty_open, empty_open),
+        Some(PrimitiveFamily::Number),
+        "an empty open enum retains numeric facts and declaration identity",
+    );
+    assert_eq!(
+        same_primitive_family(interner.store(), empty_open, wk.number),
+        None,
+        "numeric openness does not make the enum a raw number candidate",
+    );
+
+    let t_id = TypeParamId(0);
+    let t = interner.intern_type_param(t_id, "T");
+    let expected = interner.union(vec![empty_open, wk.null]);
+    let mut next_type_param = 1;
+    let map = infer_type_arguments(
+        &mut interner,
+        &mut next_type_param,
+        &[t_id],
+        &[t, t],
+        &[empty_open, wk.null],
+        &[],
+    );
+    assert_eq!(
+        map.get(&t_id).copied(),
+        Some(expected),
+        "nullish merging remains independent of primitive-family merging",
+    );
+}
+
+#[test]
+fn nullish_candidates_do_not_launder_enum_provenance() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let (_, first) = intern_enum_family(
+        &mut interner,
+        EnumId(30),
+        "First",
+        vec![EnumValue::Number(
+            EnumNumber::new(1.0).expect("finite enum constant"),
+        )],
+        false,
+    );
+    let (_, second) = intern_enum_family(
+        &mut interner,
+        EnumId(31),
+        "Second",
+        vec![EnumValue::Number(
+            EnumNumber::new(1.0).expect("finite enum constant"),
+        )],
+        false,
+    );
+    let raw = interner.intern_literal(LiteralValue::Number(99.0));
+    let matching_raw = interner.intern_literal(LiteralValue::Number(1.0));
+    let first_null = interner.union(vec![first[0], wk.null]);
+    let second_null = interner.union(vec![second[0], wk.null]);
+    let raw_null = interner.union(vec![raw, wk.null]);
+    let t_id = TypeParamId(0);
+    let t = interner.intern_type_param(t_id, "T");
+
+    let cases = [
+        ([first[0], wk.null, second[0]], first_null),
+        ([wk.null, first[0], second[0]], first_null),
+        ([first[0], second[0], wk.null], first[0]),
+        ([second[0], wk.null, first[0]], second_null),
+        ([wk.null, second[0], first[0]], second_null),
+        ([second[0], first[0], wk.null], second[0]),
+        ([first[0], wk.null, raw], first_null),
+        ([wk.null, first[0], raw], first_null),
+        ([first[0], raw, wk.null], first[0]),
+        ([raw, wk.null, first[0]], raw_null),
+        ([wk.null, raw, first[0]], raw_null),
+        ([raw, first[0], wk.null], wk.number),
+    ];
+    for (args, expected) in cases {
+        let mut next_type_param = 1;
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[t_id],
+            &[t, t, t],
+            &args,
+            &[],
+        );
+        assert_eq!(
+            map.get(&t_id).copied(),
+            Some(expected),
+            "nullish evidence must not bridge raw or cross-enum candidates: {args:?}",
+        );
+    }
+
+    for args in [
+        [first[0], wk.null, first[0]],
+        [first[0], wk.undefined, first[0]],
+        [first[0], wk.null, wk.undefined],
+        [first[0], wk.null, matching_raw],
+    ] {
+        let mut next_type_param = 1;
+        let map = infer_type_arguments(
+            &mut interner,
+            &mut next_type_param,
+            &[t_id],
+            &[t, t, t],
+            &args,
+            &[],
+        );
+        assert_eq!(
+            enum_provenance(interner.store(), map[&t_id]),
+            EnumProvenance::One(EnumId(30)),
+            "compatible enum and nullish evidence must retain enum identity: {args:?}",
+        );
+    }
 }
 
 /// A type parameter with **no** candidate falls back to `unknown` (the sound

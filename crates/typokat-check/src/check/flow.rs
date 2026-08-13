@@ -206,16 +206,25 @@ pub fn narrow_by_typeof(interner: &mut Interner, ty: TypeId, tag: TypeofTag, kee
         return ty;
     }
     let members = enum_expanded_members(interner.store(), ty);
-    let narrowed = members
-        .into_iter()
-        .filter(
-            |member| match typeof_overlap(interner.store(), *member, tag) {
-                EqualityOverlap::Always => keep,
-                EqualityOverlap::Never => !keep,
-                EqualityOverlap::Maybe => true,
-            },
-        )
-        .collect();
+    let intrinsic = match tag {
+        TypeofTag::String => wk.string,
+        TypeofTag::Number => wk.number,
+        TypeofTag::Boolean => wk.boolean,
+    };
+    let mut narrowed = Vec::with_capacity(members.len());
+    for member in members {
+        match typeof_overlap(interner.store(), member, tag) {
+            EqualityOverlap::Always if keep => narrowed.push(member),
+            EqualityOverlap::Never if !keep => narrowed.push(member),
+            EqualityOverlap::Maybe
+                if keep && interner.store().tag(member) == TypeTag::TypeParam =>
+            {
+                narrowed.push(interner.intersection(vec![member, intrinsic]));
+            }
+            EqualityOverlap::Maybe => narrowed.push(member),
+            EqualityOverlap::Always | EqualityOverlap::Never => {}
+        }
+    }
     interner.union(narrowed)
 }
 
@@ -1173,6 +1182,63 @@ mod tests {
         assert_eq!(
             narrow_by_typeof(&mut interner, lit_or_num, TypeofTag::String, true),
             lit
+        );
+    }
+
+    #[test]
+    fn typeof_refines_maybe_type_parameter_only_in_positive_branch() {
+        struct IdentityNormalization;
+
+        impl crate::relate::RelationNormalization for IdentityNormalization {
+            fn normalize(&self, ty: TypeId) -> Result<TypeId, crate::class_semantics::Exhaustion> {
+                Ok(ty)
+            }
+        }
+
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let parameter = interner.intern_type_param(TypeParamId(10), "T");
+        let source = interner.union(vec![wk.string, parameter]);
+
+        let positive = narrow_by_typeof(&mut interner, source, TypeofTag::String, true);
+        let negative = narrow_by_typeof(&mut interner, source, TypeofTag::String, false);
+        assert_eq!(negative, parameter);
+        let refined_parameter = interner
+            .store()
+            .union_members(positive)
+            .and_then(|members| members.iter().copied().find(|member| *member != wk.string))
+            .expect("string | T narrows to string | (T & string)");
+        let normalization = IdentityNormalization;
+        let mut relater = crate::relate::Relater::planned(
+            interner.store(),
+            wk,
+            crate::relate::cache::RelationCache::new(),
+            &normalization,
+        );
+        assert!(matches!(
+            relater.is_assignable_outcome(positive, wk.string),
+            RelationOutcome::Yes
+        ));
+        assert!(matches!(
+            relater.is_assignable_outcome(refined_parameter, parameter),
+            RelationOutcome::Yes
+        ));
+    }
+
+    #[test]
+    fn typeof_type_parameter_refinement_terminates_for_cyclic_constraints() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let parameter_id = TypeParamId(11);
+        let parameter = interner.intern_type_param(parameter_id, "T");
+        assert!(interner.set_type_param_constraint(parameter_id, parameter));
+
+        let positive = narrow_by_typeof(&mut interner, parameter, TypeofTag::String, true);
+        let negative = narrow_by_typeof(&mut interner, parameter, TypeofTag::String, false);
+        assert_eq!(negative, parameter);
+        assert_eq!(
+            interner.store().intersection_members(positive),
+            Some([wk.string, parameter].as_slice())
         );
     }
 

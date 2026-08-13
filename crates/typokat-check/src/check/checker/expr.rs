@@ -2456,6 +2456,7 @@ fn is_undecided_operand_shape(store: &Store, ty: TypeId, depth: u32) -> bool {
         TypeTag::Intersection => store
             .intersection_members(ty)
             .is_some_and(|members| members_undecided(store, members, depth)),
+        TypeTag::Enum | TypeTag::EnumMember => false,
         _ => false,
     }
 }
@@ -2480,6 +2481,9 @@ fn conditional_undefined_arity_subtype(store: &Store, source: TypeId, target: Ty
             .is_some_and(|(source, target)| {
                 conditional_undefined_arity_object_subtype(store, source, target)
             }),
+        (TypeTag::Enum | TypeTag::EnumMember, _) | (_, TypeTag::Enum | TypeTag::EnumMember) => {
+            false
+        }
         _ => false,
     }
 }

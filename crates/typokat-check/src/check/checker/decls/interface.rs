@@ -206,6 +206,9 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .filter(|object| !object.call_signatures.is_empty())
                     .map(|object| object.call_signatures.clone())
                     .unwrap_or_default(),
+                crate::types::repr::TypeTag::Enum | crate::types::repr::TypeTag::EnumMember => {
+                    Vec::new()
+                }
                 _ => Vec::new(),
             };
             let appended = match self.interner.store().tag(property.ty) {
@@ -216,6 +219,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .object_type(property.ty)
                     .filter(|object| !object.call_signatures.is_empty())
                     .map(|object| object.call_signatures.clone()),
+                crate::types::repr::TypeTag::Enum | crate::types::repr::TypeTag::EnumMember => None,
                 _ => None,
             };
             if !overloads.is_empty() {

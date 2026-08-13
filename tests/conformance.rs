@@ -128,10 +128,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // at optional/defaulted fixed parameter slots. WU0 is a disabled RED corpus;
     // WU1 enables it with the shared call-boundary fix.
     ("b109_optional_parameter_undefined_argument", true),
-    // Backlog 42 — enum type/value identity and publication. WU0 commits the
-    // acceptance corpus disabled; WU3 enables the flat corpus and WU4 enables
-    // the project corpus after the corresponding seams land.
-    ("b42_enum_type_value_model", false),
+    // Shipped enum type/value identity, member semantics, merges, and bounded
+    // nested-declaration accounting. Project summaries stay on their CLI gate.
+    ("b42_enum_type_value_model", true),
     ("b42_enum_project_model", false),
     // Backlog 87 — the reason chain must be bounded like the type renderer next to it:
     // past REASON_DEPTH_LIMIT nesting levels it collapses to one elision line plus the
@@ -304,15 +303,6 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 /// full. Keep this list path-sorted so execution and failure aggregation stay
 /// deterministic.
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
-    ("b42_enum_type_value_model", "ambient_and_const.ts"),
-    ("b42_enum_type_value_model", "computed_initializers.ts"),
-    ("b42_enum_type_value_model", "illegal_merges.ts"),
-    ("b42_enum_type_value_model", "legal_merges.ts"),
-    ("b42_enum_type_value_model", "member_names_and_constants.ts"),
-    ("b42_enum_type_value_model", "narrowing.ts"),
-    ("b42_enum_type_value_model", "numeric_identity.ts"),
-    ("b42_enum_type_value_model", "string_heterogeneous.ts"),
-    ("b42_enum_type_value_model", "structural_transport.ts"),
     (
         "b43_namespaces_declaration_merging",
         "class_interface_conflicts.ts",

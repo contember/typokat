@@ -674,6 +674,21 @@ impl Store {
             .collect()
     }
 
+    /// Exact enum members used only by distributive conditional evaluation. A
+    /// nonempty open family carries its numeric remainder in an opaque member;
+    /// a truly memberless open family must remain atomic.
+    pub fn distributive_enum_member_types(&self, whole: TypeId) -> Option<Vec<TypeId>> {
+        let enum_type = self.enum_type(whole)?;
+        if enum_type.members.is_empty() {
+            return None;
+        }
+        enum_type
+            .members
+            .iter()
+            .map(|member| self.enum_member_type_id(enum_type.id, member.id))
+            .collect()
+    }
+
     /// The operand of a deferred `keyof` (M28), or `None` if `id` is not one. The
     /// operand id is reconstructed from the `payload` (stored inline, like an `Infer`
     /// index).

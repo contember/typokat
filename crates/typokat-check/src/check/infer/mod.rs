@@ -20,7 +20,7 @@ use crate::check::query::{PublishedClassLookup, SemanticQueryCoordinator, Semant
 use crate::class_semantics::{DemandOutcome, Exhaustion, PublishedClasses};
 use crate::relate::{RelationDemand, RelationNormalization, RelationOutcome};
 use crate::types::repr::{
-    GenericTypeParam, IntrinsicKind, ParameterType, PropertyKey, TypeParamId, TypeTag,
+    EnumId, GenericTypeParam, IntrinsicKind, ParameterType, PropertyKey, TypeParamId, TypeTag,
 };
 use crate::types::store::{Store, TypeId};
 use crate::types::{substitute, DerivedType, Interner};
@@ -176,7 +176,7 @@ struct CandidateContribution {
     candidates: Vec<TypeId>,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum PrimitiveFamily {
     String,
     Number,
@@ -184,6 +184,13 @@ enum PrimitiveFamily {
     Null,
     Undefined,
     Void,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum EnumProvenance {
+    None,
+    One(EnumId),
+    Mixed,
 }
 
 /// Structurally match in conditional-`infer` mode (M25). Unlike call-site
@@ -1322,6 +1329,14 @@ fn mergeable_nullish_primitive(store: &Store, left: TypeId, right: TypeId) -> bo
         return false;
     }
 
+    match (enum_provenance(store, left), enum_provenance(store, right)) {
+        (EnumProvenance::None, EnumProvenance::None) => {}
+        (EnumProvenance::One(left), EnumProvenance::One(right)) if left == right => {}
+        (EnumProvenance::One(_), EnumProvenance::None) if is_nullish_only(store, right) => {}
+        (EnumProvenance::None, EnumProvenance::One(_)) if is_nullish_only(store, left) => {}
+        _ => return false,
+    }
+
     let mut non_nullish: Vec<PrimitiveFamily> = Vec::new();
     for family in families {
         if matches!(family, PrimitiveFamily::Null | PrimitiveFamily::Undefined) {
@@ -1335,6 +1350,11 @@ fn mergeable_nullish_primitive(store: &Store, left: TypeId, right: TypeId) -> bo
 }
 
 fn same_primitive_family(store: &Store, left: TypeId, right: TypeId) -> Option<PrimitiveFamily> {
+    match (enum_provenance(store, left), enum_provenance(store, right)) {
+        (EnumProvenance::None, EnumProvenance::None) => {}
+        (EnumProvenance::One(left), EnumProvenance::One(right)) if left == right => {}
+        _ => return None,
+    }
     let mut families = primitive_families(store, left)?;
     for family in primitive_families(store, right)? {
         if !families.contains(&family) {
@@ -1344,6 +1364,60 @@ fn same_primitive_family(store: &Store, left: TypeId, right: TypeId) -> Option<P
     match families.as_slice() {
         [family] => Some(*family),
         _ => None,
+    }
+}
+
+fn enum_provenance(store: &Store, ty: TypeId) -> EnumProvenance {
+    match store.tag(ty) {
+        TypeTag::Enum => store.enum_type(ty).map_or(EnumProvenance::Mixed, |family| {
+            EnumProvenance::One(family.id)
+        }),
+        TypeTag::EnumMember => store
+            .enum_member_type(ty)
+            .map_or(EnumProvenance::Mixed, |member| {
+                EnumProvenance::One(member.enum_id)
+            }),
+        TypeTag::Union => {
+            let Some(members) = store.union_members(ty) else {
+                return EnumProvenance::Mixed;
+            };
+            let mut enum_id = None;
+            let mut has_raw = false;
+            for &member in members {
+                if is_nullish_only(store, member) {
+                    continue;
+                }
+                match enum_provenance(store, member) {
+                    EnumProvenance::None => has_raw = true,
+                    EnumProvenance::One(member_id) => match enum_id {
+                        Some(existing) if existing != member_id => return EnumProvenance::Mixed,
+                        Some(_) => {}
+                        None => enum_id = Some(member_id),
+                    },
+                    EnumProvenance::Mixed => return EnumProvenance::Mixed,
+                }
+            }
+            match (enum_id, has_raw) {
+                (Some(_), true) => EnumProvenance::Mixed,
+                (Some(enum_id), false) => EnumProvenance::One(enum_id),
+                (None, _) => EnumProvenance::None,
+            }
+        }
+        _ => EnumProvenance::None,
+    }
+}
+
+fn is_nullish_only(store: &Store, ty: TypeId) -> bool {
+    match store.tag(ty) {
+        TypeTag::Intrinsic => matches!(
+            store.intrinsic_kind(ty),
+            Some(IntrinsicKind::Null | IntrinsicKind::Undefined)
+        ),
+        TypeTag::Union => store.union_members(ty).is_some_and(|members| {
+            !members.is_empty() && members.iter().all(|&member| is_nullish_only(store, member))
+        }),
+        TypeTag::Enum | TypeTag::EnumMember => false,
+        _ => false,
     }
 }
 
@@ -1360,6 +1434,23 @@ fn primitive_families(store: &Store, ty: TypeId) -> Option<Vec<PrimitiveFamily>>
         TypeTag::Intrinsic => Some(vec![primitive_family_from_intrinsic(
             store.intrinsic_kind(ty)?,
         )?]),
+        TypeTag::EnumMember => Some(vec![primitive_family_from_intrinsic(
+            store.enum_member_type(ty)?.value.base_kind(),
+        )?]),
+        TypeTag::Enum => {
+            let family = store.enum_type(ty)?;
+            let mut families = Vec::new();
+            for member in &family.members {
+                let primitive = primitive_family_from_intrinsic(member.value.base_kind())?;
+                if !families.contains(&primitive) {
+                    families.push(primitive);
+                }
+            }
+            if family.numeric_open && !families.contains(&PrimitiveFamily::Number) {
+                families.push(PrimitiveFamily::Number);
+            }
+            Some(families)
+        }
         TypeTag::Union => {
             let mut families: Vec<PrimitiveFamily> = Vec::new();
             for &member in store.union_members(ty)? {
@@ -1414,6 +1505,7 @@ fn contains_primitive_base(store: &Store, ty: TypeId, family: PrimitiveFamily) -
                 .iter()
                 .any(|&member| contains_primitive_base(store, member, family))
         }),
+        TypeTag::Enum | TypeTag::EnumMember => false,
         _ => false,
     }
 }
@@ -1432,7 +1524,7 @@ fn primitive_base(interner: &Interner, family: PrimitiveFamily) -> TypeId {
 
 fn is_primitive_ish(store: &Store, ty: TypeId) -> bool {
     match store.tag(ty) {
-        TypeTag::Literal | TypeTag::Template => true,
+        TypeTag::Literal | TypeTag::Template | TypeTag::Enum | TypeTag::EnumMember => true,
         TypeTag::Intrinsic => matches!(
             store.intrinsic_kind(ty),
             Some(

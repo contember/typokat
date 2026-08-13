@@ -5113,11 +5113,7 @@ fn enqueue_enum_merge_diagnostics<Ticket: UserReportingOwner>(
     reservations: &LexicalReservations<Ticket>,
     effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
 ) -> Result<(), Ticket::Error> {
-    for index in 0..binder.type_groups.len() {
-        let group = TypeGroupId(u32::try_from(index).expect("type group index fits u32"));
-        let Some(view) = binder.enum_group(group) else {
-            continue;
-        };
+    for view in binder.local_enum_groups() {
         for issue in view.issues {
             let owner = reservations
                 .declaration_owner(issue.owner)

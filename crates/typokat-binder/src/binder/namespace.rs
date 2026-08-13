@@ -3907,15 +3907,50 @@ impl Binder {
 
     /// Return the canonical enum descriptor input for one real type-group identity.
     pub fn enum_group(&self, group: TypeGroupId) -> Option<EnumGroupView<'_>> {
-        let record = self.namespaces.merges.iter().find(|record| {
-            record.declarations.iter().any(|participant| {
-                participant.kind == MergeDeclarationKind::Enum
-                    && self
-                        .declarations
-                        .get(participant.declaration)
-                        .is_some_and(|declaration| declaration.type_group == Some(group))
-            })
-        })?;
+        let declaration = self
+            .type_groups
+            .get(group)?
+            .fragments
+            .iter()
+            .find(|fragment| fragment.kind == TypeFragmentKind::Enum)?
+            .declaration;
+        let key = self
+            .namespaces
+            .merge_keys_by_declaration
+            .get(&declaration)?;
+        let record = self
+            .namespaces
+            .merge_indices
+            .get(key)
+            .and_then(|index| self.namespaces.merges.get(*index))?;
+        self.enum_group_from_record(group, record)
+    }
+
+    /// Return enum groups whose merge rows changed in this continuation.
+    pub fn local_enum_groups(&self) -> Vec<EnumGroupView<'_>> {
+        let mut seen = BTreeSet::new();
+        let mut groups = Vec::new();
+        for record in self.namespaces.local_merges() {
+            for group in record.declarations.iter().filter_map(|participant| {
+                (participant.kind == MergeDeclarationKind::Enum)
+                    .then(|| self.declarations.get(participant.declaration)?.type_group)
+                    .flatten()
+            }) {
+                if seen.insert(group) {
+                    if let Some(view) = self.enum_group_from_record(group, record) {
+                        groups.push(view);
+                    }
+                }
+            }
+        }
+        groups
+    }
+
+    fn enum_group_from_record<'a>(
+        &'a self,
+        group: TypeGroupId,
+        record: &'a MergeRecord,
+    ) -> Option<EnumGroupView<'a>> {
         let (buildability, issues) = enum_group_semantics(&record.declarations)?;
         let declarations = record
             .declarations

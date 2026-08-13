@@ -4305,6 +4305,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     .object_type(member)
                     .map(|object| object.call_signatures.clone())
                     .unwrap_or_default(),
+                TypeTag::Enum | TypeTag::EnumMember => Vec::new(),
                 _ => Vec::new(),
             };
             for signature in signatures {

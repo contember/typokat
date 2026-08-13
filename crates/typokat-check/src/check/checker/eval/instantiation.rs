@@ -527,7 +527,7 @@ impl<'a> ConditionalEvaluator<'a> {
             .store()
             .union_members(ty)
             .map(<[TypeId]>::to_vec)
-            .or_else(|| self.interner.store().closed_enum_member_types(ty))
+            .or_else(|| self.interner.store().distributive_enum_member_types(ty))
             .unwrap_or_else(|| vec![ty]);
         let mut out: Vec<TypeId> = Vec::with_capacity(raw.len());
         for m in raw {

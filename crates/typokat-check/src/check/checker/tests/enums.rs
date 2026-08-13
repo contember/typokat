@@ -468,6 +468,55 @@ fn enum_annotations_are_stable_across_source_order_and_composition() {
 }
 
 #[test]
+fn zero_parameter_enum_member_aliases_are_stable_during_signature_construction() {
+    for source in [
+        "enum E { A, B } type AB = E.A | E.B; function identity(value: AB): AB { return value; } const result: AB = identity(E.A);",
+        "type AB = E.A | E.B; function identity(value: AB): AB { return value; } enum E { A, B } const result: AB = identity(E.A);",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+}
+
+#[test]
+fn enum_initializer_alias_signature_keeps_pending_frontier_typed() {
+    for source in [
+        "type AB = E.A | E.B; function consume(value: AB): number { return 0; } enum E { A, B = consume(E.A) }",
+        "enum E { A, B = consume(E.A) } type AB = E.A | E.B; function consume(value: AB): number { return 0; }",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert_eq!(out.incomplete.len(), 1, "{:?}", out.incomplete);
+        assert_eq!(
+            out.incomplete[0].id,
+            "semantic-query/invalid-evaluation-node"
+        );
+    }
+}
+
+#[test]
+fn open_enum_distributive_conditionals_exclude_exact_members_in_both_orders() {
+    for source in [
+        "declare function f(): number; enum O { Opaque = f(), Fixed = 1 } type ExcludeFixed<T> = T extends O.Fixed ? never : T; type Removed = ExcludeFixed<O>; const opaque: Removed = O.Opaque; const raw: Removed = 123; const wrong: Removed = O.Fixed;",
+        "type ExcludeFixed<T> = T extends O.Fixed ? never : T; type Removed = ExcludeFixed<O>; declare function f(): number; enum O { Opaque = f(), Fixed = 1 } const opaque: Removed = O.Opaque; const raw: Removed = 123; const wrong: Removed = O.Fixed;",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["TK2322"]
+        );
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+}
+
+#[test]
 fn enum_type_arguments_are_rejected_before_publication() {
     for source in [
         "enum E { A } type Bad = E<number>;",

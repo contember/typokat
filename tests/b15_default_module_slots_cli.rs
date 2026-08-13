@@ -164,8 +164,8 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
     assert_eq!(contract["summary"]["case_count"], 38);
     assert_eq!(contract["summary"]["run_count"], 76);
     assert_eq!(contract["summary"]["root_order_byte_identical_count"], 38);
-    assert_eq!(contract["summary"]["admitted_case_count"], 23);
-    assert_eq!(contract["summary"]["deferred_control_case_count"], 15);
+    assert_eq!(contract["summary"]["admitted_case_count"], 24);
+    assert_eq!(contract["summary"]["deferred_control_case_count"], 14);
 
     let admitted = [
         "01_named_class",
@@ -188,6 +188,7 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
         "13_default_named_isolation",
         "14_value_only_wrong_type",
         "24c_identifier_interface",
+        "24d_identifier_enum_unsupported",
         "24e_default_function_overload",
         "24f_default_function_overload_surface",
         "24g_default_function_export_mismatch",
@@ -198,7 +199,6 @@ fn contract_is_machine_complete_and_matches_raw_fixtures() {
         "17_namespace_identifier_default",
         "18_class_namespace_identifier_default",
         "19_function_namespace_identifier_default",
-        "24d_identifier_enum_unsupported",
     ];
     let syntax_controls = [
         "14b_default_interface_unsupported",
@@ -738,6 +738,16 @@ fn post_wu6_admitted_projects_match_exact_summaries_in_both_orders() {
         }
         assert_eq!(outputs[0], outputs[1], "{id} post-WU6 root-order bytes");
     }
+}
+
+#[test]
+fn bare_enum_identifier_default_matches_exact_summary_in_both_orders() {
+    let contract = contract();
+    let case = case_by_id(&contract, "24d_identifier_enum_unsupported");
+    assert_eq!(case["classification"], "admitted");
+    let normal = assert_post_wu6_public_inputs(case, "normal");
+    let reverse = assert_post_wu6_public_inputs(case, "reverse");
+    assert_eq!(normal, reverse, "bare enum default root-order bytes");
 }
 
 #[test]

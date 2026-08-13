@@ -114,7 +114,7 @@ fn object_infer_conditional(interner: &mut Interner, check: TypeId) -> (Conditio
 }
 
 #[test]
-fn distributive_conditional_expands_a_closed_atomic_enum_family() {
+fn distributive_conditional_expands_closed_and_nonempty_open_enum_families() {
     let mut interner = Interner::with_intrinsics();
     let enum_id = EnumId(80_001);
     let first_id = EnumMemberId(0);
@@ -163,24 +163,24 @@ fn distributive_conditional_expands_a_closed_atomic_enum_family() {
         members: vec![
             EnumMemberFact {
                 id: open_first_id,
-                name: "First".to_owned(),
-                value: EnumValue::Number(EnumNumber::new(0.0).expect("finite enum constant")),
+                name: "Opaque".to_owned(),
+                value: EnumValue::OpaqueNumber,
             },
             EnumMemberFact {
                 id: EnumMemberId(1),
-                name: "Second".to_owned(),
+                name: "Fixed".to_owned(),
                 value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
             },
         ],
         numeric_open: true,
     });
-    let open_first = interner
+    let open_fixed = interner
         .store()
-        .enum_member_type_id(open_enum_id, open_first_id)
+        .enum_member_type_id(open_enum_id, EnumMemberId(1))
         .expect("interning the open family publishes exact members");
     let open_conditional = interner.intern_conditional(ConditionalType {
         check: parameter,
-        extends_ty: open_first,
+        extends_ty: open_fixed,
         true_branch: yes,
         false_branch: no,
         infer_count: 0,
@@ -191,15 +191,57 @@ fn distributive_conditional_expands_a_closed_atomic_enum_family() {
         interner.intern_instantiation(open_conditional, vec![(parameter_id, open_whole)]);
     let mut next = 80_003;
     let mut memo = FxHashMap::default();
+    {
+        let mut evaluator =
+            ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
+        assert_eq!(evaluate_ready(&mut evaluator, instantiated), expected);
+        assert_eq!(evaluate_ready(&mut evaluator, open_instantiated), expected);
+        assert_eq!(
+            evaluate_ready(&mut evaluator, open_instantiated),
+            expected,
+            "the memoized result preserves the opaque remainder member"
+        );
+    }
+
+    let mut reverse_memo = FxHashMap::default();
+    let mut reverse = ConditionalEvaluator::new(
+        &mut interner,
+        &mut next,
+        &mut reverse_memo,
+        DEFAULT_STEP_BUDGET,
+    );
+    assert_eq!(evaluate_ready(&mut reverse, open_instantiated), expected);
+    assert_eq!(evaluate_ready(&mut reverse, instantiated), expected);
+}
+
+#[test]
+fn distributive_conditional_keeps_a_memberless_open_enum_atomic() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let whole = interner.intern_enum(EnumType {
+        id: EnumId(80_004),
+        name: "Memberless".to_owned(),
+        members: Vec::new(),
+        numeric_open: true,
+    });
+    let parameter_id = TypeParamId(80_005);
+    let parameter = interner.intern_type_param(parameter_id, "T");
+    let conditional = interner.intern_conditional(ConditionalType {
+        check: parameter,
+        extends_ty: wk.number,
+        true_branch: wk.string,
+        false_branch: wk.boolean,
+        infer_count: 0,
+        distributive: true,
+        poisoned: false,
+    });
+    let instantiated = interner.intern_instantiation(conditional, vec![(parameter_id, whole)]);
+    let mut next = 80_006;
+    let mut memo = FxHashMap::default();
     let mut evaluator =
         ConditionalEvaluator::new(&mut interner, &mut next, &mut memo, DEFAULT_STEP_BUDGET);
 
-    assert_eq!(evaluate_ready(&mut evaluator, instantiated), expected);
-    assert_eq!(
-        evaluate_ready(&mut evaluator, open_instantiated),
-        no,
-        "an open enum stays atomic so distribution cannot drop its numeric remainder"
-    );
+    assert_eq!(evaluate_ready(&mut evaluator, instantiated), wk.string);
 }
 
 #[test]

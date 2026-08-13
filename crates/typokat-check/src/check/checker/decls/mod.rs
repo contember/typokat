@@ -5415,12 +5415,19 @@ fn fold_enum_constant(
                     let value = match unary.operator {
                         UnaryOperator::UnaryNegation => -number.get(),
                         UnaryOperator::UnaryPlus => number.get(),
-                        UnaryOperator::BitwiseNot => f64::from(!(number.get() as i32)),
+                        UnaryOperator::BitwiseNot => f64::from(!ecmascript_to_int32(number.get())),
                         _ => unreachable!(),
                     };
                     EnumNumber::new(value)
                         .map(|value| EnumFold::Value(EnumValue::Number(value)))
                         .unwrap_or(EnumFold::NonFinite)
+                }
+                EnumFold::Nan | EnumFold::NonFinite
+                    if unary.operator == UnaryOperator::BitwiseNot =>
+                {
+                    EnumFold::Value(EnumValue::Number(
+                        EnumNumber::new(-1.0).expect("-1 is a finite enum constant"),
+                    ))
                 }
                 EnumFold::SelfReference(span) => EnumFold::SelfReference(span),
                 EnumFold::LaterReference(span) => EnumFold::LaterReference(span),
@@ -5494,15 +5501,60 @@ fn fold_enum_binary(operator: BinaryOperator, left: EnumFold, right: EnumFold) -
         (EnumFold::LaterReference(span), _) | (_, EnumFold::LaterReference(span)) => {
             return EnumFold::LaterReference(span)
         }
-        (EnumFold::Value(left), EnumFold::Value(right)) => (left, right),
+        (
+            left @ (EnumFold::Value(_) | EnumFold::Nan | EnumFold::NonFinite),
+            right @ (EnumFold::Value(_) | EnumFold::Nan | EnumFold::NonFinite),
+        ) => (left, right),
         _ => return EnumFold::Computed,
     };
     if operator == BinaryOperator::Addition {
-        if let (EnumValue::String(left), EnumValue::String(right)) = (&left, &right) {
+        if let (
+            EnumFold::Value(EnumValue::String(left)),
+            EnumFold::Value(EnumValue::String(right)),
+        ) = (&left, &right)
+        {
             return EnumFold::Value(EnumValue::String(format!("{left}{right}")));
         }
     }
-    let (EnumValue::Number(left), EnumValue::Number(right)) = (left, right) else {
+    if matches!(
+        operator,
+        BinaryOperator::ShiftLeft
+            | BinaryOperator::ShiftRight
+            | BinaryOperator::ShiftRightZeroFill
+            | BinaryOperator::BitwiseOR
+            | BinaryOperator::BitwiseXOR
+            | BinaryOperator::BitwiseAnd
+    ) {
+        let Some(left_unsigned) = enum_fold_to_uint32(&left) else {
+            return EnumFold::Computed;
+        };
+        let Some(right_unsigned) = enum_fold_to_uint32(&right) else {
+            return EnumFold::Computed;
+        };
+        let left_signed = i32::from_ne_bytes(left_unsigned.to_ne_bytes());
+        let shift = right_unsigned & 31;
+        let value = match operator {
+            BinaryOperator::ShiftLeft => f64::from(left_signed.wrapping_shl(shift)),
+            BinaryOperator::ShiftRight => f64::from(left_signed >> shift),
+            BinaryOperator::ShiftRightZeroFill => f64::from(left_unsigned >> shift),
+            BinaryOperator::BitwiseOR => {
+                f64::from(left_signed | i32::from_ne_bytes(right_unsigned.to_ne_bytes()))
+            }
+            BinaryOperator::BitwiseXOR => {
+                f64::from(left_signed ^ i32::from_ne_bytes(right_unsigned.to_ne_bytes()))
+            }
+            BinaryOperator::BitwiseAnd => {
+                f64::from(left_signed & i32::from_ne_bytes(right_unsigned.to_ne_bytes()))
+            }
+            _ => unreachable!(),
+        };
+        return EnumFold::Value(EnumValue::Number(
+            EnumNumber::new(value).expect("32-bit operation produces a finite enum constant"),
+        ));
+    }
+    let (EnumFold::Value(EnumValue::Number(left)), EnumFold::Value(EnumValue::Number(right))) =
+        (left, right)
+    else {
         return EnumFold::Computed;
     };
     let left = left.get();
@@ -5514,12 +5566,6 @@ fn fold_enum_binary(operator: BinaryOperator, left: EnumFold, right: EnumFold) -
         BinaryOperator::Division => left / right,
         BinaryOperator::Remainder => left % right,
         BinaryOperator::Exponential => left.powf(right),
-        BinaryOperator::ShiftLeft => f64::from((left as i32) << ((right as u32) & 31)),
-        BinaryOperator::ShiftRight => f64::from((left as i32) >> ((right as u32) & 31)),
-        BinaryOperator::ShiftRightZeroFill => f64::from((left as u32) >> ((right as u32) & 31)),
-        BinaryOperator::BitwiseOR => f64::from((left as i32) | (right as i32)),
-        BinaryOperator::BitwiseXOR => f64::from((left as i32) ^ (right as i32)),
-        BinaryOperator::BitwiseAnd => f64::from((left as i32) & (right as i32)),
         _ => return EnumFold::Computed,
     };
     if value.is_nan() {
@@ -5529,6 +5575,39 @@ fn fold_enum_binary(operator: BinaryOperator, left: EnumFold, right: EnumFold) -
     } else {
         EnumFold::NonFinite
     }
+}
+
+fn enum_fold_to_uint32(value: &EnumFold) -> Option<u32> {
+    match value {
+        EnumFold::Value(crate::types::repr::EnumValue::Number(number)) => {
+            Some(ecmascript_to_uint32(number.get()))
+        }
+        EnumFold::Nan | EnumFold::NonFinite => Some(0),
+        EnumFold::Value(
+            crate::types::repr::EnumValue::String(_) | crate::types::repr::EnumValue::OpaqueNumber,
+        )
+        | EnumFold::Computed
+        | EnumFold::SelfReference(_)
+        | EnumFold::LaterReference(_) => None,
+    }
+}
+
+fn ecmascript_to_int32(value: f64) -> i32 {
+    i32::from_ne_bytes(ecmascript_to_uint32(value).to_ne_bytes())
+}
+
+fn ecmascript_to_uint32(value: f64) -> u32 {
+    const MODULUS: f64 = 4_294_967_296.0;
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    let remainder = value.trunc() % MODULUS;
+    let normalized = if remainder < 0.0 {
+        remainder + MODULUS
+    } else {
+        remainder
+    };
+    normalized as u32
 }
 
 /// Visit every named type declaration with the exact lexical scope allocated by
@@ -6177,6 +6256,82 @@ pub(in crate::check::checker) fn type_decl_id(
 ) -> Option<TypeGroupId> {
     let symbol_id = binder.resolve_type(scope, name)?;
     binder.symbols.get(symbol_id).and_then(|s| s.ty)
+}
+
+#[cfg(test)]
+mod enum_constant_tests {
+    use super::*;
+    use crate::types::repr::{EnumNumber, EnumValue};
+
+    fn number(value: f64) -> EnumFold {
+        EnumFold::Value(EnumValue::Number(
+            EnumNumber::new(value).expect("test enum number is finite"),
+        ))
+    }
+
+    fn folded_number(folded: EnumFold) -> f64 {
+        match folded {
+            EnumFold::Value(EnumValue::Number(value)) => value.get(),
+            _ => panic!("expected a folded numeric enum constant"),
+        }
+    }
+
+    #[test]
+    fn ecmascript_integer_coercions_wrap_truncate_and_zero_non_finite_values() {
+        assert_eq!(ecmascript_to_uint32(4_294_967_296.0), 0);
+        assert_eq!(ecmascript_to_uint32(4_294_967_297.9), 1);
+        assert_eq!(ecmascript_to_uint32(-1.9), u32::MAX);
+        assert_eq!(ecmascript_to_int32(4_294_967_295.0), -1);
+        assert_eq!(ecmascript_to_int32(2_147_483_648.0), i32::MIN);
+        assert_eq!(ecmascript_to_uint32(f64::NAN), 0);
+        assert_eq!(ecmascript_to_uint32(f64::INFINITY), 0);
+        assert_eq!(ecmascript_to_uint32(f64::NEG_INFINITY), 0);
+    }
+
+    #[test]
+    fn enum_bitwise_folding_coerces_both_operands_and_non_finite_intermediates() {
+        assert_eq!(
+            folded_number(fold_enum_binary(
+                BinaryOperator::BitwiseOR,
+                number(4_294_967_296.0),
+                number(0.0),
+            )),
+            0.0
+        );
+        assert_eq!(
+            folded_number(fold_enum_binary(
+                BinaryOperator::ShiftRightZeroFill,
+                number(-1.0),
+                number(0.0),
+            )),
+            4_294_967_295.0
+        );
+        assert_eq!(
+            folded_number(fold_enum_binary(
+                BinaryOperator::ShiftLeft,
+                number(1.0),
+                number(33.9),
+            )),
+            2.0,
+            "the RHS uses ToUint32 before the five-bit shift mask"
+        );
+        assert_eq!(
+            folded_number(fold_enum_binary(
+                BinaryOperator::BitwiseOR,
+                EnumFold::Nan,
+                number(0.0),
+            )),
+            0.0
+        );
+        assert_eq!(
+            folded_number(fold_enum_binary(
+                BinaryOperator::BitwiseXOR,
+                EnumFold::NonFinite,
+                number(0.0),
+            )),
+            0.0
+        );
+    }
 }
 
 #[cfg(test)]

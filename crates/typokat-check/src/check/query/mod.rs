@@ -2810,6 +2810,7 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
             | TypeTag::Mapped
             | TypeTag::Template => self.evaluate_existing(ty, policy),
             TypeTag::Declared => self.evaluate_declared(ty, policy),
+            TypeTag::Enum | TypeTag::EnumMember => ty,
             _ => {
                 let children = query_children(self.interner.store(), ty);
                 for child in children {

@@ -435,6 +435,7 @@ fn retains_full_mapper(store: &Store, ty: TypeId) -> bool {
         TypeTag::Mapped => store
             .mapped_type(ty)
             .is_some_and(|mapped| mapped.homomorphic),
+        TypeTag::Enum | TypeTag::EnumMember => false,
         _ => false,
     }
 }
@@ -979,7 +980,10 @@ impl<'a> Substitution<'a> {
 fn distributes_over(interner: &Interner, arg: TypeId) -> bool {
     let wk = interner.well_known();
     interner.store().tag(arg) == TypeTag::Union
-        || interner.store().closed_enum_member_types(arg).is_some()
+        || interner
+            .store()
+            .distributive_enum_member_types(arg)
+            .is_some()
         || arg == wk.never
         || arg == wk.boolean
 }

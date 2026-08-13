@@ -571,6 +571,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         let has_private_replacement = !self.type_environment.is_published()
             && self.type_decls.has_replacement(decl_id.index());
+        let stable_local_template = !self.type_environment.is_published()
+            && self
+                .type_resolved
+                .get(decl_id.index())
+                .copied()
+                .flatten()
+                .is_some()
+            && !self.type_group_construction_is_pending(decl_id)
+            && matches!(
+                self.type_decls.get(decl_id.index()),
+                Some(TypeDecl::Alias { params, .. }) if params.is_empty()
+            );
         let stable_endpoint = (!has_private_replacement
             && self
                 .type_environment
@@ -582,7 +594,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 && matches!(
                     self.type_decls.get(decl_id.index()),
                     Some(TypeDecl::Class { .. } | TypeDecl::Enum { .. })
-                ));
+                ))
+            || stable_local_template;
         let resolved = self.resolve_type_group_reference(
             scope,
             decl_id,
@@ -991,7 +1004,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 PublishedTypeGroupSurface::Template(template)
                     if published.parameters.is_empty() =>
                 {
-                    self.maybe_evaluate(template, span)
+                    if self.type_environment.is_published() {
+                        self.maybe_evaluate(template, span)
+                    } else {
+                        Some(template)
+                    }
                 }
                 PublishedTypeGroupSurface::Template(_) => {
                     self.instantiate_type_group_arguments(scope, group, Vec::new(), span)

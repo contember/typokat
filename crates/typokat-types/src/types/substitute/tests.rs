@@ -1,8 +1,8 @@
 use super::*;
 use crate::types::repr::{
-    ClassId, EnumId, EnumMemberId, EnumMemberType, EnumValue, FunctionType, GenericTypeParam,
-    LiteralValue, ObjectType, ParameterType, PropertyType, TupleRestType, TupleType,
-    WellKnownSymbol,
+    ClassId, EnumId, EnumMemberFact, EnumMemberId, EnumMemberType, EnumNumber, EnumType, EnumValue,
+    FunctionType, GenericTypeParam, LiteralValue, ObjectType, ParameterType, PropertyType,
+    TupleRestType, TupleType, WellKnownSymbol,
 };
 use crate::types::DerivationEdge;
 
@@ -46,6 +46,59 @@ fn substitution_preserves_nominal_enum_member_identity() {
     let mut map = FxHashMap::default();
     map.insert(TypeParamId(99), interner.well_known().number);
     assert_eq!(substitute(&mut interner, member, &map), member);
+}
+
+#[test]
+fn distributive_detection_expands_nonempty_open_enums_but_not_memberless_ones() {
+    let mut interner = Interner::with_intrinsics();
+    let open_id = EnumId(3);
+    let opaque_id = EnumMemberId(0);
+    let fixed_id = EnumMemberId(1);
+    let open = interner.intern_enum(EnumType {
+        id: open_id,
+        name: "Open".to_owned(),
+        members: vec![
+            EnumMemberFact {
+                id: opaque_id,
+                name: "Opaque".to_owned(),
+                value: EnumValue::OpaqueNumber,
+            },
+            EnumMemberFact {
+                id: fixed_id,
+                name: "Fixed".to_owned(),
+                value: EnumValue::Number(EnumNumber::new(1.0).expect("finite enum constant")),
+            },
+        ],
+        numeric_open: true,
+    });
+    let memberless = interner.intern_enum(EnumType {
+        id: EnumId(4),
+        name: "Memberless".to_owned(),
+        members: Vec::new(),
+        numeric_open: true,
+    });
+    let expected = vec![
+        interner
+            .store()
+            .enum_member_type_id(open_id, opaque_id)
+            .expect("opaque member identity is published"),
+        interner
+            .store()
+            .enum_member_type_id(open_id, fixed_id)
+            .expect("fixed member identity is published"),
+    ];
+
+    assert_eq!(interner.store().closed_enum_member_types(open), None);
+    assert_eq!(
+        interner.store().distributive_enum_member_types(open),
+        Some(expected)
+    );
+    assert!(distributes_over(&interner, open));
+    assert_eq!(
+        interner.store().distributive_enum_member_types(memberless),
+        None
+    );
+    assert!(!distributes_over(&interner, memberless));
 }
 
 #[test]
