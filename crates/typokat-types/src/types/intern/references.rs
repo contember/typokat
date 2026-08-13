@@ -322,9 +322,11 @@ impl Interner {
                         .ok_or("validated enum payload is missing")?;
                 }
                 TypeTag::EnumMember => {
-                    store
-                        .enum_member_type(owner)
-                        .ok_or("validated enum-member payload is missing")?;
+                    if store.enum_member_type(owner).is_none()
+                        && !self.unavailable_reserved_enum_member(owner)
+                    {
+                        return Err("validated enum-member payload is missing");
+                    }
                 }
                 TypeTag::Object => {
                     let object = store

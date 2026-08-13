@@ -6,12 +6,12 @@ namespace Available {
 
 enum DeferredEnum { A }
 
-function mixedOverload(value: DeferredEnum.A): number; // incomplete[annotation-lower/type-name/qualified-enum]
+function mixedOverload(value: DeferredEnum.A): number;
 function mixedOverload(value: string): string; // error[TK2394]: This overload signature is not compatible with its implementation signature
 function mixedOverload(value: number): number { return value; }
 
 type GenericSiblingTraversal = <
-  First extends DeferredEnum.A = MissingGeneric.FirstDefault, // incomplete[annotation-lower/type-name/qualified-enum] | error[TK2503]: Cannot find namespace 'MissingGeneric'
+  First extends DeferredEnum.A = MissingGeneric.FirstDefault, // error[TK2503]: Cannot find namespace 'MissingGeneric'
   Second extends MissingGeneric.SecondConstraint = MissingGeneric.SecondDefault, // error[TK2503]: Cannot find namespace 'MissingGeneric' | error[TK2503]: Cannot find namespace 'MissingGeneric'
 >(
   this: MissingGeneric.ThisType, // error[TK2503]: Cannot find namespace 'MissingGeneric'
@@ -20,10 +20,10 @@ type GenericSiblingTraversal = <
 
 // tsc reports TS2322 on the assignment. typokat must withhold the incomplete callable and
 // suppress that cascade until the qualified enum endpoint is modelled by backlog 42.
-type UnavailableCallable = <T extends DeferredEnum.A = DeferredEnum.A>() => T; // incomplete[annotation-lower/type-name/qualified-enum] | incomplete[annotation-lower/type-name/qualified-enum]
+type UnavailableCallable = <T extends DeferredEnum.A = DeferredEnum.A>() => T;
 declare const unavailableCallable: UnavailableCallable;
 const unavailableCallableResult = unavailableCallable();
-const unavailableCallableMustStayOpaque: never = unavailableCallableResult;
+const unavailableCallableMustStayOpaque: never = unavailableCallableResult; // error[TK2322]
 
 type InterleavedOverload = {
   method(value: MissingOverload.First): void; // error[TK2503]: Cannot find namespace 'MissingOverload'

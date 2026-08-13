@@ -2167,8 +2167,14 @@ fn demand_rejects_pending_enum_through_every_fast_path_without_durable_writes() 
     let wk = interner.well_known();
     let enum_id = EnumId(70_004);
     let shell = interner.reserve_enum(enum_id, "PendingDemand");
+    let member_shell =
+        interner.reserve_enum_member(enum_id, EnumMemberId(0), "PendingDemand", "Zero");
     let object = interner.intern_object(ObjectType {
         properties: vec![PropertyType::public("value", shell)],
+        ..Default::default()
+    });
+    let member_object = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("value", member_shell)],
         ..Default::default()
     });
     let function = interner.intern_function(FunctionType {
@@ -2187,22 +2193,23 @@ fn demand_rejects_pending_enum_through_every_fast_path_without_durable_writes() 
         distributive: false,
         poisoned: false,
     });
-    let roots = [object, function, union, conditional];
+    let roots = [object, member_object, function, union, conditional];
     let published = PublishedClasses::empty();
     let mut states = roots.map(|_| SemanticQueryState::default());
-    let mut next_type_params = [0; 4];
+    let mut next_type_params = [0; 5];
 
-    for ((root, state), next_type_param) in roots
+    for (((root, state), next_type_param), pending) in roots
         .into_iter()
         .zip(&mut states)
         .zip(&mut next_type_params)
+        .zip([shell, member_shell, shell, shell, shell])
     {
         let outcome =
             SemanticQueryCoordinator::new(&mut interner, &published, state, next_type_param)
                 .demand(root);
         assert_eq!(
             outcome,
-            DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: shell })
+            DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: pending })
         );
         assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0));
     }
@@ -2222,6 +2229,12 @@ fn demand_rejects_pending_enum_through_every_fast_path_without_durable_writes() 
             },
         )
         .expect("matching enum fills");
+    assert_eq!(
+        interner
+            .store()
+            .enum_member_type_id(enum_id, EnumMemberId(0)),
+        Some(member_shell)
+    );
 
     for ((root, state), next_type_param) in roots
         .into_iter()
@@ -2265,9 +2278,24 @@ fn enum_query_before_fill_is_not_cached_and_query_after_fill_succeeds() {
     let mut interner = Interner::with_intrinsics();
     let enum_id = EnumId(70_002);
     let shell = interner.reserve_enum(enum_id, "ReadyLater");
+    let member_shell = interner.reserve_enum_member(enum_id, EnumMemberId(0), "ReadyLater", "Zero");
+    let invalid_shell =
+        interner.reserve_enum_member(enum_id, EnumMemberId(1), "ReadyLater", "Invalid");
+    let nested = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("member", member_shell)],
+        ..Default::default()
+    });
+    let invalid_nested = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("member", invalid_shell)],
+        ..Default::default()
+    });
     let published = PublishedClasses::empty();
     let mut state = SemanticQueryState::default();
     assert!(publication_exhaustion(&interner, &[shell], &published, &mut state).is_some());
+    assert_eq!(
+        publication_exhaustion(&interner, &[nested], &published, &mut state),
+        Some(Exhaustion::EvaluationInvalidNode { ty: member_shell })
+    );
     interner
         .fill_enum(
             shell,
@@ -2286,6 +2314,14 @@ fn enum_query_before_fill_is_not_cached_and_query_after_fill_succeeds() {
     assert_eq!(
         publication_exhaustion(&interner, &[shell], &published, &mut state),
         None
+    );
+    assert_eq!(
+        publication_exhaustion(&interner, &[nested], &published, &mut state),
+        None
+    );
+    assert_eq!(
+        publication_exhaustion(&interner, &[invalid_nested], &published, &mut state),
+        Some(Exhaustion::EvaluationInvalidNode { ty: invalid_shell })
     );
 }
 

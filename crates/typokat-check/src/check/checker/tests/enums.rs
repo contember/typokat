@@ -83,6 +83,20 @@ fn duplicate_enum_member_initializer_is_checked_once() {
 }
 
 #[test]
+fn duplicate_enum_member_keeps_first_endpoint_and_checks_both_initializers() {
+    let out =
+        check_source("enum E { A = firstMissing, A = secondMissing } const exact: E.A = E.A;");
+    let mut diagnostics = out
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    diagnostics.sort_unstable();
+    assert_eq!(diagnostics, ["TK2300", "TK2300", "TK2304", "TK2304"]);
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
 fn enum_template_initializer_visits_each_interpolation_once_without_generic_incomplete() {
     let numeric =
         check_source("declare function nextNumber(): number; enum E { A = `${nextNumber()}` }");
@@ -161,6 +175,41 @@ fn illegal_enum_merge_reports_every_owned_declaration() {
 }
 
 #[test]
+fn rejected_enum_function_group_publishes_no_enum_member_endpoint() {
+    let out =
+        check_source("enum E { A } function E(): void {} const member = E.A; const typed: E = 1;");
+    let mut diagnostics = out
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect::<Vec<_>>();
+    diagnostics.sort_unstable();
+    assert_eq!(diagnostics, ["TK2339", "TK2567", "TK2567", "TK2709"]);
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
+fn rejected_enum_group_never_leaks_pending_shell_into_annotations() {
+    for source in [
+        "enum E { A } function E(): void {} type Alias = E; declare function use(value: E): void;",
+        "type Alias = E; type Member = E.A; declare function use(value: E, member: E.A): void; enum E { A } function E(): void {}",
+        "namespace E { export const tag = 1; } enum E { A } function E(): void {} type Alias = E; declare function use(value: E): void;",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code.as_str() == "TK2709")
+                .count(),
+            2,
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn qualified_enum_reference_diagnostic_owns_the_whole_expression() {
     for (source, code, needle) in [
         ("enum E { A = E.A }", "TK2565", "E.A"),
@@ -215,6 +264,126 @@ fn production_enum_publication_is_one_atomic_replay_component() {
     for value in values {
         assert!(trace.edges.contains(&(value, group)));
         assert!(trace.edges.contains(&(group, value)));
+    }
+}
+
+#[test]
+fn enum_namespace_value_payload_joins_the_atomic_descriptor_in_both_orders() {
+    for source in [
+        "enum E { A = 'a' } namespace E { export const label = 'enum'; } const member: E.A = E.A; const label: string = E.label;",
+        "namespace E { export const label = 'enum'; } enum E { A = 'a' } const member: E.A = E.A; const label: string = E.label;",
+    ] {
+        let (out, trace) = check_source_with_enum_publication_trace(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+        assert_eq!(trace.reservations, 1);
+        assert_eq!(trace.fills, 1);
+        assert_eq!(trace.ordered_member_names, ["A"]);
+        assert!(trace.readonly_value_properties);
+        assert!(!trace.terminal_visible_before_freeze);
+    }
+}
+
+#[test]
+fn namespace_interface_resolves_reserved_exact_enum_member_in_both_orders() {
+    for source in [
+        "enum Status { Ready = 'ready' } namespace Status { export interface Payload { status: Status.Ready; } } const payload: Status.Payload = { status: Status.Ready };",
+        "namespace Status { export interface Payload { status: Status.Ready; } } enum Status { Ready = 'ready' } const payload: Status.Payload = { status: Status.Ready };",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+}
+
+#[test]
+fn enum_namespace_member_collision_reports_both_owners_in_every_order() {
+    for source in [
+        "enum E { A = 1 } namespace E { export const A = 2; }",
+        "namespace E { export const A = 2; } enum E { A = 1 }",
+        "enum E { First = 0 } enum E { A = 1 } namespace E { export const A = 2; }",
+        "enum E { A = 1 } namespace E { export interface A {} }",
+        "namespace E { export type A = number; } enum E { A = 1 }",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["TK2300", "TK2300"],
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn enum_namespace_collision_census_does_not_repeat_existing_duplicate_owners() {
+    for (source, expected) in [
+        (
+            "enum E { A = 1, A = 2 } namespace E { export const A = 3; }",
+            3,
+        ),
+        (
+            "enum E { A = 1 } namespace E { export interface A {} export interface A {} }",
+            3,
+        ),
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+        assert_eq!(
+            out.diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code.as_str() == "TK2300")
+                .count(),
+            expected,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn project_enum_namespace_slots_preserve_identity_across_root_order() {
+    for inputs in [
+        vec![
+            FileInput {
+                name: "source.ts".into(),
+                source: "export enum Status { Ready = 'ready', Done = 'done' } export namespace Status { export const label = 'status'; export interface Payload { status: Status; } }".into(),
+            },
+            FileInput {
+                name: "consumer.ts".into(),
+                source: "import { Status } from './source'; const member: Status.Ready = Status.Ready; const payload: Status.Payload = { status: Status.Done }; const label: string = Status.label; const wrong: Status.Done = Status.Ready;".into(),
+            },
+        ],
+        vec![
+            FileInput {
+                name: "consumer.ts".into(),
+                source: "import { Status } from './source'; const member: Status.Ready = Status.Ready; const payload: Status.Payload = { status: Status.Done }; const label: string = Status.label; const wrong: Status.Done = Status.Ready;".into(),
+            },
+            FileInput {
+                name: "source.ts".into(),
+                source: "export enum Status { Ready = 'ready', Done = 'done' } export namespace Status { export const label = 'status'; export interface Payload { status: Status; } }".into(),
+            },
+        ],
+    ] {
+        let reports = check_project(inputs);
+        assert!(reports
+            .iter()
+            .all(|report| report.output.parse_errors.is_empty()));
+        assert!(reports
+            .iter()
+            .all(|report| report.output.incomplete.is_empty()));
+        let diagnostics = reports
+            .iter()
+            .flat_map(|report| &report.output.diagnostics)
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostics, ["TK2322"]);
     }
 }
 

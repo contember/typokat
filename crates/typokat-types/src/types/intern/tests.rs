@@ -583,6 +583,7 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
     let mut interner = Interner::with_intrinsics();
     let enum_id = interner.next_enum_id();
     let reserved = interner.reserve_enum(enum_id, "Mode");
+    let reserved_member = interner.reserve_enum_member(enum_id, EnumMemberId(0), "Mode", "Read");
     let invalid = EnumType {
         id: EnumId(enum_id.0 + 1),
         name: "Mode".to_owned(),
@@ -600,8 +601,10 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
         interner
             .store()
             .enum_member_type_id(enum_id, EnumMemberId(0)),
-        None
+        Some(reserved_member)
     );
+    assert!(interner.pending_reserved_enum(reserved_member));
+    assert!(interner.store().enum_member_type(reserved_member).is_none());
 
     let family = EnumType {
         id: enum_id,
@@ -620,6 +623,7 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
     let member = interner
         .store()
         .enum_member_type_id(enum_id, EnumMemberId(0));
+    assert_eq!(member, Some(reserved_member));
     assert!(interner.fill_enum(reserved, family).is_err());
     assert_eq!(interner.store().len(), after_fill);
     assert_eq!(
@@ -628,6 +632,155 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
             .enum_member_type_id(enum_id, EnumMemberId(0)),
         member
     );
+}
+
+#[test]
+fn enum_member_shell_batch_fills_valid_rows_and_terminalizes_invalid_rows() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = interner.next_enum_id();
+    let whole = interner.reserve_enum(enum_id, "Mode");
+    let ready = interner.reserve_enum_member(enum_id, EnumMemberId(0), "Mode", "Ready");
+    let invalid = interner.reserve_enum_member(enum_id, EnumMemberId(1), "Mode", "Invalid");
+    interner
+        .fill_enum(
+            whole,
+            EnumType {
+                id: enum_id,
+                name: "Mode".to_owned(),
+                members: vec![EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "Ready".to_owned(),
+                    value: EnumValue::String("ready".to_owned()),
+                }],
+                numeric_open: false,
+            },
+        )
+        .expect("whole and member terminals publish atomically");
+    assert!(interner.store().enum_member_type(ready).is_some());
+    assert!(interner.store().enum_member_type(invalid).is_none());
+    assert!(interner.unavailable_reserved_enum_member(invalid));
+    assert!(!interner.pending_reserved_enum(ready));
+    assert!(!interner.pending_reserved_enum(invalid));
+}
+
+#[test]
+fn enum_member_shell_keeps_identity_name_and_reverse_map_through_fill() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = interner.next_enum_id();
+    let whole = interner.reserve_enum(enum_id, "Status");
+    let member = interner.reserve_enum_member(enum_id, EnumMemberId(0), "Status", "Ready");
+    assert_eq!(
+        interner.store().enum_member_shell(member),
+        Some((enum_id, EnumMemberId(0), "Status", "Ready"))
+    );
+    assert_eq!(
+        interner
+            .store()
+            .enum_member_type_id(enum_id, EnumMemberId(0)),
+        Some(member)
+    );
+    interner
+        .fill_enum(
+            whole,
+            EnumType {
+                id: enum_id,
+                name: "Status".to_owned(),
+                members: vec![EnumMemberFact {
+                    id: EnumMemberId(0),
+                    name: "Ready".to_owned(),
+                    value: EnumValue::String("ready".to_owned()),
+                }],
+                numeric_open: false,
+            },
+        )
+        .expect("matching shell fills");
+    let terminal = interner
+        .store()
+        .enum_member_type(member)
+        .expect("member facts terminalize");
+    assert_eq!(
+        (terminal.enum_id, terminal.member_id),
+        (enum_id, EnumMemberId(0))
+    );
+    assert_eq!(
+        (terminal.enum_name.as_str(), terminal.member_name.as_str()),
+        ("Status", "Ready")
+    );
+}
+
+#[test]
+fn enum_member_batch_propagates_owner_numeric_open_to_every_shell() {
+    let mut interner = Interner::with_intrinsics();
+    let enum_id = interner.next_enum_id();
+    let whole = interner.reserve_enum(enum_id, "Open");
+    let first = interner.reserve_enum_member(enum_id, EnumMemberId(0), "Open", "First");
+    let second = interner.reserve_enum_member(enum_id, EnumMemberId(1), "Open", "Second");
+    interner
+        .fill_enum(
+            whole,
+            EnumType {
+                id: enum_id,
+                name: "Open".to_owned(),
+                members: vec![
+                    EnumMemberFact {
+                        id: EnumMemberId(0),
+                        name: "First".to_owned(),
+                        value: EnumValue::OpaqueNumber,
+                    },
+                    EnumMemberFact {
+                        id: EnumMemberId(1),
+                        name: "Second".to_owned(),
+                        value: EnumValue::Number(EnumNumber::new(1.0).expect("finite")),
+                    },
+                ],
+                numeric_open: true,
+            },
+        )
+        .expect("open family fills");
+    assert!(
+        interner
+            .store()
+            .enum_member_type(first)
+            .unwrap()
+            .numeric_open
+    );
+    assert!(
+        interner
+            .store()
+            .enum_member_type(second)
+            .unwrap()
+            .numeric_open
+    );
+}
+
+#[test]
+fn frozen_delta_preserves_exact_enum_member_identity() {
+    let mut base = Interner::with_intrinsics();
+    let enum_id = base.next_enum_id();
+    let whole = base.reserve_enum(enum_id, "Frozen");
+    let member = base.reserve_enum_member(enum_id, EnumMemberId(0), "Frozen", "Only");
+    base.fill_enum(
+        whole,
+        EnumType {
+            id: enum_id,
+            name: "Frozen".to_owned(),
+            members: vec![EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "Only".to_owned(),
+                value: EnumValue::String("only".to_owned()),
+            }],
+            numeric_open: false,
+        },
+    )
+    .expect("family fills");
+    base.freeze_as_base().expect("base freezes");
+    let delta = base.fork_delta().expect("delta forks");
+    assert_eq!(
+        delta.store().enum_member_type_id(enum_id, EnumMemberId(0)),
+        Some(member)
+    );
+    assert_eq!(delta.store().enum_member_whole_type_id(member), Some(whole));
+    assert!(base.store().shares_base_rows_with(delta.store()));
 }
 
 #[test]

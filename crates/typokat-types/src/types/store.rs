@@ -25,6 +25,15 @@ pub enum TypeParamFreezeError {
     AlreadyFrozen(TypeParamId),
 }
 
+#[derive(Clone, Debug)]
+struct EnumMemberRow {
+    enum_id: EnumId,
+    member_id: EnumMemberId,
+    enum_name: String,
+    member_name: String,
+    terminal: Option<EnumMemberType>,
+}
+
 impl TypeId {
     #[inline]
     pub fn index(self) -> usize {
@@ -100,8 +109,8 @@ pub struct Store {
     templates: LayeredVec<TemplateType>,
     /// Whole enum families keyed by their stable declaration-group identity.
     enums: LayeredVec<EnumType>,
-    /// Exact nominal enum members.
-    enum_members: LayeredVec<EnumMemberType>,
+    /// Exact nominal enum-member identities. Facts remain absent while reserved.
+    enum_members: LayeredVec<EnumMemberRow>,
     /// Stable reverse lookup from declaration identity to the whole enum node.
     enum_wholes_by_id: LayeredMap<EnumId, TypeId>,
     /// Stable reverse lookup from declaration identity to an exact member node.
@@ -613,7 +622,10 @@ impl Store {
         if self.tag(id) != TypeTag::EnumMember {
             return None;
         }
-        self.enum_members.get(self.payload(id) as usize)
+        self.enum_members
+            .get(self.payload(id) as usize)?
+            .terminal
+            .as_ref()
     }
 
     /// The canonical whole type for an enum declaration identity.
@@ -624,6 +636,22 @@ impl Store {
     /// The canonical exact member type for an enum-member declaration identity.
     pub fn enum_member_type_id(&self, enum_id: EnumId, member_id: EnumMemberId) -> Option<TypeId> {
         self.enum_members_by_id.get(&(enum_id, member_id)).copied()
+    }
+
+    pub(crate) fn enum_member_shell(
+        &self,
+        id: TypeId,
+    ) -> Option<(EnumId, EnumMemberId, &str, &str)> {
+        if self.tag(id) != TypeTag::EnumMember {
+            return None;
+        }
+        let row = self.enum_members.get(self.payload(id) as usize)?;
+        Some((
+            row.enum_id,
+            row.member_id,
+            row.enum_name.as_str(),
+            row.member_name.as_str(),
+        ))
     }
 
     /// The owning whole type for an exact member, once its family is published.
@@ -1014,11 +1042,57 @@ impl Store {
     pub fn push_enum_member(&mut self, member: EnumMemberType, flags: TypeFlags) -> TypeId {
         let member_key = (member.enum_id, member.member_id);
         let payload = self.enum_members.len() as u32;
-        self.enum_members.push_local(member);
+        self.enum_members.push_local(EnumMemberRow {
+            enum_id: member.enum_id,
+            member_id: member.member_id,
+            enum_name: member.enum_name.clone(),
+            member_name: member.member_name.clone(),
+            terminal: Some(member),
+        });
         let id = self.push(TypeTag::EnumMember, flags, payload);
         let existing = self.enum_members_by_id.insert_append_only(member_key, id);
         debug_assert!(existing.is_none() || existing == Some(id));
         id
+    }
+
+    pub(super) fn push_reserved_enum_member(
+        &mut self,
+        enum_id: EnumId,
+        member_id: EnumMemberId,
+        enum_name: String,
+        member_name: String,
+        flags: TypeFlags,
+    ) -> TypeId {
+        let payload = self.enum_members.len() as u32;
+        self.enum_members.push_local(EnumMemberRow {
+            enum_id,
+            member_id,
+            enum_name,
+            member_name,
+            terminal: None,
+        });
+        let id = self.push(TypeTag::EnumMember, flags, payload);
+        let existing = self
+            .enum_members_by_id
+            .insert_append_only((enum_id, member_id), id);
+        debug_assert!(existing.is_none());
+        id
+    }
+
+    pub(super) fn set_enum_member(&mut self, id: TypeId, member: EnumMemberType) {
+        assert_eq!(self.tag(id), TypeTag::EnumMember);
+        let row = self
+            .enum_members
+            .get_mut_local(self.payload(id) as usize)
+            .expect("validated enum-member row must be local");
+        assert_eq!(
+            (row.enum_id, row.member_id),
+            (member.enum_id, member.member_id)
+        );
+        assert_eq!(row.enum_name, member.enum_name);
+        assert_eq!(row.member_name, member.member_name);
+        assert!(row.terminal.is_none());
+        row.terminal = Some(member);
     }
 }
 

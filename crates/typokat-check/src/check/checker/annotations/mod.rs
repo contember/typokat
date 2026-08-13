@@ -415,8 +415,12 @@ mod multi_child_recovery_tests {
                 .iter()
                 .map(|diagnostic| diagnostic.code)
                 .collect::<Vec<_>>(),
-            [DiagnosticCode::TK2394, DiagnosticCode::TK2322],
-            "ready compatibility and bodies run, but the unavailable group publishes no callable"
+            [
+                DiagnosticCode::TK2394,
+                DiagnosticCode::TK2322,
+                DiagnosticCode::TK2322,
+            ],
+            "the reserved enum member makes the overload row available before publication"
         );
     }
 

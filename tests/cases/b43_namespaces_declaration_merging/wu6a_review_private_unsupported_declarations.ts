@@ -8,7 +8,7 @@ namespace Wu6aReviewPrivateImportSource {
 
 namespace Wu6aReviewPrivateUnsupportedDeclarations {
   export const ready: number = 1;
-  enum HiddenMode { A } // incomplete[decl/enum-declaration/self]
+  enum HiddenMode { A }
   import HiddenAlias = Wu6aReviewPrivateImportSource; // incomplete[decl/import-equals/self]
 }
 

@@ -1238,6 +1238,7 @@ pub struct EnumGroupView<'a> {
 pub enum NamespaceValueAttachmentDisposition {
     AdmittedFunction,
     AdmittedClass,
+    AdmittedEnum,
     DeferredFunctionBacklog42,
     TypeContainerOnly,
     Rejected(MergeDisposition),
@@ -3974,6 +3975,7 @@ impl Binder {
             disposition,
             NamespaceValueAttachmentDisposition::AdmittedFunction
                 | NamespaceValueAttachmentDisposition::AdmittedClass
+                | NamespaceValueAttachmentDisposition::AdmittedEnum
                 | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
         );
         let fragments = if exposes_members {
@@ -4164,7 +4166,10 @@ impl Binder {
                     .get(symbol)
                     .is_some_and(|symbol| symbol.blocks_namespace_lookup)
                 {
-                    return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                    return root_deferred.map_or(
+                        QualifiedTypePathResolution::Unavailable { segment: 0 },
+                        |reason| QualifiedTypePathResolution::Deferred { segment: 0, reason },
+                    );
                 }
                 let view = self.qualified_symbol_view(owning_namespace, symbol, &mut Vec::new());
                 if view.unavailable {
@@ -4174,7 +4179,12 @@ impl Binder {
                     return QualifiedTypePathResolution::Deferred { segment: 0, reason };
                 }
                 if let Some(reason) = root_deferred {
-                    if reason == QualifiedTypePathDeferredReason::Enum {
+                    let admitted_enum_namespace = reason == QualifiedTypePathDeferredReason::Enum
+                        && view.namespace.is_some()
+                        && root_merge.is_some_and(|record| {
+                            record.classification.disposition == MergeDisposition::Admitted
+                        });
+                    if reason == QualifiedTypePathDeferredReason::Enum && !admitted_enum_namespace {
                         return QualifiedTypePathResolution::Deferred { segment: 0, reason };
                     }
                     let known_target = view.namespace.is_some() || view.type_group.is_some();
@@ -4225,7 +4235,13 @@ impl Binder {
                             .get(symbol)
                             .is_some_and(|symbol| symbol.blocks_namespace_lookup)
                         {
-                            return QualifiedTypePathResolution::Unavailable { segment: 0 };
+                            return public_root_deferred.map_or(
+                                QualifiedTypePathResolution::Unavailable { segment: 0 },
+                                |reason| QualifiedTypePathResolution::Deferred {
+                                    segment: 0,
+                                    reason,
+                                },
+                            );
                         }
                         let view =
                             self.qualified_symbol_view(public_owner, symbol, &mut Vec::new());
@@ -4236,7 +4252,15 @@ impl Binder {
                             return QualifiedTypePathResolution::Deferred { segment: 0, reason };
                         }
                         if let Some(reason) = public_root_deferred {
-                            if reason == QualifiedTypePathDeferredReason::Enum {
+                            let admitted_enum_namespace = reason
+                                == QualifiedTypePathDeferredReason::Enum
+                                && view.namespace.is_some()
+                                && public_root_merge.is_some_and(|record| {
+                                    record.classification.disposition == MergeDisposition::Admitted
+                                });
+                            if reason == QualifiedTypePathDeferredReason::Enum
+                                && !admitted_enum_namespace
+                            {
                                 return QualifiedTypePathResolution::Deferred {
                                     segment: 0,
                                     reason,
@@ -4461,10 +4485,7 @@ impl Binder {
                         view.deferred = Some(QualifiedTypePathDeferredReason::Import);
                         break;
                     }
-                    MergeDeclarationKind::Enum => {
-                        view.deferred = Some(QualifiedTypePathDeferredReason::Enum);
-                        break;
-                    }
+                    MergeDeclarationKind::Enum => {}
                     MergeDeclarationKind::DeferredExport if member.declaration.is_none() => {
                         if member.module_specifier.is_some() {
                             view.deferred = Some(QualifiedTypePathDeferredReason::Import);
@@ -4574,11 +4595,12 @@ fn namespace_value_attachment_disposition(
             composition.kind == MergeCompositionKind::ClassNamespace
                 && composition.disposition == MergeDisposition::Admitted
         });
-    match (has_function, has_class) {
-        (true, false) => Some(NamespaceValueAttachmentDisposition::AdmittedFunction),
-        (false, true) => Some(NamespaceValueAttachmentDisposition::AdmittedClass),
-        (false, false) => Some(NamespaceValueAttachmentDisposition::TypeContainerOnly),
-        (true, true) => Some(NamespaceValueAttachmentDisposition::Rejected(
+    match (has_function, has_class, has_enum) {
+        (true, false, false) => Some(NamespaceValueAttachmentDisposition::AdmittedFunction),
+        (false, true, false) => Some(NamespaceValueAttachmentDisposition::AdmittedClass),
+        (false, false, true) => Some(NamespaceValueAttachmentDisposition::AdmittedEnum),
+        (false, false, false) => Some(NamespaceValueAttachmentDisposition::TypeContainerOnly),
+        _ => Some(NamespaceValueAttachmentDisposition::Rejected(
             MergeDisposition::RejectedRedeclaration,
         )),
     }
@@ -5164,6 +5186,7 @@ pub(super) fn plan_namespace_value_attachments(state: &BindState) -> NamespaceVa
             Some(
                 NamespaceValueAttachmentDisposition::AdmittedFunction
                     | NamespaceValueAttachmentDisposition::AdmittedClass
+                    | NamespaceValueAttachmentDisposition::AdmittedEnum
                     | NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42
             )
         );
@@ -6619,6 +6642,7 @@ fn attach_namespace_symbol(state: &mut BindState, namespace: NamespaceId, declar
         .symbol;
     if let Some(symbol) = state.symbols.get_mut(symbol_id) {
         symbol.ns = Some(namespace);
+        symbol.blocks_namespace_lookup = false;
     }
     state.attach_symbol_declaration(symbol_id, declaration);
 }
@@ -9213,6 +9237,8 @@ namespace F {
 }
 class C {}
 namespace C { export const classTag = 1; }
+enum E { Member }
+namespace E { export const enumTag = 1; }
 namespace Standalone { export const dormant = 1; }
 interface TypeOnly {}
 namespace TypeOnly { export const dormant = 1; }
@@ -9363,6 +9389,23 @@ enum ClassChimera {}
             ["classTag"]
         );
         assert!(class_attachment.members[0].value_storage.is_some());
+
+        let enum_attachment = binder
+            .namespace_value_attachment(binder.module, "E")
+            .expect("enum namespace attachment");
+        assert_eq!(
+            enum_attachment.disposition,
+            NamespaceValueAttachmentDisposition::AdmittedEnum
+        );
+        assert_eq!(
+            enum_attachment
+                .members
+                .iter()
+                .map(|member| member.name)
+                .collect::<Vec<_>>(),
+            ["enumTag"]
+        );
+        assert!(enum_attachment.members[0].value_storage.is_some());
 
         for name in ["Standalone", "TypeOnly"] {
             let namespace = binder
@@ -10970,6 +11013,7 @@ declare namespace DeferredRoot {
             &["AmbientAliasList", "PublicType"][..],
             &["AmbientAliasList", "ExplicitTypeOnly"][..],
             &["AmbientAliasList", "PublicChild", "Leaf"][..],
+            &["DeferredRoot", "Enumeration"][..],
         ] {
             success(path);
         }
@@ -11050,13 +11094,6 @@ declare namespace DeferredRoot {
                 QualifiedTypePathResolution::Deferred {
                     segment: 1,
                     reason: QualifiedTypePathDeferredReason::Import,
-                },
-            ),
-            (
-                &["DeferredRoot", "Enumeration"][..],
-                QualifiedTypePathResolution::Deferred {
-                    segment: 1,
-                    reason: QualifiedTypePathDeferredReason::Enum,
                 },
             ),
             (
@@ -11204,10 +11241,11 @@ declare namespace A {
                 MergeDisposition::Admitted,
                 "{name} composition must be admitted"
             );
-            assert!(matches!(
-                binder.resolve_qualified_type_path(binder.module, &[name, "X"]),
-                QualifiedTypePathResolution::TypeGroup(_)
-            ));
+            let resolution = binder.resolve_qualified_type_path(binder.module, &[name, "X"]);
+            assert!(
+                matches!(resolution, QualifiedTypePathResolution::TypeGroup(_)),
+                "{name}: {resolution:?}"
+            );
         }
 
         for (source, name) in [

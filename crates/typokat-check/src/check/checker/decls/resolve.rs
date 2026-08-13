@@ -1,6 +1,8 @@
 use super::*;
 use crate::binder::declaration::{DeclarationKind, TypeGroupId};
-use crate::binder::namespace::QualifiedTypePathResolution;
+use crate::binder::namespace::{
+    DeclarationOwner, NamespacePublication, QualifiedTypePathResolution,
+};
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::checker::classes::application::{
@@ -125,7 +127,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         symbol: SymbolId,
         name: &str,
     ) -> Option<EnumMemberEndpoint> {
-        let (_, whole) = self.enum_value_group(symbol)?;
+        let (group, whole) = self.enum_value_group(symbol)?;
+        if self.enum_namespace_member_collision(group, name) {
+            return None;
+        }
         let family = self.interner.store().enum_type(whole)?;
         let member = family
             .members
@@ -139,6 +144,92 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         Some(match member {
             Some(member) => EnumMemberEndpoint::Found { whole, member },
             None => EnumMemberEndpoint::Missing { whole },
+        })
+    }
+
+    fn enum_member_endpoint_at(
+        &self,
+        scope: ScopeId,
+        root: &str,
+        name: &str,
+    ) -> Option<EnumMemberEndpoint> {
+        let symbol = self.binder.resolve_symbol(scope, root)?;
+        let group = self.binder.symbols.get(symbol)?.ty?;
+        if self.enum_namespace_member_collision(group, name) {
+            return None;
+        }
+        if let Some(EnumMemberEndpoint::Found { whole, member }) =
+            self.enum_member_endpoint(symbol, name)
+        {
+            return Some(EnumMemberEndpoint::Found { whole, member });
+        }
+        if !self.type_environment.is_published() {
+            if self.binder.enum_group(group).is_some_and(|view| {
+                view.buildability != crate::binder::namespace::EnumGroupBuildability::Buildable
+            }) {
+                return None;
+            }
+            if let Some(TypeDecl::Enum {
+                reserved,
+                member_shells,
+                ..
+            }) = self.type_decls.get(group.index())
+            {
+                return Some(match member_shells.get(name) {
+                    Some((_, member)) => EnumMemberEndpoint::Found {
+                        whole: *reserved,
+                        member: *member,
+                    },
+                    None => EnumMemberEndpoint::Missing { whole: *reserved },
+                });
+            }
+        }
+        let whole = match self
+            .type_environment
+            .resolution_environment()
+            .groups()
+            .get(group)
+        {
+            Some(PublishedTypeGroupTerminal::Ready(published)) => {
+                let PublishedTypeGroupSurface::Enum(whole) = published.surface else {
+                    return None;
+                };
+                whole
+            }
+            Some(PublishedTypeGroupTerminal::Unavailable(_)) => return None,
+            None if !self.type_environment.is_published() => {
+                self.type_resolved.get(group.index()).copied().flatten()?
+            }
+            None => return None,
+        };
+        let family = self.interner.store().enum_type(whole)?;
+        let member = family
+            .members
+            .iter()
+            .find(|member| member.name == name)
+            .and_then(|member| {
+                self.interner
+                    .store()
+                    .enum_member_type_id(family.id, member.id)
+            });
+        Some(match member {
+            Some(member) => EnumMemberEndpoint::Found { whole, member },
+            None => EnumMemberEndpoint::Missing { whole },
+        })
+    }
+
+    fn enum_namespace_member_collision(&self, group: TypeGroupId, name: &str) -> bool {
+        let Some(namespace) = self
+            .binder
+            .enum_group(group)
+            .and_then(|view| view.namespace)
+        else {
+            return false;
+        };
+        self.binder.namespaces.members().any(|member| {
+            member.target == DeclarationOwner::NamespacePublic(namespace)
+                && member.publication != NamespacePublication::Private
+                && member.name.as_deref() == Some(name)
         })
     }
 
@@ -530,22 +621,20 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
 
         if segments.len() == 2 {
             let root = segments[0];
-            if let Some(symbol) = self.resolve_type_replay(scope, root.name) {
-                if let Some(EnumMemberEndpoint::Found { member, .. }) =
-                    self.enum_member_endpoint(symbol, segments[1].name)
-                {
-                    if let Some(arguments) = type_arguments {
-                        for argument in &arguments.params {
-                            let _ = self.lower_annotation(scope, argument);
-                        }
-                        self.emit_diagnostic(Diagnostic::type_is_not_generic(
-                            reference_span,
-                            &format!("{}.{}", root.name, segments[1].name),
-                        ));
-                        return Some(self.interner.well_known().error);
+            if let Some(EnumMemberEndpoint::Found { member, .. }) =
+                self.enum_member_endpoint_at(scope, root.name, segments[1].name)
+            {
+                if let Some(arguments) = type_arguments {
+                    for argument in &arguments.params {
+                        let _ = self.lower_annotation(scope, argument);
                     }
-                    return Some(member);
+                    self.emit_diagnostic(Diagnostic::type_is_not_generic(
+                        reference_span,
+                        &format!("{}.{}", root.name, segments[1].name),
+                    ));
+                    return Some(self.interner.well_known().error);
                 }
+                return Some(member);
             }
         }
 
@@ -633,6 +722,24 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         ) && segments.len() == 2
         {
             if let Some(symbol) = self.resolve_type_replay(scope, segments[0].name) {
+                let rejected_enum_group = self
+                    .binder
+                    .symbols
+                    .get(symbol)
+                    .and_then(|binding| binding.ty)
+                    .and_then(|group| self.binder.enum_group(group))
+                    .is_some_and(|view| {
+                        view.buildability
+                            != crate::binder::namespace::EnumGroupBuildability::Buildable
+                    });
+                if rejected_enum_group {
+                    self.emit_diagnostic(Diagnostic::namespace_has_no_exported_member(
+                        segments[1].span,
+                        segments[0].name,
+                        segments[1].name,
+                    ));
+                    return QualifiedTypeDisposition::RecoveredTopologyFailure;
+                }
                 let is_bare_enum = self
                     .binder
                     .symbols
@@ -684,6 +791,18 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         arguments: Option<&TSTypeParameterInstantiation<'_>>,
     ) -> Option<TypeId> {
         self.record_replay_demand(super::super::replay_index::ReplayOwner::TypeGroup(group));
+        let rejected_enum_group = self.binder.enum_group(group).is_some_and(|view| {
+            view.buildability != crate::binder::namespace::EnumGroupBuildability::Buildable
+        });
+        if rejected_enum_group {
+            if let Some(arguments) = arguments {
+                for argument in &arguments.params {
+                    let _ = self.lower_annotation(scope, argument);
+                }
+            }
+            self.emit_diagnostic(Diagnostic::cannot_use_namespace_as_type(span, name));
+            return Some(self.interner.well_known().error);
+        }
         if (matches!(self.current_source, crate::source::SourceUnit::User { .. })
             || self.combined_user_source)
             && self

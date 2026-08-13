@@ -4157,15 +4157,8 @@ fn declaration_namespace_names(
 
 fn default_candidate_declaration_namespace_names(
     declaration: &Declaration<'_>,
-    mut record: impl FnMut(&str, NamespaceProvenance),
+    record: impl FnMut(&str, NamespaceProvenance),
 ) -> bool {
-    if let Declaration::TSEnumDeclaration(declaration) = declaration {
-        record(
-            declaration.id.name.as_str(),
-            NamespaceProvenance::PresentOrUnknown,
-        );
-        return true;
-    }
     declaration_namespace_names(declaration, record)
 }
 
@@ -5771,11 +5764,16 @@ mod default_module_candidate_tests {
         let direct_merge = "export default class Merged {}\nnamespace Merged {}\n";
         let identifier_merge =
             "class Identifier {}\nnamespace Identifier {}\nexport default Identifier;\n";
+        let bare_enum = "enum BareEnum { A }\nexport default BareEnum;\n";
+        let enum_merge =
+            "enum MergedEnum { A }\nnamespace MergedEnum {}\nexport default MergedEnum;\n";
         let local = "const local = 1;\nexport { local as default };\n";
         let interface = "export default interface Unsupported {}\n";
         let source_bridge = "export { named as default } from \"./source.js\";\nexport { default as alias } from \"./missing.js\";\n";
         let result = TestProject::collect(&[
             ("direct.ts", direct_merge),
+            ("enum-merge.ts", enum_merge),
+            ("enum.ts", bare_enum),
             ("identifier.ts", identifier_merge),
             ("interface.ts", interface),
             ("local.ts", local),
@@ -5788,6 +5786,8 @@ mod default_module_candidate_tests {
             ("local.ts", local),
             ("interface.ts", interface),
             ("identifier.ts", identifier_merge),
+            ("enum.ts", bare_enum),
+            ("enum-merge.ts", enum_merge),
             ("direct.ts", direct_merge),
         ])?;
         assert_eq!(result, reverse);
@@ -5801,6 +5801,9 @@ mod default_module_candidate_tests {
             .is_some_and(|module| module.blocks()
                 == [DefaultExportCandidateBlock::DirectNamedNamespaceMerge]));
         assert!(module("identifier.ts").is_some_and(|module| module.blocks()
+            == [DefaultExportCandidateBlock::IdentifierNamespaceProvenance]));
+        assert!(module("enum.ts").is_some_and(|module| module.blocks().is_empty()));
+        assert!(module("enum-merge.ts").is_some_and(|module| module.blocks()
             == [DefaultExportCandidateBlock::IdentifierNamespaceProvenance]));
         assert!(module("interface.ts").is_some_and(
             |module| module.blocks() == [DefaultExportCandidateBlock::DefaultInterface]

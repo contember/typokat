@@ -155,6 +155,7 @@ impl<Ticket: Copy> FunctionGroupRegistry<Ticket> {
                     NamespaceValueAttachmentDisposition::AdmittedFunction => {}
                     NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42 => {}
                     NamespaceValueAttachmentDisposition::AdmittedClass
+                    | NamespaceValueAttachmentDisposition::AdmittedEnum
                     | NamespaceValueAttachmentDisposition::TypeContainerOnly
                     | NamespaceValueAttachmentDisposition::Rejected(_) => return None,
                 }

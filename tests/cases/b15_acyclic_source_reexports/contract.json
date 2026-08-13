@@ -820,7 +820,7 @@
         "runs": [
           {
             "order": "normal",
-            "exit": 3,
+            "exit": 0,
             "summary": {
               "schema": 1,
               "profile": "bundler",
@@ -845,20 +845,13 @@
               ],
               "project_notices": [],
               "parse_errors": [],
-              "incomplete": [
-                "consumer.ts:3:15 annotation-lower/type-name/qualified-import-alias",
-                "source.ts:1:8 decl/enum-declaration/self"
-              ],
-              "diagnostics": [
-                "barrel.ts:1:10 TK2305",
-                "consumer.ts:2:22 TK2304",
-                "consumer.ts:3:25 TK2304"
-              ]
+              "incomplete": [],
+              "diagnostics": []
             }
           },
           {
             "order": "reverse",
-            "exit": 3,
+            "exit": 0,
             "summary": {
               "schema": 1,
               "profile": "bundler",
@@ -883,15 +876,8 @@
               ],
               "project_notices": [],
               "parse_errors": [],
-              "incomplete": [
-                "consumer.ts:3:15 annotation-lower/type-name/qualified-import-alias",
-                "source.ts:1:8 decl/enum-declaration/self"
-              ],
-              "diagnostics": [
-                "barrel.ts:1:10 TK2305",
-                "consumer.ts:2:22 TK2304",
-                "consumer.ts:3:25 TK2304"
-              ]
+              "incomplete": [],
+              "diagnostics": []
             }
           }
         ],

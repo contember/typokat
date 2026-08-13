@@ -14,9 +14,9 @@ pub use declared::DeclaredMaterializationError;
 
 use crate::types::hash::{structural_hash, StructuralKey};
 use crate::types::repr::{
-    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumId, EnumMemberType, EnumType,
-    IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType, PropertyType, TypeFlags,
-    TypeParamId, TypeParamType, TypeTag,
+    ConditionalType, DeclaredRecipeId, DeclaredTypeRecipe, EnumId, EnumMemberId, EnumMemberType,
+    EnumType, IntrinsicKind, LiteralValue, MappedType, ObjectType, ParameterType, PropertyType,
+    TypeFlags, TypeParamId, TypeParamType, TypeTag,
 };
 use crate::types::store::{Store, TypeId, TypeParamFreezeError};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -348,6 +348,7 @@ pub enum ReservedTypeKind {
     Conditional,
     Mapped,
     Enum,
+    EnumMember,
 }
 
 #[derive(Clone, Debug)]
@@ -356,6 +357,8 @@ pub enum ReservedTypeFill {
     Conditional(TypeId, ConditionalType),
     Mapped(TypeId, MappedType),
     Enum(TypeId, EnumType),
+    EnumMember(TypeId, EnumMemberType),
+    UnavailableEnumMember(TypeId),
 }
 
 impl ReservedTypeFill {
@@ -364,7 +367,9 @@ impl ReservedTypeFill {
             ReservedTypeFill::Object(id, _)
             | ReservedTypeFill::Conditional(id, _)
             | ReservedTypeFill::Mapped(id, _)
-            | ReservedTypeFill::Enum(id, _) => *id,
+            | ReservedTypeFill::Enum(id, _)
+            | ReservedTypeFill::EnumMember(id, _)
+            | ReservedTypeFill::UnavailableEnumMember(id) => *id,
         }
     }
 
@@ -374,6 +379,16 @@ impl ReservedTypeFill {
             ReservedTypeFill::Conditional(_, _) => ReservedTypeKind::Conditional,
             ReservedTypeFill::Mapped(_, _) => ReservedTypeKind::Mapped,
             ReservedTypeFill::Enum(_, _) => ReservedTypeKind::Enum,
+            ReservedTypeFill::EnumMember(_, _) | ReservedTypeFill::UnavailableEnumMember(_) => {
+                ReservedTypeKind::EnumMember
+            }
+        }
+    }
+
+    fn terminal_state(&self) -> ReservedTypeState {
+        match self {
+            ReservedTypeFill::UnavailableEnumMember(_) => ReservedTypeState::Unavailable,
+            _ => ReservedTypeState::Frozen,
         }
     }
 }
@@ -403,6 +418,7 @@ pub enum ReservedObjectPromotionError {
 enum ReservedTypeState {
     Pending,
     Frozen,
+    Unavailable,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -869,8 +885,22 @@ impl Interner {
 
     pub fn pending_reserved_enum(&self, id: TypeId) -> bool {
         self.reserved_type(id).is_some_and(|reserved| {
-            reserved.kind == ReservedTypeKind::Enum && reserved.state == ReservedTypeState::Pending
+            matches!(
+                reserved.kind,
+                ReservedTypeKind::Enum | ReservedTypeKind::EnumMember
+            ) && reserved.state == ReservedTypeState::Pending
         })
+    }
+
+    pub fn unavailable_reserved_enum_member(&self, id: TypeId) -> bool {
+        self.reserved_type(id).is_some_and(|reserved| {
+            reserved.kind == ReservedTypeKind::EnumMember
+                && reserved.state == ReservedTypeState::Unavailable
+        })
+    }
+
+    pub fn reserved_enum_semantic_frontier(&self, id: TypeId) -> bool {
+        self.pending_reserved_enum(id) || self.unavailable_reserved_enum_member(id)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -939,7 +969,7 @@ impl Interner {
             return Err("interner still carries a non-empty delta".to_owned());
         }
         for (id, reserved) in self.reserved_types() {
-            if reserved.state != ReservedTypeState::Frozen {
+            if reserved.state == ReservedTypeState::Pending {
                 return Err(format!(
                     "pending reserved type {} ({:?}, name={:?})",
                     id.0,
@@ -1026,7 +1056,7 @@ impl Interner {
                     supplied: fill.kind(),
                 });
             }
-            if reserved.state == ReservedTypeState::Frozen {
+            if reserved.state != ReservedTypeState::Pending {
                 return Err(ReservedTypeFillError::AlreadyFrozen(id));
             }
             let valid_backing_row = match reserved.kind {
@@ -1034,9 +1064,24 @@ impl Interner {
                 ReservedTypeKind::Conditional => self.store.conditional_type(id).is_some(),
                 ReservedTypeKind::Mapped => self.store.mapped_type(id).is_some(),
                 ReservedTypeKind::Enum => self.store.enum_type(id).is_some(),
+                ReservedTypeKind::EnumMember => self.store.enum_member_shell(id).is_some(),
             };
             if !valid_backing_row {
                 return Err(ReservedTypeFillError::InvalidBackingRow(id));
+            }
+            if let ReservedTypeFill::EnumMember(_, member) = fill {
+                let Some((enum_id, member_id, enum_name, member_name)) =
+                    self.store.enum_member_shell(id)
+                else {
+                    return Err(ReservedTypeFillError::InvalidBackingRow(id));
+                };
+                if enum_id != member.enum_id
+                    || member_id != member.member_id
+                    || enum_name != member.enum_name
+                    || member_name != member.member_name
+                {
+                    return Err(ReservedTypeFillError::InvalidBackingRow(id));
+                }
             }
         }
 
@@ -1053,6 +1098,7 @@ impl Interner {
         }
         for fill in fills {
             let id = fill.target();
+            let terminal_state = fill.terminal_state();
             match fill {
                 ReservedTypeFill::Object(_, object) => self.store.set_object(id, object),
                 ReservedTypeFill::Conditional(_, conditional) => {
@@ -1060,11 +1106,13 @@ impl Interner {
                 }
                 ReservedTypeFill::Mapped(_, mapped) => self.store.set_mapped(id, mapped),
                 ReservedTypeFill::Enum(_, enumeration) => self.store.set_enum(id, enumeration),
+                ReservedTypeFill::EnumMember(_, member) => self.store.set_enum_member(id, member),
+                ReservedTypeFill::UnavailableEnumMember(_) => {}
             }
             self.reserved_types
                 .get_mut(&id)
                 .expect("validated reservation must remain registered")
-                .state = ReservedTypeState::Frozen;
+                .state = terminal_state;
         }
         Ok(())
     }
@@ -1238,6 +1286,28 @@ impl Interner {
         self.register_reserved_type(id, ReservedTypeKind::Enum)
     }
 
+    /// Reserve one stable exact-member identity without primitive facts.
+    pub fn reserve_enum_member(
+        &mut self,
+        enum_id: EnumId,
+        member_id: EnumMemberId,
+        enum_name: impl Into<String>,
+        member_name: impl Into<String>,
+    ) -> TypeId {
+        assert!(
+            self.store.enum_member_type_id(enum_id, member_id).is_none(),
+            "one enum-member identity is reserved exactly once"
+        );
+        let id = self.store.push_reserved_enum_member(
+            enum_id,
+            member_id,
+            enum_name.into(),
+            member_name.into(),
+            TypeFlags::EMPTY,
+        );
+        self.register_reserved_type(id, ReservedTypeKind::EnumMember)
+    }
+
     /// Fill a reserved enum shell after all member facts are known.
     pub fn fill_enum(
         &mut self,
@@ -1254,7 +1324,7 @@ impl Interner {
                 supplied: ReservedTypeKind::Enum,
             });
         }
-        if reservation.state == ReservedTypeState::Frozen {
+        if reservation.state != ReservedTypeState::Pending {
             return Err(ReservedTypeFillError::AlreadyFrozen(id));
         }
         let current = self
@@ -1272,24 +1342,63 @@ impl Interner {
         {
             return Err(ReservedTypeFillError::InvalidBackingRow(id));
         }
-        if enum_type.members.iter().any(|member| {
-            self.store
-                .enum_member_type_id(enum_type.id, member.id)
-                .is_some()
-        }) {
-            return Err(ReservedTypeFillError::InvalidBackingRow(id));
-        }
+        let mut fills = vec![ReservedTypeFill::Enum(id, enum_type.clone())];
         for member in &enum_type.members {
-            self.intern_enum_member(EnumMemberType {
-                enum_id: enum_type.id,
-                member_id: member.id,
-                enum_name: enum_type.name.clone(),
-                member_name: member.name.clone(),
-                value: member.value.clone(),
-                numeric_open: enum_type.numeric_open,
-            });
+            let Some(member_id) = self.store.enum_member_type_id(enum_type.id, member.id) else {
+                return Err(ReservedTypeFillError::InvalidBackingRow(id));
+            };
+            let Some((shell_enum, shell_member, shell_enum_name, shell_member_name)) =
+                self.store.enum_member_shell(member_id)
+            else {
+                return Err(ReservedTypeFillError::InvalidBackingRow(member_id));
+            };
+            if shell_enum != enum_type.id
+                || shell_member != member.id
+                || shell_enum_name != enum_type.name
+                || shell_member_name != member.name
+            {
+                return Err(ReservedTypeFillError::InvalidBackingRow(member_id));
+            }
+            fills.push(ReservedTypeFill::EnumMember(
+                member_id,
+                EnumMemberType {
+                    enum_id: enum_type.id,
+                    member_id: member.id,
+                    enum_name: enum_type.name.clone(),
+                    member_name: member.name.clone(),
+                    value: member.value.clone(),
+                    numeric_open: enum_type.numeric_open,
+                },
+            ));
         }
-        self.fill_reserved_type_batch(vec![ReservedTypeFill::Enum(id, enum_type)])
+        let valid_members = enum_type
+            .members
+            .iter()
+            .map(|member| member.id)
+            .collect::<FxHashSet<_>>();
+        let pending_members = self
+            .reserved_types
+            .iter()
+            .filter_map(|(&member, reservation)| {
+                (reservation.kind == ReservedTypeKind::EnumMember
+                    && reservation.state == ReservedTypeState::Pending)
+                    .then(|| {
+                        self.store
+                            .enum_member_shell(member)
+                            .map(|shell| (member, shell))
+                    })
+                    .flatten()
+            })
+            .filter_map(|(member, (owner, member_id, _, _))| {
+                (owner == enum_type.id && !valid_members.contains(&member_id)).then_some(member)
+            })
+            .collect::<Vec<_>>();
+        fills.extend(
+            pending_members
+                .into_iter()
+                .map(ReservedTypeFill::UnavailableEnumMember),
+        );
+        self.fill_reserved_type_batch(fills)
     }
 
     /// Freeze a failed enum reservation as an uninhabited nominal shell.
@@ -1299,7 +1408,8 @@ impl Interner {
             .enum_type(id)
             .cloned()
             .ok_or(ReservedTypeFillError::InvalidBackingRow(id))?;
-        self.fill_reserved_type_batch(vec![ReservedTypeFill::Enum(
+        let enum_id = shell.id;
+        let mut fills = vec![ReservedTypeFill::Enum(
             id,
             EnumType {
                 id: shell.id,
@@ -1307,7 +1417,21 @@ impl Interner {
                 members: Vec::new(),
                 numeric_open: false,
             },
-        )])
+        )];
+        fills.extend(
+            self.reserved_types
+                .iter()
+                .filter_map(|(&member, reservation)| {
+                    (reservation.kind == ReservedTypeKind::EnumMember
+                        && reservation.state == ReservedTypeState::Pending
+                        && self
+                            .store
+                            .enum_member_shell(member)
+                            .is_some_and(|entry| entry.0 == enum_id))
+                    .then_some(ReservedTypeFill::UnavailableEnumMember(member))
+                }),
+        );
+        self.fill_reserved_type_batch(fills)
     }
 
     /// Intern one exact nominal enum member.

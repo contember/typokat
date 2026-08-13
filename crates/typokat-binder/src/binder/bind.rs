@@ -842,6 +842,27 @@ impl Binder {
         self.resolve_type_traced(scope, name, || {})
     }
 
+    /// Resolve the exact lexical symbol even when the active scope is a namespace
+    /// fragment whose public projection carries a different same-named member.
+    pub fn resolve_symbol(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+        let mut current = Some(scope);
+        while let Some(id) = current {
+            let current_scope = self.graph.get(id)?;
+            if let Some(symbol) = current_scope.lookup_local(name) {
+                return Some(symbol);
+            }
+            if let Some(symbol) = current_scope
+                .namespace_public
+                .and_then(|public| self.graph.get(public))
+                .and_then(|public| public.lookup_local(name))
+            {
+                return Some(symbol);
+            }
+            current = current_scope.parent;
+        }
+        None
+    }
+
     pub fn resolve_type_traced(
         &self,
         scope: ScopeId,
@@ -958,6 +979,7 @@ pub struct ImportedSymbol {
     name: String,
     value: Option<ImportedValueSlot>,
     ty: Option<ImportedTypeSlot>,
+    namespace: Option<crate::binder::namespace::NamespaceId>,
     value_barrier: bool,
     type_only_value_absence: bool,
     type_barrier: bool,
@@ -978,6 +1000,7 @@ impl ImportedSymbol {
         name: String,
         value: Option<ValueStorageId>,
         ty: Option<TypeGroupId>,
+        namespace: Option<crate::binder::namespace::NamespaceId>,
         provenance: ImportedSymbolProvenance,
         site: Span,
     ) -> Self {
@@ -985,6 +1008,7 @@ impl ImportedSymbol {
             name,
             value: value.map(ImportedValueSlot::Existing),
             ty: ty.map(ImportedTypeSlot::Existing),
+            namespace,
             value_barrier: provenance.value_barrier,
             type_only_value_absence: provenance.type_only_value_absence,
             type_barrier: provenance.type_barrier,
@@ -998,6 +1022,7 @@ impl ImportedSymbol {
             name,
             value: None,
             ty: None,
+            namespace: None,
             value_barrier: false,
             type_only_value_absence: false,
             type_barrier: true,
@@ -1011,6 +1036,7 @@ impl ImportedSymbol {
             name,
             value: Some(ImportedValueSlot::Placeholder),
             ty: None,
+            namespace: None,
             value_barrier: false,
             type_only_value_absence: false,
             type_barrier: true,
@@ -2106,6 +2132,20 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .and_then(|symbol_id| self.state.symbols.get(symbol_id))
             .map(|symbol| (symbol.value, symbol.ty))
             .unwrap_or((None, None))
+    }
+
+    /// Return a namespace declared directly by this module, never an inherited one.
+    pub fn local_symbol_namespace(
+        &self,
+        scope: ScopeId,
+        name: &str,
+    ) -> Option<crate::binder::namespace::NamespaceId> {
+        self.state
+            .graph
+            .get(scope)
+            .and_then(|scope| scope.lookup_local(name))
+            .and_then(|symbol_id| self.state.symbols.get(symbol_id))
+            .and_then(|symbol| symbol.ns)
     }
 
     /// Return one exact declaration owned by the module being assembled.
@@ -3332,6 +3372,7 @@ fn declare_import(
         .ty
         .as_ref()
         .map(|ImportedTypeSlot::Existing(group)| *group);
+    let namespace = import.namespace;
     let declaration =
         state.attach_declaration_scope(import.site.start, DeclarationKind::Import, scope);
     let lexical = state
@@ -3349,11 +3390,15 @@ fn declare_import(
             Some(symbol) => {
                 symbol.value = value_decl;
                 symbol.ty = type_group;
+                if namespace.is_some() {
+                    symbol.ns = namespace;
+                }
                 symbol.owns_type_group = false;
                 symbol.blocks_value_lookup = import.value_barrier;
                 symbol.type_only_value_absence = import.type_only_value_absence;
                 symbol.blocks_type_lookup = import.type_barrier;
                 symbol.type_unavailable_from_value = import.type_unavailable_from_value;
+                symbol.blocks_namespace_lookup = symbol.ns.is_none();
             }
             None => state
                 .record_frozen_prefix_write(Some(declaration), FrozenPrefixWriteSite::ImportSlot),
@@ -3366,11 +3411,13 @@ fn declare_import(
     let mut symbol = Symbol::new(&import.name);
     symbol.value = value_decl;
     symbol.ty = type_group;
+    symbol.ns = namespace;
     symbol.owns_type_group = false;
     symbol.blocks_value_lookup = import.value_barrier;
     symbol.type_only_value_absence = import.type_only_value_absence;
     symbol.blocks_type_lookup = import.type_barrier;
     symbol.type_unavailable_from_value = import.type_unavailable_from_value;
+    symbol.blocks_namespace_lookup = namespace.is_none();
     let symbol_id: SymbolId = state.symbols.push(symbol);
     if state.graph.declare(scope, &import.name, symbol_id).is_err() {
         state
@@ -3552,6 +3599,7 @@ mod tests {
                 "NeverValue".to_owned(),
                 None,
                 ty,
+                None,
                 ImportedSymbolProvenance {
                     value_barrier: true,
                     type_only_value_absence: true,
@@ -3564,6 +3612,7 @@ mod tests {
                 "ErasedValue".to_owned(),
                 None,
                 ty,
+                None,
                 ImportedSymbolProvenance {
                     value_barrier: true,
                     type_only_value_absence: false,

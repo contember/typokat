@@ -789,8 +789,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // `export {…}`, type-alias, and interface are handled elsewhere (binder /
             // type-fill / the ExportNamedDeclaration arm) and skip silently.
             Statement::TSEnumDeclaration(declaration)
-                if scope != self.current_module
-                    && scope != self.binder.statement_lexical_root(self.current_module) =>
+                if !enum_scope_is_scheduled(self.binder, self.current_module, scope) =>
             {
                 self.record_incomplete(
                     "decl/enum-declaration/self",
@@ -963,8 +962,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // for them before dropping (WU4). Type-alias / interface are handled by
             // type-fill and skip silently.
             Declaration::TSEnumDeclaration(declaration)
-                if scope != self.current_module
-                    && scope != self.binder.statement_lexical_root(self.current_module) =>
+                if !enum_scope_is_scheduled(self.binder, self.current_module, scope) =>
             {
                 self.record_incomplete(
                     "decl/enum-declaration/self",
@@ -3555,6 +3553,20 @@ fn module_declaration_is_type_only(declaration: &TSModuleDeclaration<'_>) -> boo
     }
 }
 
+fn enum_scope_is_scheduled(
+    binder: &crate::binder::Binder,
+    module: ScopeId,
+    scope: ScopeId,
+) -> bool {
+    scope == module
+        || scope == binder.statement_lexical_root(module)
+        || matches!(
+            binder.namespaces.declaration_owner_for_scope(scope),
+            crate::binder::namespace::DeclarationOwner::NamespacePublic(_)
+                | crate::binder::namespace::DeclarationOwner::NamespacePrivate(_)
+        )
+}
+
 fn module_declaration_binding_span(declaration: &TSModuleDeclaration<'_>) -> Span {
     match &declaration.id {
         TSModuleDeclarationName::Identifier(identifier) => Span::from_oxc(identifier.span),
@@ -3564,11 +3576,13 @@ fn module_declaration_binding_span(declaration: &TSModuleDeclaration<'_>) -> Spa
 
 fn module_statement_is_type_only(statement: &Statement<'_>) -> bool {
     match statement {
+        Statement::TSEnumDeclaration(enumeration) => enumeration.r#const,
         Statement::TSInterfaceDeclaration(_) | Statement::TSTypeAliasDeclaration(_) => true,
         Statement::TSModuleDeclaration(declaration) => module_declaration_is_type_only(declaration),
         Statement::ExportNamedDeclaration(export) => match &export.declaration {
             Some(Declaration::TSInterfaceDeclaration(_))
             | Some(Declaration::TSTypeAliasDeclaration(_)) => true,
+            Some(Declaration::TSEnumDeclaration(enumeration)) => enumeration.r#const,
             Some(Declaration::TSModuleDeclaration(declaration)) => {
                 module_declaration_is_type_only(declaration)
             }

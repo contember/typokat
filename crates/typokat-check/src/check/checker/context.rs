@@ -1069,6 +1069,7 @@ pub(in crate::check::checker) enum TypeDecl<'ast> {
         declaration: DeclId,
         enum_id: EnumId,
         reserved: TypeId,
+        member_shells: BTreeMap<String, (crate::types::repr::EnumMemberId, TypeId)>,
         fragments: Vec<EnumFragment<'ast>>,
     },
     /// An interface reserves an object id, then fills own and inherited members into it.
@@ -1957,6 +1958,8 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// Immutable namespace value surfaces awaiting their exact class-owned draft.
     pub(in crate::check::checker) class_namespace_payloads:
         BTreeMap<TypeGroupId, Vec<ClassNamespacePropertyPayload<Ticket>>>,
+    /// Immutable namespace value properties awaiting their enum descriptor fill.
+    pub(in crate::check::checker) enum_namespace_payloads: BTreeMap<TypeGroupId, Vec<PropertyType>>,
     /// Prepared attached-namespace members consumed exactly once at their source sites.
     pub(in crate::check::checker) namespace_values: NamespaceValueRegistry<Ticket>,
     /// Explicit `var` annotations reserved across one function/module hoist

@@ -3264,7 +3264,7 @@ fn pending_enum_exhaustion<L: PublishedClassLookup + ?Sized>(
         if !seen.insert(ty) {
             continue;
         }
-        if interner.pending_reserved_enum(ty) {
+        if interner.reserved_enum_semantic_frontier(ty) {
             return Some(Exhaustion::EvaluationInvalidNode { ty });
         }
         if let Some(instance) = store.class_instance_type(ty) {
@@ -3298,7 +3298,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         }
         // Enum shells are never safe relation operands, including through a
         // structural wrapper or an identity fast path.
-        if interner.pending_reserved_enum(ty) {
+        if interner.reserved_enum_semantic_frontier(ty) {
             return Some(Exhaustion::EvaluationInvalidNode { ty });
         }
         if state.publication_clean.contains(&ty) {

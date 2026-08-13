@@ -2693,18 +2693,13 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_namespace_export_alias_replays_at_exact_local_owner() {
+    fn nested_enum_namespace_export_alias_is_available_without_recovery() {
         use std::cell::RefCell;
 
         let source = "declare namespace ExactAliasOwner {\n\
                       enum Hidden { A }\n\
                       export { Hidden as PublicHidden };\n\
                       }";
-        let local_start = source
-            .find("Hidden as PublicHidden")
-            .expect("alias local spelling");
-        let local_start = u32::try_from(local_start).expect("source offset fits u32");
-        let local_span = Span::new(local_start, local_start + 6);
         let replay = RefCell::new(Vec::new());
         let reports = check_project_inner_with_namespace_value_inspector(
             vec![FileInput {
@@ -2744,9 +2739,9 @@ mod tests {
                 })
                 .map(|incomplete| incomplete.span)
                 .collect::<Vec<_>>(),
-            [local_span]
+            []
         );
-        assert_eq!(replay.into_inner(), [(0, local_start, 2, 0)]);
+        assert!(replay.into_inner().is_empty());
     }
 
     #[test]

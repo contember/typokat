@@ -156,6 +156,8 @@ pub enum DiagnosticCode {
     TK2713,
     /// A pure type-only namespace is used in value position.
     TK2708,
+    /// A namespace-bearing rejected merge is used as a type.
+    TK2709,
     TK2717,
     /// Cannot assign to a read-only property — M14.
     TK2540,
@@ -257,6 +259,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK2707 => "TK2707",
             DiagnosticCode::TK2713 => "TK2713",
             DiagnosticCode::TK2708 => "TK2708",
+            DiagnosticCode::TK2709 => "TK2709",
             DiagnosticCode::TK2717 => "TK2717",
             DiagnosticCode::TK2540 => "TK2540",
             DiagnosticCode::TK2554 => "TK2554",
@@ -1250,6 +1253,16 @@ impl Diagnostic {
             code: DiagnosticCode::TK2708,
             severity: Severity::Error,
             message: format!("Cannot use namespace '{name}' as a value"),
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    pub fn cannot_use_namespace_as_type(span: Span, name: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK2709,
+            severity: Severity::Error,
+            message: format!("Cannot use namespace '{name}' as a type"),
             span,
             elaboration: Vec::new(),
         }

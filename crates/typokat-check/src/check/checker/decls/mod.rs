@@ -1060,13 +1060,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         let buildability = view.buildability;
         let participants = view.declarations;
         let name = view.name.to_owned();
-        let (enum_id, reserved, mut fragments) = match &self.type_decls[index] {
+        let (enum_id, reserved, member_shells, mut fragments) = match &self.type_decls[index] {
             TypeDecl::Enum {
                 enum_id,
                 reserved,
+                member_shells,
                 fragments,
                 ..
-            } => (*enum_id, *reserved, fragments.clone()),
+            } => (
+                *enum_id,
+                *reserved,
+                member_shells.clone(),
+                fragments.clone(),
+            ),
             _ => return,
         };
         self.begin_type_group_construction(group);
@@ -1089,12 +1095,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .unwrap_or(usize::MAX)
         });
         self.with_type_decl_effects(group, |pass| {
-            match pass.build_enum_family(enum_id, &name, &fragments) {
+            match pass.build_enum_family(enum_id, &name, &member_shells, &fragments) {
                 Some(family) => {
                     pass.interner
                         .fill_enum(reserved, family.clone())
                         .expect("enum descriptor fills one matching reservation");
-                    let properties = family
+                    let mut properties = family
                         .members
                         .iter()
                         .filter_map(|member| {
@@ -1110,7 +1116,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                                     property
                                 })
                         })
-                        .collect();
+                        .collect::<Vec<_>>();
+                    if let Some(namespace_properties) = pass.enum_namespace_payloads.remove(&group)
+                    {
+                        properties.extend(namespace_properties);
+                    }
                     let value_object =
                         pass.interner.intern_object(crate::types::repr::ObjectType {
                             properties,
@@ -1163,9 +1173,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         enum_id: EnumId,
         name: &str,
+        member_shells: &BTreeMap<String, (crate::types::repr::EnumMemberId, TypeId)>,
         fragments: &[EnumFragment<'ast>],
     ) -> Option<crate::types::repr::EnumType> {
-        use crate::types::repr::{EnumMemberFact, EnumMemberId, EnumNumber, EnumType, EnumValue};
+        use crate::types::repr::{EnumMemberFact, EnumNumber, EnumType, EnumValue};
         let mut facts = Vec::new();
         let mut values = BTreeMap::<String, EnumValue>::new();
         let mut seen_names = BTreeSet::<String>::new();
@@ -1362,9 +1373,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         if duplicate_after_first {
                             continue;
                         }
-                        let member_id = EnumMemberId(
-                            u32::try_from(facts.len()).expect("enum member identity fits u32"),
-                        );
+                        let member_id = member_shells
+                            .get(&member_name)
+                            .map(|entry| entry.0)
+                            .expect("every canonical enum member has a reserved identity");
                         values.insert(member_name.clone(), value.clone());
                         facts.push(EnumMemberFact {
                             id: member_id,
@@ -4643,7 +4655,12 @@ fn reserve_type_decls_with_selection<'ast>(
         program,
         &mut |walk_scope, _, declaration| {
             if let TopTypeDecl::Enum(enumeration) = declaration {
-                if walk_scope != module && walk_scope != direct_scope {
+                let namespace_owned = matches!(
+                    binder.namespaces.declaration_owner_for_scope(walk_scope),
+                    crate::binder::namespace::DeclarationOwner::NamespacePublic(_)
+                        | crate::binder::namespace::DeclarationOwner::NamespacePrivate(_)
+                );
+                if walk_scope != module && walk_scope != direct_scope && !namespace_owned {
                     if let Some(exact) = binder.exact_declaration_at(
                         module,
                         enumeration.id.span.start,
@@ -4714,6 +4731,14 @@ fn reserve_type_decls_with_selection<'ast>(
                             let enum_id = interner.next_enum_id();
                             let reserved =
                                 interner.reserve_enum(enum_id, enumeration.id.name.as_str());
+                            let mut member_shells = BTreeMap::new();
+                            reserve_enum_member_shells(
+                                interner,
+                                enum_id,
+                                enumeration.id.name.as_str(),
+                                enumeration,
+                                &mut member_shells,
+                            );
                             super::record_enum_reservation_for_test();
                             if let Some(slot) = resolved.get_mut(group.index()) {
                                 *slot = Some(reserved);
@@ -4722,6 +4747,7 @@ fn reserve_type_decls_with_selection<'ast>(
                                 declaration,
                                 enum_id,
                                 reserved,
+                                member_shells,
                                 fragments: vec![EnumFragment {
                                     declaration,
                                     scope,
@@ -4729,7 +4755,19 @@ fn reserve_type_decls_with_selection<'ast>(
                                 }],
                             };
                         }
-                        Some(TypeDecl::Enum { fragments, .. }) => {
+                        Some(TypeDecl::Enum {
+                            enum_id,
+                            member_shells,
+                            fragments,
+                            ..
+                        }) => {
+                            reserve_enum_member_shells(
+                                interner,
+                                *enum_id,
+                                enumeration.id.name.as_str(),
+                                enumeration,
+                                member_shells,
+                            );
                             fragments.push(EnumFragment {
                                 declaration,
                                 scope,
@@ -5220,6 +5258,26 @@ fn reserve_type_decls_with_selection<'ast>(
             }
         },
     );
+}
+
+fn reserve_enum_member_shells(
+    interner: &mut Interner,
+    enum_id: EnumId,
+    enum_name: &str,
+    enumeration: &TSEnumDeclaration<'_>,
+    shells: &mut BTreeMap<String, (crate::types::repr::EnumMemberId, TypeId)>,
+) {
+    for member in &enumeration.body.members {
+        let name = member.id.static_name().to_string();
+        if shells.contains_key(&name) {
+            continue;
+        }
+        let member_id = crate::types::repr::EnumMemberId(
+            u32::try_from(shells.len()).expect("enum member identity fits u32"),
+        );
+        let shell = interner.reserve_enum_member(enum_id, member_id, enum_name, &name);
+        shells.insert(name, (member_id, shell));
+    }
 }
 
 fn ensure_type_group_slot<'ast>(decls: &mut TypeDeclTable<'ast>, index: usize) {

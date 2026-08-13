@@ -1510,6 +1510,7 @@ pub fn merge_project_binding_thread_receipt_for_test(
 struct ExportedSlots {
     value: Option<ValueStorageId>,
     ty: Option<TypeGroupId>,
+    namespace: Option<crate::binder::namespace::NamespaceId>,
     /// A type-only export blocks value lookup even when no value slot existed.
     value_erased: bool,
     /// The type-only surface blocked value lookup without erasing a value slot.
@@ -4374,6 +4375,7 @@ fn imported_symbols<Ticket: UserReportingOwner>(
                             import.local.clone(),
                             value,
                             slots.ty,
+                            slots.namespace,
                             ImportedSymbolProvenance {
                                 value_barrier,
                                 type_only_value_absence,
@@ -4431,6 +4433,7 @@ fn imported_symbols<Ticket: UserReportingOwner>(
                             import.specifier.local().to_owned(),
                             if type_only { None } else { slots.value },
                             slots.ty,
+                            slots.namespace,
                             ImportedSymbolProvenance {
                                 value_barrier,
                                 type_only_value_absence: value_barrier
@@ -4591,9 +4594,24 @@ fn collect_default_export(
             }
         }
     };
+    let namespace = match &export.declaration {
+        oxc_ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(class) => class
+            .id
+            .as_ref()
+            .and_then(|id| builder.local_symbol_namespace(scope, id.name.as_str())),
+        declaration => declaration
+            .as_expression()
+            .and_then(|expression| match expression {
+                oxc_ast::ast::Expression::Identifier(identifier) => {
+                    builder.local_symbol_namespace(scope, identifier.name.as_str())
+                }
+                _ => None,
+            }),
+    };
     Ok(ExportedSlots {
         value,
         ty,
+        namespace,
         value_erased,
         type_only_value_absence,
         type_unavailable: value.is_some() && ty.is_none(),
@@ -4641,6 +4659,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                         ExportedSlots {
                             value,
                             ty: None,
+                            namespace: None,
                             value_erased: false,
                             type_only_value_absence: false,
                             type_unavailable: false,
@@ -4663,6 +4682,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                     ExportedSlots {
                         value,
                         ty: None,
+                        namespace: None,
                         value_erased: false,
                         type_only_value_absence: false,
                         type_unavailable: false,
@@ -4684,6 +4704,9 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                     ExportedSlots {
                         value,
                         ty,
+                        namespace: context
+                            .builder
+                            .local_symbol_namespace(context.scope, id.name.as_str()),
                         value_erased: false,
                         type_only_value_absence: false,
                         type_unavailable: false,
@@ -4704,6 +4727,7 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                 ExportedSlots {
                     value: None,
                     ty,
+                    namespace: None,
                     value_erased: false,
                     type_only_value_absence: false,
                     type_unavailable: false,
@@ -4723,11 +4747,31 @@ fn collect_declaration_export<Ticket: UserReportingOwner>(
                 ExportedSlots {
                     value: None,
                     ty,
+                    namespace: None,
                     value_erased: false,
                     type_only_value_absence: false,
                     type_unavailable: false,
                 },
                 Span::from_oxc(iface.id.span),
+                owner_start,
+                false,
+            )?;
+        }
+        Declaration::TSEnumDeclaration(enumeration) => {
+            let name = enumeration.id.name.as_str();
+            let (value, ty) = context.builder.local_symbol_slots(context.scope, name);
+            insert_collected_export(
+                context,
+                name,
+                ExportedSlots {
+                    value,
+                    ty,
+                    namespace: context.builder.local_symbol_namespace(context.scope, name),
+                    value_erased: false,
+                    type_only_value_absence: false,
+                    type_unavailable: false,
+                },
+                Span::from_oxc(enumeration.id.span),
                 owner_start,
                 false,
             )?;
@@ -4773,6 +4817,7 @@ fn collect_list_export<Ticket: UserReportingOwner>(
         return Ok(());
     };
     let (mut value, ty) = context.builder.local_symbol_slots(context.scope, local);
+    let namespace = context.builder.local_symbol_namespace(context.scope, local);
     let local_value_barrier = context
         .builder
         .local_value_lookup_barrier(context.scope, local);
@@ -4818,6 +4863,7 @@ fn collect_list_export<Ticket: UserReportingOwner>(
         ExportedSlots {
             value,
             ty,
+            namespace,
             value_erased,
             type_only_value_absence,
             type_unavailable: local_type_barrier,
@@ -4892,6 +4938,7 @@ fn collect_source_reexport<Ticket: UserReportingOwner>(
                 ExportedSlots {
                     value: None,
                     ty: None,
+                    namespace: None,
                     value_erased: true,
                     type_only_value_absence: false,
                     type_unavailable: true,
@@ -7061,6 +7108,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         function_group_precedence_tails_by_name: FxHashMap::default(),
         named_function_symbols: LayeredSet::default(),
         class_namespace_payloads: BTreeMap::new(),
+        enum_namespace_payloads: BTreeMap::new(),
         namespace_values: namespace_values::NamespaceValueRegistry::default(),
         var_annotation_surfaces: FxHashMap::default(),
         var_value_type_states: FxHashMap::default(),
@@ -8094,7 +8142,7 @@ mod default_module_slot_tests {
     }
 
     #[test]
-    fn enum_identifier_default_is_refused_before_binding_in_both_orders() {
+    fn bare_enum_identifier_default_is_admitted_in_both_orders() {
         let files = [
             ("source.ts", "enum Local { A } export default Local;"),
             (
@@ -8102,17 +8150,30 @@ mod default_module_slot_tests {
                 "import Local from './source.js'; const good = Local.A; good;",
             ),
         ];
+        let orders = check_both_orders(&files).expect("bare enum default candidate is admitted");
+        for results in orders {
+            assert!(codes(&results).is_empty());
+            assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn enum_namespace_identifier_default_is_refused_before_binding() {
+        let files = [
+            (
+                "source.ts",
+                "enum Local { A } namespace Local { export const tag = 1; } export default Local;",
+            ),
+            ("consumer.ts", "import Local from './source.js'; Local;"),
+        ];
         for order in [files.to_vec(), files.into_iter().rev().collect()] {
             let (result, work) = check_with_work(&order);
             assert_eq!(
-                result.expect_err("enum default candidate must be refused"),
+                result.expect_err("enum+namespace default candidate must be refused"),
                 ProjectDefaultInvariantError::UnsupportedCandidate.message()
             );
             assert_eq!(work.entries, 0);
-            assert_eq!(work.fresh_project_seed_entries, 0);
             assert_eq!(work.bound_units, 0);
-            assert_eq!(work.typed_products_produced, 0);
-            assert_eq!(work.ordinary_check_products_consumed, 0);
         }
     }
 

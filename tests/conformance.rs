@@ -306,6 +306,8 @@ const ENABLED_PROJECT_FIXTURES: &[(&str, &str)] = &[
 const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ("b42_enum_type_value_model", "ambient_and_const.ts"),
     ("b42_enum_type_value_model", "computed_initializers.ts"),
+    ("b42_enum_type_value_model", "illegal_merges.ts"),
+    ("b42_enum_type_value_model", "legal_merges.ts"),
     ("b42_enum_type_value_model", "member_names_and_constants.ts"),
     ("b42_enum_type_value_model", "narrowing.ts"),
     ("b42_enum_type_value_model", "numeric_identity.ts"),

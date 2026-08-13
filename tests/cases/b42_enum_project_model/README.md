@@ -1,9 +1,10 @@
 # Backlog 42 enum project publication corpus
 
-Each subdirectory is one strict files-only ESNext/Bundler project. WU0 keeps this corpus disabled.
-WU4 enables it after enum value/type slots publish through named imports, type-only imports, acyclic
+Each subdirectory is one strict files-only ESNext/Bundler project. The raw/internal conformance
+route keeps this config-backed corpus disabled. WU4 runs every project through the black-box CLI
+contract after enum value/type slots publish through named imports, type-only imports, acyclic
 source re-exports, namespace payloads, and the admitted identifier-default form. Every project has
-normal and reverse `files` order configs; both orders must produce the same normalized result.
+normal and reverse `files` order configs; both orders must produce byte-identical output.
 
 The project checklist is explicit so review can compare planned and enabled coverage:
 

@@ -4,6 +4,7 @@ use super::assignment::declared_from_init;
 use super::calls::{FunctionReservation, RetainedFunctionBodySurface};
 use super::context::{
     ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder, FunctionSurface, Pass,
+    TypeDecl,
 };
 use super::events::UserRecordTicket;
 use super::function_groups::FunctionNamespacePayload;
@@ -36,6 +37,7 @@ use oxc_ast::ast_kind::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeSet;
 
 pub(in crate::check::checker) struct NamespaceValueRegistry<Ticket: Copy = UserRecordTicket> {
     prepared: FxHashMap<(ScopeId, u32), PreparedNamespaceMember<Ticket>>,
@@ -182,7 +184,7 @@ enum PreparedNamespaceMember<Ticket: Copy = UserRecordTicket> {
 struct AttachmentInput {
     owner_scope: ScopeId,
     name: String,
-    class_group: Option<TypeGroupId>,
+    type_group: Option<TypeGroupId>,
     disposition: NamespaceValueAttachmentDisposition,
     fragments: Vec<FragmentInput>,
     members: Vec<OwnedMemberInput>,
@@ -972,8 +974,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     && member.kind == MergeDeclarationKind::Namespace
                     && first.1 == member.value_storage
                     && first.2 == member.child_namespace;
+                let repeated_enum = first.0 == MergeDeclarationKind::Enum
+                    && member.kind == MergeDeclarationKind::Enum
+                    && first.1.is_some()
+                    && first.1 == member.value_storage;
                 if !(legal_existing_merges.contains_key(name)
                     || repeated_overload
+                    || repeated_enum
                     || repeated_namespace)
                 {
                     if let (Some(declaration), Some(kind)) = (
@@ -1228,7 +1235,34 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         }
                     }
                 }
-                MergeDeclarationKind::Enum | MergeDeclarationKind::ImportAlias => {
+                MergeDeclarationKind::Enum => {
+                    let Some(storage) = member.value_storage else {
+                        unavailable =
+                            Some(NamespaceValueUnavailableCause::UnsupportedExportedMember);
+                        continue;
+                    };
+                    let repeated = dependencies.iter().any(|dependency| {
+                        dependency.name == name
+                            && matches!(
+                                dependency.kind,
+                                StandaloneNamespaceDependencyKind::ExistingValue {
+                                    storage: existing,
+                                    ..
+                                } if existing == storage
+                            )
+                    });
+                    if !repeated {
+                        dependencies.push(StandaloneNamespaceDependency {
+                            name,
+                            readonly: false,
+                            kind: StandaloneNamespaceDependencyKind::ExistingValue {
+                                storage,
+                                alias_failure: None,
+                            },
+                        });
+                    }
+                }
+                MergeDeclarationKind::ImportAlias => {
                     if let (Some(declaration), Some((id, context))) = (
                         member.declaration,
                         namespace_payload_unavailable(member.kind),
@@ -1785,6 +1819,89 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             unavailable = true;
         }
 
+        let enum_member_collisions =
+            if attachment.disposition == NamespaceValueAttachmentDisposition::AdmittedEnum {
+                attachment
+                    .type_group
+                    .and_then(|group| self.type_decls.get(group.index()))
+                    .and_then(|declaration| match declaration {
+                        TypeDecl::Enum { fragments, .. } => Some(fragments.clone()),
+                        _ => None,
+                    })
+                    .map(|fragments| {
+                        let enum_name_counts = fragments
+                            .iter()
+                            .flat_map(|fragment| &fragment.enumeration.body.members)
+                            .fold(std::collections::BTreeMap::new(), |mut counts, member| {
+                                *counts
+                                    .entry(member.id.static_name().to_string())
+                                    .or_insert(0usize) += 1;
+                                counts
+                            });
+                        let namespace = attachment
+                            .type_group
+                            .and_then(|group| self.binder.enum_group(group))
+                            .and_then(|view| view.namespace)
+                            .expect("admitted enum attachment has one namespace");
+                        let namespace_members = self
+                            .binder
+                            .namespaces
+                            .members()
+                            .filter(|member| {
+                                member.target
+                                    == crate::binder::namespace::DeclarationOwner::NamespacePublic(
+                                        namespace,
+                                    )
+                                    && member.publication
+                                        != crate::binder::namespace::NamespacePublication::Private
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let namespace_names = namespace_members
+                            .iter()
+                            .filter_map(|member| member.name.as_deref())
+                            .collect::<BTreeSet<_>>();
+                        let mut collisions = BTreeSet::new();
+                        for fragment in fragments {
+                            for member in &fragment.enumeration.body.members {
+                                let name = member.id.static_name().to_string();
+                                if namespace_names.contains(name.as_str()) {
+                                    collisions.insert(name.clone());
+                                    if enum_name_counts.get(&name) == Some(&1) {
+                                        self.record_namespace_attachment_diagnostic(
+                                            fragment.declaration,
+                                            Diagnostic::duplicate_identifier(
+                                                Span::from_oxc(member.id.span()),
+                                                &name,
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        for member in namespace_members {
+                            if let Some(name) = member.name.as_deref() {
+                                if collisions.contains(name) {
+                                    let diagnostic =
+                                        Diagnostic::duplicate_identifier(member.binding_span, name);
+                                    if let Some(declaration) = member.declaration {
+                                        self.record_namespace_attachment_diagnostic(
+                                            declaration,
+                                            diagnostic,
+                                        );
+                                    } else {
+                                        self.emit_diagnostic(diagnostic);
+                                    }
+                                }
+                            }
+                        }
+                        collisions
+                    })
+                    .unwrap_or_default()
+            } else {
+                BTreeSet::new()
+            };
+
         let mut variables = Vec::new();
         let mut functions = Vec::new();
         for member in &attachment.members {
@@ -1909,6 +2026,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Some(function_properties) => properties.extend(function_properties),
             None => unavailable = true,
         }
+        properties.retain(|property| {
+            property
+                .key
+                .as_string()
+                .is_none_or(|name| !enum_member_collisions.contains(name))
+        });
 
         for variable in variables {
             if self.decl_type_replay(variable.input.storage).is_none() {
@@ -1965,12 +2088,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             NamespaceValueAttachmentDisposition::AdmittedClass => {
                 let group = attachment
-                    .class_group
+                    .type_group
                     .expect("admitted class attachment has a type group");
                 let payload = self.class_namespace_property_payload(&attachment, properties);
                 assert!(
                     self.install_class_namespace_payload(group, payload),
                     "class namespace payload installed twice"
+                );
+            }
+            NamespaceValueAttachmentDisposition::AdmittedEnum => {
+                let group = attachment
+                    .type_group
+                    .expect("admitted enum attachment has a type group");
+                assert!(
+                    self.enum_namespace_payloads
+                        .insert(group, properties)
+                        .is_none(),
+                    "enum namespace payload installed twice"
                 );
             }
             NamespaceValueAttachmentDisposition::TypeContainerOnly
@@ -2404,6 +2538,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 "deferred function recovery must install"
             }
             NamespaceValueAttachmentDisposition::AdmittedClass
+            | NamespaceValueAttachmentDisposition::AdmittedEnum
             | NamespaceValueAttachmentDisposition::TypeContainerOnly
             | NamespaceValueAttachmentDisposition::Rejected(_) => return,
         };
@@ -2750,6 +2885,7 @@ fn collect_attachment_inputs<Ticket: Copy + PartialEq>(
         let exposes_value_attachment = match attachment.disposition {
             NamespaceValueAttachmentDisposition::AdmittedFunction => true,
             NamespaceValueAttachmentDisposition::AdmittedClass => true,
+            NamespaceValueAttachmentDisposition::AdmittedEnum => true,
             NamespaceValueAttachmentDisposition::DeferredFunctionBacklog42 => true,
             NamespaceValueAttachmentDisposition::TypeContainerOnly
             | NamespaceValueAttachmentDisposition::Rejected(_) => false,
@@ -2864,7 +3000,7 @@ fn collect_attachment_inputs<Ticket: Copy + PartialEq>(
                     == Some(crate::binder::namespace::VariableKind::Const),
             });
         }
-        let class_group = pass
+        let type_group = pass
             .binder
             .symbols
             .get(attachment.symbol)
@@ -2878,7 +3014,7 @@ fn collect_attachment_inputs<Ticket: Copy + PartialEq>(
         inputs.push(AttachmentInput {
             owner_scope,
             name: attachment.name.to_owned(),
-            class_group,
+            type_group,
             disposition: attachment.disposition,
             fragments: attachment
                 .fragments
@@ -2975,7 +3111,9 @@ fn legal_existing_owner_merges(
         let Some(owner) = group.iter().copied().find(|member| {
             matches!(
                 member.kind,
-                MergeDeclarationKind::Function | MergeDeclarationKind::Class
+                MergeDeclarationKind::Function
+                    | MergeDeclarationKind::Class
+                    | MergeDeclarationKind::Enum
             )
         }) else {
             continue;
@@ -2996,7 +3134,10 @@ fn legal_existing_owner_merges(
                 }
                 kind if kind == owner.kind => {
                     owner_count += 1;
-                    owner.kind == MergeDeclarationKind::Function || owner_count == 1
+                    matches!(
+                        owner.kind,
+                        MergeDeclarationKind::Function | MergeDeclarationKind::Enum
+                    ) || owner_count == 1
                 }
                 _ => false,
             }
@@ -4185,6 +4326,29 @@ namespace UnavailableOwner {
     }
 
     #[test]
+    fn standalone_namespace_exported_enum_publishes_paired_type_and_value() {
+        let source = r#"
+namespace Outer {
+  export enum Mode { A = "a", B = "b" }
+  export const current: Mode = Mode.A;
+}
+const whole: Outer.Mode = Outer.Mode.B;
+const wrong: Outer.Mode = "a";
+"#;
+        let output = check_source(source);
+        assert!(output.parse_errors.is_empty());
+        assert!(output.incomplete.is_empty());
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.as_str())
+                .collect::<Vec<_>>(),
+            ["TK2322"]
+        );
+    }
+
+    #[test]
     fn private_unsupported_declarations_keep_exact_checks_off_the_ready_payload() {
         let source = r#"
 namespace PrivateImportSource { export const value: number = 1; }
@@ -4231,7 +4395,7 @@ const ready: number = PrivateUnsupported.ready;
                 .iter()
                 .map(|incomplete| incomplete.id.as_str())
                 .collect::<Vec<_>>(),
-            ["decl/enum-declaration/self", "decl/import-equals/self"]
+            ["decl/import-equals/self"]
         );
     }
 
