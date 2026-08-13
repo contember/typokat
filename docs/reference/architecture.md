@@ -69,6 +69,12 @@ in Rust is the biggest perf lever.
 - **Hash-consing**: structurally identical types share one node. Type construction goes
   through an interner that deduplicates. Consequence: structural equality is `id_a ==
   id_b`, i.e. an integer compare instead of a recursive walk.
+- **Nominal enums** use stable `EnumId`/`EnumMemberId` identities. A whole-enum node stores the
+  ordered canonical member family and its numeric-openness fact; each exact member node retains its
+  nominal identity plus the proved number/string/opaque-number fact. The interner reserves the
+  whole and identity-only member shells before initializer analysis, then validates and fills the
+  family as one batch. Invalid members become explicitly unavailable. No relation, renderer, or
+  query may observe a pending shell or cache an answer derived from one.
 - **SoA (struct-of-arrays) layout** for hot type attributes (flags, kind tag), so that
   comparison and filtering are cache-friendly and bit-packable.
 - **de Bruijn indices** for type parameters and `infer`, so alpha-equivalent generics
@@ -164,12 +170,12 @@ Which merges to keep correct vs defer:
 
 - **Keep:** `interface`+`interface`, `namespace`(type container)+`interface`,
   `function`+`namespace`, `class`+`namespace` (statics), and the approved
-  `class`+`interface`(+`namespace`) composition. In the last case the class owns the
+  `class`+`interface`(+`namespace`) composition. Repeated `enum` declarations and
+  `enum`+`namespace` compositions share one canonical enum descriptor; illegal
+  `enum`+`function` combinations retain typed function/namespace recovery and exact merge
+  diagnostics. In the class case the class owns the
   `ClassId`/`ClassInstance` identity and attached interface instance members join its draft before
   atomic class publication.
-- **Defer:** exact three-way `enum`+`namespace`+`function` legality and recovery to enum type-side
-  work. Namespace placement diagnostics and a non-permissive function+namespace surface remain
-  required meanwhile.
 
 An instantiated standalone `NamespaceId` owns one stable `ValueStorageId` and publishes one
 complete immutable structural `ObjectType` shared across reopenings. Nested instantiated namespaces
@@ -315,6 +321,12 @@ Historically the largest CPU consumer in a TS checker, bigger than evaluating co
 types. In real repos, time disappears into repeated `isRelatedTo(A, B, relation)`, not
 into type-level arithmetic. It deserves first-class architectural treatment, not a
 footnote.
+
+Enum relations preserve the nominal family. Members from distinct enum identities do not become
+compatible merely because their primitive values match. Numeric members remain number-like and a
+numeric-open family admits the raw-number cases proved by the conformance matrix; raw strings never
+enter string enum/member targets. Equality overlap is a separate rule so comparable raw literals
+can narrow an enum without weakening assignment.
 
 ### 6.1 Relation caches
 
@@ -551,14 +563,16 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   surfaces keep `default: Option<ExportedSlots>` structurally separate from the named export map.
   Direct default classes/functions, expressions, and namespace-free identifier defaults publish
   into that slot; direct and type-only default imports read only that slot, with exact `TK1192`
-  when a resolved module has no default. There is no named/default fallback. Acyclic local named
+  when a resolved module has no default. A bare enum identifier is namespace-free and publishes
+  paired default value/type slots. Direct named enum and enum+namespace exports/imports likewise
+  retain their paired slots and namespace payload. There is no named/default fallback. Acyclic local named
   source re-exports use frontend-certified dependency/provenance evidence and directly project
   namespace-free target value/type slots without a barrel-local binding. Typokat inventories every
   module declaration before filtering and returns a deterministic summary of roots, checked/skipped
   files, resolutions, project notices, parse errors, incompletes, and diagnostics. Unsupported
   configs, specifiers, and forms are explicit non-clean outcomes. General packages, namespace
   imports, default bridges/re-exports, mixed forms, star/namespace re-exports,
-  namespace-bearing producers/targets, and cycles are not admitted
+  namespace-bearing source re-exports/defaults, and cycles are not admitted
   ([ADR-0007](../decisions/0007-bundler-resolution-via-oxc-resolver.md)).
 - **Stage 1 — shared *read-only* default-library base (shipped).**
   `lib.d.ts` + intrinsics form a large, immutable, universally-needed base; re-seeding them into N
@@ -614,22 +628,24 @@ The cut runs between **type semantics** (keep, cheap) and **runtime/emit semanti
 | Sacrifice hard | Deferred type-checking coverage | Keep correct (core) |
 |---|---|---|
 | **JS emit** (all of it) | typed JS / `checkJs` | structural subtyping |
-| **enum runtime** (reverse map, IIFE, const-enum inlining) | exact enum+function+namespace type-checking legality/recovery (→ `42`) | generics + constraints + `const` params |
+| **enum runtime** (reverse map, IIFE, const-enum inlining) | nested/function-local enum declaration placement (→ `75`) | nominal enum/member typing, merges, and flow |
 | **namespace runtime/emit** + `import =` | polymorphic `this` | control-flow narrowing |
 | JSDoc types in JS | variance exactly (→ more soundness) | conditional / mapped / `infer` |
 | legacy compiler flags | — | `export =` semantic module export surfaces (→ `15`) |
 | | | inference engine |
 | | | `.d.ts` parsing + consumption |
 
-**Common-mistake correction:** enum *on the type side* (= union of its members, for
-narrowing in `switch`) and namespace *on the type side* (= named type container, `N.T`)
+**Common-mistake correction:** enum *on the type side* is a nominal whole/member family with an
+explicit numeric-open remainder, not merely a primitive union. It supports exact member access and
+narrowing in equality/`switch`. Namespace *on the type side* (= named type container, `N.T`)
 belong to the **core**, not to the sacrifice column. Only runtime namespace emit is sacrificed.
 Instantiated standalone namespaces publish stable, query-free `ValueStorageId`/`ObjectType`
 checker metadata, while non-instantiated namespaces remain type-only; function/class owners retain
 their existing augmented value identity. `export =` runtime emit is covered by
 the general emit sacrifice, but type-checking its module export surface belongs to backlog `15`;
-`import =` may remain sacrificed. Exact enum+function+namespace type-side legality and recovery are
-deferred to backlog `42`, not accepted as a degraded implementation. Namespaces on the type side you
+`import =` may remain sacrificed. Enum+function+namespace legality and typed recovery are shipped;
+function-local enum placement and attached-owner payload demand remain explicit bounded gaps under
+backlogs `75` and `76`. Namespaces on the type side you
 don't even *get* to sacrifice — `lib.d.ts` and `@types` require them.
 
 ---

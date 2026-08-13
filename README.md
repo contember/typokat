@@ -71,6 +71,7 @@ error[TK2322]: Type '{ a: { b: string } }' is not assignable to type '{ a: { b: 
 | **Generics** | type parameters, instantiation, **type-argument inference** from call arguments, **constraints** (`extends` — apparent types, declaration + call-site `TK2344`/`TK2345`, circularity `TK2313`), persistent generic free/member/call/construct signatures |
 | **Type-level evaluation** | conditional types (**distribution**, `infer` incl. tuple/function rest capture and anchored template extraction, recursion guards `TK2456`/`TK2589`), mapped types (modifier arithmetic, homomorphic union distribution), template literal types (construction + anchored pattern matching), deferred `keyof`, the pinned TypeScript 6.0.3 ES2025 full-host default library, and the `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` intrinsics |
 | **Classes** | fields, constructor, methods, `this`, `new`, structural instances; inheritance (`extends`/`super`); access modifiers (`private`/`protected` — access control **+ nominal typing**); `static`; member-assignment checking; `readonly`; getters/setters; `abstract` (incl. **abstract-member completeness**); **generic classes**; **override compatibility** (tsc's base-keyed method bivariance); **constructor accessibility** on `new`; immutable complete class applications, dependency-first SCC publication, poison propagation, and bounded demand-driven projection |
+| **Enums** | nominal whole-enum and member identities; numeric openness and string-member exactness; constant/computed initializer analysis; value member access; equality and `switch` narrowing; repeated declarations, legal namespace merges, typed illegal-merge recovery, and checker-visible `declare`/`const enum` forms |
 | **Real-world types** | arrays (`T[]`/`Array<T>`, element access, covariance), tuples (positional, rest elements, contextual typing), contextual fresh object/array/tuple literals, flat object variable binding publication with one typed identity per static-key leaf, index signatures (`{ [k: string]: T }`), `keyof T`, indexed-access types (`T[K]`), type-side namespaces/reopenings/qualified lookup and declaration merging, local relative modules with named imports/exports, acyclic named source re-exports, structurally distinct direct default exports/imports, and the bounded files-only Bundler project route |
 | **Reporting** | nested reason chains (`Types of property 'x' are incompatible …`) |
 
@@ -99,14 +100,15 @@ plan in [`docs/archive/mvp-plan.md`](./docs/archive/mvp-plan.md). The pieces tha
 and fast:
 
 - **Type store** — every type is a `TypeId(u32)` into an arena (no `Rc<RefCell>`), **hash-consed**
-  so structural equality is an integer compare, SoA cold side-tables, substitution-aware.
+  so structural equality is an integer compare, SoA cold side-tables, substitution-aware, with
+  stable nominal enum/member identities and atomic pending-shell fill.
 - **Relation engine** (`is_assignable`) — the biggest CPU piece — with a 3×`u32` cache, an
   **assume-true-until-disproven cycle stack** for recursive types, and **reason chains** (not a
   bare `bool`) so reporting runs through the same path. Carries a soundness fix for cache poisoning
   by provisional cycle assumptions (architecture §6.3).
 - **Binder** — a scope graph with **multi-slot symbols** (value / type / namespace spaces), which is
-  what lets a class be both a type (instance) and a value (constructor), and what nominal classes
-  key on.
+  what lets a class be both a type (instance) and a value (constructor), an enum publish paired
+  value/type slots, and nominal declarations share canonical groups.
 - **Class publication + semantic queries** — complete immutable `ClassInstance` applications are
   published by declaration SCC behind a capability boundary. A sole `SemanticQueryCoordinator`
   owns demand-driven projection/evaluation and relation transactions with query-local overlays,
@@ -176,12 +178,17 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — enums and `satisfies`/`as const` are not modeled yet. Type-side
-  namespaces, reopenings, qualified lookup, declaration merging, standalone instantiated namespace
-  values, and local `Array` heritage are modeled. Generic methods, explicit `this`
-  parameters, contextual `ThisType<T>`, and object call/construct signatures are modeled
-  persistently, but generic/deferred indexed access (`T[K]`), optional methods, and member-path
-  narrowing remain separate gaps. The remaining model-completeness track is in
+- **Remaining type-model gaps** — `satisfies`/`as const` are not modeled yet. Enums now have
+  nominal whole/member types, initializer checking, value access, flow narrowing, legal merges,
+  and project slots. Function-local and other nested enum declarations remain explicitly
+  incomplete, and an enum nested in an attached-owner namespace remains withheld with that owner
+  until lazy declaration-type resolution can publish both atomically. Enum runtime emit, reverse
+  maps, and `const enum` inlining remain out of scope. Type-side namespaces, reopenings, qualified
+  lookup, declaration merging, standalone instantiated namespace values, and local `Array` heritage
+  are modeled. Generic methods, explicit `this` parameters, contextual `ThisType<T>`, and object
+  call/construct signatures are modeled persistently, but unresolved value-side type queries,
+  generic/deferred indexed access (`T[K]`), optional methods, and member-path narrowing remain
+  separate gaps. The remaining model-completeness track is in
   [`docs/backlog/`](./docs/backlog/README.md). The pinned TypeScript 6.0.3 ES2025 full-host default
   library is loaded from source on every production route. (Intersections `A & B` landed in M31;
   signature shape landed in M32;
@@ -198,11 +205,14 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   The public `check --project-summary json <directory|tsconfig.json>` route accepts only the exact
   files-only strict/noEmit/ESNext/Bundler config and configured local `.ts` roots. It resolves local
   named and regular direct default imports, including extensionless and `.js`→`.ts` forms, through
-  `oxc_resolver 11.24.2`. It admits acyclic local named source re-exports and structurally distinct
-  direct default declarations/expressions/imports. It emits deterministic complete accounting.
+  `oxc_resolver 11.24.2`. Direct named enum and enum+namespace exports/imports retain paired
+  value/type slots. It admits acyclic local named source re-exports and structurally distinct direct
+  default declarations/expressions/imports, including a bare enum identifier default. It emits
+  deterministic complete accounting.
   Every unsupported form is an explicit non-clean notice. Still deferred: packages /
   `node_modules`, broader config/root selection, `.d.ts`, namespace imports, default bridges and
-  re-exports, mixed forms, star/namespace re-exports, namespace-bearing producers/targets,
+  re-exports, mixed forms, star/namespace re-exports, namespace-bearing source re-exports and
+  defaults,
   CommonJS, ambient modules, cyclic module graphs, and parallel cross-file type identity. An
   **unresolved type name** in type position is `TK2304` (M22). Qualified value leaves and admitted
   default-import values with no type slot report `TK2749`; simple lexical value-as-type coverage,

@@ -56,6 +56,12 @@ initializer refers back to its namespace root, publication currently records
 `decl/class-declaration/namespace-payload-static-cycle` and withholds the complete root. This item
 owns resolving that cycle without partial class or namespace publication.
 
+An enum exported from an attached-owner namespace reaches the same owner-publication boundary.
+The top-level enum family is modeled, but the enclosing function/class owner cannot yet demand and
+publish that nested enum payload without the declaration-type query. The checker records
+`decl/enum-declaration/namespace-payload-unavailable` and withholds the complete owner instead of
+publishing a partial or permissive value.
+
 ## Approach / acceptance
 
 Add a declaration-plan layer keyed by `DeclId` for function declarations and the value

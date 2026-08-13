@@ -308,7 +308,7 @@ explicit and legacy routes remain frozen. Export attributes retain their exact e
 records 38 projects and both root orders against pinned `tsc 6.0.3`. The admitted rows cover named
 and anonymous default classes and functions, literal/object/arrow expressions, namespace-free
 identifier projection including a type-only interface slot, direct and type-only default imports,
-lexical visibility, distinct
+lexical visibility, a namespace-free bare enum identifier with paired slots, distinct
 default/named slots, and named default functions that close adjacent overload groups without
 replacing their implementation-signature default surfaces while named imports retain the overload
 surface and mismatched exported/non-exported rows report `TK2383`, missing modules/defaults, and
@@ -317,7 +317,7 @@ with the display name `default` (`TK2515` for one member and aggregated `TK2654`
 error row proves that a default expression is checked exactly once.
 
 Deferred rows stay explicit non-clean outcomes: default interfaces; namespace-bearing producers,
-including enum-backed identifiers whose qualified surface is not modeled;
+including enum+namespace identifiers (the bare enum control is admitted);
 local export-list and named-import spellings of `default`; source re-exports involving a default
 slot; and mixed default imports. The mixed named form retains two named specifiers, including one
 inline type-only member. Duplicate production uses five real publication paths — direct class,
@@ -403,12 +403,12 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b38_minimal_ambient_prelude/` | shipped backlog `38` | historical bounded `console` and numeric `Math` acceptance, now exercised through the production default library |
 | `b38_prelude_lookup_boundaries/` | backlog `38` follow-up | project-shaped ambient-library boundaries: a value-bearing `import type` blocks ambient value fallback, export lists cannot inherit library names, and local type-only exports do not acquire ambient value slots |
 | `b41_generic_methods/` | shipped B41 | generic method/call/construct signatures: persistent binders through outer substitution, calls, relation, overloads, inheritance, and cache order |
-| `b42_enum_type_value_model/` | backlog `42` (disabled WU0 spec) | nominal enum/member identity, initializer analysis, relation, flow narrowing, legal merges, and typed invalid-merge recovery |
-| `b42_enum_project_model/` | backlog `42` (disabled WU0 spec) | paired enum value/type publication through named, type-only, source-re-export, namespace-payload, and admitted identifier-default Bundler routes |
+| `b42_enum_type_value_model/` | shipped backlog `42` | nominal enum/member identity, JavaScript-exact initializer analysis, numeric-open conditional distribution, relation, flow narrowing, legal merges, typed invalid-merge recovery, and explicit backlog-75 nested-declaration accounting |
+| `b42_enum_project_model/` | shipped backlog `42` CLI contract (raw conformance disabled) | paired enum value/type publication through named, type-only, namespace-payload, and admitted identifier-default Bundler routes; the B15 CLI contract owns source re-exports and namespace-bearing default refusal |
 | `b74_declaration_hoisting/` | backlog `74` | forward ordinary/generic/overloaded function calls see hoisted callable types; `var` binds in its containing function/module scope |
 | `b78_generic_class_value_aliases/` | backlog `78` (disabled) | one-step const aliases of generic classes retain substitution and abstract/private/protected construction facts |
 | `b92_contextual_duplicate_diagnostics/` | shipped backlog `92` | one error nested inside contextually typed arguments is reported once, not `2^depth` times; the raw argument walk still reports wherever no committed contextual walk supersedes it |
-| `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned deferred UMD/enum tails |
+| `b43_namespaces_declaration_merging/` | shipped namespace sprint (65 flat fixtures + 6 projects enabled) | namespace type/value containers, repeated interfaces, qualified names, legal cross-space merges, ambient/global boundaries, and explicitly owned UMD plus nested-owner payload tails |
 | `b14_full_lib_loading/` | shipped backlog `14` production corpus; archived after final WU7 PASS and exact-`d1aa6d4` remote CI | TypeScript 6.0.3 default-library globals, native-type bridges, intrinsic roles, identity-safe shadowing, and explicit unsupported outcomes |
 | `b14_full_lib_loading_project/` | shipped backlog `14` production corpus; archived after final WU7 PASS and exact-`d1aa6d4` remote CI | fast external-module routing, collision/private-epoch order, global-object contributions, global augmentation/UMD forms, and unavailable-merge withholding |
 | `b102_frozen_prefix_writes/` | shipped backlogs `102`/`103` regression net | fresh script globals reach a writable delta scope; library collisions route through private replay without mutating the shared base |
@@ -728,15 +728,13 @@ constraint/field/method annotations. Named/default import coexistence is a proje
 recorded in the sprint rather than a single-file fixture. Reopening-private helper lookup is already
 pinned by `namespace_visibility.ts`; no duplicate fixture owns it. Three mixed-order controls require
 a later missing-root `TK2503` to survive an earlier successful qualified endpoint or a
-backlog-42-deferred enum endpoint.
+shipped enum endpoint.
 The valid UMD `.d.ts` is the current `export =` form witness: it keeps both
 `export as namespace` and `export =` explicitly incomplete under backlog `15`; local access to its
 merged `Options` alone would not prove a global UMD export. `export as namespace` may also publish an
 ordinary named-export external-module surface, which backlog `15` must cover differentially before
-claiming UMD support. The
-enum/function/namespace chimera keeps its enum surface explicitly incomplete under backlog `42`,
-pins the namespace-order diagnostic, and requires receiver-use errors so an `any`/error recovery
-cannot pass it. Exact `TS2567` ownership remains a WU0A/direct-test gate.
+claiming UMD support. The enum/function/namespace chimera now pins exact `TK2567` ownership,
+namespace placement, and typed receiver-use recovery so an `any`/error surface cannot pass it.
 Direct merged-class identity/publication remains a WU0A test because marker fixtures observe only
 downstream surfaces and diagnostics.
 The WU4 addendum adds seven focused fixtures: type-only interface+namespace pairs in
@@ -789,9 +787,9 @@ namespace-owned `ValueStorageId`s even when hash-consing deduplicates their stru
 `wu6a_unavailable_ledger.ts` keeps every admitted exported child that cannot publish on its precise
 non-namespace boundary and
 requires the complete parent value to remain terminal `Unavailable`: `typeof` type query → `52`
-(`annotation-lower/type-query/typeof`), inferred initializer/function return → `76`, enum → `42`,
-import-equals → `15`, duplicate value → `18`, TDZ/use-before-assignment → `47`, and the current
-class/static dependency cycle → implementation or `76`. The stable payload incomplete ids are
+(`annotation-lower/type-query/typeof`); inferred initializer/function return, attached-owner enum
+payload, and the class/static dependency cycle → `76`; import-equals → `15`; duplicate value →
+`18`; and TDZ/use-before-assignment → `47`. The stable payload incomplete ids are
 pinned where they already exist. The duplicate row deliberately retains its backlog-18 incomplete
 instead of pretending tsc's `TS2451` pair is implemented; the TDZ row pins future `TK2448` and
 `TK2454` because no honest typed incomplete surface currently represents that semantic check. Root
@@ -884,9 +882,9 @@ companion `TS2300` diagnostics is outside WU6A. No marker is hidden to enable it
 
 `wu6a_review_private_unsupported_declarations.ts` is the enabled soundness-review witness for
 consumed standalone namespace bodies. Strict tsc keeps the private enum and `import =` alias off the
-public value payload while the exported `ready` property remains usable. Typokat retains the exact
-`decl/enum-declaration/self` and `decl/import-equals/self` completeness owners when it consumes that
-fragment; publishing `Ready` may not silently discard either private declaration.
+public value payload while the exported `ready` property remains usable. The private enum is now
+checked without becoming a public property. The exact backlog-15 `decl/import-equals/self` marker
+remains; publishing `Ready` may not silently discard that unsupported private declaration.
 
 WU7 adds three enabled strict-tsc regression fixtures from the official-suite ratchet:
 

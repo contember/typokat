@@ -66,7 +66,9 @@ at `lib.es5.d.ts:1873:155` is truthful rendering of ArrayBuffer's published
 Template-expression traversal, elisions, object/call spreads, tagged templates, and iteration
 targets are not duplicated here: their concrete silent-skip owner is [`71`](./71-expression-inference-fn-tail.md),
 and the shipped surface inventory enforces their accounting. Iterability belongs to `71`; optional
-methods/accessors belong to `49`; enums belong to `42`; namespace type/value publication is shipped,
+methods/accessors belong to `49`; top-level enum semantics are shipped, while function-local and
+other nested enum declaration placement remains this item's declaration-surface tail; namespace
+type/value publication is shipped,
 while ambient external modules remain `15`; explicit `this`
 parameters are shipped.
 

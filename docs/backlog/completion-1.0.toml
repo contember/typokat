@@ -54,11 +54,11 @@ deps = []
 id = "A-enums"
 track = "A"
 title = "Enums (type side)"
-state = "incomplete"
+state = "complete"
 blocks_release = "true"
-owner = "./42-enums-type-side.md"
-witness = "spec-first corpus; NOT required by lib.es5 core (audit: 0 enum uses) but required for DoD model completeness"
-links = ["./lib-audit-6.0.3.md"]
+owner = "shipped"
+witness = "cargo test conformance (b42 enum corpus enabled); black-box Bundler project identity in both root orders; independent tsc 6.0.3 adversarial review; official-suite ratchet 0 regressions and 39 progress"
+links = ["../../tests/cases/b42_enum_type_value_model", "../../tests/cases/b42_enum_project_model", "../../tests/cases/b15_acyclic_source_reexports", "../../tests/cases/b15_default_module_slots", "../../tooling/official-suite/scoreboard.txt", "./lib-audit-6.0.3.md"]
 deps = []
 scope = ["b-enums"]
 

@@ -186,23 +186,16 @@ and validated the same way.
   typokat uses its ordinary missing-member `TK2339`. Both reject the same leaked-property demand;
   backlog `48` owns `noImplicitAny` code fidelity independently of library routing.
   <!-- div: id=lib/global-this-missing-property-code dir=cosmetic scope=a-implicit-any-index owner=../backlog/48-no-implicit-any.md witness=../../tests/cases/b14_full_lib_loading_project/zz_shared_base_isolation/00_check.ts -->
-- **Qualified enum endpoints remain unavailable (under-report).** Until enum types
-  land, `E.Member` records
-  `annotation-lower/type-name/qualified-enum` instead of guessing a type. Withholding
-  the enclosing callable is non-permissive, but it suppresses tsc's downstream
-  `TS2322` recovery diagnostic.
-  <!-- div: id=enums/qualified-endpoint-unavailable dir=under scope=b-enums owner=../backlog/42-enums-type-side.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu2_annotation_recovery.ts -->
-- **Enum/function/namespace diagnostics remain deferred (under-report).** The
-  three-way recovery keeps the enum declaration explicitly incomplete and preserves
-  namespace placement plus typed receiver-use errors, but does not yet emit tsc's
-  `TS2567` at the enum/function declarations. Exact legality and recovery belong to
-  backlog `42`.
-  <!-- div: id=enums/function-namespace-ts2567 dir=under scope=b-enums owner=../backlog/42-enums-type-side.md witness=../../tests/cases/b43_namespaces_declaration_merging/degraded_chimera.ts -->
-- **An exported enum in an attached namespace is unavailable (over-report).** The
+- **A nested enum on an attached owner is unavailable (over-report).** The
   exact enum member records `decl/enum-declaration/namespace-payload-unavailable`
-  and withholds the owner value where tsc publishes the member. Backlog `42` owns
-  the enum value/type surface.
-  <!-- div: id=enums/attached-namespace-payload dir=over scope=b-enums owner=../backlog/42-enums-type-side.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+  and withholds the owner value where tsc publishes the member. The enum family is
+  modeled; backlog `76` owns the enclosing declaration-type demand and atomic owner publication.
+  <!-- div: id=enums/attached-namespace-payload dir=over scope=b-enums owner=../backlog/76-lazy-value-type-resolution.md witness=../../tests/cases/b43_namespaces_declaration_merging/wu4_namespace_payload_incomplete_ledger.ts -->
+- **Function-local and other nested enum declarations are unavailable (over-report).** Top-level
+  enum semantics are modeled, but nested statement placement records
+  `decl/enum-declaration/self` instead of silently dropping or partially publishing the family.
+  Backlog `75` owns this remaining declaration-surface placement.
+  <!-- div: id=enums/nested-declaration-placement dir=over scope=b-enums owner=../backlog/75-scope-surface-tail.md witness=../../tests/cases/b42_enum_type_value_model/nested_function_local.ts -->
 - **Unannotated forward `var` value types are unresolved (under-report).** The
   declaration-hoisting sprint shipped name hoisting and explicit-annotation reservation, but a later
   unannotated initializer still does not type an earlier read/write. Moving value
