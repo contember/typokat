@@ -148,6 +148,19 @@ class UnitParserTests(unittest.TestCase):
         self.assertEqual(ts.parse_units("\ufeff" + source), expected)
 
 
+class SyntaxBucketTests(unittest.TestCase):
+    def test_enum_is_no_longer_syntax_gated(self):
+        self.assertIsNone(ts.syntax_bucket("enum E { A }"))
+
+    def test_satisfies_gate_ignores_line_comment_prose(self):
+        self.assertIsNone(ts.syntax_bucket(
+            "const x = 1; // x satisfies the constraint\n"
+            "// Initializer satisfies strict initialization\n"
+        ))
+        self.assertEqual(ts.syntax_bucket("const x = 1 satisfies number;"),
+                         "satisfies")
+
+
 # --- Finding 1: identity-based ratchet ---------------------------------------
 
 class IdentityRatchetTests(unittest.TestCase):
@@ -1874,7 +1887,7 @@ class ScoreboardFormatTests(unittest.TestCase):
         rows = [
             rec("z.ts", matched=2, fp=1, expected=2,
                 matched_detail=[(3, 2322), (1, 2345)], fp_detail=[(9, 2339)]),
-            rec("y.ts", bucket="syntax:enum"),
+            rec("y.ts", bucket="syntax:decorator"),
         ]
         with temp_scoreboard(rows):
             board = ts.read_scoreboard()
@@ -1882,7 +1895,7 @@ class ScoreboardFormatTests(unittest.TestCase):
                          [(1, 2345), (3, 2322)])
         self.assertEqual(board["z.ts"]["fp_ids"], [(9, 2339)])
         # Out-of-scope rows carry no identity.
-        self.assertEqual(board["y.ts"]["status"], "OOS:syntax:enum")
+        self.assertEqual(board["y.ts"]["status"], "OOS:syntax:decorator")
         self.assertIsNone(board["y.ts"]["matched_ids"])
         self.assertIsNone(board["y.ts"]["incomplete_ids"])
 

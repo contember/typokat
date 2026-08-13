@@ -105,7 +105,7 @@ redirects make the cache incompatible.
      oracle would be truthful.
    - `multifile` — more than one `@filename` unit (modules / cross-file).
    - `syntax:<feature>` — uses a checking feature typokat doesn't model and that
-     wouldn't self-report (`enum`, decorators, `namespace`/`import`/`export`,
+     wouldn't self-report (decorators, `namespace`/`import`/`export`,
      `satisfies`, `as const`, user-defined type predicates/assertions, or
      `instanceof` narrowing).
      Heuristic regex — see `OUT_OF_SCOPE_SYNTAX`.
@@ -146,7 +146,7 @@ in-scope / clean-kept / error-exact / diag-recall) at the pinned TS SHA.
 
 ```
 IN	4 8 0 12	5:2322,9:2345|	conformance/.../assignmentCompatWithCallSignatures2.ts
-OOS:syntax:enum	- - - -	-	conformance/.../enumTest.ts
+OOS:syntax:decorator	- - - -	-	conformance/.../decoratorTest.ts
 OOS:unsupported	1 1 0 2	3:2322|	expr-infer/template-literal/interpolation	conformance/.../templateCall.ts
 ```
 

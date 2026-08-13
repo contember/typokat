@@ -156,12 +156,12 @@ def is_strict(options):
 OUT_OF_SCOPE_SYNTAX = [
     ("module", re.compile(r"^\s*import\s|^\s*export\s|\brequire\s*\(|^///\s*<reference"
                           r"|\bdeclare\s+module\b|\bnamespace\b|\bmodule\s+\w+\s*\{", re.M)),
-    ("enum", re.compile(r"\benum\b")),
     ("decorator", re.compile(r"^\s*@[A-Za-z_]\w*\s*[\(\n]", re.M)),
     # conditional-type + infer gates removed — M25 models them (backlog 09).
     # mapped-type gate removed — M26 models them (backlog 10).
     # template-lit-type gate removed — M27 models them (backlog 11).
-    ("satisfies", re.compile(r"\bsatisfies\b")),
+    # Ignore prose in line comments; the curated corpus uses "satisfies" there.
+    ("satisfies", re.compile(r"^(?:(?!//).)*\bsatisfies\b", re.M)),
     ("as-const", re.compile(r"\bas\s+const\b")),
     # Deferred narrowing (README: type predicates + unstructured-flow CFG = M23).
     # The conformance typeGuards/ tests exercise exactly these, so gate them until
