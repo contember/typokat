@@ -35,15 +35,19 @@ default-slot slice removes `placetext`'s historical route blocker. A read-only r
 skipped-root, or excluded-root record, but stopped on 7 incomplete records and 27 diagnostics. The
 flat object-variable binding slice removed all exact 22 unpublished-leaf `TK2304` identities. The
 optional-parameter call-boundary slice then removed the revealed
-`repo/src/core/generator.ts:36:48 TK2345`. The immutable 2026-08-11 re-screen preserves the same
-route counts and seven incomplete records, with five unchanged diagnostics and no new identity.
-Enum, computed object-key, template-interpolation, and predicate-bearing array surface gaps remain
-independent.
+`repo/src/core/generator.ts:36:48 TK2345`. The enum type/value model removed the remaining enum
+incomplete, enum-name `TK2304`, and both source-re-export `TK2305` records. The immutable 2026-08-13
+re-screen preserves the 9-root/13-resolution route and has six incomplete records plus four
+diagnostics. Five computed object keys and one template interpolation remain incomplete. The two
+predicate-array `TK2339` records remain; exact enum-key materialization exposes one computed-key
+`TK2741`, and absent `Array.isArray` predicate narrowing exposes one downstream `TK2322`.
 
 The pinned native and overlay `tsc 6.0.3` runs are both clean, but their
 ES2020-versus-full-ES2025 library meaning is not proved equivalent. The hard stop therefore still
 forbids mutations, witness files, or CI work. Exact evidence and independent PASS are retained in
-the [`2026-08-11 placetext re-screen`](../archive/real-project-rescreen-2026-08-11/README.md); the
+the [`2026-08-13 placetext re-screen`](../archive/real-project-rescreen-2026-08-13/README.md); the
+[`2026-08-11 predecessor`](../archive/real-project-rescreen-2026-08-11/README.md) preserves the
+pre-enum identity set, the
 [`2026-08-10 predecessor`](../archive/real-project-rescreen-2026-08-10/README.md) preserves the
 optional-parameter diagnostic, and the
 [`2026-08-09 predecessor`](../archive/real-project-rescreen-2026-08-09/README.md) preserves the

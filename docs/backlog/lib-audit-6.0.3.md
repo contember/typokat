@@ -54,7 +54,7 @@ of loader work.
 | **Polymorphic `this` / intrinsic / symbol / bigint annotations** | annotation lowering | 173 | **1.0 owner → `75`** (164/5/3/1); explicit incompletes, independent of loader start; `object` is shipped |
 | **Callable heritage compatibility** | `CallableFunction`/`NewableFunction extends Function` | 2 canonical + 2 surplus `TK2430` | canonical compatibility and surplus cardinality → parity-only `63`; neither blocks the shipped loader route |
 | **`this`-parameter typing + `ThisType<T>`** | `\(this:`; `ThisType\|ThisParameterType\|OmitThisParameter` | 16 + 7 | **✓ shipped (B70)** — explicit receiver slots, `ThisType<T>`, and `ThisParameterType`/`OmitThisParameter`; production projection and loading shipped through the archived closure sprint |
-| `enum` | `\benum\b` | **0** | ✓ not used by es5 core (needed for full model completeness → `42`, not for `14`) |
+| `enum` | `\benum\b` | **0** | ✓ not used by es5 core (full model completeness shipped through the archived enum sprint; not required for `14`) |
 | `satisfies` / `as const` | `\bsatisfies\b`, `as const` | **0** | ✓ not used by es5 core (full model completeness → `44`, not for `14`) |
 | Symbol / computed keys (`[Symbol.x]`) | `\[Symbol\.` | **0** in es5 | out of es5 (arrives with `es2015.iterable`; Tier B) |
 
@@ -77,8 +77,8 @@ added incomplete. The namespace/declaration-merging lifecycle is closed, so load
 this verdict alone did not mean that the standard library was loaded. The production loader has
 since shipped under the archived closure sprint, while backlog `63` owns canonical heritage
 compatibility and surplus cardinality as separate parity work. Owners `50` and `75` remain
-mandatory model work; `42` and `44`
-remain 1.0 model blockers but are absent from ES5 core.
+mandatory model work. Enum owner `42` shipped; open `44` remains a 1.0 model blocker but is absent
+from ES5 core.
 
 ## Reproduce
 

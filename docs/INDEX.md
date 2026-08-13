@@ -24,10 +24,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-12-enum-type-value-model.md`](sprints/sprint-2026-08-12-enum-type-value-model.md) —
-  planned: close backlog `42` with nominal enum-member identity, one coherent type/value descriptor,
-  exact namespace/Bundler publication, official-suite adjudication, and an immutable `placetext`
-  re-screen.
 - [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
   active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
   and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
@@ -39,12 +35,13 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Enum type/value model is the next planned sprint** — the active
-  [`enum sprint`](sprints/sprint-2026-08-12-enum-type-value-model.md) closes backlog
-  [`42`](backlog/42-enums-type-side.md) spec-first across nominal member identity, relation,
-  annotations, value access, narrowing, merge recovery, and the shipped Bundler slots. Its final
-  gate removes only reviewed enum-owned `placetext` identities and re-screens at backlog `72`'s
-  unchanged zero threshold.
+- **Enum type/value model shipped 2026-08-13** — the archived
+  [`enum sprint`](archive/sprint-2026-08-12-enum-type-value-model.md) supplies nominal member
+  identity, relation and flow behavior, exact merge recovery, namespace/Bundler publication, and
+  an audited official-suite ratchet. The immutable
+  [`placetext re-screen`](archive/real-project-rescreen-2026-08-13/README.md) removed every old
+  enum/module identity and exposed computed-key and predicate-narrowing cascades; backlog
+  [`72`](backlog/72-real-project-preview-readiness.md) remains open at the unchanged zero threshold.
 - **Optional-parameter argument acceptance shipped 2026-08-11** — the archived
   [`optional-parameter sprint`](archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
   admits direct `undefined` and matching undefined-bearing values at optional/defaulted fixed call

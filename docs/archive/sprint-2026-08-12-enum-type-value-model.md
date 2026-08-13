@@ -1,10 +1,29 @@
 # Sprint — enum type/value model (2026-08-12)
 
+## OUTCOME — shipped 2026-08-13
+
+Backlog `42` shipped as a nominal enum/member model with JavaScript-exact constant facts, atomic
+type/value publication, exact relation and flow behavior, declaration-merge recovery, namespace
+composition, and paired Bundler slots. The enabled B42 corpus, 1,041 checker unit tests, full
+workspace test suite, clippy/check/fmt gates, and independent adversarial reviews passed. The
+official TypeScript suite moved 39 rows with zero regressions and now pins 379 IN / 495 OOS.
+
+Commit map: `e4635f1` corpus; `4dc4bc2` type identities; `d93844c` binder groups; `b93f2ec`
+descriptor publication; `48f30a2` consumers and flow; `f7e2ddc` namespace/project publication;
+`31ddc5f` adversarial soundness and replay-scale fixes; `6327707` official-suite ratchet;
+`5b10043` living documentation; `41fe6c3` immutable-screen interface/mapped-key findings.
+
+The immutable `placetext` re-screen removed all four enum/module-recovery identities with unchanged
+9-root/13-resolution accounting. It records six incompletes and four safe-direction diagnostics:
+five computed keys plus their revealed `TK2741`, one template interpolation, and two
+predicate-array diagnostics plus their revealed downstream `TK2322`. Backlogs `75`, `71`,
+`50`/`107`, and `72` retain those general owners. No witness mutation or CI ratchet started.
+
 **Goal.** Model TypeScript enums as one nominal member family with coherent type and value sides,
 publish that family through the shipped namespace and Bundler module routes, and re-screen the
 immutable `placetext` project to establish the next general blocker.
 
-**Theme.** Backlog [`42`](../backlog/42-enums-type-side.md) is the first remaining general blocker
+**Theme.** Backlog `42` is the first remaining general blocker
 in the immutable `placetext` screen and one of three open Track-A model-completeness items. This
 sprint closes the enum model itself. It does not special-case `Corpus`, weaken backlog `72`'s
 zero-clean gate, or implement JavaScript emit behavior.
@@ -359,3 +378,18 @@ semantic identity.
   line. Normal/reverse Bundler configs were byte-identical at the oracle boundary. A temporary
   isolated run of both disabled corpora failed with 239 conformance differences across 17 files and
   no unexpected parse error; the committed registration remains disabled and behavior-neutral.
+- **WU1–WU4 implementation (2026-08-12/13).** Nominal whole/member identities, canonical binder
+  groups, pending member shells, atomic descriptors, consumers, narrowing, namespace payloads, and
+  paired project slots landed in review-gated commits. Architecture A reserved identity-only member
+  shells before ordinary type fill and terminalized the entire family in one validated batch.
+- **WU5 adversarial closure (2026-08-13).** Review found and fixed numeric coercion, open-enum
+  conditional distribution, generic inference provenance, zero-parameter alias construction,
+  generic `typeof` refinement, TypeTag wildcard omissions, and a billion-unit replay scan. The
+  exact 32-project scale gate and pinned replay identity passed; the official-suite release ratchet
+  reported zero regressions and 39 progress before saving, then zero/zero afterward.
+- **WU6 immutable re-screen (2026-08-13).** The first run exposed a ready zero-parameter interface
+  evaluation gap and missing string-enum mapped keys. Both were fixed with pending-enum fail-closed
+  controls and independent review. The final evidence is
+  [`real-project-rescreen-2026-08-13`](real-project-rescreen-2026-08-13/README.md): all four old
+  enum/module identities disappeared; the two additional diagnostics are general computed-key and
+  predicate-narrowing cascades owned by existing backlogs.

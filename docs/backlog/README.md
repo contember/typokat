@@ -68,13 +68,13 @@ The pinned TS 6.0.3 `lib.d.ts` surface audit — the historical start gate for `
 `41`, receiver typing shipped with `70`, and namespace/merging work shipped in the archived
 2026-07-15 sprint). The committed proof is GO for starting `14`. Backlogs `50` and `75`
 independently block 1.0; `63` owns both canonical Callable/Newable compatibility and its surplus
-diagnostic cardinality as parity work. `42`/`44` are not used by ES5 core. The official-suite
+diagnostic cardinality as parity work. `44` is not used by ES5 core. The official-suite
 scoreboard is the ratchet on the way there — its syntax gates flip OOS→IN as features land — not a
 numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **49 remaining items**. The release classification comes from
+The roadmap has **48 remaining items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -101,11 +101,10 @@ non-blocking groups.
 ## Items
 
 **A. Model completeness — exact declaration types.** Every item kills a silently-permissive or
-deliberately approximate model family. `42`, `44`, and `76` still block checker 1.0 but are not
+deliberately approximate model family. `44` and `76` still block checker 1.0 but are not
 needed by the
 `lib.es5.d.ts` core.
 
-- **L** · [`42`](42-enums-type-side.md) — enum type/value sides, nominal member types, and narrowing.
 - **L** · [`44`](44-satisfies-as-const.md) — `satisfies` checking plus readonly literal/tuple semantics for `as const`.
 - **XL** · [`76`](76-lazy-value-type-resolution.md) — demand-driven declaration/value types and inferred-return cycles · blocked by `46`, `48`.
 
@@ -214,10 +213,12 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
    removed all 22 measured binding `TK2304` identities, and the archived
    [`optional-parameter sprint`](../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
-   removed the next `TK2345`. Five independent diagnostics and seven incomplete records remain:
-   enum (`42`), computed-key (`75`), template-interpolation (`71`), and predicate-bearing array
-   (`50`/`107`) surfaces are the visible general owners. Re-screen only from reviewed general
-   commits; do not patch the project.
+   removed the next `TK2345`; the archived
+   [`enum sprint`](../archive/sprint-2026-08-12-enum-type-value-model.md) then removed all four
+   enum/module-recovery identities. The latest screen has six incomplete records and four
+   diagnostics: computed keys plus their revealed `TK2741` (`75`), template interpolation (`71`),
+   and predicate-bearing array diagnostics plus their revealed downstream `TK2322` (`50`/`107`).
+   Re-screen only from reviewed general commits; do not patch the project.
 2. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
    native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
    unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic
