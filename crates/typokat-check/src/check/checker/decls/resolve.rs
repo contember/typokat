@@ -579,10 +579,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 .flatten()
                 .is_some()
             && !self.type_group_construction_is_pending(decl_id)
-            && matches!(
-                self.type_decls.get(decl_id.index()),
-                Some(TypeDecl::Alias { params, .. }) if params.is_empty()
-            );
+            && match self.type_decls.get(decl_id.index()) {
+                Some(TypeDecl::Alias { params, .. } | TypeDecl::Interface { params, .. }) => {
+                    params.is_empty()
+                }
+                _ => false,
+            };
         let stable_endpoint = (!has_private_replacement
             && self
                 .type_environment

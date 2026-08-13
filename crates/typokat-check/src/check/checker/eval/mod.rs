@@ -12,8 +12,9 @@ use crate::relate::cache::RelationCache;
 use crate::relate::{Relater, RelationNormalization, RelationOutcome};
 use crate::span::Span;
 use crate::types::repr::{
-    ConditionalType, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType, PropertyKey,
-    PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag, Visibility,
+    ConditionalType, EnumValue, FunctionType, LiteralValue, MappedType, ModifierOp, ObjectType,
+    PropertyKey, PropertyType, TemplateType, TupleRestType, TupleType, TypeParamId, TypeTag,
+    Visibility,
 };
 use crate::types::store::TypeId;
 use crate::types::{substitute, Interner};

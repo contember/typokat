@@ -818,6 +818,24 @@ impl<'a> ConditionalEvaluator<'a> {
     /// negative), so the whole map is out of subset instead (review F1 secondaries).
     pub(super) fn literal_string_keys(&self, ty: TypeId) -> Option<Vec<String>> {
         let store = self.interner.store();
+        if let Some(enumeration) = store.enum_type(ty) {
+            let mut keys = Vec::with_capacity(enumeration.members.len());
+            for member in &enumeration.members {
+                let EnumValue::String(value) = &member.value else {
+                    return None;
+                };
+                if !keys.contains(value) {
+                    keys.push(value.clone());
+                }
+            }
+            return Some(keys);
+        }
+        if let Some(member) = store.enum_member_type(ty) {
+            return match &member.value {
+                EnumValue::String(value) => Some(vec![value.clone()]),
+                EnumValue::Number(_) | EnumValue::OpaqueNumber => None,
+            };
+        }
         let members: Vec<TypeId> = match store.union_members(ty) {
             Some(members) => members.to_vec(),
             None => vec![ty],

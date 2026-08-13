@@ -481,6 +481,52 @@ fn zero_parameter_enum_member_aliases_are_stable_during_signature_construction()
 }
 
 #[test]
+fn zero_parameter_interfaces_containing_enums_are_stable_during_signature_construction() {
+    for source in [
+        "enum E { A = 'a', B = 'b' } interface Options { value?: E | string[] } function use(options: Options = {}): void { const { value = E.A } = options; }",
+        "interface Options { value?: E | string[] } function use(options: Options = {}): void { const { value = E.A } = options; } enum E { A = 'a', B = 'b' }",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+    }
+}
+
+#[test]
+fn enum_initializer_interface_signature_keeps_pending_frontier_typed() {
+    for source in [
+        "interface Options { value?: E } function consume(options: Options): number { return 0; } enum E { A, B = consume({ value: E.A }) }",
+        "enum E { A, B = consume({ value: E.A }) } interface Options { value?: E } function consume(options: Options): number { return 0; }",
+    ] {
+        let out = check_source(source);
+        assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+        assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
+        assert_eq!(out.incomplete.len(), 1, "{:?}", out.incomplete);
+        assert_eq!(
+            out.incomplete[0].id,
+            "semantic-query/invalid-evaluation-node"
+        );
+    }
+}
+
+#[test]
+fn string_enum_families_supply_exact_record_keys() {
+    let out = check_source(
+        "enum E { A = 'a', B = 'b' } type R = Record<E, number>; const full: R = { a: 1, b: 2 }; const missing: R = {};",
+    );
+    assert!(out.parse_errors.is_empty(), "{:?}", out.parse_errors);
+    assert_eq!(
+        out.diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        ["TK2741"]
+    );
+    assert!(out.incomplete.is_empty(), "{:?}", out.incomplete);
+}
+
+#[test]
 fn enum_initializer_alias_signature_keeps_pending_frontier_typed() {
     for source in [
         "type AB = E.A | E.B; function consume(value: AB): number { return 0; } enum E { A, B = consume(E.A) }",
