@@ -300,3 +300,9 @@ sprint before its implementation starts. No preparation agent edits the sprint o
   inventory receipt test, comparator negative controls, unchanged default test name, and ignored
   full-parity test defined in WU0. `cargo test --test conformance --no-run` passed in 0.19 s under a
   two-vCPU lease before implementation.
+- **2026-08-14 — WU0 verify-first full-parity baseline PASS at `724adf4`.** The unchanged
+  `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture` command
+  completed the current combined shared/cold corpus with 1 passed, 0 failed in **1,103.90 s**
+  (18 min 23.90 s), within the 45-minute stop budget. No agent wrote to the tree during the run.
+  This proves the pre-change parity gate is green and supplies the exact baseline that the new
+  ignored full-parity test must preserve.
