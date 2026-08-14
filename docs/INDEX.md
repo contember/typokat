@@ -24,9 +24,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-25-checker-scaling.md`](sprints/sprint-2026-07-25-checker-scaling.md) —
-  active: remove the five quadratic/exponential terms that lose `modules` (665×), `generics` (17.7×)
-  and `flow` (3.9×) to native TypeScript 7, and leave guards so the class cannot land silently again.
 - [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
   planned behavior-preserving cleanup, not started; unblocked by the full-library closure and
   requiring complete re-verification at current HEAD before WU1.
@@ -35,6 +32,13 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Checker-scaling sprint archived partial 2026-08-14** — the dated
+  [`scaling sprint`](archive/sprint-2026-07-25-checker-scaling.md) shipped its measured nonlinear
+  fixes, but never recorded a final current-HEAD benchmark sweep or whole-sprint review. Its
+  residual scaling gate, flat per-file cost, and memo soundness surfaces remain in backlogs
+  [`89`](backlog/89-scaling-guards-for-project-state.md),
+  [`94`](backlog/94-flat-per-file-regression-since-july-9.md), and
+  [`106`](backlog/106-contextual-memo-residual-key-surfaces.md).
 - **Enum type/value model shipped 2026-08-13** — the archived
   [`enum sprint`](archive/sprint-2026-08-12-enum-type-value-model.md) supplies nominal member
   identity, relation and flow behavior, exact merge recovery, namespace/Bundler publication, and

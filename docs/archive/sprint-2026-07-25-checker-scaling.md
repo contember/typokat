@@ -1,5 +1,32 @@
 # Sprint — checker scaling on real code (2026-07-25)
 
+## OUTCOME — archived partial 2026-08-14
+
+The sprint shipped the five measured nonlinear fixes and the replacement for the rejected
+contextual-walk design, but it never completed its own closure gate. WU1 indexed placement syntax
+lookups (`e910be9`); WU2 classified namespaces once per project (`202f0bc`) and then planned value
+attachments once (`c8fc029`); WU3 replaced cloned query transactions with journals (`7ba2c01`);
+WU4 served reason-free relation probes from the cache (`665c911`); and WU5 added local-layer scan
+probes and module-bounded owner attachment (`904642f`). Recorded fixture, differential, and
+official-suite checks across the landed work found no regressions. Follow-up commits also interned
+and shared the merge substrate
+(`727fcf4`) and made lexical completion storage lazy (`c3c3549`), reducing the dated modules route
+without closing its residual flat-cost target.
+
+WU6's specified base-1 memo was disproved: two of the three walks retained observable effects. The
+replacement first removed duplicate `2^d` diagnostics (`243a878`) and then reduced contextual walk
+growth from `3^d` to `d² + d` with tracked-read memoization (`466639d`). Its recorded differential
+gate covered 14,000 generated programs plus 1,800 independent-seed programs with a live negative
+control and no divergence. The original flat-growth acceptance was therefore not met.
+
+No final current-HEAD benchmark sweep, full-suite gate, or independent whole-sprint review was
+recorded after the last WU. The remaining work is already durable in backlog:
+[`89`](../backlog/89-scaling-guards-for-project-state.md) for the missing multi-file gate and
+scaling policy, [`94`](../backlog/94-flat-per-file-regression-since-july-9.md) for the residual flat
+per-file cost, and [`106`](../backlog/106-contextual-memo-residual-key-surfaces.md) for the memo's
+two argued soundness surfaces. This closure makes no fresh performance or semantic claim; it
+removes a stale active contract and preserves the dated evidence below.
+
 **Goal.** Remove the quadratic and exponential terms that make typokat lose to native TypeScript 7
 on multi-file projects, generic-heavy code, and failing comparisons — and leave behind guards that
 make the next instance fail a test instead of a benchmark.

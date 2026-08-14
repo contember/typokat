@@ -1,7 +1,7 @@
 ---
 id: 0016
 title: Suppress the reason chain on relation probes whose caller discards it
-status: proposed
+status: accepted
 date: 2026-07-25
 ---
 

@@ -173,13 +173,15 @@ Default-library base + method (fell out of the ADR-0017 snapshot removal):
 
 - **M** · [`98`](98-library-diagnostic-count-delta.md) — an unattributed 273 → 265 library diagnostic delta that a digest-only witness let drift for 102 commits. Its forward half shipped with ADR-0018; only the backwards attribution is open.
 
-Checker scaling (from sprint-2026-07-25):
+Checker scaling (from the archived [`2026-07-25 sprint`](../archive/sprint-2026-07-25-checker-scaling.md)):
 
 - **S** · [`106`](106-contextual-memo-residual-key-surfaces.md) — two residual surfaces in the contextual-walk memo are argued rather than constructed: one-shot consumption, and a 64-bit type-param hash.
-- **M** · [`94`](94-flat-per-file-regression-since-july-9.md) — a flat 3x per-file regression sitting under the modules exponent.
+- **M** · [`94`](94-flat-per-file-regression-since-july-9.md) — remeasure the current route and
+  close the flat per-file gap left after the shipped merge and completion-storage reductions.
 - **M** · [`85`](85-owner-closure-representation.md) — replay owner closure is quadratic on an accumulating chain.
 - **M** · [`86`](86-free-param-summary-base-reset.md) — the free-param summary cache discards its sealed base on any mutation.
-- **M** · [`89`](89-scaling-guards-for-project-state.md) — nothing guards against per-item scans of whole-project state.
+- **M** · [`89`](89-scaling-guards-for-project-state.md) — add a multi-file benchmark gate and
+  require scaling notes for compilation-wide structures; local-layer probes already shipped.
 
 **D. Scale + IDE — the §12 phase ladder.**
 

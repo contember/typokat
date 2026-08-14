@@ -8,9 +8,10 @@ blocked-by: []
 
 **Summary.** On 2026-07-26, `modules-100000` cost **0.997 s / 372 MB** at the then-HEAD endpoint
 `a0a5a6c` against **0.30 s / 154 MB** at `f065e89` (2026-07-09) on the identical corpus. The dated
-bisect found four eager per-declaration substrate steps. It predates the source-backed default-
-library cutover; remeasure the current baseline before using its impact ranking. The recorded
-0.35 s / 200 MB target and historical evidence remain. Effort L.
+bisect found four eager per-declaration substrate steps. Merge-key interning and participant sharing
+shipped in `727fcf4`; lazy completion storage shipped in `c3c3549`. The evidence predates the
+source-backed default-library cutover, so remeasure the current baseline before ranking the remaining
+work. The recorded 0.35 s / 200 MB target and historical evidence remain. Effort L.
 
 ## Problem
 
@@ -78,6 +79,22 @@ takes wall 4.79 s → 0.192 s with RSS unchanged (81.4 → 81.6 MB). Two indepen
 ~0 ms under the route that existed then. The source-backed cutover shipped later, so this is not a
 current startup or route claim. Re-establish the baseline before choosing or ranking a fix.
 
+### Subsequent shipped reductions
+
+- **Merge substrate (`727fcf4`).** `MergeKey` names are interned and
+  `MergeRecord.declarations` shares the placement participant vector. On the dated modules route,
+  `modules-100000` moved from 364.8 to 353.2 MB and from 1.022 to 1.001 s. The measured attribution
+  was −3.9 MB from interning and −7.3 MB from sharing. Diagnostics were unchanged and the official
+  suite reported zero regressions.
+- **Lexical completion storage (`c3c3549`).** Reservations no longer materialize a completion slot
+  at every record position. Records are stored only when completed, while the unfinished-position
+  audit and deterministic replay order remain enforced. `modules-100000` moved from 353.3 to
+  319.1 MB and from 1.002 to 0.866 s; diagnostics were unchanged and the official suite reported
+  zero regressions.
+
+These commits reduced the dated endpoint but did not meet the historical ≤0.35 s / ≤200 MB target.
+They also do not establish a baseline for the current source-backed route.
+
 The largest step (+19.5 MB combined) is **behaviourally inert at its own boundary**: 356 fixtures plus
 `errors-10000.ts` produce byte-identical output across it, 4,661 diagnostic lines each. It is
 substrate for namespace work that landed later. `a7923b6`'s boundary was checked by the earlier
@@ -86,7 +103,8 @@ bisect — identical diagnostic multiset, one column regression, which is [`90`]
 ## Approach / acceptance
 
 The 2026-07-26 evidence implicated all of these substrates and found that no single one covered the
-165 MB gap. Fresh measurement must confirm the current ranking before implementation.
+165 MB gap. Two measured pieces have since shipped. Fresh measurement must establish whether the
+remaining mechanisms still dominate before any further implementation.
 
 > **Correction (2026-07-26).** An earlier revision ranked "namespace substrate (~94 MB)" first with
 > `MergeKey` interning as its lead bullet. The ~94 MB is `b6ecfa4` **plus** `fe61867` — the
@@ -99,30 +117,25 @@ The 2026-07-26 evidence implicated all of these substrates and found that no sin
 > gives 5.9 MB at 1,249 files against the bisect's measured +11.1 MB for `fe61867`, so the merge
 > substrate is ~53 % of that step and the model does not exceed it. The ranking below is corrected.
 
-Ranked by measured MB at the 2026-07-26 endpoint, not by effort:
+Remaining candidates from the dated ranking, to be reordered only after the fresh measurement:
 
-1. **Lexical-event substrate** (~71 MB, the largest single item) — replace the `BTreeMap` with a
-   dense arena indexed by reservation ordinal (M / medium), and make `deferred`/`incomplete` tickets
-   lazy (M / medium). A full revert is **not available**: ADR-0008 requires the deterministic replay
-   order. Existing source-order tests are the gate.
-2. **`DeclarationTable`** (`b6ecfa4`) — the other half of the ~94 MB pair, untouched at the dated
-   endpoint. One dense row plus one hash entry per source declaration, eagerly materialized by a
-   full AST walk the checker then repeats. Size it before scoping the fix.
-3. **Walk deduplication** — 9 walks per file down to 4–5. Overlaps with 2.
-4. **Namespace merge substrate** (~30 MB total, ~9 MB reachable at low risk) — intern `MergeKey`
-   names, and stop cloning `participants` into `MergeRecord.declarations` when the `placements` map
-   already holds that vector. Worth more on real code than on the bench corpus, which uses
-   all-distinct names and has **zero** merges, so every declaration pays the full singleton price.
-   Note singleton records cannot simply be dropped: five production loops iterate the record set
-   (`crates/typokat-check/src/check/checker/namespace_values.rs:2398`,
-   `crates/typokat-check/src/check/checker/library_compiler.rs:3045`, three sites in
-   `crates/typokat-binder/src/binder/bind.rs`,
-   `crates/typokat-binder/src/binder/references.rs:808`), so synthesising them on demand is a
-   behaviour change, not a representation
-   change, and is deliberately deferred.
-5. **Collapse the layered indirection when `base_len() == 0`** — a time-only candidate at the dated
+1. **`DeclarationTable`** (`b6ecfa4`) — one dense row plus one hash entry per source declaration,
+   eagerly materialized by a full AST walk the checker then repeats. Size it before scoping the fix.
+2. **Walk deduplication** — the dated route walked each file about nine times; reducing that overlaps
+   with the declaration-table work.
+3. **Singleton namespace merge records.** `727fcf4` removed the participant copy but retained one
+   merge record per non-merging declaration. Those records cannot simply be dropped: five production
+   loops iterate the record set
+   (`crates/typokat-check/src/check/checker/namespace_values.rs:2875`,
+   `crates/typokat-check/src/check/checker/library_compiler.rs:5416`,
+   `crates/typokat-binder/src/binder/namespace.rs:3933`,
+   `crates/typokat-binder/src/binder/namespace.rs:5216`, and
+   `crates/typokat-binder/src/binder/references.rs:797`), so synthesising them on demand is a
+   behaviour change, not a representation change.
+4. **Collapse the layered indirection when `base_len() == 0`** — a time-only candidate at the dated
    endpoint; current routes require fresh measurement.
-6. Re-measure. The diffuse ~7.7 KB/file tail from 07-16 onward needs its own pass if still short.
+5. **Diffuse tail.** The unattributed ~7.7 KB/file tail from 07-16 onward needs its own pass if the
+   fresh profile still shows it.
 
 Before implementation, remeasure `modules-100000` at fresh HEAD under the current source-backed
 route. Acceptance remains ≤0.35 s and ≤200 MB, which is what the dated comparator evidence says is
@@ -132,11 +145,9 @@ ratchet at 0 regressions. Do not weaken ADR-0008's replay determinism to get the
 
 ## Touch points
 
-`crates/typokat-check/src/check/checker/lexical_events.rs`,
-`crates/typokat-check/src/check/checker/events.rs`,
 `crates/typokat-binder/src/binder/declaration.rs`
 (`DeclarationTable`), `crates/typokat-binder/src/binder/namespace.rs` (`MergeKey`, `MergeParticipant`,
-`collect_project_namespace_metadata`), `crates/typokat-types/src/types/layered.rs`.
+`collect_project_namespace_metadata`), `crates/typokat-types/src/types/layered.rs`, `tooling/bench/`.
 
 <!-- Origin: complexity hunt of the modules knee, 2026-07-25, which closed the exponent question and
      exposed this underneath. Bisected 2026-07-26 on peak RSS over f065e89..a0a5a6c with build-input

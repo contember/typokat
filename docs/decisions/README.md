@@ -31,7 +31,7 @@ a commit message suffices.
 - [`0013`](0013-replay-private-library-collision-closures.md) — replay affected owners; seeding/storage narrowed by 0017 and 0020 — accepted (2026-07-23)
 - [`0014`](0014-authenticate-private-replay-prefixes-at-separate-boundaries.md) — authenticate private replay prefixes; sparse-route checkpoints narrowed by 0017 and 0020 — accepted (2026-07-23)
 - [`0015`](0015-make-private-collisions-snapshot-native.md) — make private collisions snapshot-native publication epochs with sparse binder-prefix replacement — superseded by 0017 (2026-07-23)
-- [`0016`](0016-reason-free-relation-probes.md) — suppress the reason chain on relation probes whose caller discards it — proposed (2026-07-25)
+- [`0016`](0016-reason-free-relation-probes.md) — suppress the reason chain on relation probes whose caller discards it — accepted (2026-07-25; implemented by `665c911`)
 - [`0017`](0017-compile-the-default-library-from-source.md) — compile the default library from source in every process; retire the shipped snapshot — accepted (2026-07-26)
 - [`0018`](0018-pin-library-owned-records-as-a-named-census.md) — retain no library-owned record at runtime; pin the full set as a named `(code, site)` suite census — accepted (2026-07-27)
 - [`0019`](0019-split-the-checker-into-layered-workspace-crates.md) — split the checker into a root facade over ten acyclic workspace layers — accepted (2026-07-28)
