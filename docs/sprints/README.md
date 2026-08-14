@@ -20,6 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-07-16-namespace-binder-refactor.md`](sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, now unblocked by the default-library closure; requires a
-  fresh HEAD re-verification before WU1 starts.
+- [`sprint-2026-08-14-maintenance-cleanup.md`](sprint-2026-08-14-maintenance-cleanup.md) —
+  active maintenance cleanup derived from a current-HEAD audit: restore the correctness gate,
+  remove duplication that survived adversarial refutation, and prove one bounded hotspot split.

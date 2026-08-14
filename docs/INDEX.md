@@ -24,14 +24,19 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-07-16-namespace-binder-refactor.md`](sprints/sprint-2026-07-16-namespace-binder-refactor.md) —
-  planned behavior-preserving cleanup, not started; unblocked by the full-library closure and
-  requiring complete re-verification at current HEAD before WU1.
+- [`sprint-2026-08-14-maintenance-cleanup.md`](sprints/sprint-2026-08-14-maintenance-cleanup.md) —
+  active current-HEAD maintenance cleanup for the correctness gate, validated duplication,
+  bounded hygiene, and one independently reviewed hotspot split.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Maintenance cleanup active 2026-08-14** — the
+  [`active sprint`](sprints/sprint-2026-08-14-maintenance-cleanup.md) replaces the unstarted
+  [`namespace refactor plan`](archive/sprint-2026-07-16-namespace-binder-refactor.md). It schedules
+  only current-HEAD findings that survived adversarial refutation: the amplified conformance gate,
+  two semantic duplication boundaries, canonical ordering boilerplate, and one namespace split.
 - **Checker-scaling sprint archived partial 2026-08-14** — the dated
   [`scaling sprint`](archive/sprint-2026-07-25-checker-scaling.md) shipped its measured nonlinear
   fixes, but never recorded a final current-HEAD benchmark sweep or whole-sprint review. Its

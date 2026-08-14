@@ -1,3 +1,13 @@
+> **OUTCOME — terminated unstarted and superseded 2026-08-14.** No work unit started and no
+> implementation from this plan landed. Its only run-log activity was a reference re-check at
+> `36c3695` on 2026-07-22. At replacement HEAD `6207565`,
+> `crates/typokat-binder/src/binder/namespace.rs` is 12,618 lines, its inline tests start at line
+> 7,696, and its production prefix is approximately 7,695 lines. The plan's 8,480-line baseline
+> and related line, clone, consumer, and snapshot assumptions are obsolete. The fresh audit and
+> the [`2026-08-14 maintenance cleanup sprint`](../sprints/sprint-2026-08-14-maintenance-cleanup.md)
+> supersede this plan. Only current-HEAD findings that survived adversarial refutation transfer
+> into active work; refuted candidates remain recorded exclusions, not work units.
+
 # Sprint — namespace binder refactor: split & dedup (2026-07-16)
 
 **Goal.** Mechanically restructure `crates/typokat-binder/src/binder/namespace.rs` (8 480 lines)
