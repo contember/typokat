@@ -79,28 +79,40 @@ clone, consumer, and snapshot measurements are historical only.
   3. run the current `tests/wu6_complete_source_cli.rs` matrix; and
   4. run the existing exact shared/cold sweep once under `cpu-lease run -n 2`. If it fails or does
      not finish within 45 minutes, stop and record the baseline; do not weaken it.
-- **Scope.** Extract one deterministic inventory and route-execution mode from
-  `tests/conformance.rs`. Make the default test run every marker once through the shared route. Add
-  an exact-named ignored full-parity test over the identical inventory and exact `FileReport`
-  comparison. Keep `tests/wu6_complete_source_cli.rs` as the pull-request ADR-0021 risk matrix.
-  Add a weekly/manual CI gate for the full sweep and require it at sprint/milestone closure. Put the
-  long gate in a separate workflow or an event-specific concurrency group: scheduled runs must not
-  share the current push group's `cancel-in-progress: true`, and `workflow_dispatch` must be
-  available. Deterministic sharding is allowed only by stable logical id and must prove a disjoint
-  union equal to the unsharded inventory. Do not cache the cold semantic product.
+- **Scope.** Keep the model private to `tests/conformance.rs`: one ordered `Inventory` of logical
+  fixture projects, a `DiscoveryReceipt` with project/source pairs for the four registration
+  classes, a `SharedMarkers` / `SharedColdParity` route mode, and a `RunReceipt` with total project,
+  source, shared-execution, and cold-execution counts. Discovery happens once per test and records
+  the breakdown while it builds the inventory; both modes consume that inventory without
+  rediscovery, path heuristics, filtering, sampling, or reordering.
+  Make the default `conformance` test run every marker once through the shared route. Add an
+  exact-named ignored `conformance_full_shared_cold_parity` test over the identical inventory and
+  ordered `FileReport` comparison. Exact parity includes name, source, diagnostics, parse errors,
+  incomplete records, and `project_notices`; add cheap comparator negative controls for report
+  order/name, source, parse errors, and notices. Keep `tests/wu6_complete_source_cli.rs` unchanged as
+  the pull-request ADR-0021 risk matrix unless a missing invariant is proved first. Add a separate
+  `.github/workflows/full-parity.yml` with weekly and `workflow_dispatch` triggers, a concurrency
+  group distinct from push/PR CI, scheduled cancellation disabled, and a 60-minute timeout.
+  Deterministic sharding is deferred from the minimal implementation. Do not cache the cold
+  semantic product.
 - **Acceptance / witness.** No `.ts` fixture or marker changes. The default gate reports exactly
   567 fixture projects / 683 source files and one shared execution per project. The pull-request
   parity matrix remains green across imports, merges, parse failures, diagnostics, incompletes,
   ordering, collision/global identity, and provider isolation. The named full-parity command covers
   the identical inventory with one shared and one cold execution per project and zero mismatches.
+  A cheap `conformance_inventory_matches_frozen_receipt` test pins the 420/420 whole-flat,
+  74/184 whole-project, 67/67 selected-flat, 6/12 selected-project, and 567/683 total receipt, plus
+  sorted unique logical ids and source paths. The default receipt is 567/683/567/0 and full parity
+  is 567/683/567/567. Successful completion of the common exact comparator is the zero-mismatch
+  witness; do not add or print a literal mismatch counter.
   On the documented host, three warm runs of
   `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact` must have a median at
   or below 60 seconds and no run above 120 seconds. The unsharded full-parity command must finish
   within 45 minutes under the same lease; its CI job has a 60-minute timeout. Published timings
   change only after both commands finish under these conditions.
-- **Touch points.** `tests/conformance.rs`, `tests/wu6_complete_source_cli.rs`,
-  `.github/workflows/ci.yml`, `tests/cases/README.md`, `docs/reference/dev-method.md`, and
-  `CLAUDE.md`.
+- **Touch points.** `tests/conformance.rs` and new `.github/workflows/full-parity.yml`. Treat
+  `tests/wu6_complete_source_cli.rs` and `.github/workflows/ci.yml` as read-only controls. All
+  command/count documentation belongs to WU1's later documentation commit.
 
 ### WU1 — close the high-confidence hygiene batch (effort S)
 
@@ -110,7 +122,10 @@ clone, consumer, and snapshot measurements are historical only.
   that this is still the only advisory and that a precise lock update changes only
   `crossbeam-epoch`. Derive counts from WU0 receipts. Measure timings only under `cpu-lease`.
 - **Scope.** Land three atomic commits inside the batch: (a) source/test hygiene, (b) the precise
-  lockfile patch, and (c) WU0-derived documentation. Replace four ADR-0015 replay-scheduler comments
+  lockfile patch, and (c) WU0-derived documentation. The documentation commit exclusively owns
+  `README.md`, `CLAUDE.md`, `tests/cases/README.md`, and `docs/reference/dev-method.md`; it consumes
+  WU0's named commands and measured receipts rather than inventing another authority. Replace four
+  ADR-0015 replay-scheduler comments
   with their ADR-0020 full-index-oracle
   role, while keeping the scheduler. Correct `library_compiler.rs`'s measurement-only module
   description. Delete only the ignored pre-WU6 RED test that declares itself obsolete. Update only
@@ -121,7 +136,8 @@ clone, consumer, and snapshot measurements are historical only.
   contains only the patch upgrade. Every published count and timing names its reproducing command.
 - **Touch points.** `crates/typokat-check/src/check/checker/replay_index.rs`,
   `crates/typokat-check/src/check/checker/library_compiler.rs`,
-  `tests/b15_default_module_slots_cli.rs`, `Cargo.lock`, `README.md`, and `CLAUDE.md`.
+  `tests/b15_default_module_slots_cli.rs`, `Cargo.lock`, `README.md`, `CLAUDE.md`,
+  `tests/cases/README.md`, and `docs/reference/dev-method.md`.
 
 ### WU2 — collapse declaration mirrors and canonical-id boilerplate (effort M)
 
@@ -249,15 +265,23 @@ clone, consumer, and snapshot measurements are historical only.
 
 1. WU0 blocks semantic cleanup and the move. Its inventory and full-parity command become the gate
    for every later WU.
-2. WU1 may start its source/test-hygiene and lockfile commits while WU0 is measured, but its
-   count/timing documentation is a third commit and waits for WU0.
-3. WU2 and WU3 may run in parallel with disjoint source ownership after WU0. Each lands as its own
-   atomic commit after independent adversarial review.
-4. WU4 starts after WU2 and after WU3 is integrated. It is one move-only commit with a separate
+2. WU0 implementation, independent review, every receipt and leased measurement, and its atomic
+   commit complete before any WU1 edit starts. WU1 source/test hygiene, precise lock update, and
+   derived documentation then land sequentially as three commits.
+3. WU2 and WU3 may prepare their read-only contract/evidence tables in parallel after WU0. In the
+   shared worktree their implementation, review, verification, and commit are sequential so every
+   gate observes exactly one uncommitted unit. WU2 lands first, then WU3.
+4. WU4 starts from the committed post-WU2/post-WU3 HEAD. Its approved symbol/visibility move
+   manifest lands as a docs-only seam commit before any source movement; the move is a separate
+   commit with a separate
    independent review.
 5. Closure runs the normal Rust gates, the named exact full-parity sweep, release official-suite
    ratchet, `cargo audit`, and a zero-diff scoreboard check. Every CPU-heavy command uses
    `cpu-lease`.
+
+The leader alone writes and commits sprint evidence. Preparation agents return WU2 normalization
+data and the WU3 operation table read-only; the leader serially appends each frozen seam to this
+sprint before its implementation starts. No preparation agent edits the sprint or `.orchestrate/`.
 
 ## Run log
 
@@ -267,3 +291,12 @@ clone, consumer, and snapshot measurements are historical only.
   the amplified conformance gate, binder declaration mirrors, canonical suffix construction,
   duplicated semantic-query transaction, and one-root namespace decomposition. Refuted candidates
   and all other oversized roots are explicitly excluded above.
+- **2026-08-14 — execution seams frozen at `28eec70`; WU0 remains RED.** Independent decomposition
+  review rejected parallel WU2/WU3 implementation in one worktree and assigned all derived command
+  docs to one later WU1 commit. The WU0 spec independently derived 567 fixture projects / 683
+  sources and 567 shared + 567 cold current executions. No clean behavioral RED can exist before
+  the private route-mode/receipt seam: undefined APIs would only break compilation and source-text
+  tests would be brittle. The executable spec therefore lands with the implementation as the
+  inventory receipt test, comparator negative controls, unchanged default test name, and ignored
+  full-parity test defined in WU0. `cargo test --test conformance --no-run` passed in 0.19 s under a
+  two-vCPU lease before implementation.
