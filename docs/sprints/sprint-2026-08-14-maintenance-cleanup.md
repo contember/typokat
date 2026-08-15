@@ -214,15 +214,18 @@ clone, consumer, and snapshot measurements are historical only.
   visibility preservation are allowed. Do not widen items to `pub`, split crates, redesign state,
   change phase order, rename public items, or combine logic cleanup with the move.
 - **Acceptance / witness.** The move commit changes only `namespace.rs` and new files beneath
-  `binder/namespace/`. External and test-only imports compile unchanged. An independent reviewer
+  `binder/namespace/`, plus the manifest-approved source-path update in
+  `binder/compilation_origin_spec.rs`. External and test-only symbol imports compile unchanged. An independent reviewer
   compares production bodies against the move manifest; every non-move line is an import, module,
   re-export, or visibility-preservation change. The facade contains only module declarations,
   re-exports, and at most 250 non-test physical lines; no production child exceeds 1,500 physical
-  lines. Test modules are excluded from that size cap, and no test names or bodies change. Focused tests,
+  lines. Test modules are excluded from that size cap. No test name or assertion changes; only the
+  manifest-approved `include_str!`/source-path expressions may follow the moved production bodies. Focused tests,
   `cargo test --no-run`, the default marker gate, the pull-request parity matrix, the exact full
   closure sweep, and the official ratchet all pass with zero scoreboard movement.
-- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs` and new files under
-  `crates/typokat-binder/src/binder/namespace/` only.
+- **Touch points.** `crates/typokat-binder/src/binder/namespace.rs`, new files under
+  `crates/typokat-binder/src/binder/namespace/`, and only the source-path expression in
+  `crates/typokat-binder/src/binder/compilation_origin_spec.rs` named by the approved manifest.
 
 ## Out of scope (explicit)
 
@@ -395,6 +398,124 @@ missing from those aggregate tests: root/observation order, overload root-leaf `
 overload calls with zero completed-memo entries, the exact `NeedsBatch` retry branch, and operation
 driver outcomes across `Yes`, `No`, `Exhausted`, planning taint, and cycle taint. Do not use
 source-text assertions.
+
+### WU4 approved move manifest candidate
+
+Audit baseline: current `namespace.rs` has 12,336 physical lines, with production at 1–7,412 and
+the inline test module at 7,413–12,336. Line ranges below are audit anchors only; implementation
+must move symbols by syntax, not cut by stale coordinates. Use flat sibling modules under
+`binder/namespace/`; `models_ids.rs` avoids an unnecessary second privacy boundary.
+
+| Destination | Audit anchors | Projected physical lines |
+|---|---:|---:|
+| facade `namespace.rs` | declarations and re-exports only | 50–90 non-test |
+| `models_ids.rs` | 33–1,338 | ~1,329 |
+| `layered.rs` | 1,339–2,483; 3,202–3,212 | ~1,181 |
+| `classification.rs` | 2,484–3,201; 4,551–4,562; 4,624–4,921 | ~1,050 |
+| `lookup.rs` | 3,213–3,251; 3,381–3,404; 3,598–3,842; 4,067–4,550 | ~820 |
+| `metadata.rs` | 3,252–3,312; 4,922–5,152 | ~315 |
+| `values.rs` | 3,313–3,380; 3,405–3,597; 3,843–4,066; 4,563–4,623; 5,153–5,592 | ~1,020 |
+| `walking.rs` | 5,593–6,562 | ~1,005 |
+| `deferred.rs` | 6,563–7,412 | ~885 |
+| `tests.rs` | 7,413–12,336 | ~4,925; excluded from cap |
+
+Every current production item maps exactly once:
+
+- **`models_ids.rs`:** all four continuation/placement/finalization/merge instrumentation structs,
+  scopes, thread-locals, recorders, snapshots, and work helpers; IDs `NamespaceId`,
+  `NamespaceFragmentId`, `NamespaceMemberId`, `GlobalAugmentationId`, `DeferredModuleId`,
+  `ExportContextId`, `SourceUnitKey`, `ExactKey`, `exact_key`; source/unit items `SourceFileKind`,
+  `source_file_kind`, `ModuleBindingContext`, `CompilationUnit`,
+  `CompilationOriginIndexConflict`, `ImportMetaVisitor` and its `Visit` impl,
+  `has_external_module_indicator`; all domain models from `NamespaceOwner` through
+  `SourceUnitRecord`; and keys `NamespaceKey`, `NameId` plus impl, and `MergeKey`. “All domain
+  models” is the contiguous audited set: namespace/publication/fragment/owner/member metadata,
+  alias and qualified-resolution results, syntax/space/merge facts, globals and placement issues,
+  deferred modules/children, export/UMD contexts, merge slot/composition/classification records,
+  enum group records, namespace value attachments, and standalone value attachments.
+- **`layered.rs`:** `NamespaceTable`, `NamespacePrimaryRows`, `NamespaceReferenceOffsets`,
+  `NamespaceReferenceRows`, `rebuild_canonical_suffix`, `assert_idempotent_overlay_publication`,
+  and the first `NamespaceTable` impl segment from `intern_name` through `reference_rows`.
+- **`classification.rs`:** `NamespaceTable::{classify,rebuild_local_merge_index,
+  rebuild_local_fragment_declaration_index,rebuild_local_statement_site_indexes,
+  rebuild_local_declaration_owner_scope_index,compute_namespace_instance_states,
+  dormant_standalone_value_storage_candidates,is_admitted_instantiated_standalone,
+  raw_global_record_is_publishable,is_admitted_storage_free_global_namespace,
+  is_storage_free_type_side_namespace,standalone_merge_record,has_compilation_global_ancestor}`;
+  helpers `join_instance_state`, `enum_group_semantics`, `classify_group`, `placement_issues`.
+- **`lookup.rs`:** helpers `direct_script_global_this_conflict`,
+  `global_this_namespace_is_type_only`, `QualifiedSymbolView`, `ambient_member_union`; Binder
+  methods `global_augmentation_scope`, `statement_lexical_root`, both direct-global conflict
+  methods, both global-this namespace methods, global augmentation body/continuation/incomplete/
+  storage methods, UMD incomplete, both library reporting owners, local/all/per-owner ambient alias
+  failures, both qualified type-path resolvers, namespace/root merge/deferred/import target lookup,
+  `qualified_symbol_view`, and `namespace_members_for_symbol`.
+- **`metadata.rs`:** `suppress_direct_global_this_variable_values`, `WalkContext` plus impl,
+  `NamespaceMetadataRoot`, `collect_namespace_metadata`, `finalize_namespace_metadata`,
+  `fill_namespace_value_attachments`, `collect_project_namespace_metadata`, and
+  `publish_continuation_hoisted_variables`.
+- **`values.rs`:** `allocate_dormant_namespace_value_storages`; Binder methods for namespace
+  fragment terminal/private/storage inputs, local/all/per-owner standalone attachments, value
+  attachment lookup, enum groups, and record conversion; helpers
+  `namespace_value_attachment_disposition`, `NamespaceValueBindingTarget`,
+  `NamespaceValueAttachmentPlan` plus impl, plan/bind/replay/apply attachment functions, selected
+  statement/declaration/variable/module-body binding, ambient alias target resolution, and
+  `local_declaration_symbol`.
+- **`walking.rs`:** every top-level item from `walk_statements` through
+  `dormant_symbol_in_scope`: statement/declaration walking, variable/named/module binding,
+  declaration owner scope, export-list/context helpers, header reservation, namespace/symbol
+  attachment, and dormant symbol lookup.
+- **`deferred.rs`:** every top-level item from `bind_deferred_module` through `metadata_name`:
+  deferred statement/declaration/binding/export recording, global binding,
+  `PLACEMENT_INDEX_THRESHOLD`, placement/member/export/alias push helpers, dormant lookup, and
+  metadata-name construction.
+- **`tests.rs`:** the complete current inline `tests` module; preserve every test name and
+  assertion. Only four approved source paths change: layered-sharing reads `layered.rs`, the
+  placement one-shot witness reads `classification.rs`, and the finalization once-per-project
+  witness reads `metadata.rs`; the existing binder source witness changes `include_str!("bind.rs")`
+  to `include_str!("../bind.rs")` after the test module moves one directory deeper.
+
+No item becomes `pub`. Existing public and crate-visible items retain their facade path. Minimum
+new sibling visibility is frozen as follows:
+
+- `models_ids.rs`: `pub(super)` for all continuation/placement/finalization/merge recorder
+  functions; `DeclarationSpaces::{NONE,VALUE,TYPE,VALUE_TYPE,ALIAS,NAMESPACE}`; `NamespaceKey` and
+  fields; `MergeKey` and fields; the `NameId` tuple field and `NameId::index` while `NameId` stays
+  `pub(crate)`.
+- `NamespaceTable`: `pub(super)` for every field except `names`, `name_ids`,
+  `compilation_origins_by_source`, and `compilation_origin_conflicts`, which remain private to
+  `layered.rs`. The exposed sibling fields are namespaces/instance/storage/fragment/member rows;
+  namespace/canonical/placement/merge indices; declaration/fragment/site owner maps; global,
+  UMD, source-unit, reporting, deferred, export-context, canonical suffix, compilation-global,
+  script-root, and library-shared-global state. Methods newly `pub(super)` are `intern_name`,
+  `name_id`, `name_text`, `uses_library_shared_globals`, `source_unit_for_module`,
+  `record_compilation_origin`, `classify`, the six standalone/global admission queries,
+  `standalone_merge_record`, and `rebuild_canonical_suffix`.
+- Other sibling seams newly `pub(super)`: lookup’s two direct/global-this helpers; `WalkContext`,
+  its fields and four helpers; `enum_group_semantics`; value disposition/bind/alias helpers;
+  walking’s `walk_statements`, `walk_statement`, export-list/context, header reservation, and
+  dormant-owner helpers; deferred’s module/global bind and placement/member/export/alias push
+  helpers; layered’s test-only idempotent publication witness.
+
+The facade declares every child and re-exports the existing surface: public models/functions plus
+`NamespaceTable`; crate-visible `NameId`, primary/reference row structs,
+`collect_project_namespace_metadata`, and `NamespaceValueAttachmentPlan`; binder-visible allocation,
+metadata collection/finalization/attachment planning/replay functions and `NamespaceMetadataRoot`.
+The extracted tests may import `assert_idempotent_overlay_publication` explicitly. They also add
+explicit private test imports for `DeclarationKind`, `TypeFragmentKind`, `ValueStorageId`,
+`ScopeId`, `ScopeKind`, `Symbol`, `SymbolId`, `LibraryFileOrdinal`, `CompilationOrigin`,
+`OriginalModuleOrdinal`, `Span`, and Oxc `Statement`; do not re-export
+or widen these only to recreate the monolithic parent import environment. This preserves
+all current `binder::namespace::*` consumers, including the test-only `use super::namespace::*` in
+`binder/references.rs`; no external consumer path changes.
+
+The only additional touched file is `binder/compilation_origin_spec.rs`: keep its test names and
+assertions, but build the inspected source from `namespace/models_ids.rs` plus
+`namespace/layered.rs` and append the literal `#[cfg(test)]\nmod tests` marker required by its
+unchanged `split_once` boundary assertion. The sentinel substitutes only for the former inline-test
+boundary; the production source under inspection remains exactly the two moved bodies. Walking’s
+calls into deferred/global helpers and deferred module bodies re-entering
+ordinary walking remain sibling imports; bodies and phase order do not change.
 
 ## Run log
 
