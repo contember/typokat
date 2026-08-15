@@ -360,6 +360,42 @@ library and user key closure explicit (14 typed closures total) while one helper
 `canonical_namespaces` missing-fragment MAX sentinel is protected. The in-place fragment sort and
 merge-row sort remain explicit and outside the helper.
 
+### WU3 semantic-query operation contract
+
+The read-only post-WU1 audit froze this contract before extraction:
+
+| Contract | Assignability (`query/mod.rs:1873`) | Overload compatibility (`:2106`) |
+|---|---|---|
+| observed roots | source, then target | implementation, then overload |
+| publication precheck | `[source, target]`; LIFO observes target first | `[overload, implementation]`; LIFO observes implementation first |
+| pre-planner fast paths | completed memo, identity, same-class covariant mismatch | none |
+| planner roots | `[source, target]` | `[overload, implementation]` |
+| relation attempt | `is_assignable_attempt(source, target)` | `overload_implementation_compatible_attempt(overload, implementation)` |
+| `No` shape | detailed `ReasonChain`; fast mismatch is a root leaf | always root leaf `(overload, implementation)` |
+| completed memo | assignability only; two-hit failure promotion; suppress on cycle taint | none; do not add an operation kind |
+| relation cache | shared cache; promote only decided and clean pending entries | same cache; only nested assignability creates ordinary entries |
+| retry | `Needs` expands one; `NeedsBatch` expands every demand, then retries the root | identical |
+| planner finish | always finish and advance `next_type_param` | identical |
+| planning taint | tainted `Yes` becomes `Exhausted`; tainted `No` stays `No`; no writes commit | identical |
+| cycle taint | suppress pending cache and plan writes; suppress completed memo | same cache/plan rule; no completed memo exists |
+| exhausted result | never commits | never commits |
+| clean commit | projection/evaluator delta, relation cache, next type parameter, then completed memo | projection/evaluator delta, relation cache, next type parameter only |
+| final result | exact post-taint `RelationOutcome` | exact post-taint `RelationOutcome` |
+
+Protected surrounding seams are pass-local taint state (`:623-639`), query savepoints
+(`:679-715`), relation-cache journaling (`:780-843`), semantic-context invalidation (`:845-870`),
+publication traversal (`:3281-3322`), planner demand dispatch (`:2621-2655`), planner finish
+(`:2725-2753`), and cycle-tainted commit filtering (`:2433-2449`).
+
+Existing focused witnesses cover overload and identity laziness, publication/poison boundaries,
+planning-taint rollback, cycle-tainted cache suppression, completed success/failure admission and
+invalidation, detailed assignability reasons, overload `TK2394`, and deferred retry. Before WU3
+implementation, a separate test-only spec commit must directly pin the extraction seam still
+missing from those aggregate tests: root/observation order, overload root-leaf `No`, repeated
+overload calls with zero completed-memo entries, the exact `NeedsBatch` retry branch, and operation
+driver outcomes across `Yes`, `No`, `Exhausted`, planning taint, and cycle taint. Do not use
+source-text assertions.
+
 ## Run log
 
 <!-- Append as work proceeds. Graduate changed rationale to an ADR and future work to backlog. -->
