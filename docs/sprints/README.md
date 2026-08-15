@@ -20,9 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-14-maintenance-cleanup.md`](sprint-2026-08-14-maintenance-cleanup.md) —
-  active maintenance cleanup derived from a current-HEAD audit: restore the correctness gate,
-  remove duplication that survived adversarial refutation, and prove one bounded hotspot split.
 - [`sprint-2026-08-15-library-compiler-decomposition.md`](sprint-2026-08-15-library-compiler-decomposition.md) —
   active move-only decomposition of the `checker::library_compiler` hotspot behind its stable
   facade, with a frozen full-token manifest and lifecycle closure gates.

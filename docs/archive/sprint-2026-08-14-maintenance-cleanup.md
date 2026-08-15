@@ -1,3 +1,17 @@
+> **OUTCOME — shipped 2026-08-15.** The sprint separated the fast marker-conformance gate from
+> full route parity, closed the bounded hygiene batch, removed verified declaration/query
+> duplication, and split the 12,336-line namespace binder into a 36-line facade plus production
+> children no larger than 1,313 lines. Commit map: WU0 → `be4632a`, `1478213`, `8164ef8`; WU1 →
+> `f32402e`, `001b183`, `ad784e7`, `ab0c574`; WU2 → `cdef230`, `744d5b0`, `ccbde12`; WU3 →
+> `444b2ee`, `1bd6602`, `21a23c5`, `8400273`; WU4 → `3b6c035`, `1d4b9c7`, `4b63ce5`,
+> `33f929e`. Closure → replay pin `e58334b`, CLI cleanup backlog `e149b4a`, and independently
+> reviewed follow-on plan `17d2cd7`. Verification: default conformance `567/683/567/0`, WU6
+> `15/15`, full shared/cold parity `567/683/567/567`, official-suite `0` regressions / `0`
+> progress with a byte-unchanged scoreboard, full `cargo test` PASS, workspace clippy PASS, and
+> `cargo audit` with zero vulnerabilities or warnings. Deferred: the move-only
+> `library_compiler.rs` split is the active follow-on sprint; CLI rendering/status duplication is
+> backlog `112`; all other oversized roots remain unscheduled.
+
 # Sprint — maintenance cleanup: gate, dedup, first hotspot split (2026-08-14)
 
 **Goal.** Restore a usable local and pull-request correctness gate, remove the
@@ -600,3 +614,27 @@ change follows from these path/import fixes.
   tests passed 94/94, clippy was clean, default conformance passed 567/683/567/0 in 114.11 s, WU6
   passed 15/15 in 264.53 s, and the freshly rebuilt release official-suite ratchet again reported
   0 regressions / 0 progress with the scoreboard byte-unchanged.
+- **2026-08-15 — WU4 PASS at `33f929e`.** The approved manifest and two seam amendments moved all
+  217 production functions and all 48 tests exactly once into a 36-line facade, eight production
+  children of 303–1,313 lines, and an isolated test child. Independent review found the public item
+  multiset exact, no public widening, all function bodies token-equivalent after only approved path
+  normalization, and all test/assertion bodies preserved. Binder tests passed 112/112; all-target
+  check, no-run, binder and workspace clippy passed. Default conformance passed in 114.79 s, WU6
+  passed 15/15 in 286.33 s, full shared/cold parity passed in 1,110.60 s (wall 1,111.18 s), and the
+  rebuilt release official-suite ratchet reported 0 regressions / 0 progress with the scoreboard
+  byte-unchanged.
+- **2026-08-15 — closure full-suite PASS after repairing one historical pin.** The first whole-suite
+  run exposed a replay-index identity pin left stale by the earlier zero-parameter-interface change
+  `41fe6c3`; WU4 did not alter the runtime graph. Independent review proved that six removed reverse
+  edges account exactly for 60 removed manifest bytes and the new digest. Commit `e58334b` changes
+  only those three pins; all other shape/health canaries remain exact. The repeated full suite then
+  passed, including ordinary conformance 18/18 in 112.32 s, WU6 15/15 in 281.63 s,
+  `typokat-library` 107/107 active tests in 671.30 s, every workspace unit/integration test, and all
+  doctests. Final `cargo audit` reported zero vulnerabilities and zero warnings; fmt, diff-check,
+  and the official scoreboard diff were clean.
+- **2026-08-15 — post-WU4 audit graduated two durable next steps.** Among 126 production candidate
+  Rust files, 26 remain above 1,500 lines. The largest is `library_compiler.rs` at 12,939 lines
+  (9,535 before its 3,404-line test tail); its independently reviewed one-root move-only sprint is
+  commit `17d2cd7`. The largest coherent live duplication is the three-copy CLI report rendering
+  and status transaction in `src/main.rs`; it remains separate because output, buffering, and exit
+  status are behavioral contracts, and is now backlog `112` in commit `e149b4a`.

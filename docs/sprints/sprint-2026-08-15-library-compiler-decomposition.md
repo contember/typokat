@@ -283,8 +283,8 @@ external guards.
 - **Acceptance / witness.** Every command passes, both conformance receipts are exact, WU6 is 15/15,
   the official ratchet reports zero regressions and zero scoreboard movement, no semantic fixture
   or API consumer changed, all external source-guard changes match their WU0 authorization, and the
-  final complete-token/size/path/reachability receipts match WU0. The sprint can then receive its
-  OUTCOME block and move to `docs/archive/` with the normal index updates.
+  final complete-token/size/path/reachability receipts match WU0. The sprint can then be stamped
+  with its closure record and move to `docs/archive/` with the normal index updates.
 - **Touch points.** This sprint's run log and normal close/archive navigation files only. Production
   changes remain limited to WU1 paths.
 

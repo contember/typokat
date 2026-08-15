@@ -24,19 +24,24 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-14-maintenance-cleanup.md`](sprints/sprint-2026-08-14-maintenance-cleanup.md) —
-  active current-HEAD maintenance cleanup for the correctness gate, validated duplication,
-  bounded hygiene, and one independently reviewed hotspot split.
+- [`sprint-2026-08-15-library-compiler-decomposition.md`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) —
+  active move-only decomposition of the largest remaining Rust source hotspot, with a frozen
+  full-token/path manifest, one implementation writer, and complete library lifecycle gates.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Maintenance cleanup active 2026-08-14** — the
-  [`active sprint`](sprints/sprint-2026-08-14-maintenance-cleanup.md) replaces the unstarted
-  [`namespace refactor plan`](archive/sprint-2026-07-16-namespace-binder-refactor.md). It schedules
-  only current-HEAD findings that survived adversarial refutation: the amplified conformance gate,
-  two semantic duplication boundaries, canonical ordering boilerplate, and one namespace split.
+- **Library compiler decomposition active 2026-08-15** — the
+  [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
+  12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,
+  path, visibility, consumer, and source-oracle manifest before the single-writer move begins.
+- **Maintenance cleanup shipped 2026-08-15** — the
+  [`archived sprint`](archive/sprint-2026-08-14-maintenance-cleanup.md) separated fast marker
+  conformance from full route parity, removed verified binder/query duplication, and replaced the
+  obsolete namespace refactor plan with a reviewed 36-line facade split. Post-WU4 measurement
+  selected the active library-compiler sprint and graduated CLI rendering duplication to backlog
+  [`112`](backlog/112-cli-report-rendering-transaction.md).
 - **Checker-scaling sprint archived partial 2026-08-14** — the dated
   [`scaling sprint`](archive/sprint-2026-07-25-checker-scaling.md) shipped its measured nonlinear
   fixes, but never recorded a final current-HEAD benchmark sweep or whole-sprint review. Its

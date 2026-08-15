@@ -4,7 +4,7 @@
 > `crates/typokat-binder/src/binder/namespace.rs` is 12,618 lines, its inline tests start at line
 > 7,696, and its production prefix is approximately 7,695 lines. The plan's 8,480-line baseline
 > and related line, clone, consumer, and snapshot assumptions are obsolete. The fresh audit and
-> the [`2026-08-14 maintenance cleanup sprint`](../sprints/sprint-2026-08-14-maintenance-cleanup.md)
+> the [`2026-08-14 maintenance cleanup sprint`](sprint-2026-08-14-maintenance-cleanup.md)
 > supersede this plan. Only current-HEAD findings that survived adversarial refutation transfer
 > into active work; refuted candidates remain recorded exclusions, not work units.
 
