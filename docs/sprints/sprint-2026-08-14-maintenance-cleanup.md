@@ -327,3 +327,9 @@ sprint before its implementation starts. No preparation agent edits the sprint o
   traced the behavior to the pre-WU0 route contract: ADR-0021 and WU6 omit notices, while B15
   explicitly requires notices on `check_project_once` and none on legacy `check_project`. WU0 now
   compares exact semantic output and leaves the route-specific notice envelope under B15.
+- **2026-08-15 — WU0 PASS at `1478213`.** Independent final review passed after adding an active
+  incomplete-record comparator control. The three focused semantic/UMD/route-envelope witnesses
+  passed. The exact ignored sweep then passed all 567 projects and 683 sources with receipt
+  567/683/567/567 in 1,075.40 s (wall 1,076.01 s), and the unchanged WU6 pull-request matrix passed
+  15/15 in 265.84 s. `cargo fmt --check` and `git diff --check` passed before the atomic test/workflow
+  commit. No fixture, production route, existing CI workflow, or WU6 test changed.
