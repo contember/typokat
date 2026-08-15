@@ -470,7 +470,8 @@ Every current production item maps exactly once:
   `PLACEMENT_INDEX_THRESHOLD`, placement/member/export/alias push helpers, dormant lookup, and
   metadata-name construction.
 - **`tests.rs`:** the complete current inline `tests` module; preserve every test name and
-  assertion. Only four approved source paths change: layered-sharing reads `layered.rs`, the
+  assertion. Only four approved source paths change: layered-sharing reads `layered.rs` and strips
+  only the manifest-approved `pub(super) ` field prefix before matching each storage witness, the
   placement one-shot witness reads `classification.rs`, and the finalization once-per-project
   witness reads `metadata.rs`; the existing binder source witness changes `include_str!("bind.rs")`
   to `include_str!("../bind.rs")` after the test module moves one directory deeper.
