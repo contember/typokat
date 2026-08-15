@@ -1,4 +1,4 @@
-//! Measurement-only compiler for injected declaration-library profiles.
+//! Source-backed compiler for declaration-library profiles and complete-source project routes.
 
 use super::classes::application::ClassTypeParameterDefault;
 use super::context::{CertifiedLibraryValues, CheckerRecordBatch, DeclTypes, TypeDecl};

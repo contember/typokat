@@ -634,60 +634,6 @@ fn candidate_anonymous_default_class_completeness_matches_the_oracle() {
     );
 }
 
-#[test]
-#[ignore = "pre-WU6 RED proof; intentionally becomes obsolete at cutover"]
-fn current_production_route_is_red_only_through_default_notices() {
-    let contract = contract();
-    for id in contract["classifications"]["admitted"]
-        .as_array()
-        .expect("admitted ids")
-    {
-        let id = id.as_str().expect("admitted id");
-        let case = case_by_id(&contract, id);
-        let mut outputs = Vec::new();
-        for order in ["normal", "reverse"] {
-            let project = TempProject::from_case(case, order);
-            let output = run_typokat(&project_args(&project.root));
-            assert_eq!(output.status.code(), Some(3), "{id}/{order} exit");
-            let summary = parse_summary(&output, &format!("{id}/{order}"));
-            assert!(
-                summary["diagnostics"]
-                    .as_array()
-                    .expect("diagnostics")
-                    .is_empty(),
-                "{id}/{order}"
-            );
-            assert!(
-                summary["incomplete"]
-                    .as_array()
-                    .expect("incomplete")
-                    .is_empty(),
-                "{id}/{order}"
-            );
-            assert!(
-                summary["parse_errors"]
-                    .as_array()
-                    .expect("parse errors")
-                    .is_empty(),
-                "{id}/{order}"
-            );
-            let notices = summary["project_notices"].as_array().expect("notices");
-            assert!(!notices.is_empty(), "{id}/{order} has a default notice");
-            assert!(
-                notices.iter().all(|notice| {
-                    notice.as_str().is_some_and(|notice| {
-                        notice.starts_with("unsupported-module-form default-import")
-                            || notice.starts_with("unsupported-module-form default-export")
-                    })
-                }),
-                "{id}/{order} has only frozen default notices: {notices:?}"
-            );
-            outputs.push((output.stdout, output.stderr));
-        }
-        assert_eq!(outputs[0], outputs[1], "{id} current root-order bytes");
-    }
-}
-
 fn assert_post_wu6_public_inputs(case: &Value, order: &str) -> (Vec<u8>, Vec<u8>) {
     let id = case["id"].as_str().expect("case id");
     let expected = &case["typokat_after_wu6"];

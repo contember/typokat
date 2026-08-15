@@ -1790,20 +1790,20 @@ impl ReplayRowRange {
         })
     }
 
-    #[allow(dead_code)] // Used when the ADR-0015 collision route consumes admitted ranges.
+    #[allow(dead_code)] // Retained for the ADR-0020 full-index oracle.
     fn indices(self) -> Option<std::ops::Range<usize>> {
         Some(usize::try_from(self.start).ok()?..usize::try_from(self.end).ok()?)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
+#[allow(dead_code)] // Retained for the ADR-0020 full-index oracle.
 pub enum SparseReplayScheduleError {
     UnknownSeed(ReplayOwner),
     MissingScc(u32),
 }
 
-#[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
+#[allow(dead_code)] // Retained for the ADR-0020 full-index oracle.
 pub trait SparseReplayGraphAccess {
     fn owner_scc(&self, owner: ReplayOwner) -> Option<u32>;
     fn reverse_sccs(&self, scc: u32) -> Option<&[u32]>;
@@ -1817,7 +1817,7 @@ pub trait SparseReplayGraphAccess {
     fn observe_affected_owner_emission(&self, _owner: ReplayOwner) {}
 }
 
-#[allow(dead_code)] // Used by the pending ADR-0015 production collision route.
+#[allow(dead_code)] // Retained for the ADR-0020 full-index oracle.
 pub fn schedule_sparse_collision_closure<G: SparseReplayGraphAccess + ?Sized>(
     graph: &G,
     seeds: &[ReplayOwner],
