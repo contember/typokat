@@ -1,0 +1,28 @@
+name: Full shared/cold parity
+
+on:
+  schedule:
+    - cron: "0 5 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  conformance-full-shared-cold-parity:
+    name: conformance (full shared/cold parity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the unsharded full parity inventory
+        run: >-
+          cargo test --test conformance conformance_full_shared_cold_parity
+          -- --ignored --exact --nocapture

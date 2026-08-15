@@ -18,7 +18,7 @@
 //!
 //! Every corpus runs through the same production TypeScript 6.0.3 default-library route.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use typokat::driver::{check_project, check_project_once, CheckOutput, FileReport};
@@ -558,6 +558,8 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
+const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0xcfaa2f76b5f0d882;
+
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
 struct ExpectedMarker {
@@ -576,17 +578,152 @@ struct ExpectedIncomplete {
     substring: Option<String>,
 }
 
-/// The M0 conformance entry point. Runs every enabled milestone dir and reports
-/// all failures together so a regression is debuggable in one shot.
-#[test]
-fn conformance() -> Result<(), String> {
-    on_raw_check_worker(conformance_on_worker)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RouteMode {
+    SharedMarkers,
+    SharedColdParity,
 }
 
-fn conformance_on_worker() {
+struct FixtureProject {
+    logical_id: String,
+    fixtures: Vec<PathBuf>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DiscoveryReceipt {
+    whole_flat: (usize, usize),
+    whole_project: (usize, usize),
+    selected_flat: (usize, usize),
+    selected_project: (usize, usize),
+}
+
+struct Inventory {
+    projects: Vec<FixtureProject>,
+    source_files: usize,
+    discovery: DiscoveryReceipt,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RunReceipt {
+    fixture_projects: usize,
+    source_files: usize,
+    shared_executions: usize,
+    cold_executions: usize,
+}
+
+/// The ordinary marker gate. Full shared/cold parity has its own ignored entry point.
+#[test]
+fn conformance() -> Result<(), String> {
+    on_raw_check_worker(|| {
+        let inventory = discover_enabled_inventory();
+        let receipt = run_inventory(&inventory, RouteMode::SharedMarkers);
+        assert_eq!(
+            receipt,
+            RunReceipt {
+                fixture_projects: 567,
+                source_files: 683,
+                shared_executions: 567,
+                cold_executions: 0,
+            }
+        );
+        print_run_receipt(&receipt);
+    })
+}
+
+#[test]
+#[ignore = "weekly and sprint-closure full shared/cold parity gate"]
+fn conformance_full_shared_cold_parity() -> Result<(), String> {
+    on_raw_check_worker(|| {
+        let inventory = discover_enabled_inventory();
+        let receipt = run_inventory(&inventory, RouteMode::SharedColdParity);
+        assert_eq!(
+            receipt,
+            RunReceipt {
+                fixture_projects: 567,
+                source_files: 683,
+                shared_executions: 567,
+                cold_executions: 567,
+            }
+        );
+        print_run_receipt(&receipt);
+    })
+}
+
+#[test]
+fn conformance_inventory_matches_frozen_receipt() {
+    let inventory = discover_enabled_inventory();
+    assert_eq!(inventory.projects.len(), 567);
+    assert_eq!(inventory.source_files, 683);
+    assert_eq!(
+        inventory.discovery,
+        DiscoveryReceipt {
+            whole_flat: (420, 420),
+            whole_project: (74, 184),
+            selected_flat: (67, 67),
+            selected_project: (6, 12),
+        }
+    );
+
     let cases_root = cases_root();
-    let mut failures: Vec<String> = Vec::new();
-    let mut files_checked = 0usize;
+    let mut logical_ids = BTreeSet::new();
+    let mut source_paths = BTreeSet::new();
+    for project in &inventory.projects {
+        assert!(
+            !project.fixtures.is_empty(),
+            "{} is empty",
+            project.logical_id
+        );
+        assert!(
+            logical_ids.insert(&project.logical_id),
+            "fixture project selected twice: {}",
+            project.logical_id
+        );
+
+        assert!(
+            project.fixtures.windows(2).all(|pair| pair[0] < pair[1]),
+            "source paths are not sorted and unique in {}",
+            project.logical_id
+        );
+        for fixture in &project.fixtures {
+            assert!(
+                fixture.starts_with(&cases_root),
+                "fixture is outside tests/cases: {}",
+                fixture.display()
+            );
+            assert!(
+                source_paths.insert(fixture),
+                "fixture source was selected twice: {}",
+                fixture.display()
+            );
+        }
+    }
+    assert_eq!(source_paths.len(), inventory.source_files);
+    let order_fingerprint = inventory_order_fingerprint(&inventory.projects);
+    assert_eq!(order_fingerprint, FROZEN_INVENTORY_ORDER_FINGERPRINT);
+    println!(
+        "conformance inventory: fixture_projects={} source_files={} whole_flat={}/{} whole_project={}/{} selected_flat={}/{} selected_project={}/{} order_fingerprint={order_fingerprint:016x}",
+        inventory.projects.len(),
+        inventory.source_files,
+        inventory.discovery.whole_flat.0,
+        inventory.discovery.whole_flat.1,
+        inventory.discovery.whole_project.0,
+        inventory.discovery.whole_project.1,
+        inventory.discovery.selected_flat.0,
+        inventory.discovery.selected_flat.1,
+        inventory.discovery.selected_project.0,
+        inventory.discovery.selected_project.1,
+    );
+}
+
+fn discover_enabled_inventory() -> Inventory {
+    let cases_root = cases_root();
+    let mut projects = Vec::new();
+    let mut discovery = DiscoveryReceipt {
+        whole_flat: (0, 0),
+        whole_project: (0, 0),
+        selected_flat: (0, 0),
+        selected_project: (0, 0),
+    };
 
     for (dir, enabled) in MILESTONE_DIRS {
         if !*enabled {
@@ -594,19 +731,19 @@ fn conformance_on_worker() {
         }
         let dir_path = cases_root.join(dir);
         if PROJECT_DIRS.contains(dir) {
-            let mut projects = discover_project_dirs(&dir_path);
-            projects.sort();
+            let mut discovered_projects = discover_project_dirs(&dir_path);
+            discovered_projects.sort();
             assert!(
-                !projects.is_empty(),
+                !discovered_projects.is_empty(),
                 "no project fixtures found in {}",
                 dir_path.display()
             );
-            for project in projects {
+            for project in discovered_projects {
                 let fixtures = discover_ts_files_recursive(&project);
-                files_checked += fixtures.len();
-                if let Err(project_failures) = run_project_fixture(&project, fixtures) {
-                    failures.extend(project_failures);
-                }
+                assert!(!fixtures.is_empty(), "empty project: {}", project.display());
+                discovery.whole_project.0 += 1;
+                discovery.whole_project.1 += fixtures.len();
+                push_fixture_project(&cases_root, &mut projects, project, fixtures);
             }
             continue;
         }
@@ -618,10 +755,9 @@ fn conformance_on_worker() {
             dir_path.display()
         );
         for fixture in fixtures {
-            files_checked += 1;
-            if let Err(file_failures) = run_fixture(&fixture) {
-                failures.extend(file_failures);
-            }
+            discovery.whole_flat.0 += 1;
+            discovery.whole_flat.1 += 1;
+            push_fixture_project(&cases_root, &mut projects, fixture.clone(), vec![fixture]);
         }
     }
 
@@ -633,10 +769,9 @@ fn conformance_on_worker() {
             "fixture not found: {}",
             fixture.display()
         );
-        files_checked += 1;
-        if let Err(file_failures) = run_fixture(&fixture) {
-            failures.extend(file_failures);
-        }
+        discovery.selected_flat.0 += 1;
+        discovery.selected_flat.1 += 1;
+        push_fixture_project(&cases_root, &mut projects, fixture.clone(), vec![fixture]);
     }
 
     for (dir, project) in ENABLED_PROJECT_FIXTURES {
@@ -648,22 +783,199 @@ fn conformance_on_worker() {
             project.display()
         );
         let fixtures = discover_ts_files_recursive(&project);
-        files_checked += fixtures.len();
-        if let Err(project_failures) = run_project_fixture(&project, fixtures) {
-            failures.extend(project_failures);
+        assert!(!fixtures.is_empty(), "empty project: {}", project.display());
+        discovery.selected_project.0 += 1;
+        discovery.selected_project.1 += fixtures.len();
+        push_fixture_project(&cases_root, &mut projects, project, fixtures);
+    }
+
+    let mut logical_ids = BTreeSet::new();
+    let mut source_paths = BTreeSet::new();
+    for project in &projects {
+        assert!(
+            logical_ids.insert(project.logical_id.clone()),
+            "fixture project selected twice: {}",
+            project.logical_id
+        );
+        assert!(
+            !project.fixtures.is_empty(),
+            "{} is empty",
+            project.logical_id
+        );
+        for fixture in &project.fixtures {
+            assert!(
+                source_paths.insert(fixture.clone()),
+                "fixture source selected twice: {}",
+                fixture.display()
+            );
         }
     }
 
-    assert!(files_checked > 0, "no fixtures were checked");
+    Inventory {
+        projects,
+        source_files: source_paths.len(),
+        discovery,
+    }
+}
+
+fn push_fixture_project(
+    cases_root: &Path,
+    projects: &mut Vec<FixtureProject>,
+    logical_path: PathBuf,
+    mut fixtures: Vec<PathBuf>,
+) {
+    fixtures.sort();
+    let logical_id = logical_path
+        .strip_prefix(cases_root)
+        .unwrap_or_else(|_| panic!("fixture is outside tests/cases: {}", logical_path.display()))
+        .display()
+        .to_string();
+    projects.push(FixtureProject {
+        logical_id,
+        fixtures,
+    });
+}
+
+fn inventory_order_fingerprint(projects: &[FixtureProject]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    let mut fingerprint = OFFSET_BASIS;
+    for project in projects {
+        for byte in project.logical_id.bytes() {
+            fingerprint ^= u64::from(byte);
+            fingerprint = fingerprint.wrapping_mul(PRIME);
+        }
+        fingerprint ^= u64::from(b'\n');
+        fingerprint = fingerprint.wrapping_mul(PRIME);
+    }
+    fingerprint
+}
+
+fn run_inventory(inventory: &Inventory, mode: RouteMode) -> RunReceipt {
+    let mut failures = Vec::new();
+    let mut shared_executions = 0usize;
+    let mut cold_executions = 0usize;
+
+    for project in &inventory.projects {
+        let inputs = fixture_inputs(&project.fixtures);
+        shared_executions += 1;
+        let shared = match check_project(clone_inputs(&inputs)) {
+            Ok(reports) => reports,
+            Err(error) => {
+                failures.push(library_base_failure(&project.logical_id, &error));
+                continue;
+            }
+        };
+        failures.extend(compare_project_markers(project, &inputs, &shared));
+
+        if mode == RouteMode::SharedColdParity {
+            cold_executions += 1;
+            match check_project_once(clone_inputs(&inputs)) {
+                Ok(cold) => {
+                    failures.extend(compare_route_reports(&project.logical_id, &shared, &cold));
+                }
+                Err(error) => failures.push(complete_source_failure(&project.logical_id, &error)),
+            }
+        }
+    }
 
     if !failures.is_empty() {
         panic!(
             "conformance failures ({} across {} files):\n\n{}",
             failures.len(),
-            files_checked,
+            inventory.source_files,
             failures.join("\n\n")
         );
     }
+
+    RunReceipt {
+        fixture_projects: inventory.projects.len(),
+        source_files: inventory.source_files,
+        shared_executions,
+        cold_executions,
+    }
+}
+
+fn fixture_inputs(fixtures: &[PathBuf]) -> Vec<FileInput> {
+    fixtures
+        .iter()
+        .map(|fixture| FileInput {
+            name: fixture.display().to_string(),
+            source: std::fs::read_to_string(fixture).unwrap_or_else(|error| {
+                panic!("cannot read fixture {}: {error}", fixture.display())
+            }),
+        })
+        .collect()
+}
+
+fn clone_inputs(inputs: &[FileInput]) -> Vec<FileInput> {
+    inputs
+        .iter()
+        .map(|input| FileInput {
+            name: input.name.clone(),
+            source: input.source.clone(),
+        })
+        .collect()
+}
+
+fn compare_project_markers(
+    project: &FixtureProject,
+    inputs: &[FileInput],
+    reports: &[FileReport],
+) -> Vec<String> {
+    let alignment_failures = compare_report_alignment(&project.logical_id, inputs, reports);
+    if !alignment_failures.is_empty() {
+        return alignment_failures;
+    }
+
+    let mut failures = Vec::new();
+    for ((fixture, input), report) in project.fixtures.iter().zip(inputs).zip(reports) {
+        if let Err(file_failures) = compare_fixture_output(fixture, &input.source, &report.output) {
+            failures.extend(file_failures);
+        }
+    }
+    failures
+}
+
+fn compare_report_alignment(
+    logical_id: &str,
+    inputs: &[FileInput],
+    reports: &[FileReport],
+) -> Vec<String> {
+    if reports.len() != inputs.len() {
+        return vec![format!(
+            "{logical_id}: project report count mismatch, expected {}, got {}",
+            inputs.len(),
+            reports.len()
+        )];
+    }
+
+    let mut failures = Vec::new();
+    for (index, (input, report)) in inputs.iter().zip(reports).enumerate() {
+        if report.name != input.name {
+            failures.push(format!(
+                "{logical_id}: report {index} name mismatch, expected {:?}, got {:?}",
+                input.name, report.name
+            ));
+        }
+        if report.source != input.source {
+            failures.push(format!(
+                "{logical_id}: report {index} source differs from its original input"
+            ));
+        }
+    }
+    failures
+}
+
+fn print_run_receipt(receipt: &RunReceipt) {
+    println!(
+        "conformance receipt: fixture_projects={} source_files={} shared_executions={} cold_executions={}",
+        receipt.fixture_projects,
+        receipt.source_files,
+        receipt.shared_executions,
+        receipt.cold_executions
+    );
 }
 
 fn assert_fixture_directory_registered(dir: &str) {
@@ -673,110 +985,22 @@ fn assert_fixture_directory_registered(dir: &str) {
     );
 }
 
-/// Run one fixture; return `Err(messages)` on any mismatch.
-fn run_fixture(path: &Path) -> Result<(), Vec<String>> {
-    let source = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", path.display()));
-
-    let one_file_project = || {
-        vec![FileInput {
-            name: path.display().to_string(),
-            source: source.clone(),
-        }]
-    };
-    let shared = match check_project(one_file_project()) {
-        Ok(reports) => reports,
-        Err(error) => return Err(vec![library_base_failure(path, &error)]),
-    };
-    let cold = match check_project_once(one_file_project()) {
-        Ok(reports) => reports,
-        Err(error) => return Err(vec![complete_source_failure(path, &error)]),
-    };
-    let mut failures = compare_route_reports(path, &shared, &cold);
-    let Some(report) = cold.first() else {
-        failures.push(format!(
-            "{}: complete-source route omitted its one-file report",
-            display_path(path)
-        ));
-        return Err(failures);
-    };
-    if let Err(marker_failures) = compare_fixture_output(path, &source, &report.output) {
-        failures.extend(marker_failures);
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures)
-    }
+fn library_base_failure(logical_id: &str, error: &impl std::fmt::Display) -> String {
+    format!("{logical_id}: the default-library base is unavailable: {error}")
 }
 
-fn library_base_failure(path: &Path, error: &impl std::fmt::Display) -> String {
-    format!(
-        "{}: the default-library base is unavailable: {error}",
-        display_path(path)
-    )
+fn complete_source_failure(logical_id: &str, error: &impl std::fmt::Display) -> String {
+    format!("{logical_id}: the complete-source standalone route failed: {error}")
 }
 
-fn complete_source_failure(path: &Path, error: &impl std::fmt::Display) -> String {
-    format!(
-        "{}: the complete-source standalone route failed: {error}",
-        display_path(path)
-    )
-}
-
-fn run_project_fixture(project: &Path, mut fixtures: Vec<PathBuf>) -> Result<(), Vec<String>> {
-    fixtures.sort();
-    let mut inputs = Vec::with_capacity(fixtures.len());
-    for fixture in &fixtures {
-        let source = std::fs::read_to_string(fixture)
-            .unwrap_or_else(|e| panic!("cannot read fixture {}: {e}", fixture.display()));
-        inputs.push(FileInput {
-            name: fixture.display().to_string(),
-            source,
-        });
-    }
-    let shared_inputs = inputs
-        .iter()
-        .map(|input| FileInput {
-            name: input.name.clone(),
-            source: input.source.clone(),
-        })
-        .collect();
-    let shared = match check_project(shared_inputs) {
-        Ok(reports) => reports,
-        Err(error) => return Err(vec![library_base_failure(project, &error)]),
-    };
-    let reports = match check_project_once(inputs) {
-        Ok(reports) => reports,
-        Err(error) => return Err(vec![complete_source_failure(project, &error)]),
-    };
-    let mut failures = compare_route_reports(project, &shared, &reports);
-    for (fixture, report) in fixtures.iter().zip(&reports) {
-        if let Err(file_failures) = compare_fixture_output(fixture, &report.source, &report.output)
-        {
-            failures.extend(file_failures);
-        }
-    }
-    if reports.len() != fixtures.len() {
-        failures.push(format!(
-            "{}: project report count mismatch, expected {}, got {}",
-            display_path(project),
-            fixtures.len(),
-            reports.len()
-        ));
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures)
-    }
-}
-
-fn compare_route_reports(path: &Path, shared: &[FileReport], cold: &[FileReport]) -> Vec<String> {
+fn compare_route_reports(
+    logical_id: &str,
+    shared: &[FileReport],
+    cold: &[FileReport],
+) -> Vec<String> {
     if shared.len() != cold.len() {
         return vec![format!(
-            "{}: shared/cold report count differs: {} != {}",
-            display_path(path),
+            "{logical_id}: shared/cold report count differs: {} != {}",
             shared.len(),
             cold.len()
         )];
@@ -791,7 +1015,7 @@ fn compare_route_reports(path: &Path, shared: &[FileReport], cold: &[FileReport]
             (!same).then(|| {
                 format!(
                     "{}: shared/cold output differs for {}\n    shared: {:?}\n    cold:   {:?}",
-                    display_path(path),
+                    logical_id,
                     cold.name,
                     exact_output(&shared.output),
                     exact_output(&cold.output)
@@ -815,6 +1039,136 @@ fn exact_output(output: &CheckOutput) -> (Vec<String>, Vec<String>, Vec<String>)
             .map(|record| format!("{record:?}"))
             .collect(),
     )
+}
+
+#[test]
+fn exact_route_comparator_detects_public_report_changes() {
+    let equal_left = vec![parity_control_report("a.ts", "const a = 1;", &[], &[])];
+    let equal_right = vec![parity_control_report("a.ts", "const a = 1;", &[], &[])];
+    assert!(compare_route_reports("control", &equal_left, &equal_right).is_empty());
+
+    let changed_name = vec![parity_control_report("b.ts", "const a = 1;", &[], &[])];
+    assert!(!compare_route_reports("control", &equal_left, &changed_name).is_empty());
+
+    let changed_source = vec![parity_control_report("a.ts", "const a = 2;", &[], &[])];
+    assert!(!compare_route_reports("control", &equal_left, &changed_source).is_empty());
+
+    let changed_parse = vec![parity_control_report(
+        "a.ts",
+        "const a = 1;",
+        &["parse changed"],
+        &[],
+    )];
+    assert!(!compare_route_reports("control", &equal_left, &changed_parse).is_empty());
+
+    let mut changed_incomplete = parity_control_report("a.ts", "const a = 1;", &[], &[]);
+    changed_incomplete
+        .output
+        .incomplete
+        .push(typokat::diagnostics::IncompleteSurface::new(
+            "control/incomplete/change",
+            typokat::span::Span::new(0, 1),
+            "incomplete changed",
+        ));
+    assert!(!compare_route_reports("control", &equal_left, &[changed_incomplete]).is_empty());
+
+    let changed_notice = vec![parity_control_report(
+        "a.ts",
+        "const a = 1;",
+        &[],
+        &["notice changed"],
+    )];
+    assert!(
+        compare_route_reports("control", &equal_left, &changed_notice).is_empty(),
+        "route-envelope notices are not part of semantic parity"
+    );
+
+    let ordered = vec![
+        parity_control_report("a.ts", "const a = 1;", &[], &[]),
+        parity_control_report("b.ts", "const b = 1;", &[], &[]),
+    ];
+    let reordered = vec![
+        parity_control_report("b.ts", "const b = 1;", &[], &[]),
+        parity_control_report("a.ts", "const a = 1;", &[], &[]),
+    ];
+    assert!(!compare_route_reports("control", &ordered, &reordered).is_empty());
+}
+
+#[test]
+fn marker_alignment_rejects_missing_or_misaligned_reports_before_parsing() {
+    let malformed = "const a = 1; // error[TK2322\n";
+    let normal = "const b = 1;\n";
+    let inputs = vec![
+        FileInput {
+            name: "a.ts".to_owned(),
+            source: malformed.to_owned(),
+        },
+        FileInput {
+            name: "b.ts".to_owned(),
+            source: normal.to_owned(),
+        },
+    ];
+    let project = FixtureProject {
+        logical_id: "control".to_owned(),
+        fixtures: vec![PathBuf::from("a.ts"), PathBuf::from("b.ts")],
+    };
+
+    let aligned = vec![
+        parity_control_report("a.ts", malformed, &[], &[]),
+        parity_control_report("b.ts", normal, &[], &[]),
+    ];
+    assert!(compare_report_alignment("control", &inputs, &aligned).is_empty());
+
+    let duplicated = vec![
+        parity_control_report("a.ts", malformed, &[], &[]),
+        parity_control_report("a.ts", malformed, &[], &[]),
+    ];
+    assert!(!compare_project_markers(&project, &inputs, &duplicated).is_empty());
+
+    let omitted = vec![parity_control_report("a.ts", malformed, &[], &[])];
+    assert!(!compare_project_markers(&project, &inputs, &omitted).is_empty());
+
+    let reordered = vec![
+        parity_control_report("b.ts", normal, &[], &[]),
+        parity_control_report("a.ts", malformed, &[], &[]),
+    ];
+    assert!(!compare_project_markers(&project, &inputs, &reordered).is_empty());
+
+    let renamed = vec![
+        parity_control_report("renamed.ts", malformed, &[], &[]),
+        parity_control_report("b.ts", normal, &[], &[]),
+    ];
+    assert!(!compare_project_markers(&project, &inputs, &renamed).is_empty());
+
+    let changed_source = vec![
+        parity_control_report("a.ts", "const changed = 1;\n", &[], &[]),
+        parity_control_report("b.ts", normal, &[], &[]),
+    ];
+    assert!(!compare_project_markers(&project, &inputs, &changed_source).is_empty());
+}
+
+fn parity_control_report(
+    name: &str,
+    source: &str,
+    parse_errors: &[&str],
+    project_notices: &[&str],
+) -> FileReport {
+    FileReport {
+        name: name.to_owned(),
+        source: source.to_owned(),
+        output: CheckOutput {
+            diagnostics: Vec::new(),
+            parse_errors: parse_errors
+                .iter()
+                .map(|message| (*message).to_owned())
+                .collect(),
+            incomplete: Vec::new(),
+            project_notices: project_notices
+                .iter()
+                .map(|notice| (*notice).to_owned())
+                .collect(),
+        },
+    }
 }
 
 fn compare_fixture_output(
