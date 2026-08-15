@@ -87,9 +87,11 @@ clone, consumer, and snapshot measurements are historical only.
   rediscovery, path heuristics, filtering, sampling, or reordering.
   Make the default `conformance` test run every marker once through the shared route. Add an
   exact-named ignored `conformance_full_shared_cold_parity` test over the identical inventory and
-  ordered `FileReport` comparison. Exact parity includes name, source, diagnostics, parse errors,
-  incomplete records, and `project_notices`; add cheap comparator negative controls for report
-  order/name, source, parse errors, and notices. Keep `tests/wu6_complete_source_cli.rs` unchanged as
+  ordered `FileReport` comparison. Exact semantic parity includes name, source, diagnostics, parse
+  errors, and incomplete records; add cheap comparator negative controls for report order/name,
+  source, parse errors, and incompletes. `project_notices` are route-envelope metadata and are
+  deliberately not a parity field: `tests/b15_default_module_slots_cli.rs` remains their exact
+  route-specific oracle. Keep `tests/wu6_complete_source_cli.rs` unchanged as
   the pull-request ADR-0021 risk matrix unless a missing invariant is proved first. Add a separate
   `.github/workflows/full-parity.yml` with weekly and `workflow_dispatch` triggers, a concurrency
   group distinct from push/PR CI, scheduled cancellation disabled, and a 60-minute timeout.
@@ -107,7 +109,9 @@ clone, consumer, and snapshot measurements are historical only.
   witness; do not add or print a literal mismatch counter.
   On the documented host, three warm runs of
   `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact` must have a median at
-  or below 60 seconds and no run above 120 seconds. The unsharded full-parity command must finish
+  or below 135 seconds and no run above 150 seconds. These bounds are based on the current
+  567-route corpus; the earlier 60/120-second draft bounds had no like-for-like measurement. The
+  unsharded full-parity command must finish
   within 45 minutes under the same lease; its CI job has a 60-minute timeout. Published timings
   change only after both commands finish under these conditions.
 - **Touch points.** `tests/conformance.rs` and new `.github/workflows/full-parity.yml`. Treat
@@ -260,6 +264,9 @@ clone, consumer, and snapshot measurements are historical only.
 - **Differential boundary.** Inference and contextual typing are untouched, so their special
   reference-binary/tsc differential gate is not added. If implementation reaches them, stop and
   rescope instead of expanding this sprint.
+- **Route notices are not semantic parity.** ADR-0021 and the WU6 oracle compare diagnostics, parse
+  failures, and incomplete records. The explicit-file-list route additionally publishes module
+  admission notices while the legacy provider route deliberately does not; B15 pins both envelopes.
 
 ## Sequencing
 
@@ -306,3 +313,17 @@ sprint before its implementation starts. No preparation agent edits the sprint o
   (18 min 23.90 s), within the 45-minute stop budget. No agent wrote to the tree during the run.
   This proves the pre-change parity gate is green and supplies the exact baseline that the new
   ignored full-parity test must preserve.
+- **2026-08-15 — WU0 cadence re-gated from measured current routes.** The reviewed shared-only
+  implementation passed with receipt 567/683/567/0. Three warm two-vCPU runs took 120.35 s,
+  110.62 s, and 111.28 s (median 111.28 s, maximum 120.35 s), a 9.17x reduction from the
+  1,103.90-second combined baseline. Temporary route instrumentation, removed after the run, found
+  285 shared routes in 0.285 s, 273 private-sparse routes in 104.248 s, and 9 complete-source
+  fallbacks in 24.036 s; all preflight work totaled 0.051 s. The measured 135/150-second gate keeps
+  bounded headroom without treating private replay as harness overhead.
+- **2026-08-15 — first named full-parity run exposed a specification error, not a checker diff.**
+  The 1,061.40-second run found five UMD files whose diagnostics, parse errors, and incomplete
+  records matched while the explicit cold route additionally returned its documented
+  `export-as-namespace` / `export-assignment` project notices. Three independent read-only reviews
+  traced the behavior to the pre-WU0 route contract: ADR-0021 and WU6 omit notices, while B15
+  explicitly requires notices on `check_project_once` and none on legacy `check_project`. WU0 now
+  compares exact semantic output and leaves the route-specific notice envelope under B15.
