@@ -491,7 +491,8 @@ new sibling visibility is frozen as follows:
   `name_id`, `name_text`, `uses_library_shared_globals`, `source_unit_for_module`,
   `record_compilation_origin`, `classify`, the six standalone/global admission queries,
   `standalone_merge_record`, and `rebuild_canonical_suffix`.
-- Other sibling seams newly `pub(super)`: lookup’s two direct/global-this helpers; `WalkContext`,
+- Other sibling seams newly `pub(super)`: lookup’s two direct/global-this helpers and
+  `ambient_member_union`; `WalkContext`,
   its fields and four helpers; `enum_group_semantics`; value disposition/bind/alias helpers;
   walking’s `walk_statements`, `walk_statement`, export-list/context, header reservation, and
   dormant-owner helpers; deferred’s module/global bind and placement/member/export/alias push
@@ -516,6 +517,13 @@ unchanged `split_once` boundary assertion. The sentinel substitutes only for the
 boundary; the production source under inspection remains exactly the two moved bodies. Walking’s
 calls into deferred/global helpers and deferred module bodies re-entering
 ordinary walking remain sibling imports; bodies and phase order do not change.
+
+Blocked compile review approved three additional move-only seam adjustments. `walking.rs` changes
+its inherited `super::bind::bind_statement(...)` path to
+`crate::binder::bind::bind_statement(...)`; the function keeps its existing binder-private
+`pub(super)` visibility and is not re-exported by the namespace facade. `metadata.rs` explicitly
+imports the already-approved `super::deferred::push_placement`. No other visibility, body, or API
+change follows from these path/import fixes.
 
 ## Run log
 
