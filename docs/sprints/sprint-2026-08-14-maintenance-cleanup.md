@@ -460,3 +460,13 @@ source-text assertions.
   49/49, targeted clippy was clean, default conformance passed 567/683/567/0 in 111.14 s, and the
   freshly rebuilt release official-suite ratchet reported 0 regressions / 0 progress with the
   scoreboard byte-unchanged.
+- **2026-08-15 — WU3 PASS in spec `1bd6602` and implementation `21a23c5`.** The pre-refactor
+  characterization pins both operation root/observation orders, overload root-leaf `No` and absent
+  completed memo, exact whole-`NeedsBatch` retry order through the real coordinator, `Yes`/`No`/
+  `Exhausted`, planning taint, cycle taint, and zero-write rules. Its private `cfg(test)` trace has
+  RAII nesting/unwind cleanup and compiles out of production. The implementation leaves exactly one
+  two-variant transaction loop while keeping assignability fast paths/memo and overload leaf/no-memo
+  policy outside it. Independent review found no cache, taint, root-order, or commit drift. Query
+  tests passed 94/94, clippy was clean, default conformance passed 567/683/567/0 in 114.11 s, WU6
+  passed 15/15 in 264.53 s, and the freshly rebuilt release official-suite ratchet again reported
+  0 regressions / 0 progress with the scoreboard byte-unchanged.
