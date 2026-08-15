@@ -267,6 +267,47 @@ enum ExactFamilyAttempt {
     Exhausted(Exhaustion),
 }
 
+#[derive(Clone, Copy)]
+enum RelationOperation {
+    Assignable {
+        src: TypeId,
+        tgt: TypeId,
+    },
+    OverloadCompatibility {
+        overload: TypeId,
+        implementation: TypeId,
+    },
+}
+
+impl RelationOperation {
+    fn roots(self) -> [TypeId; 2] {
+        match self {
+            Self::Assignable { src, tgt } => [src, tgt],
+            Self::OverloadCompatibility {
+                overload,
+                implementation,
+            } => [overload, implementation],
+        }
+    }
+
+    fn attempt(self, relater: &mut Relater<'_>) -> RelationAttempt {
+        match self {
+            Self::Assignable { src, tgt } => relater.is_assignable_attempt(src, tgt),
+            Self::OverloadCompatibility {
+                overload,
+                implementation,
+            } => relater.overload_implementation_compatible_attempt(overload, implementation),
+        }
+    }
+
+    fn completed_key(self) -> Option<CompletedRelationKey> {
+        match self {
+            Self::Assignable { src, tgt } => Some(CompletedRelationKey::assignable(src, tgt)),
+            Self::OverloadCompatibility { .. } => None,
+        }
+    }
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueryDemandMeasure {
@@ -1978,6 +2019,10 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.remember_completed_relation(completed_key, &outcome);
             return outcome;
         }
+        self.run_relation_transaction(RelationOperation::Assignable { src, tgt })
+    }
+
+    fn run_relation_transaction(&mut self, operation: RelationOperation) -> RelationOutcome {
         let mut planner = ProjectionPlanner::new(
             self.interner,
             self.published,
@@ -1987,7 +2032,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
             self.state.array_definitely_lacks_then,
             self.state.library_object_context,
         );
-        planner.prepare_relation_roots(&[src, tgt]);
+        planner.prepare_relation_roots(&operation.roots());
         let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
         let mut outcome = loop {
             let well_known = planner.interner.well_known();
@@ -1998,7 +2043,7 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                     relation_cache,
                     &planner.plan,
                 );
-                let attempt = relater.is_assignable_attempt(src, tgt);
+                let attempt = operation.attempt(&mut relater);
                 let commit_cache = matches!(
                     attempt,
                     RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
@@ -2037,7 +2082,9 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         if commit_plan {
             self.commit_plan(transaction.into_commit());
             if !cache_tainted {
-                self.remember_completed_relation(completed_key, &outcome);
+                if let Some(completed_key) = operation.completed_key() {
+                    self.remember_completed_relation(completed_key, &outcome);
+                }
             }
         }
         outcome
@@ -2204,66 +2251,10 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
         ) {
             return RelationOutcome::Exhausted(reason);
         }
-        let mut planner = ProjectionPlanner::new(
-            self.interner,
-            self.published,
-            &self.state.projection_memo,
-            &self.state.evaluation_memo,
-            *self.next_type_param,
-            self.state.array_definitely_lacks_then,
-            self.state.library_object_context,
-        );
-        planner.prepare_relation_roots(&[overload, implementation]);
-        let mut relation_cache = std::mem::take(&mut self.state.relation_cache);
-        let mut outcome = loop {
-            let well_known = planner.interner.well_known();
-            let (attempt, returned_cache) = {
-                let mut relater = Relater::planned(
-                    planner.interner.store(),
-                    well_known,
-                    relation_cache,
-                    &planner.plan,
-                );
-                let attempt =
-                    relater.overload_implementation_compatible_attempt(overload, implementation);
-                let commit_cache = matches!(
-                    attempt,
-                    RelationAttempt::Decided(RelationOutcome::Yes | RelationOutcome::No(_))
-                ) && !planner.planning_tainted
-                    && planner.cycle_taint_reason.is_none();
-                let cache = relater.finish_planned(commit_cache);
-                (attempt, cache)
-            };
-            relation_cache = returned_cache;
-            #[cfg(test)]
-            record_relation_driver_attempt(&attempt);
-            match attempt {
-                RelationAttempt::Decided(outcome) => break outcome,
-                RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
-                RelationAttempt::NeedsBatch(demands) => {
-                    for demand in demands {
-                        planner.expand_relation_demand(demand);
-                    }
-                }
-            }
-        };
-        let transaction = planner.finish();
-        *self.next_type_param = transaction.next_type_param;
-        if matches!(outcome, RelationOutcome::Yes) && transaction.planning_tainted {
-            outcome = RelationOutcome::Exhausted(
-                transaction
-                    .first_exhaustion
-                    .clone()
-                    .unwrap_or(Exhaustion::ClassProjectionBudget),
-            );
-        }
-        let commit_plan =
-            !transaction.planning_tainted && !matches!(outcome, RelationOutcome::Exhausted(_));
-        self.state.relation_cache = relation_cache;
-        if commit_plan {
-            self.commit_plan(transaction.into_commit());
-        }
-        outcome
+        self.run_relation_transaction(RelationOperation::OverloadCompatibility {
+            overload,
+            implementation,
+        })
     }
 
     fn commit_plan(&mut self, transaction: PendingQueryCommit) {
