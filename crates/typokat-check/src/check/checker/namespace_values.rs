@@ -2698,51 +2698,33 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
             let statement = &statements[index];
-            match statement {
-                Statement::VariableDeclaration(declaration) => self
-                    .check_prepared_namespace_variable(
-                        declaration,
-                        check_unprepared.then_some(scope),
-                    ),
-                Statement::FunctionDeclaration(function) => self
-                    .check_prepared_namespace_function(function, check_unprepared.then_some(scope)),
-                Statement::ClassDeclaration(class) => {
-                    self.check_class_for_namespace(class, check_unprepared.then_some(scope))
-                }
+            if matches!(
+                statement,
                 Statement::TSEnumDeclaration(_) | Statement::TSImportEqualsDeclaration(_)
-                    if self.namespace_values.take_private_unsupported_member(
-                        self.current_module,
-                        statement.span().start,
-                    ) =>
-                {
-                    let mut no_return = None;
-                    self.check_stmt(scope, statement, None, &mut no_return);
-                }
-                Statement::TSModuleDeclaration(nested) => {
-                    self.check_prepared_namespace_declaration(nested);
-                }
+            ) && self
+                .namespace_values
+                .take_private_unsupported_member(self.current_module, statement.span().start)
+            {
+                let mut no_return = None;
+                self.check_stmt(scope, statement, None, &mut no_return);
+                index += 1;
+                continue;
+            }
+            if let Some(declaration) = statement.as_declaration() {
+                self.check_prepared_namespace_member_declaration(
+                    declaration,
+                    check_unprepared.then_some(scope),
+                );
+                index += 1;
+                continue;
+            }
+            match statement {
                 Statement::ExportNamedDeclaration(export) => {
                     if let Some(declaration) = &export.declaration {
-                        match declaration {
-                            Declaration::VariableDeclaration(declaration) => self
-                                .check_prepared_namespace_variable(
-                                    declaration,
-                                    check_unprepared.then_some(scope),
-                                ),
-                            Declaration::FunctionDeclaration(function) => self
-                                .check_prepared_namespace_function(
-                                    function,
-                                    check_unprepared.then_some(scope),
-                                ),
-                            Declaration::ClassDeclaration(class) => self.check_class_for_namespace(
-                                class,
-                                check_unprepared.then_some(scope),
-                            ),
-                            Declaration::TSModuleDeclaration(nested) => {
-                                self.check_prepared_namespace_declaration(nested);
-                            }
-                            _ => {}
-                        }
+                        self.check_prepared_namespace_member_declaration(
+                            declaration,
+                            check_unprepared.then_some(scope),
+                        );
                     }
                 }
                 Statement::BlockStatement(_)
@@ -2763,6 +2745,28 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 _ => {}
             }
             index += 1;
+        }
+    }
+
+    fn check_prepared_namespace_member_declaration(
+        &mut self,
+        declaration: &Declaration<'_>,
+        unprepared_scope: Option<ScopeId>,
+    ) {
+        match declaration {
+            Declaration::VariableDeclaration(declaration) => {
+                self.check_prepared_namespace_variable(declaration, unprepared_scope)
+            }
+            Declaration::FunctionDeclaration(function) => {
+                self.check_prepared_namespace_function(function, unprepared_scope)
+            }
+            Declaration::ClassDeclaration(class) => {
+                self.check_class_for_namespace(class, unprepared_scope)
+            }
+            Declaration::TSModuleDeclaration(nested) => {
+                self.check_prepared_namespace_declaration(nested);
+            }
+            _ => {}
         }
     }
 

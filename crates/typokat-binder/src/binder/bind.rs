@@ -2261,56 +2261,14 @@ fn bind_type_declarations(state: &mut BindState, scope: ScopeId, statements: &[S
 }
 
 fn bind_type_declaration_statement(state: &mut BindState, scope: ScopeId, stmt: &Statement<'_>) {
-    match stmt {
-        Statement::TSTypeAliasDeclaration(alias) => {
-            bind_source_type(
-                state,
-                scope,
-                alias.id.name.as_str(),
-                alias.id.span.start,
-                DeclarationKind::TypeAlias,
-                TypeFragmentKind::TypeAlias,
-            );
+    if let Statement::ExportNamedDeclaration(export) = stmt {
+        if let Some(declaration) = &export.declaration {
+            bind_type_declaration(state, scope, declaration);
         }
-        Statement::TSInterfaceDeclaration(iface) => {
-            bind_source_type(
-                state,
-                scope,
-                iface.id.name.as_str(),
-                iface.id.span.start,
-                DeclarationKind::Interface,
-                TypeFragmentKind::Interface,
-            );
-        }
-        // Class type-side names are reserved up front so self/sibling type references resolve.
-        Statement::ClassDeclaration(class) => {
-            if let Some(id) = &class.id {
-                bind_source_type(
-                    state,
-                    scope,
-                    id.name.as_str(),
-                    id.span.start,
-                    DeclarationKind::Class,
-                    TypeFragmentKind::Class,
-                );
-            }
-        }
-        Statement::TSEnumDeclaration(enumeration) => {
-            bind_source_type(
-                state,
-                scope,
-                enumeration.id.name.as_str(),
-                enumeration.id.span.start,
-                DeclarationKind::Enum,
-                TypeFragmentKind::Enum,
-            );
-        }
-        Statement::ExportNamedDeclaration(export) => {
-            if let Some(decl) = &export.declaration {
-                bind_type_declaration(state, scope, decl);
-            }
-        }
-        _ => {}
+        return;
+    }
+    if let Some(declaration) = stmt.as_declaration() {
+        bind_type_declaration(state, scope, declaration);
     }
 }
 

@@ -1437,6 +1437,25 @@ pub(crate) struct NamespaceReferenceRows {
     pub(crate) canonical_export_contexts: Vec<u32>,
 }
 
+fn rebuild_canonical_suffix<T, LibraryKey: Ord, UserKey: Ord>(
+    canonical: &mut LayeredVec<T>,
+    source_range: std::ops::Range<usize>,
+    mut row: impl FnMut(usize) -> T,
+    library_order: bool,
+    mut library_key: impl FnMut(&T) -> LibraryKey,
+    mut user_key: impl FnMut(&T) -> UserKey,
+) {
+    canonical.clear_local();
+    for index in source_range {
+        canonical.push_local(row(index));
+    }
+    if library_order {
+        canonical.local_slice_mut().sort_by_key(&mut library_key);
+    } else {
+        canonical.local_slice_mut().sort_by_key(&mut user_key);
+    }
+}
+
 impl NamespaceTable {
     /// Store `name` once and hand back its id. A name the table already holds costs a hash
     /// lookup and nothing else — no allocation, no second copy of the text.
@@ -2497,44 +2516,37 @@ impl NamespaceTable {
                 });
             }
         }
-        self.canonical_namespaces.clear_local();
-        for id in (self.namespaces.base_len()..self.namespaces.len())
-            .map(|index| NamespaceId(u32::try_from(index).expect("namespace count fits u32")))
-        {
-            self.canonical_namespaces.push_local(id);
-        }
-        if library_order {
-            self.canonical_namespaces
-                .local_slice_mut()
-                .sort_by_key(|id| {
-                    let namespace = &self.namespaces[id.index()];
-                    let first = namespace
-                        .fragments
-                        .first()
-                        .and_then(|fragment| self.fragments.get(fragment.index()))
-                        .expect("canonical library namespace has a fragment");
-                    (first.origin, first.source_start, namespace.name.clone())
-                });
-        } else {
-            self.canonical_namespaces
-                .local_slice_mut()
-                .sort_by_key(|id| {
-                    let namespace = &self.namespaces[id.index()];
-                    let first = namespace
-                        .fragments
-                        .first()
-                        .and_then(|fragment| self.fragments.get(fragment.index()));
-                    (
-                        first
-                            .map(|fragment| fragment.source)
-                            .unwrap_or(SourceUnitKey(u32::MAX)),
-                        first
-                            .map(|fragment| fragment.source_start)
-                            .unwrap_or(u32::MAX),
-                        namespace.name.clone(),
-                    )
-                });
-        }
+        rebuild_canonical_suffix(
+            &mut self.canonical_namespaces,
+            self.namespaces.base_len()..self.namespaces.len(),
+            |index| NamespaceId(u32::try_from(index).expect("namespace count fits u32")),
+            library_order,
+            |id| {
+                let namespace = &self.namespaces[id.index()];
+                let first = namespace
+                    .fragments
+                    .first()
+                    .and_then(|fragment| self.fragments.get(fragment.index()))
+                    .expect("canonical library namespace has a fragment");
+                (first.origin, first.source_start, namespace.name.clone())
+            },
+            |id| {
+                let namespace = &self.namespaces[id.index()];
+                let first = namespace
+                    .fragments
+                    .first()
+                    .and_then(|fragment| self.fragments.get(fragment.index()));
+                (
+                    first
+                        .map(|fragment| fragment.source)
+                        .unwrap_or(SourceUnitKey(u32::MAX)),
+                    first
+                        .map(|fragment| fragment.source_start)
+                        .unwrap_or(u32::MAX),
+                    namespace.name.clone(),
+                )
+            },
+        );
         self.merges.clear_local();
         // `clear_local` invalidates every suffix index. Keep only sealed-prefix keys so a sparse
         // continuation can still replace an affected base row at its stable index.
@@ -2617,122 +2629,90 @@ impl NamespaceTable {
         }
         self.rebuild_local_merge_index()?;
         self.rebuild_local_declaration_owner_scope_index()?;
-        self.canonical_globals.clear_local();
-        for id in (self.globals.base_len()..self.globals.len())
-            .map(|index| GlobalAugmentationId(u32::try_from(index).expect("global count fits u32")))
-        {
-            self.canonical_globals.push_local(id);
-        }
-        if library_order {
-            self.canonical_globals.local_slice_mut().sort_by_key(|id| {
+        rebuild_canonical_suffix(
+            &mut self.canonical_globals,
+            self.globals.base_len()..self.globals.len(),
+            |index| GlobalAugmentationId(u32::try_from(index).expect("global count fits u32")),
+            library_order,
+            |id| {
                 let global = &self.globals[id.index()];
                 (global.origin, global.diagnostic_span.start, global.source)
-            });
-        } else {
-            self.canonical_globals.local_slice_mut().sort_by_key(|id| {
+            },
+            |id| {
                 let global = &self.globals[id.index()];
                 (global.source, global.diagnostic_span.start, global.origin)
-            });
-        }
-        self.canonical_deferred_modules.clear_local();
-        for id in (self.deferred_modules.base_len()..self.deferred_modules.len())
-            .map(|index| DeferredModuleId(u32::try_from(index).expect("module count fits u32")))
-        {
-            self.canonical_deferred_modules.push_local(id);
-        }
-        if library_order {
-            self.canonical_deferred_modules
-                .local_slice_mut()
-                .sort_by_key(|id| {
-                    let module = &self.deferred_modules[id.index()];
-                    (module.origin, module.span.start, module.source)
-                });
-        } else {
-            self.canonical_deferred_modules
-                .local_slice_mut()
-                .sort_by_key(|id| {
-                    let module = &self.deferred_modules[id.index()];
-                    (module.source, module.span.start, module.origin)
-                });
-        }
-        self.canonical_source_units.clear_local();
-        for index in self.source_units.base_len()..self.source_units.len() {
-            self.canonical_source_units.push_local(index);
-        }
-        if library_order {
-            self.canonical_source_units
-                .local_slice_mut()
-                .sort_by_key(|index| {
-                    let unit = &self.source_units[*index];
-                    (unit.origin, unit.source)
-                });
-        } else {
-            self.canonical_source_units
-                .local_slice_mut()
-                .sort_by_key(|index| {
-                    let unit = &self.source_units[*index];
-                    (unit.source, unit.origin)
-                });
-        }
-        self.canonical_deferred_children.clear_local();
-        for index in self.deferred_children.base_len()..self.deferred_children.len() {
-            self.canonical_deferred_children.push_local(index);
-        }
-        if library_order {
-            self.canonical_deferred_children
-                .local_slice_mut()
-                .sort_by_key(|index| {
-                    let child = &self.deferred_children[*index];
-                    (child.origin, child.span.start, child.source)
-                });
-        } else {
-            self.canonical_deferred_children
-                .local_slice_mut()
-                .sort_by_key(|index| {
-                    let child = &self.deferred_children[*index];
-                    (child.source, child.span.start, child.origin)
-                });
-        }
-        self.canonical_umd_exports.clear_local();
-        for index in self.umd_exports.base_len()..self.umd_exports.len() {
-            self.canonical_umd_exports.push_local(index);
-        }
-        if library_order {
-            self.canonical_umd_exports
-                .local_slice_mut()
-                .sort_by_key(|index| {
-                    let export = &self.umd_exports[*index];
-                    (export.origin, export.span.start, export.source)
-                });
-        } else {
-            self.canonical_umd_exports
-                .local_slice_mut()
-                .sort_by_key(|index| {
-                    let export = &self.umd_exports[*index];
-                    (export.source, export.span.start, export.origin)
-                });
-        }
-        self.canonical_export_contexts.clear_local();
-        for id in (self.export_contexts.base_len()..self.export_contexts.len()).map(|index| {
-            ExportContextId(u32::try_from(index).expect("export context count fits u32"))
-        }) {
-            self.canonical_export_contexts.push_local(id);
-        }
-        if library_order {
-            self.canonical_export_contexts
-                .local_slice_mut()
-                .sort_by_key(|id| {
-                    let context = &self.export_contexts[id.index()];
-                    (context.origin, context.span.start, context.source)
-                });
-        } else {
-            self.canonical_export_contexts
-                .local_slice_mut()
-                .sort_by_key(|id| {
-                    let context = &self.export_contexts[id.index()];
-                    (context.source, context.span.start, context.origin)
-                });
-        }
+            },
+        );
+        rebuild_canonical_suffix(
+            &mut self.canonical_deferred_modules,
+            self.deferred_modules.base_len()..self.deferred_modules.len(),
+            |index| DeferredModuleId(u32::try_from(index).expect("module count fits u32")),
+            library_order,
+            |id| {
+                let module = &self.deferred_modules[id.index()];
+                (module.origin, module.span.start, module.source)
+            },
+            |id| {
+                let module = &self.deferred_modules[id.index()];
+                (module.source, module.span.start, module.origin)
+            },
+        );
+        rebuild_canonical_suffix(
+            &mut self.canonical_source_units,
+            self.source_units.base_len()..self.source_units.len(),
+            |index| index,
+            library_order,
+            |index| {
+                let unit = &self.source_units[*index];
+                (unit.origin, unit.source)
+            },
+            |index| {
+                let unit = &self.source_units[*index];
+                (unit.source, unit.origin)
+            },
+        );
+        rebuild_canonical_suffix(
+            &mut self.canonical_deferred_children,
+            self.deferred_children.base_len()..self.deferred_children.len(),
+            |index| index,
+            library_order,
+            |index| {
+                let child = &self.deferred_children[*index];
+                (child.origin, child.span.start, child.source)
+            },
+            |index| {
+                let child = &self.deferred_children[*index];
+                (child.source, child.span.start, child.origin)
+            },
+        );
+        rebuild_canonical_suffix(
+            &mut self.canonical_umd_exports,
+            self.umd_exports.base_len()..self.umd_exports.len(),
+            |index| index,
+            library_order,
+            |index| {
+                let export = &self.umd_exports[*index];
+                (export.origin, export.span.start, export.source)
+            },
+            |index| {
+                let export = &self.umd_exports[*index];
+                (export.source, export.span.start, export.origin)
+            },
+        );
+        rebuild_canonical_suffix(
+            &mut self.canonical_export_contexts,
+            self.export_contexts.base_len()..self.export_contexts.len(),
+            |index| ExportContextId(u32::try_from(index).expect("export context count fits u32")),
+            library_order,
+            |id| {
+                let context = &self.export_contexts[id.index()];
+                (context.origin, context.span.start, context.source)
+            },
+            |id| {
+                let context = &self.export_contexts[id.index()];
+                (context.source, context.span.start, context.origin)
+            },
+        );
         Ok(())
     }
 
@@ -5454,60 +5434,14 @@ fn bind_selected_namespace_value_statements(
     scopes: &FxHashMap<DeclId, ScopeId>,
 ) {
     for statement in statements {
-        match statement {
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(declaration) = &export.declaration {
-                    bind_selected_namespace_value_declaration(state, declaration, scopes);
-                }
+        if let Statement::ExportNamedDeclaration(export) = statement {
+            if let Some(declaration) = &export.declaration {
+                bind_selected_namespace_value_declaration(state, declaration, scopes);
             }
-            Statement::VariableDeclaration(declaration) => {
-                bind_selected_namespace_variable(state, declaration, scopes)
-            }
-            Statement::FunctionDeclaration(function) => {
-                let selected = function.id.as_ref().and_then(|identifier| {
-                    state
-                        .source_decl_at(identifier.span.start, DeclarationKind::Function)
-                        .and_then(|declaration| {
-                            scopes
-                                .get(&declaration)
-                                .copied()
-                                .map(|scope| (declaration, scope))
-                        })
-                });
-                if let Some((_, scope)) = selected {
-                    bind_function_declaration(state, scope, function);
-                }
-            }
-            Statement::ClassDeclaration(class) => {
-                let selected = class.id.as_ref().and_then(|identifier| {
-                    state
-                        .source_decl_at(identifier.span.start, DeclarationKind::Class)
-                        .and_then(|declaration| {
-                            scopes
-                                .get(&declaration)
-                                .copied()
-                                .map(|scope| (declaration, scope))
-                        })
-                });
-                if let Some((_, scope)) = selected {
-                    bind_class_declaration(state, scope, class);
-                }
-            }
-            Statement::TSEnumDeclaration(enumeration) => {
-                let scope = state
-                    .source_decl_at(enumeration.id.span.start, DeclarationKind::Enum)
-                    .and_then(|declaration| scopes.get(&declaration).copied());
-                if let Some(scope) = scope {
-                    bind_enum_declaration(state, scope, enumeration);
-                }
-            }
-            Statement::TSModuleDeclaration(declaration) => {
-                bind_selected_namespace_module_body(state, declaration, scopes)
-            }
-            Statement::TSGlobalDeclaration(global) => {
-                bind_selected_namespace_value_statements(state, &global.body.body, scopes)
-            }
-            _ => {}
+            continue;
+        }
+        if let Some(declaration) = statement.as_declaration() {
+            bind_selected_namespace_value_declaration(state, declaration, scopes);
         }
     }
 }
@@ -5676,39 +5610,51 @@ fn walk_statement(
     unit: CompilationUnit,
     compilation_global: ScopeId,
 ) {
-    match statement {
-        Statement::ExportNamedDeclaration(export) => {
-            let export_context = push_export_context(
+    if let Statement::ExportNamedDeclaration(export) = statement {
+        let export_context = push_export_context(
+            state,
+            context,
+            if export.declaration.is_some() {
+                ExportContextKind::WrappedDeclaration
+            } else {
+                ExportContextKind::NamedList
+            },
+            export.source.is_some(),
+            Span::from_oxc(export.span),
+            unit,
+        );
+        let export_walk = WalkContext {
+            active_export_context: export_context,
+            ..context
+        };
+        if let Some(declaration) = &export.declaration {
+            walk_declaration(
                 state,
-                context,
-                if export.declaration.is_some() {
-                    ExportContextKind::WrappedDeclaration
-                } else {
-                    ExportContextKind::NamedList
-                },
-                export.source.is_some(),
-                Span::from_oxc(export.span),
+                declaration,
+                export_walk,
+                true,
                 unit,
+                compilation_global,
             );
-            let export_walk = WalkContext {
-                active_export_context: export_context,
-                ..context
-            };
-            if let Some(declaration) = &export.declaration {
-                walk_declaration(
-                    state,
-                    declaration,
-                    export_walk,
-                    true,
-                    unit,
-                    compilation_global,
-                );
-            } else if context.member_owner().is_some() {
-                for specifier in &export.specifiers {
-                    push_export_alias_member(state, export_walk, export, specifier, unit);
-                }
+        } else if context.member_owner().is_some() {
+            for specifier in &export.specifiers {
+                push_export_alias_member(state, export_walk, export, specifier, unit);
             }
         }
+        return;
+    }
+    if let Some(declaration) = statement.as_declaration() {
+        walk_declaration(
+            state,
+            declaration,
+            context,
+            explicit,
+            unit,
+            compilation_global,
+        );
+        return;
+    }
+    match statement {
         Statement::ExportAllDeclaration(export) => {
             let context = context_with_export(
                 state,
@@ -5741,120 +5687,6 @@ fn walk_statement(
                 unit,
             );
             push_deferred_export_member(state, context, Span::from_oxc(export.span), unit)
-        }
-        Statement::VariableDeclaration(declaration) => {
-            bind_variable(state, declaration, context, explicit, unit)
-        }
-        Statement::FunctionDeclaration(function) => {
-            if let Some(identifier) = &function.id {
-                bind_named_declaration(
-                    state,
-                    context,
-                    explicit,
-                    identifier.name.as_str(),
-                    identifier.span.start,
-                    DeclarationKind::Function,
-                    MergeDeclarationKind::Function,
-                    DeclarationSpaces::VALUE,
-                    function.declare,
-                    unit,
-                );
-            }
-        }
-        Statement::ClassDeclaration(class) => {
-            if let Some(identifier) = &class.id {
-                bind_named_declaration(
-                    state,
-                    context,
-                    explicit,
-                    identifier.name.as_str(),
-                    identifier.span.start,
-                    DeclarationKind::Class,
-                    MergeDeclarationKind::Class,
-                    DeclarationSpaces::VALUE_TYPE,
-                    class.declare,
-                    unit,
-                );
-            }
-        }
-        Statement::TSTypeAliasDeclaration(alias) => bind_named_declaration(
-            state,
-            context,
-            explicit,
-            alias.id.name.as_str(),
-            alias.id.span.start,
-            DeclarationKind::TypeAlias,
-            MergeDeclarationKind::TypeAlias,
-            DeclarationSpaces::TYPE,
-            alias.declare,
-            unit,
-        ),
-        Statement::TSInterfaceDeclaration(interface) => bind_named_declaration(
-            state,
-            context,
-            explicit,
-            interface.id.name.as_str(),
-            interface.id.span.start,
-            DeclarationKind::Interface,
-            MergeDeclarationKind::Interface,
-            DeclarationSpaces::TYPE,
-            interface.declare,
-            unit,
-        ),
-        Statement::TSEnumDeclaration(enumeration) => bind_named_declaration_with_syntax(
-            state,
-            context,
-            explicit,
-            enumeration.id.name.as_str(),
-            enumeration.id.span.start,
-            DeclarationKind::Enum,
-            MergeDeclarationKind::Enum,
-            DeclarationSpaces::VALUE_TYPE,
-            enumeration.declare,
-            unit,
-            DeclarationSyntaxFacts::Enum {
-                constant: enumeration.r#const,
-            },
-        ),
-        Statement::TSModuleDeclaration(namespace) => bind_module_declaration(
-            state,
-            namespace,
-            context,
-            explicit,
-            false,
-            unit,
-            compilation_global,
-        ),
-        Statement::TSGlobalDeclaration(global) => {
-            bind_global(state, global, context, unit, compilation_global)
-        }
-        Statement::TSImportEqualsDeclaration(import) => {
-            bind_named_declaration_with_syntax(
-                state,
-                context,
-                explicit,
-                import.id.name.as_str(),
-                import.id.span.start,
-                DeclarationKind::ImportEquals,
-                MergeDeclarationKind::ImportAlias,
-                if import.import_kind == ImportOrExportKind::Type {
-                    DeclarationSpaces::TYPE
-                } else {
-                    DeclarationSpaces::ALIAS
-                },
-                context.ambient,
-                unit,
-                DeclarationSyntaxFacts::Import(ImportSyntaxFacts {
-                    form: ImportBindingForm::ImportEquals,
-                    outer_type_only: import.import_kind == ImportOrExportKind::Type,
-                    specifier_type_only: false,
-                    external_reference: matches!(
-                        import.module_reference,
-                        TSModuleReference::ExternalModuleReference(_)
-                    ),
-                    exported: false,
-                }),
-            );
         }
         Statement::ImportDeclaration(import) => {
             if let Some(specifiers) = &import.specifiers {
@@ -6552,46 +6384,18 @@ fn reserve_statement_header(
         }
         return;
     }
-    let publication = context.publication(explicit);
-    let owner = context.declaration_owner(publication);
-    let mut reserve = |name: &str| {
-        dormant_symbol_for_declaration_owner(state, owner, name);
-    };
-    match statement {
-        Statement::VariableDeclaration(declaration) => {
-            for declarator in &declaration.declarations {
-                for identifier in declarator.id.get_binding_identifiers() {
-                    reserve(identifier.name.as_str());
-                }
+    if let Some(declaration) = statement.as_declaration() {
+        reserve_declaration_header(state, declaration, context, explicit);
+        return;
+    }
+    if let Statement::ImportDeclaration(import) = statement {
+        let publication = context.publication(explicit);
+        let owner = context.declaration_owner(publication);
+        if let Some(specifiers) = &import.specifiers {
+            for specifier in specifiers {
+                dormant_symbol_for_declaration_owner(state, owner, specifier.local().name.as_str());
             }
         }
-        Statement::FunctionDeclaration(function) => {
-            if let Some(identifier) = &function.id {
-                reserve(identifier.name.as_str());
-            }
-        }
-        Statement::ClassDeclaration(class) => {
-            if let Some(identifier) = &class.id {
-                reserve(identifier.name.as_str());
-            }
-        }
-        Statement::TSTypeAliasDeclaration(alias) => reserve(alias.id.name.as_str()),
-        Statement::TSInterfaceDeclaration(interface) => reserve(interface.id.name.as_str()),
-        Statement::TSEnumDeclaration(enumeration) => reserve(enumeration.id.name.as_str()),
-        Statement::TSModuleDeclaration(namespace) => {
-            if let TSModuleDeclarationName::Identifier(identifier) = &namespace.id {
-                reserve(identifier.name.as_str());
-            }
-        }
-        Statement::TSImportEqualsDeclaration(import) => reserve(import.id.name.as_str()),
-        Statement::ImportDeclaration(import) => {
-            if let Some(specifiers) = &import.specifiers {
-                for specifier in specifiers {
-                    reserve(specifier.local().name.as_str());
-                }
-            }
-        }
-        _ => {}
     }
 }
 
@@ -6862,97 +6666,11 @@ fn record_deferred_statement(
         }
         return;
     }
+    if let Some(declaration) = statement.as_declaration() {
+        record_deferred_declaration(state, module, declaration, false, unit);
+        return;
+    }
     match statement {
-        Statement::VariableDeclaration(declaration) => {
-            for declarator in &declaration.declarations {
-                for identifier in declarator.id.get_binding_identifiers() {
-                    record_deferred_binding(
-                        state,
-                        module,
-                        identifier.span.start,
-                        DeclarationKind::Variable,
-                        DeferredChildKind::OrdinaryDeclaration,
-                        identifier.name.as_str(),
-                        unit,
-                    );
-                }
-            }
-        }
-        Statement::FunctionDeclaration(function) => {
-            if let Some(identifier) = &function.id {
-                record_deferred_binding(
-                    state,
-                    module,
-                    identifier.span.start,
-                    DeclarationKind::Function,
-                    DeferredChildKind::OrdinaryDeclaration,
-                    identifier.name.as_str(),
-                    unit,
-                );
-            }
-        }
-        Statement::ClassDeclaration(class) => {
-            if let Some(identifier) = &class.id {
-                record_deferred_binding(
-                    state,
-                    module,
-                    identifier.span.start,
-                    DeclarationKind::Class,
-                    DeferredChildKind::OrdinaryDeclaration,
-                    identifier.name.as_str(),
-                    unit,
-                );
-            }
-        }
-        Statement::TSTypeAliasDeclaration(alias) => record_deferred_binding(
-            state,
-            module,
-            alias.id.span.start,
-            DeclarationKind::TypeAlias,
-            DeferredChildKind::OrdinaryDeclaration,
-            alias.id.name.as_str(),
-            unit,
-        ),
-        Statement::TSInterfaceDeclaration(interface) => record_deferred_binding(
-            state,
-            module,
-            interface.id.span.start,
-            DeclarationKind::Interface,
-            DeferredChildKind::OrdinaryDeclaration,
-            interface.id.name.as_str(),
-            unit,
-        ),
-        Statement::TSEnumDeclaration(enumeration) => record_deferred_binding(
-            state,
-            module,
-            enumeration.id.span.start,
-            DeclarationKind::Enum,
-            DeferredChildKind::OrdinaryDeclaration,
-            enumeration.id.name.as_str(),
-            unit,
-        ),
-        Statement::TSModuleDeclaration(namespace) => {
-            if let TSModuleDeclarationName::Identifier(identifier) = &namespace.id {
-                record_deferred_binding(
-                    state,
-                    module,
-                    identifier.span.start,
-                    DeclarationKind::Namespace,
-                    DeferredChildKind::NamespaceDeclaration,
-                    identifier.name.as_str(),
-                    unit,
-                );
-            }
-        }
-        Statement::TSImportEqualsDeclaration(import) => record_deferred_binding(
-            state,
-            module,
-            import.id.span.start,
-            DeclarationKind::ImportEquals,
-            DeferredChildKind::OrdinaryDeclaration,
-            import.id.name.as_str(),
-            unit,
-        ),
         Statement::ImportDeclaration(import) => {
             if let Some(specifiers) = &import.specifiers {
                 for specifier in specifiers {
