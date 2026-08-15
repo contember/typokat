@@ -20,13 +20,29 @@ M0–M33 are implemented. Coverage: [README.md](./README.md). Full design:
 cargo run -- check path/to/file.ts          # check one file (exit 1 if diagnostics)
 cargo run -- check --project-summary json path/to/project # bounded Bundler project summary
 cargo test                                  # unit tests + conformance corpus
-cargo test conformance                      # just the marker-driven conformance harness
+cargo test --test conformance conformance -- --exact --nocapture # ordinary marker gate
 cargo test <name>                           # a single unit test by name
 cargo clippy --all-targets -- -D warnings   # must stay clean
 ```
 
-The conformance corpus is a single `#[test]` that runs every *enabled* milestone
-directory — toggle scope via the `MILESTONE_DIRS` table in `tests/conformance.rs`.
+The ordinary conformance command discovers 567 fixture projects / 683 source files from the
+registrations in `tests/conformance.rs`, checks each once through the shared route, and prints
+receipt `567/683/567/0`. `conformance_inventory_matches_frozen_receipt` is the count and ordering
+authority. Three warm runs of the ordinary exact command under `cpu-lease run -n 2 --` took
+120.35 s, 110.62 s, and 111.28 s (median 111.28 s, maximum 120.35 s).
+
+The pull-request ADR-0021 risk matrix remains
+`cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s). Run complete
+shared/cold parity with:
+
+```sh
+cpu-lease run -n 2 -- cargo test --test conformance \
+  conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+```
+
+That exact command covers the same inventory, prints receipt `567/683/567/567`, and passed in
+1,075.40 s (wall 1,076.01 s). `.github/workflows/full-parity.yml` runs it weekly and on manual
+dispatch.
 
 Rough incremental costs after one edit in `check/` (median of 3, quiet machine),
 cheapest first — reach for the narrowest one that answers your question:
@@ -38,7 +54,9 @@ cheapest first — reach for the narrowest one that answers your question:
 | `cargo clippy --lib` | 4.5 s — inner-loop lint |
 | `cargo test --no-run` | 6.5 s |
 | `cargo clippy --all-targets -- -D warnings` | 10 s — the gate |
-| `cargo test` | 12 s — whole suite, so just run it |
+
+Whole-suite and conformance costs depend on the enabled corpus; use the measured exact commands
+above instead of the obsolete pre-expansion estimate.
 
 ## Architecture (the big picture)
 

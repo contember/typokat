@@ -5,6 +5,31 @@ define, milestone by milestone, exactly what typokat accepts and what it must re
 harness (`tests/conformance.rs`, built in M0) runs the checker over each `.ts` file and diffs the
 produced diagnostics against the inline markers below.
 
+The ordinary gate is:
+
+```sh
+cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture
+```
+
+It discovers 567 fixture projects / 683 source files, checks each project once through the shared
+route, and prints receipt `567/683/567/0` (projects/sources/shared/cold). Three warm runs took
+120.35 s, 110.62 s, and 111.28 s (median 111.28 s, maximum 120.35 s). The inventory and ordering
+authority is
+`cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
+the ordinary command's printed receipt repeats the aggregate totals.
+
+The unchanged pull-request route matrix is
+`cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s). Exact
+shared/cold parity uses the same inventory:
+
+```sh
+cpu-lease run -n 2 -- cargo test --test conformance \
+  conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+```
+
+It prints receipt `567/683/567/567` and passed in 1,075.40 s (wall 1,076.01 s). The separate
+`.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
+
 This file is **test tooling**: how to write and read these fixtures. The substantive record of
 **what typokat models and where it deliberately differs from `tsc`** lives in `docs/` —
 [`docs/reference/scope.md`](../../docs/reference/scope.md) (the code-range boundary) and
@@ -907,8 +932,9 @@ The directory contains 74 flat fixtures. Six older fixtures, the WU6A unavailabl
 `wu6a_review_using_legality.ts`, and `wu6a_review_duplicate_legality.ts` remain outside the admitted
 slice, so the whole directory stays disabled; the conformance harness gates the other 65 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
-`wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. Together with all other
-corpora, the harness currently covers 420 enabled source files. WU6 adds
+`wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. The whole-flat registration
+class contains 420 one-source projects; the frozen inventory test above is the authority for the
+complete 567-project / 683-source inventory. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,

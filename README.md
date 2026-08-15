@@ -18,14 +18,15 @@ model** faithfully; when in doubt it *over-reports* (the safe direction). Full d
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
   <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1539%20unit%20%2B%20585%20conformance-blue">
+  <img alt="Conformance inventory" src="https://img.shields.io/badge/conformance-567%20projects%20%2F%20683%20sources-blue">
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-By the numbers: **197,700 lines of Rust** (187,184 nonblank), **1,539 unit tests**
-(1,528 passing plus 11 ignored measurements), and **585 enabled conformance source files** with
-1,967 expected diagnostic markers plus 197 explicit incomplete-surface markers. `clippy -D warnings` is
-clean, and **every milestone is cross-checked against real `tsc 6.0.3 --strict`**.
+The enabled conformance inventory contains **567 fixture projects / 683 source files**. The
+inventory and ordering are frozen by
+`cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
+the ordinary marker gate prints the same totals in its run receipt. `clippy -D warnings` is clean,
+and **every milestone is cross-checked against real `tsc 6.0.3 --strict`**.
 
 ## Quick start
 
@@ -248,8 +249,25 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
 
 ```sh
 cargo test                              # unit tests + the conformance corpus
+cargo test --test conformance conformance -- --exact --nocapture
 cargo clippy --all-targets -- -D warnings
 ```
+
+The exact conformance command checks all 567 fixture projects / 683 source files through the
+ordinary shared route and prints receipt `567/683/567/0` (projects/sources/shared/cold). Three warm
+runs under `cpu-lease run -n 2 --` took 120.35 s, 110.62 s, and 111.28 s (median 111.28 s, maximum
+120.35 s). The unchanged pull-request risk matrix is reproduced by
+`cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s).
+
+Full shared/cold parity over the identical inventory is intentionally separate:
+
+```sh
+cpu-lease run -n 2 -- cargo test --test conformance \
+  conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+```
+
+It prints receipt `567/683/567/567`; the measured run passed in 1,075.40 s (wall 1,076.01 s).
+`.github/workflows/full-parity.yml` runs this unsharded command weekly and on manual dispatch.
 
 ## Continuous integration
 
@@ -263,5 +281,6 @@ official-suite regression ratchet (`python3 tsofficial.py fetch`, then
 (`tooling/differential/` — its unit tests, the committed minimal-repro ratchet
 `differential.py repros --check`, and a time-capped self-consistency fuzz sweep). A
 weekly scheduled job re-verifies the differential harness's frozen `tsc 6.0.3` baselines
-and prints its truth-mode dashboard. Formatting is enforced against the toolchain
-pinned in `rust-toolchain.toml`, so run `cargo fmt` before pushing.
+and prints its truth-mode dashboard. The separate `.github/workflows/full-parity.yml` workflow
+runs the exact full shared/cold conformance command weekly or by manual dispatch. Formatting is
+enforced against the toolchain pinned in `rust-toolchain.toml`, so run `cargo fmt` before pushing.

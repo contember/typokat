@@ -67,16 +67,38 @@ spec, review, differential, or final gate above.
    it to the change. If the narrow gate cannot see the bug class, use the smallest gate that can.
 5. Give every agent explicit file ownership. Integrate each green cluster onto current `main`
    immediately; do not accumulate fixes in long-lived worktrees that drift from `main`.
-6. Run full conformance when the cluster closes, not after every edit, unless no narrower gate can
-   observe the bug. Freeze the resulting small diff and hand that exact diff to the independent
-   adversarial reviewer. Start no new RED cluster until the reviewed cluster lands.
+6. Run the ordinary exact conformance gate when the cluster closes, not after every edit, unless no
+   narrower gate can observe the bug. Use
+   `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture`. It
+   covers the frozen 567-project / 683-source inventory once through the shared route and prints
+   receipt `567/683/567/0`. Freeze the resulting small diff and hand that exact diff to the
+   independent adversarial reviewer. Start no new RED cluster until the reviewed cluster lands.
 7. Check progress every 20 minutes. Progress means an edit, a test result, or concrete root-cause
    evidence. If there is none, transfer ownership and context to another implementation agent.
 8. Share a warm Cargo target directory when isolation is safe. Serialize every Cargo invocation
    through one owner/queue and run it under an appropriate `cpu-lease`; never overlap Cargo jobs.
-9. At milestone closure, still run every required full gate: full conformance/`cargo test`, clippy,
-   fixture spot-runs, the independent `tsc --strict` adversarial review, and the randomized
-   differential gate when the change touches its scope. The leader runs and verifies these gates.
+9. At milestone closure, still run every required full gate: the ordinary exact conformance command
+   above, `cargo test`, clippy, fixture spot-runs, the independent `tsc --strict` adversarial review,
+   and the randomized differential gate when the change touches its scope. The unchanged ADR-0021
+   pull-request matrix is
+   `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli`; its measured result is 15/15
+   in 265.84 s. The leader runs and verifies these gates.
+10. Run exact shared/cold parity at sprint closure when route or library lifecycle behavior is in
+    scope:
+
+    ```sh
+    cpu-lease run -n 2 -- cargo test --test conformance \
+      conformance_full_shared_cold_parity -- --ignored --exact --nocapture
+    ```
+
+    It uses the same frozen inventory, prints receipt `567/683/567/567`, and passed in 1,075.40 s
+    (wall 1,076.01 s). `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and
+    on manual dispatch.
+
+The ordinary exact gate's three warm two-vCPU measurements are 120.35 s, 110.62 s, and 111.28 s
+(median 111.28 s, maximum 120.35 s). `conformance_inventory_matches_frozen_receipt` is the count
+and ordering authority; the printed receipt repeats aggregate totals. Do not maintain a second
+hand-counted inventory.
 
 ### Required extra gate: inference / contextual typing changes
 
