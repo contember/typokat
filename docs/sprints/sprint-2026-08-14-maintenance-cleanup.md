@@ -448,3 +448,15 @@ source-text assertions.
   `ad784e7` published the frozen inventory authority, exact commands, receipts, measured cadence,
   WU6 matrix, and weekly/manual full-parity workflow across the four owned docs; independent review
   passed after distinguishing the frozen count/order test from receipts that repeat aggregate totals.
+- **2026-08-15 — WU2 PASS at `744d5b0`.** Five Statement walkers now delegate inherited
+  declarations to their existing Declaration dispatchers, the checker mirror uses one dispatcher
+  after its overload/private gates, and one helper rebuilds exactly seven canonical local suffixes.
+  Independent review found all nine Oxc variants, wrapper/import/runtime/UMD policy, flags, both
+  source orders, 14 typed key closures, MAX sentinel, and explicit fragment/merge sorts preserved.
+  The frozen fixed-coordinate LCS output fell from 302 to 46 lines; a symbol-adjusted review scan
+  found 58 residual delegation/wrapper lines and no mirrored declaration semantics. Strict jscpd
+  fell from 107 clones / 1,139 duplicated lines / 8,163 tokens to 97 / 1,008 / 7,466; no remaining
+  clone spans a walker pair or suffix protocol. Binder tests passed 112/112, checker namespace tests
+  49/49, targeted clippy was clean, default conformance passed 567/683/567/0 in 111.14 s, and the
+  freshly rebuilt release official-suite ratchet reported 0 regressions / 0 progress with the
+  scoreboard byte-unchanged.
