@@ -290,6 +290,76 @@ The leader alone writes and commits sprint evidence. Preparation agents return W
 data and the WU3 operation table read-only; the leader serially appends each frozen seam to this
 sprint before its implementation starts. No preparation agent edits the sprint or `.orchestrate/`.
 
+## Frozen implementation seams
+
+### WU2 declaration and canonical-suffix evidence
+
+The post-WU0/WU1 read-only audit froze these five Statement/Declaration pairs:
+
+| Pair | Statement entry | Declaration entry |
+|---|---|---|
+| selected namespace values | `namespace.rs:5451` | `namespace.rs:5515` |
+| ordinary walk | `namespace.rs:5671` | `namespace.rs:5958` |
+| header reservation | `namespace.rs:6543` | `namespace.rs:6598` |
+| deferred recording | `namespace.rs:6826` | `namespace.rs:7009` |
+| type prebind | `bind.rs:2263` | `bind.rs:2403` |
+
+The checker mirror is `namespace_values.rs:2683-2767`: overload prepass `2692-2699`, private
+unsupported enum/import gate `2712-2720`, direct declarations `2702-2723`, wrapped declarations
+`2724-2747`, and runtime delegation `2748-2762`. Oxc 0.137.0 inherits exactly nine Declaration
+variants into Statement: variable, function, class, type alias, interface, enum, module, global,
+and import-equals. Export wrappers, ordinary imports, other exports, UMD namespace exports, and
+runtime statements are not inherited declarations.
+
+Use this exact prefix-only normalization before and after implementation; do not substitute the
+older approximate 309-line audit, which also normalized identifiers and removed headers:
+
+```sh
+scratch=$(mktemp -d)
+while IFS=: read -r file a b c d label; do
+  sed -n "${a},${b}p" "$file" | sed -E 's/(Statement|Declaration)::/__DECL__::/g' > "$scratch/left"
+  sed -n "${c},${d}p" "$file" | sed -E 's/(Statement|Declaration)::/__DECL__::/g' > "$scratch/right"
+  common=$(diff --unchanged-line-format='%L' --old-line-format='' --new-line-format='' \
+    "$scratch/left" "$scratch/right" | wc -l)
+  printf '%s\t%s\n' "$label" "$common"
+done <<'PAIRS'
+crates/typokat-binder/src/binder/namespace.rs:5451:5513:5515:5560:selected-values
+crates/typokat-binder/src/binder/namespace.rs:5671:5956:5958:6082:walk
+crates/typokat-binder/src/binder/namespace.rs:6543:6596:6598:6638:reserve-header
+crates/typokat-binder/src/binder/namespace.rs:6826:7007:7009:7114:deferred
+crates/typokat-binder/src/binder/bind.rs:2263:2315:2403:2449:type-prebind
+PAIRS
+rm -r "$scratch"
+```
+
+The frozen result is `9 + 122 + 37 + 89 + 45 = 302` normalized common lines. The matching strict
+duplication baseline is:
+
+```sh
+scan=$(mktemp -d)
+cpu-lease run -n 2 -- npx -y jscpd@5.0.15 \
+  crates/typokat-binder/src/binder/namespace.rs \
+  crates/typokat-binder/src/binder/bind.rs \
+  crates/typokat-check/src/check/checker/namespace_values.rs \
+  --min-tokens 50 --min-lines 5 --skip-comments --reporters json --output "$scan"
+jq '.statistics.total | {clones,duplicatedLines,duplicatedTokens,lines,percentage,percentageTokens,sources}' \
+  "$scan/jscpd-report.json"
+rm -r "$scan"
+```
+
+It reports 107 clones, 1,139 duplicated lines, 8,163 duplicated tokens, and 23,337 lines
+(4.8807% lines / 5.9150% tokens). Nine strict clones are WU2 walker mirrors. The selected-values
+wrapper, ordinary walk export context, reserve `explicit`, deferred `exported`, type-prewalk order,
+checker overload prepass, private unsupported gate, runtime delegation, and all import/UMD/export
+statement policies remain at the Statement layer and in their current order.
+
+`NamespaceTable::classify` has seven suffix collections: `canonical_namespaces`, globals,
+deferred modules, source units, deferred children, UMD exports, and export contexts. Each keeps its
+library and user key closure explicit (14 typed closures total) while one helper may own only
+`clear_local`, rebuilding `base_len()..len()`, `push_local`, and sorting `local_slice_mut`. The
+`canonical_namespaces` missing-fragment MAX sentinel is protected. The in-place fragment sort and
+merge-row sort remain explicit and outside the helper.
+
 ## Run log
 
 <!-- Append as work proceeds. Graduate changed rationale to an ADR and future work to backlog. -->
