@@ -26,6 +26,93 @@ fn published(
     .expect("test publication is complete")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClassLookupEvent {
+    Observe(ClassId),
+    Publish(ClassId),
+}
+
+struct ObservedPublishedClasses {
+    published: PublishedClasses,
+    events: std::cell::RefCell<Vec<ClassLookupEvent>>,
+}
+
+impl ObservedPublishedClasses {
+    fn pair(
+        source: ClassId,
+        source_template: TypeId,
+        target: ClassId,
+        target_template: TypeId,
+        static_template: TypeId,
+    ) -> Self {
+        let published = PublishedClasses::from_publication(
+            FxHashMap::from_iter([
+                (source, ClassConstructionState::Published),
+                (target, ClassConstructionState::Published),
+            ]),
+            FxHashMap::from_iter([
+                (
+                    source,
+                    PublishedClassSurface::new(
+                        source,
+                        Vec::new(),
+                        source_template,
+                        static_template,
+                        None,
+                    ),
+                ),
+                (
+                    target,
+                    PublishedClassSurface::new(
+                        target,
+                        Vec::new(),
+                        target_template,
+                        static_template,
+                        None,
+                    ),
+                ),
+            ]),
+            FxHashMap::default(),
+        )
+        .expect("observed test publication is complete");
+        Self {
+            published,
+            events: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    fn take_events(&self) -> Vec<ClassLookupEvent> {
+        std::mem::take(&mut *self.events.borrow_mut())
+    }
+}
+
+impl PublishedClassLookup for ObservedPublishedClasses {
+    fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface> {
+        self.events
+            .borrow_mut()
+            .push(ClassLookupEvent::Publish(class));
+        self.published.published_class(class)
+    }
+
+    fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
+        self.published.require(class)
+    }
+
+    fn publication_identity(&self) -> &Arc<()> {
+        self.published.identity()
+    }
+
+    fn observe_class_demand(&self, class: ClassId) {
+        self.events
+            .borrow_mut()
+            .push(ClassLookupEvent::Observe(class));
+    }
+
+    fn class_demand_observation_enabled(&self) -> bool {
+        true
+    }
+}
+
 fn library_object_context_for_test(
     interner: &mut Interner,
     object: TypeId,
@@ -709,6 +796,280 @@ fn overload_relation_does_not_plan_an_unrelated_deferred_result_tail() {
             .overload_implementation_compatible(overload, implementation);
 
     assert!(matches!(outcome, RelationOutcome::Yes), "{outcome:?}");
+}
+
+#[test]
+fn relation_operations_preserve_observation_publication_and_planner_root_order() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let source_class = ClassId(80_401);
+    let target_class = ClassId(80_402);
+    let source_template = interner.intern_object(ObjectType::default());
+    let target_template = interner.intern_object(ObjectType::default());
+    let source = interner.intern_class_instance(source_class, Vec::new());
+    let target = interner.intern_class_instance(target_class, Vec::new());
+    let published = ObservedPublishedClasses::pair(
+        source_class,
+        source_template,
+        target_class,
+        target_template,
+        wk.error,
+    );
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    let assignability =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .is_assignable(source, target);
+    assert!(matches!(assignability, RelationOutcome::Yes));
+    assert_eq!(
+        published.take_events(),
+        vec![
+            ClassLookupEvent::Observe(source_class),
+            ClassLookupEvent::Observe(target_class),
+            ClassLookupEvent::Publish(target_class),
+            ClassLookupEvent::Publish(source_class),
+            ClassLookupEvent::Publish(source_class),
+            ClassLookupEvent::Publish(target_class),
+        ],
+        "assignability observes source/target, publication walks LIFO, and planning stays source/target"
+    );
+
+    let mut state = SemanticQueryState::default();
+    let overload =
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param)
+            .overload_implementation_compatible(source, target);
+    assert!(matches!(overload, RelationOutcome::No(_)));
+    assert_eq!(
+        published.take_events(),
+        vec![
+            ClassLookupEvent::Observe(target_class),
+            ClassLookupEvent::Observe(source_class),
+            ClassLookupEvent::Publish(target_class),
+            ClassLookupEvent::Publish(source_class),
+            ClassLookupEvent::Publish(source_class),
+            ClassLookupEvent::Publish(target_class),
+        ],
+        "overload observation is implementation/overload while publication and planning use overload/implementation"
+    );
+}
+
+#[test]
+fn repeated_overload_failure_keeps_root_leaf_shape_and_never_uses_completed_memo() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let overload = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.number,
+    });
+    let implementation = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.string)],
+        ret: wk.string,
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let guard = start_query_source_cold_measure();
+
+    for _ in 0..2 {
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .overload_implementation_compatible(overload, implementation);
+        let RelationOutcome::No(reason) = outcome else {
+            panic!("expected overload failure, got {outcome:?}");
+        };
+        assert!(matches!(
+            reason.head(),
+            Reason::Leaf { src, tgt } if (*src, *tgt) == (overload, implementation)
+        ));
+        assert_eq!(state.completed_relation_len(), 0);
+        assert_eq!(state.completed_relation_no_candidate_len(), 0);
+    }
+    assert_eq!(
+        query_source_cold_measure()
+            .expect("measurement is active")
+            .planner_transactions,
+        2,
+        "an overload result is planned again instead of entering the assignability memo"
+    );
+    drop(guard);
+}
+
+#[test]
+fn relation_driver_trace_scope_rejects_nesting_and_rearms_after_unwind() {
+    let outer = start_relation_driver_trace();
+    assert!(std::panic::catch_unwind(start_relation_driver_trace).is_err());
+    drop(outer);
+
+    assert!(std::panic::catch_unwind(|| {
+        let _trace = start_relation_driver_trace();
+        panic!("trace unwind probe");
+    })
+    .is_err());
+    assert!(start_relation_driver_trace().finish().is_empty());
+}
+
+#[test]
+fn relation_operations_turn_planning_tainted_yes_into_exhaustion_without_writes() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let mut exhausting = wk.number;
+    for _ in 0..=DEFAULT_STEP_BUDGET {
+        exhausting = decidable_conditional(&mut interner, exhausting);
+    }
+    let overload = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", exhausting)],
+        ret: wk.void,
+    });
+    let implementation = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", wk.number)],
+        ret: wk.void,
+    });
+    let published = PublishedClasses::empty();
+
+    for (name, outcome, state, measure) in {
+        let mut cases = Vec::new();
+
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        let guard = start_query_source_cold_measure();
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .is_assignable(exhausting, wk.number);
+        let measure = query_source_cold_measure().expect("measurement is active");
+        drop(guard);
+        cases.push(("assignability", outcome, state, measure));
+
+        let mut state = SemanticQueryState::default();
+        let mut next_type_param = 0;
+        let guard = start_query_source_cold_measure();
+        let outcome = SemanticQueryCoordinator::new(
+            &mut interner,
+            &published,
+            &mut state,
+            &mut next_type_param,
+        )
+        .overload_implementation_compatible(overload, implementation);
+        let measure = query_source_cold_measure().expect("measurement is active");
+        drop(guard);
+        cases.push(("overload", outcome, state, measure));
+
+        cases
+    } {
+        assert!(
+            matches!(
+                outcome,
+                RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+            ),
+            "{name} must expose planning taint as exhaustion: {outcome:?}"
+        );
+        assert_eq!(state.durable_lengths(), (0, 0, 0, 0, 0), "{name}");
+        assert_eq!(measure.planner_transactions, 1, "{name}");
+        assert_eq!(measure.planner_tainted_finishes, 1, "{name}");
+        assert_eq!(measure.planner_commits, 0, "{name}");
+    }
+}
+
+#[test]
+fn relation_operations_keep_cycle_tainted_yes_but_promote_no_durable_state() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let parameter = TypeParamId(99_401);
+    let parameter_ty = interner.intern_type_param(parameter, "T");
+    let array_template = interner.reserve_object();
+    interner.fill_object(
+        array_template,
+        ObjectType {
+            properties: vec![
+                PropertyType::public("element", parameter_ty),
+                PropertyType::public("length", wk.number),
+                PropertyType::public("self", array_template),
+            ],
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        substitute_with_outcome(
+            &mut interner,
+            array_template,
+            &FxHashMap::from_iter([(parameter, wk.number)]),
+        ),
+        SubstitutionOutcome::CycleTainted(_)
+    ));
+    let target = interner.intern_object(ObjectType {
+        properties: vec![optional_property("element", wk.number)],
+        ..Default::default()
+    });
+    let source = interner.intern_array(wk.number);
+    let context = library_object_context_with_array_templates_for_test(
+        &mut interner,
+        target,
+        array_template,
+        array_template,
+        parameter,
+    );
+    let overload = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", source)],
+        ret: wk.void,
+    });
+    let implementation = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![ParameterType::required("value", target)],
+        ret: wk.void,
+    });
+    let published = PublishedClasses::empty();
+
+    let mut assignability_state = SemanticQueryState::default();
+    assignability_state.set_library_object_context(Some(context));
+    let mut next_type_param = 0;
+    let assignability = SemanticQueryCoordinator::new(
+        &mut interner,
+        &published,
+        &mut assignability_state,
+        &mut next_type_param,
+    )
+    .is_assignable(source, target);
+    assert!(matches!(assignability, RelationOutcome::Yes));
+    assert_eq!(
+        assignability_state.durable_lengths(),
+        (0, 0, 0, 0, 0),
+        "cycle-tainted assignability cannot promote plan, cache, or completed memo"
+    );
+
+    let mut overload_state = SemanticQueryState::default();
+    overload_state.set_library_object_context(Some(context));
+    let overload_outcome = SemanticQueryCoordinator::new(
+        &mut interner,
+        &published,
+        &mut overload_state,
+        &mut next_type_param,
+    )
+    .overload_implementation_compatible(overload, implementation);
+    assert!(matches!(overload_outcome, RelationOutcome::Yes));
+    assert_eq!(
+        overload_state.durable_lengths(),
+        (0, 0, 0, 0, 0),
+        "cycle-tainted overload compatibility cannot promote plan or nested relation cache"
+    );
 }
 
 #[test]
@@ -4066,6 +4427,90 @@ fn canonical_object_lazily_selects_each_native_apparent_surface() {
         .is_assignable(source, target);
         assert!(matches!(outcome, RelationOutcome::Yes), "{outcome:?}");
     }
+}
+
+#[test]
+fn relation_operations_expand_a_whole_needs_batch_before_one_retry() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let first_array = interner.intern_array(wk.number);
+    let second_array = interner.intern_array(wk.string);
+    let target_member = interner.intern_object(ObjectType {
+        properties: vec![optional_property("length", wk.number)],
+        ..Default::default()
+    });
+    let source = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("first", first_array),
+            PropertyType::public("second", second_array),
+        ],
+        ..Default::default()
+    });
+    let target = interner.intern_object(ObjectType {
+        properties: vec![
+            PropertyType::public("first", target_member),
+            PropertyType::public("second", target_member),
+        ],
+        ..Default::default()
+    });
+    let overload = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![
+            ParameterType::required("first", first_array),
+            ParameterType::required("second", second_array),
+        ],
+        ret: wk.void,
+    });
+    let implementation = interner.intern_function(FunctionType {
+        type_params: Vec::new(),
+        receiver: None,
+        params: vec![
+            ParameterType::required("first", target_member),
+            ParameterType::required("second", target_member),
+        ],
+        ret: wk.void,
+    });
+    let context = library_object_context_for_test(&mut interner, target_member);
+    let published = PublishedClasses::empty();
+    let expected_trace = || {
+        vec![
+            RelationDriverTraceEvent::AttemptNeedsBatch(vec![
+                RelationDemand::ApparentSurface(first_array),
+                RelationDemand::ApparentSurface(second_array),
+            ]),
+            RelationDriverTraceEvent::Expand(RelationDemand::ApparentSurface(first_array)),
+            RelationDriverTraceEvent::Expand(RelationDemand::ApparentSurface(second_array)),
+            RelationDriverTraceEvent::AttemptDecided,
+        ]
+    };
+
+    let mut assignability_state = SemanticQueryState::default();
+    assignability_state.set_library_object_context(Some(context));
+    let mut next_type_param = 0;
+    let trace = start_relation_driver_trace();
+    let assignability = SemanticQueryCoordinator::new(
+        &mut interner,
+        &published,
+        &mut assignability_state,
+        &mut next_type_param,
+    )
+    .is_assignable(source, target);
+    assert!(matches!(assignability, RelationOutcome::Yes));
+    assert_eq!(trace.finish(), expected_trace());
+
+    let mut overload_state = SemanticQueryState::default();
+    overload_state.set_library_object_context(Some(context));
+    let trace = start_relation_driver_trace();
+    let overload_outcome = SemanticQueryCoordinator::new(
+        &mut interner,
+        &published,
+        &mut overload_state,
+        &mut next_type_param,
+    )
+    .overload_implementation_compatible(overload, implementation);
+    assert!(matches!(overload_outcome, RelationOutcome::Yes));
+    assert_eq!(trace.finish(), expected_trace());
 }
 
 #[test]

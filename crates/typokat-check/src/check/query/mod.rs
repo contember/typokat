@@ -332,6 +332,90 @@ thread_local! {
     static EVALUATOR_CACHE_WRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RelationDriverTraceEvent {
+    AttemptDecided,
+    AttemptNeeds(RelationDemand),
+    AttemptNeedsBatch(Vec<RelationDemand>),
+    Expand(RelationDemand),
+}
+
+#[cfg(test)]
+thread_local! {
+    static RELATION_DRIVER_TRACE: std::cell::RefCell<Option<Vec<RelationDriverTraceEvent>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct RelationDriverTraceGuard {
+    armed: bool,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+fn start_relation_driver_trace() -> RelationDriverTraceGuard {
+    RELATION_DRIVER_TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        assert!(trace.is_none(), "relation-driver traces do not nest");
+        *trace = Some(Vec::new());
+    });
+    RelationDriverTraceGuard {
+        armed: true,
+        _not_send: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+impl RelationDriverTraceGuard {
+    fn finish(mut self) -> Vec<RelationDriverTraceEvent> {
+        let events = RELATION_DRIVER_TRACE.with(|trace| {
+            trace
+                .borrow_mut()
+                .take()
+                .expect("an active relation-driver trace finishes exactly once")
+        });
+        self.armed = false;
+        events
+    }
+}
+
+#[cfg(test)]
+impl Drop for RelationDriverTraceGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            RELATION_DRIVER_TRACE.with(|trace| {
+                trace.borrow_mut().take();
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+fn record_relation_driver_attempt(attempt: &RelationAttempt) {
+    let event = match attempt {
+        RelationAttempt::Decided(_) => RelationDriverTraceEvent::AttemptDecided,
+        RelationAttempt::Needs(demand) => RelationDriverTraceEvent::AttemptNeeds(*demand),
+        RelationAttempt::NeedsBatch(demands) => {
+            RelationDriverTraceEvent::AttemptNeedsBatch(demands.clone())
+        }
+    };
+    RELATION_DRIVER_TRACE.with(|trace| {
+        if let Some(events) = trace.borrow_mut().as_mut() {
+            events.push(event);
+        }
+    });
+}
+
+#[cfg(test)]
+fn record_relation_driver_expand(demand: RelationDemand) {
+    RELATION_DRIVER_TRACE.with(|trace| {
+        if let Some(events) = trace.borrow_mut().as_mut() {
+            events.push(RelationDriverTraceEvent::Expand(demand));
+        }
+    });
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueryCacheWritesForTest {
@@ -1924,6 +2008,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 (attempt, cache)
             };
             relation_cache = returned_cache;
+            #[cfg(test)]
+            record_relation_driver_attempt(&attempt);
             match attempt {
                 RelationAttempt::Decided(outcome) => break outcome,
                 RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
@@ -2149,6 +2235,8 @@ impl<'a, L: PublishedClassLookup + ?Sized> SemanticQueryCoordinator<'a, L> {
                 (attempt, cache)
             };
             relation_cache = returned_cache;
+            #[cfg(test)]
+            record_relation_driver_attempt(&attempt);
             match attempt {
                 RelationAttempt::Decided(outcome) => break outcome,
                 RelationAttempt::Needs(demand) => planner.expand_relation_demand(demand),
@@ -2619,6 +2707,8 @@ impl<'work, 'memo, L: PublishedClassLookup + ?Sized> ProjectionPlanner<'work, 'm
     }
 
     fn expand_relation_demand(&mut self, demand: RelationDemand) {
+        #[cfg(test)]
+        record_relation_driver_expand(demand);
         match demand {
             RelationDemand::ClassProjection(application) => {
                 self.project_class_outer(application);
