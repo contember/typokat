@@ -439,3 +439,12 @@ source-text assertions.
   567/683/567/567 in 1,075.40 s (wall 1,076.01 s), and the unchanged WU6 pull-request matrix passed
   15/15 in 265.84 s. `cargo fmt --check` and `git diff --check` passed before the atomic test/workflow
   commit. No fixture, production route, existing CI workflow, or WU6 test changed.
+- **2026-08-15 — WU1 PASS in three atomic commits.** `f32402e` replaced exactly four stale
+  ADR-0015 scheduler comments with their retained ADR-0020 oracle role, corrected the declaration
+  library compiler description, and removed only the self-declared obsolete ignored pre-WU6 RED
+  test; independent review and the six scheduler plus active B15 route-envelope witnesses passed.
+  `001b183` moved only `crossbeam-epoch` 0.9.18 to 0.9.20; the before audit found only
+  RUSTSEC-2026-0204, the after audit found zero advisories, and `cargo check --locked --lib` passed.
+  `ad784e7` published the frozen inventory authority, exact commands, receipts, measured cadence,
+  WU6 matrix, and weekly/manual full-parity workflow across the four owned docs; independent review
+  passed after distinguishing the frozen count/order test from receipts that repeat aggregate totals.
