@@ -117,11 +117,12 @@ one aggregate diffstat is explicitly insufficient.
   Carry nested source-member/return paths far enough to choose the tsc-owned source line. This does
   not implement backlog `111`'s call-site candidate provenance model or alter generic inference.
 - **Acceptance.** Every WU0/WU1b row matches tsc code, count, type retention, and primary source
-  line; direct non-fresh structures remain `TK1360`; ordinary assignment/argument contextual
-  behavior is unchanged; and a second independent review returns PASS.
-- **Touch points.** The WU1 expression/provenance/span helpers and their focused unit tests only;
-  backlog `111`, call-site inference, fixtures, and expectations are read-only after this spec
-  amendment.
+  line in ordinary and class-published paths; direct non-fresh structures remain `TK1360`;
+  ordinary assignment/argument contextual behavior is unchanged; and a second independent review
+  returns PASS.
+- **Touch points.** The WU1 expression/provenance/span helpers, class initializer inference, and
+  their focused unit tests only; backlog `111`, call-site inference, fixtures, and expectations are
+  read-only after this spec amendment.
 
 ### WU2 — independent adversarial review and inference gates (effort M)
 

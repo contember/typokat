@@ -84,5 +84,16 @@ class PublishedContextualCallback {
 declare const publishedContextual: PublishedContextualCallback;
 const contextualResult: number = publishedContextual.field.callback(1);
 
+class PublishedLiteralProvenance {
+  field = { flag: true, text: "fixed" as "fixed" } satisfies {
+    flag: boolean;
+    text: string;
+  };
+}
+
+declare const publishedLiteralProvenance: PublishedLiteralProvenance;
+const publishedFlag: true = publishedLiteralProvenance.field.flag;
+const publishedText: "fixed" = publishedLiteralProvenance.field.text;
+
 declare function needNumber(value: number): number;
 needNumber("bad") satisfies number; // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
