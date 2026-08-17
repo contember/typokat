@@ -59,5 +59,16 @@ const duplicateTuplePaths = [
   ["wrong"], // error[TK2322]: Type 'string' is not assignable to type 'number'
 ] satisfies [[number], [number]];
 
+({ value: 1 }) satisfies { (): void; value: number }; // error[TK1360]
+
+({ value: 1 }) satisfies { new (): object; value: number }; // error[TK1360]
+
+const mixedArray = ["wrong", 1] satisfies number[]; // error[TK2322]: Type 'string' is not assignable to type 'number'
+
+const twoBadArray = [
+  "wrong", // error[TK2322]: Type 'string' is not assignable to type 'number'
+  false, // error[TK2322]: Type 'boolean' is not assignable to type 'number'
+] satisfies number[];
+
 declare const wholeUnion: { kind: "a"; value: string } | { kind: "b"; value: boolean };
 wholeUnion satisfies { kind: "a" | "b"; value: number }; // error[TK1360]

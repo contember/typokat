@@ -26,6 +26,20 @@ const contextualLiteralCallback =
   ((value) => "fixed") satisfies (value: number) => "fixed";
 const retainedContextualReturn: "fixed" = contextualLiteralCallback(1);
 
+const structuredReturnCallback =
+  ((value: number) => ({ kind: "a", count: value })) satisfies
+  (value: number) => { kind: "a" | "b"; count: number };
+const retainedStructuredReturn: "a" = structuredReturnCallback(1).kind;
+
+const contextualStructuredReturn =
+  ((value) => ({ kind: "a", count: value })) satisfies
+  (value: number) => { kind: "a" | "b"; count: number };
+const retainedContextualStructuredReturn: "a" = contextualStructuredReturn(1).kind;
+
+const tupleReturnCallback =
+  (() => ["a", 1]) satisfies () => ["a" | "b", number];
+const retainedTupleReturn: "a" = tupleReturnCallback()[0];
+
 const widenedObject = { text: "value", count: 1 } satisfies { text: string; count: number };
 const exactText: "value" = widenedObject.text; // error[TK2322]: Type 'string' is not assignable to type '"value"'
 const exactCount: 1 = widenedObject.count; // error[TK2322]: Type 'number' is not assignable to type '1'
