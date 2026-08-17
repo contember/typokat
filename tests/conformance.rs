@@ -109,6 +109,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b33_as_cast_assignability", true),
     // Backlog 44 `satisfies`: source-preserving contextual assignability.
     ("b44_satisfies", true),
+    // Backlog 44 `as const`: disabled RED acceptance spec. WU1 enables it after
+    // AST-directed const contexts land on ordinary and class-publication paths.
+    ("b44_as_const", false),
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),

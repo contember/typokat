@@ -170,3 +170,27 @@ outcome must state the difference instead of presenting an apples-to-apples feat
 
 <!-- Append as work proceeds. Graduate durable decisions/findings to ADR/backlog and trim this log
      to pointers. -->
+
+- 2026-08-17 — WU0 authored a disabled seven-file acceptance corpus. Admitted rows cover exact
+  primitive/negative/enum values, deep owned object/tuple shapes, parentheses, shorthand members,
+  shallow reference boundaries, readonly writes and relation direction, ordinary widening,
+  suppression of an outer `satisfies` context, query-order permutations, and instance class-field
+  publication. The original-PR exclusions remain explicit: spread/elision use the existing backlog
+  `71` incomplete identities; computed keys use the existing backlog `75` identity; object methods
+  and invalid const operands reserve `expr-infer/as-const/object-method` and
+  `expr-infer/as-const/invalid-operand` for backlog `75` accounting. No `TK1355` is introduced.
+- 2026-08-17 — Pinned `tsc 6.0.3 --strict --noEmit --pretty false --lib esnext` matched every
+  admitted marker. The excluded ledger is clean in tsc except for the intentionally deferred
+  invalid operand's `TS1355`. Declaration emit confirmed the key inferred surfaces: the deep object
+  has recursively readonly literal-owned members but a mutable referenced object; arrays are
+  readonly fixed tuples; the two outer-context controls remain `{ readonly kind: "left" }` and
+  `readonly ["left", 1]`; and both instance fields publish those same surfaces.
+- 2026-08-17 — Forced checks with the current pre-implementation `target/debug/typokat` were RED
+  for the intended model gaps, not parsing: object/tuple literals widened, readonly writes were
+  absent, readonly controls and class fields lacked complete surfaces, and the two new backlog-75
+  accounting identities were absent. The top-level primitive/negative/enum file already passes and
+  remains a positive control for the existing transparent assertion path. Existing spread,
+  elision, and computed-key incomplete identities emitted on their exact marker lines. The corpus
+  remains registered `false`. A fresh isolated-target inventory test passed under a two-vCPU lease
+  with the unchanged `572/688` inventory receipt; the isolated target avoids the pre-existing stale
+  Rust object in the shared target without deleting shared build artifacts.
