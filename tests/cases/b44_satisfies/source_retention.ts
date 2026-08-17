@@ -40,6 +40,26 @@ const tupleReturnCallback =
   (() => ["a", 1]) satisfies () => ["a" | "b", number];
 const retainedTupleReturn: "a" = tupleReturnCallback()[0];
 
+const blockStructuredReturn = ((value: number) => {
+  return { kind: "a", count: value };
+}) satisfies (value: number) => { kind: "a" | "b"; count: number };
+const retainedBlockStructuredReturn: "a" = blockStructuredReturn(1).kind;
+
+const contextualBlockStructuredReturn = ((value) => {
+  return { kind: "a", count: value };
+}) satisfies (value: number) => { kind: "a" | "b"; count: number };
+const retainedContextualBlockReturn: "a" = contextualBlockStructuredReturn(1).kind;
+
+const blockTupleReturn = (() => {
+  return ["a", 1];
+}) satisfies () => ["a" | "b", number];
+const retainedBlockTupleReturn: "a" = blockTupleReturn()[0];
+
+const annotatedBlockReturn = ((value: number): { kind: "a"; count: number } => {
+  return { kind: "a", count: value };
+}) satisfies (value: number) => { kind: "a" | "b"; count: number };
+const retainedAnnotatedBlockReturn: "a" = annotatedBlockReturn(1).kind;
+
 const widenedObject = { text: "value", count: 1 } satisfies { text: string; count: number };
 const exactText: "value" = widenedObject.text; // error[TK2322]: Type 'string' is not assignable to type '"value"'
 const exactCount: 1 = widenedObject.count; // error[TK2322]: Type 'number' is not assignable to type '1'

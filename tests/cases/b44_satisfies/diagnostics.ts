@@ -70,5 +70,9 @@ const twoBadArray = [
   false, // error[TK2322]: Type 'boolean' is not assignable to type 'number'
 ] satisfies number[];
 
+({ value: 1, extra: true }) satisfies { value: number; missing: string }; // error[TK2353]
+
+({ value: 1, extra: true }) satisfies { (): void; value: number }; // error[TK2353]
+
 declare const wholeUnion: { kind: "a"; value: string } | { kind: "b"; value: boolean };
 wholeUnion satisfies { kind: "a" | "b"; value: number }; // error[TK1360]
