@@ -60,6 +60,16 @@ const annotatedBlockReturn = ((value: number): { kind: "a"; count: number } => {
 }) satisfies (value: number) => { kind: "a" | "b"; count: number };
 const retainedAnnotatedBlockReturn: "a" = annotatedBlockReturn(1).kind;
 
+const annotatedUnionReturn =
+  ((value: number): { kind: "a" | "b" } => ({ kind: "a" })) satisfies
+  (value: number) => { kind: "a" | "b" };
+const narrowedAnnotatedReturn: "a" = annotatedUnionReturn(1).kind; // error[TK2322]
+
+const contextualAnnotatedUnionReturn =
+  ((value): { kind: "a" | "b" } => ({ kind: value > 0 ? "a" : "b" })) satisfies
+  (value: number) => { kind: "a" | "b" };
+const narrowedContextualAnnotatedReturn: "a" = contextualAnnotatedUnionReturn(1).kind; // error[TK2322]
+
 const widenedObject = { text: "value", count: 1 } satisfies { text: string; count: number };
 const exactText: "value" = widenedObject.text; // error[TK2322]: Type 'string' is not assignable to type '"value"'
 const exactCount: 1 = widenedObject.count; // error[TK2322]: Type 'number' is not assignable to type '1'

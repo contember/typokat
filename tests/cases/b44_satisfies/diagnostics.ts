@@ -74,5 +74,9 @@ const twoBadArray = [
 
 ({ value: 1, extra: true }) satisfies { (): void; value: number }; // error[TK2353]
 
+const invalidAnnotatedReturn =
+  ((value: number): { kind: "a" } => ({ kind: "b" })) satisfies // error[TK2322]
+  (value: number) => { kind: "a" };
+
 declare const wholeUnion: { kind: "a"; value: string } | { kind: "b"; value: boolean };
 wholeUnion satisfies { kind: "a" | "b"; value: number }; // error[TK1360]
