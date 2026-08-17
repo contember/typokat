@@ -735,9 +735,9 @@ role = "expr-infer"
 surface = "satisfies-expression"
 slot = "self"
 oxc_variant = "Expression::TSSatisfiesExpression"
-disposition = "unsupported-in"
-owner = "../../docs/backlog/44-satisfies-as-const.md"
-witness = "../cases/b73_expression_shape_tail/satisfies.ts"
+disposition = "supported"
+owner = "shipped"
+witness = "../cases/b44_satisfies/source_retention.ts"
 
 [[surface]]
 id = "expr-infer/sequence-expression/self"

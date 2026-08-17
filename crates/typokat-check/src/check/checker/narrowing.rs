@@ -3,6 +3,7 @@
 //! into expressions while guard analysis feeds flow condition nodes.
 
 use super::context::*;
+use super::statements::ReturnCheckPolicy;
 use crate::binder::scope::ScopeId;
 use crate::binder::symbol::SymbolId;
 use crate::check::flow::{NarrowOp, TypeofTag};
@@ -39,13 +40,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         if_stmt: &IfStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         self.infer_expr(scope, &if_stmt.test);
-        self.check_stmt(scope, &if_stmt.consequent, declared_ret, inferred);
+        self.check_stmt_with_return_policy(scope, &if_stmt.consequent, return_policy, inferred);
         if let Some(alternate) = &if_stmt.alternate {
-            self.check_stmt(scope, alternate, declared_ret, inferred);
+            self.check_stmt_with_return_policy(scope, alternate, return_policy, inferred);
         }
     }
 
@@ -57,7 +58,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         switch: &SwitchStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         // The discriminant is evaluated in the enclosing scope; the case block is one
@@ -107,10 +108,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             // Every clause shares one lexical scope, but consecutive overload grouping
             // remains local to the clause's own statement list.
-            self.check_statement_list_with_surfaces(
+            self.check_statement_list_with_surfaces_policy(
                 switch_scope,
                 &case.consequent,
-                declared_ret,
+                return_policy,
                 inferred,
                 &mut surfaces,
             );
@@ -124,11 +125,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         while_stmt: &WhileStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         self.infer_expr(scope, &while_stmt.test);
-        self.check_stmt(scope, &while_stmt.body, declared_ret, inferred);
+        self.check_stmt_with_return_policy(scope, &while_stmt.body, return_policy, inferred);
     }
 
     /// Analyze a condition into a guard fact, or `None` for unrecognized shapes

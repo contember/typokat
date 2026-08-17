@@ -367,6 +367,9 @@ fn push_pending_effect_type_roots<Ticket: Copy>(
             DeferredRelationObligation::Assign(obligation) => {
                 roots.extend([obligation.src, obligation.tgt]);
             }
+            DeferredRelationObligation::Satisfies(obligation) => {
+                push_satisfies_check_roots(roots, &obligation.root);
+            }
             DeferredRelationObligation::AssertionCompatibility(obligation) => {
                 roots.extend([obligation.source, obligation.asserted]);
             }
@@ -387,6 +390,13 @@ fn push_pending_effect_type_roots<Ticket: Copy>(
     }
     for nested in &effects.nested {
         push_pending_effect_type_roots(roots, nested);
+    }
+}
+
+fn push_satisfies_check_roots(roots: &mut Vec<TypeId>, check: &super::context::SatisfiesCheckNode) {
+    roots.extend([check.residual.src, check.residual.tgt]);
+    for child in &check.children {
+        push_satisfies_check_roots(roots, child);
     }
 }
 

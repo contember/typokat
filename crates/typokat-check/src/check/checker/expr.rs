@@ -21,10 +21,11 @@ use crate::types::repr::{
 use crate::types::store::{Store, TypeId};
 use crate::types::{Interner, WellKnown};
 use oxc_ast::ast::{
-    ArrayExpression, ArrayExpressionElement, BinaryExpression, BinaryOperator, ChainElement,
-    ComputedMemberExpression, ConditionalExpression, Expression, LogicalExpression,
-    LogicalOperator, ObjectExpression, ObjectPropertyKind, SimpleAssignmentTarget,
-    StaticMemberExpression, TSType, TSTypeName, UnaryExpression, UnaryOperator,
+    ArrayExpression, ArrayExpressionElement, ArrowFunctionExpression, BinaryExpression,
+    BinaryOperator, ChainElement, ComputedMemberExpression, ConditionalExpression, Expression,
+    LogicalExpression, LogicalOperator, ObjectExpression, ObjectPropertyKind,
+    SimpleAssignmentTarget, StaticMemberExpression, TSType, TSTypeName, UnaryExpression,
+    UnaryOperator,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -39,6 +40,26 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub(in crate::check::checker) enum ContextualRewalk {
     Rewalked,
     KeptRaw,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::check::checker) enum ContextualLiteralProvenance {
+    Existing,
+    Satisfies,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ContextualWalkPolicy {
+    use_contextual_arrow: bool,
+    retain_contextual_arrow_checks: bool,
+    provenance: ContextualLiteralProvenance,
+}
+
+impl ContextualLiteralProvenance {
+    fn shape_members(self, store: &Store, ty: TypeId, shape: TypeTag) -> Option<Vec<TypeId>> {
+        let shapes = contextual_shape_members(store, ty, shape)?;
+        (self == Self::Satisfies || shapes.len() == 1).then_some(shapes)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -262,8 +283,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             Expression::BinaryExpression(binary) => Some(self.infer_binary(scope, binary)),
             // Backlog 101: `&&`/`||`/`??` and a ternary carry real value types, so this
             // position is context-free but no longer coarse.
-            Expression::LogicalExpression(logical) => self.infer_logical(scope, logical, None),
-            Expression::ConditionalExpression(cond) => self.infer_conditional(scope, cond, None),
+            Expression::LogicalExpression(logical) => {
+                self.infer_logical(scope, logical, None, ContextualLiteralProvenance::Existing)
+            }
+            Expression::ConditionalExpression(cond) => {
+                self.infer_conditional(scope, cond, None, ContextualLiteralProvenance::Existing)
+            }
             // A sequence `(a, b, …, z)` (backlog 53): walk every operand for its side
             // effects (references, nested checks), and take the value/type of the
             // **last** operand — the comma operator's result.
@@ -391,16 +416,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 None
             }
-            Expression::TSSatisfiesExpression(satisfies) => {
-                self.infer_expr(scope, &satisfies.expression);
-                self.lower_annotation(scope, &satisfies.type_annotation);
-                self.record_incomplete(
-                    "expr-infer/satisfies-expression/self",
-                    Span::from_oxc(satisfies.span),
-                    "satisfies expression not modeled",
-                );
-                None
-            }
+            Expression::TSSatisfiesExpression(satisfies) => self.infer_satisfies(
+                scope,
+                &satisfies.expression,
+                &satisfies.type_annotation,
+                Span::from_oxc(satisfies.span),
+            ),
             Expression::TSNonNullExpression(non_null) => {
                 self.infer_expr(scope, &non_null.expression);
                 self.record_incomplete(
@@ -524,12 +545,11 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             SimpleAssignmentTarget::TSSatisfiesExpression(satisfies) => {
-                self.infer_expr(scope, &satisfies.expression);
-                self.lower_annotation(scope, &satisfies.type_annotation);
-                self.record_incomplete(
-                    "expr-infer/satisfies-expression/self",
+                self.infer_satisfies(
+                    scope,
+                    &satisfies.expression,
+                    &satisfies.type_annotation,
                     Span::from_oxc(satisfies.span),
-                    "satisfies expression not modeled",
                 );
             }
             SimpleAssignmentTarget::TSNonNullExpression(non_null) => {
@@ -603,8 +623,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
             }
             Expression::TSSatisfiesExpression(satisfies) => {
-                self.infer_chain_expression(scope, &satisfies.expression);
-                self.lower_annotation(scope, &satisfies.type_annotation);
+                self.infer_satisfies(
+                    scope,
+                    &satisfies.expression,
+                    &satisfies.type_annotation,
+                    Span::from_oxc(satisfies.span),
+                );
             }
             Expression::TSNonNullExpression(non_null) => {
                 self.infer_chain_expression(scope, &non_null.expression);
@@ -730,6 +754,183 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
         Some((asserted, span))
+    }
+
+    /// Contextually check a `satisfies` source while retaining its final source type.
+    fn infer_satisfies(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+        type_annotation: &TSType<'_>,
+        span: Span,
+    ) -> Option<(TypeId, Span)> {
+        let (raw, raw_effects) =
+            self.capture_candidate_effects(|pass| pass.infer_expr(scope, expression));
+        let target = self.lower_annotation(scope, type_annotation);
+        let Some(raw) = raw else {
+            self.merge_candidate_effects(raw_effects);
+            return None;
+        };
+        let Some(target) = target else {
+            self.merge_candidate_effects(raw_effects);
+            return Some((raw.0, span));
+        };
+        let error = self.interner.well_known().error;
+        if raw.0 == error || target == error {
+            self.merge_candidate_effects(raw_effects);
+            return Some((raw.0, span));
+        }
+
+        self.satisfies_check_sinks.push(Vec::new());
+        let (contextual, contextual_effects) = self.capture_candidate_effects(|pass| {
+            pass.infer_contextual_source_after_walked_reporting_with_provenance(
+                scope,
+                expression,
+                target,
+                raw,
+                ContextualWalkPolicy {
+                    use_contextual_arrow: true,
+                    retain_contextual_arrow_checks: true,
+                    provenance: ContextualLiteralProvenance::Satisfies,
+                },
+            )
+        });
+        let mut children = self.satisfies_check_sinks.pop().unwrap_or_default();
+        let ((source, source_span), rewalk) = contextual;
+        if rewalk == ContextualRewalk::Rewalked {
+            raw_effects.discard();
+            self.merge_candidate_effects(contextual_effects);
+        } else {
+            self.merge_candidate_effects(raw_effects);
+            self.merge_candidate_effects(contextual_effects);
+        }
+
+        let operator_span = satisfies_operator_gap_span(expression, type_annotation);
+        let contextual_ownership = rewalk == ContextualRewalk::Rewalked
+            && !matches!(
+                peel_parenthesized_expression(expression),
+                Expression::ArrowFunctionExpression(arrow)
+                    if !satisfies_arrow_needs_context(arrow)
+            );
+        if !contextual_ownership {
+            children.clear();
+        }
+        let whole = AssignObligation {
+            src: source,
+            tgt: target,
+            src_span: operator_span,
+            source_sites: Vec::new(),
+            kind: ObligationKind::SatisfiesDirect,
+        };
+        let root = if contextual_ownership && children.len() == 1 {
+            let mut root = children.remove(0);
+            root.residual = whole;
+            root
+        } else {
+            let excess = match self.check_excess_properties_for_target(expression, target) {
+                DemandOutcome::Ready(diagnostics) => diagnostics,
+                DemandOutcome::Exhausted(exhaustion) => {
+                    self.own_type_demand(DemandOutcome::Exhausted(exhaustion), source_span);
+                    Vec::new()
+                }
+            };
+            SatisfiesCheckNode {
+                children,
+                residual: whole,
+                excess,
+            }
+        };
+        self.schedule_satisfies_obligation(SatisfiesObligation { root });
+        Some((source, span))
+    }
+
+    pub(in crate::check::checker) fn has_satisfies_check_sink(&self) -> bool {
+        !self.satisfies_check_sinks.is_empty()
+    }
+
+    pub(in crate::check::checker) fn satisfies_check_mark(&self) -> usize {
+        self.satisfies_check_sinks
+            .last()
+            .map_or(0, std::vec::Vec::len)
+    }
+
+    pub(in crate::check::checker) fn truncate_satisfies_checks(&mut self, mark: usize) {
+        if let Some(checks) = self.satisfies_check_sinks.last_mut() {
+            checks.truncate(mark);
+        }
+    }
+
+    pub(in crate::check::checker) fn reanchor_satisfies_checks(&mut self, mark: usize, span: Span) {
+        if let Some(checks) = self.satisfies_check_sinks.last_mut() {
+            for check in &mut checks[mark..] {
+                check.residual.src_span = span;
+            }
+        }
+    }
+
+    pub(in crate::check::checker) fn begin_satisfies_container(&mut self) {
+        self.satisfies_check_sinks.push(Vec::new());
+    }
+
+    pub(in crate::check::checker) fn finish_satisfies_container(
+        &mut self,
+        expression: &Expression<'_>,
+        source: TypeId,
+        target: TypeId,
+        span: Span,
+    ) {
+        let excess = match self.check_excess_properties_for_target(expression, target) {
+            DemandOutcome::Ready(diagnostics) => diagnostics,
+            DemandOutcome::Exhausted(exhaustion) => {
+                self.own_type_demand(DemandOutcome::Exhausted(exhaustion), span);
+                Vec::new()
+            }
+        };
+        self.finish_satisfies_relation_container(source, target, span, excess);
+    }
+
+    pub(in crate::check::checker) fn finish_satisfies_relation_container(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        span: Span,
+        excess: Vec<Diagnostic>,
+    ) {
+        let children = self.satisfies_check_sinks.pop().unwrap_or_default();
+        if let Some(checks) = self.satisfies_check_sinks.last_mut() {
+            checks.push(SatisfiesCheckNode {
+                children,
+                residual: AssignObligation {
+                    src: source,
+                    tgt: target,
+                    src_span: span,
+                    source_sites: Vec::new(),
+                    kind: ObligationKind::Assignment,
+                },
+                excess,
+            });
+        }
+    }
+
+    pub(in crate::check::checker) fn record_satisfies_child_check(
+        &mut self,
+        source: TypeId,
+        target: TypeId,
+        span: Span,
+    ) {
+        if let Some(checks) = self.satisfies_check_sinks.last_mut() {
+            checks.push(SatisfiesCheckNode {
+                children: Vec::new(),
+                residual: AssignObligation {
+                    src: source,
+                    tgt: target,
+                    src_span: span,
+                    source_sites: Vec::new(),
+                    kind: ObligationKind::SatisfiesContextual,
+                },
+                excess: Vec::new(),
+            });
+        }
     }
 
     /// Resolve a value symbol's narrowed type at a reference. Missing pre-pass
@@ -990,10 +1191,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         cond: &ConditionalExpression<'_>,
         context: Option<TypeId>,
+        provenance: ContextualLiteralProvenance,
     ) -> Option<(TypeId, Span)> {
         self.infer_expr(scope, &cond.test);
-        let consequent = self.infer_initializer(scope, &cond.consequent, context);
-        let alternate = self.infer_initializer(scope, &cond.alternate, context);
+        let consequent =
+            self.infer_initializer_with_provenance(scope, &cond.consequent, context, provenance);
+        let alternate =
+            self.infer_initializer_with_provenance(scope, &cond.alternate, context, provenance);
         // An arm outside the expression subset contributes no member; a smaller union
         // only ever under-reports, never invents a mismatch.
         let ty = match (consequent, alternate) {
@@ -1030,6 +1234,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         logical: &LogicalExpression<'_>,
         context: Option<TypeId>,
+        provenance: ContextualLiteralProvenance,
     ) -> Option<(TypeId, Span)> {
         let span = Span::from_oxc(logical.span);
         // tsc's `getContextualTypeForBinaryOperand`: `||`/`??` shape both operands,
@@ -1039,10 +1244,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             LogicalOperator::Or | LogicalOperator::Coalesce => context,
         };
         let left = self
-            .infer_initializer(scope, &logical.left, left_context)
+            .infer_initializer_with_provenance(scope, &logical.left, left_context, provenance)
             .map(|(ty, _)| ty);
         let right = self
-            .infer_initializer(scope, &logical.right, context)
+            .infer_initializer_with_provenance(scope, &logical.right, context, provenance)
             .map(|(ty, _)| ty);
         let Some(left) = left else {
             let members = right.into_iter().collect();
@@ -1130,15 +1335,30 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         init: &Expression<'_>,
         context: Option<TypeId>,
     ) -> Option<(TypeId, Span)> {
+        self.infer_initializer_with_provenance(
+            scope,
+            init,
+            context,
+            ContextualLiteralProvenance::Existing,
+        )
+    }
+
+    pub(in crate::check::checker) fn infer_initializer_with_provenance(
+        &mut self,
+        scope: ScopeId,
+        init: &Expression<'_>,
+        context: Option<TypeId>,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<(TypeId, Span)> {
         // A ternary / logical is not itself a fresh literal — the value lives in its
         // operands, so the raw target is pushed down to each of them before any
         // literal-shaping transform runs on it (backlog `101`).
         match init {
             Expression::ConditionalExpression(cond) => {
-                return self.infer_conditional(scope, cond, context);
+                return self.infer_conditional(scope, cond, context, provenance);
             }
             Expression::LogicalExpression(logical) => {
-                return self.infer_logical(scope, logical, context);
+                return self.infer_logical(scope, logical, context, provenance);
             }
             Expression::CallExpression(call) => {
                 return self.infer_call(scope, call, context);
@@ -1182,25 +1402,64 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         };
         match (init, context) {
             (Expression::ParenthesizedExpression(paren), ctx) => {
-                self.infer_initializer(scope, &paren.expression, ctx)
+                self.infer_initializer_with_provenance(scope, &paren.expression, ctx, provenance)
             }
             (Expression::ObjectExpression(obj), Some(ctx))
-                if self.interner.store().object_type(ctx).is_some() =>
+                if provenance
+                    .shape_members(self.interner.store(), ctx, TypeTag::Object)
+                    .is_some() =>
             {
-                let id = self.infer_object_literal_with_context(scope, obj, ctx, contextual_this);
+                let grouped = provenance == ContextualLiteralProvenance::Satisfies
+                    && self.has_satisfies_check_sink();
+                if grouped {
+                    self.begin_satisfies_container();
+                }
+                let id = self.infer_object_literal_with_context(
+                    scope,
+                    obj,
+                    ctx,
+                    contextual_this,
+                    provenance,
+                );
+                if grouped {
+                    self.finish_satisfies_container(init, id, ctx, Span::from_oxc(obj.span));
+                }
                 Some((id, Span::from_oxc(obj.span)))
             }
             (Expression::ArrayExpression(array), Some(ctx))
-                if self.interner.store().tag(ctx) == TypeTag::Tuple =>
+                if provenance
+                    .shape_members(self.interner.store(), ctx, TypeTag::Tuple)
+                    .is_some() =>
             {
-                let id = self.infer_array_literal_as_tuple(scope, array, ctx);
+                let grouped = provenance == ContextualLiteralProvenance::Satisfies
+                    && self.has_satisfies_check_sink();
+                if grouped {
+                    self.begin_satisfies_container();
+                }
+                let id = self.infer_array_literal_as_tuple(scope, array, ctx, provenance);
+                if grouped {
+                    self.finish_satisfies_container(init, id, ctx, Span::from_oxc(array.span));
+                }
                 Some((id, Span::from_oxc(array.span)))
             }
             (Expression::ArrayExpression(array), Some(ctx)) => {
                 if let Some(element_context) =
-                    self.interner.store().array_type(ctx).map(|a| a.element)
+                    self.contextual_array_element_context(ctx, provenance)
                 {
-                    let id = self.infer_array_literal_as_array(scope, array, element_context);
+                    let grouped = provenance == ContextualLiteralProvenance::Satisfies
+                        && self.has_satisfies_check_sink();
+                    if grouped {
+                        self.begin_satisfies_container();
+                    }
+                    let id = self.infer_array_literal_as_array(
+                        scope,
+                        array,
+                        element_context,
+                        provenance,
+                    );
+                    if grouped {
+                        self.finish_satisfies_container(init, id, ctx, Span::from_oxc(array.span));
+                    }
                     Some((id, Span::from_oxc(array.span)))
                 } else {
                     self.infer_expr(scope, init)
@@ -1249,6 +1508,32 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         use_contextual_arrow: bool,
         retain_contextual_arrow_checks: bool,
     ) -> ((TypeId, Span), ContextualRewalk) {
+        self.infer_contextual_source_after_walked_reporting_with_provenance(
+            scope,
+            expr,
+            context,
+            raw,
+            ContextualWalkPolicy {
+                use_contextual_arrow,
+                retain_contextual_arrow_checks,
+                provenance: ContextualLiteralProvenance::Existing,
+            },
+        )
+    }
+
+    fn infer_contextual_source_after_walked_reporting_with_provenance(
+        &mut self,
+        scope: ScopeId,
+        expr: &Expression<'_>,
+        context: TypeId,
+        raw: (TypeId, Span),
+        policy: ContextualWalkPolicy,
+    ) -> ((TypeId, Span), ContextualRewalk) {
+        let ContextualWalkPolicy {
+            use_contextual_arrow,
+            retain_contextual_arrow_checks,
+            provenance,
+        } = policy;
         let context = match self.demand_composite_apparent_type(context) {
             DemandOutcome::Ready(context) => context,
             DemandOutcome::Exhausted(exhaustion) => {
@@ -1272,15 +1557,29 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
         }
         let mark = DeclTypes::log_mark();
-        if let (true, Expression::ArrowFunctionExpression(arrow)) = (use_contextual_arrow, expr) {
+        let contextual_expr = peel_parenthesized_expression(expr);
+        if let (true, Expression::ArrowFunctionExpression(arrow)) =
+            (use_contextual_arrow, contextual_expr)
+        {
             #[cfg(test)]
             super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), true);
             let decl_types = (!retain_contextual_arrow_checks).then(|| self.decl_types.clone());
+            let contextual_return = provenance == ContextualLiteralProvenance::Satisfies;
             let contextual = if retain_contextual_arrow_checks {
-                self.infer_contextual_arrow_with_return_context(scope, arrow, context, false)
+                self.infer_contextual_arrow_with_return_context(
+                    scope,
+                    arrow.as_ref(),
+                    context,
+                    contextual_return,
+                )
             } else {
                 let (contextual, effects) = self.capture_candidate_effects(|pass| {
-                    pass.infer_contextual_arrow_with_return_context(scope, arrow, context, false)
+                    pass.infer_contextual_arrow_with_return_context(
+                        scope,
+                        arrow.as_ref(),
+                        context,
+                        contextual_return,
+                    )
                 });
                 #[cfg(test)]
                 let discarded_records = effects.records.len();
@@ -1302,17 +1601,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             return resolved;
         }
 
-        if !self.context_can_shape_fresh_literal(expr, context) {
+        if !self.context_can_shape_fresh_literal(expr, context, provenance) {
             return (raw, ContextualRewalk::KeptRaw);
         }
 
         #[cfg(test)]
         super::calls::measure_contextual_rewalk(super::calls::contextual_measure_phase(), false);
         let contextual = if retain_contextual_arrow_checks {
-            self.infer_initializer(scope, expr, Some(context))
+            self.infer_initializer_with_provenance(scope, expr, Some(context), provenance)
         } else {
             let (contextual, effects) = self.capture_candidate_effects(|pass| {
-                pass.infer_initializer(scope, expr, Some(context))
+                pass.infer_initializer_with_provenance(scope, expr, Some(context), provenance)
             });
             #[cfg(test)]
             let discarded_records = effects.records.len();
@@ -1331,32 +1630,42 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         resolved
     }
 
-    fn context_can_shape_fresh_literal(&self, expr: &Expression<'_>, context: TypeId) -> bool {
+    fn context_can_shape_fresh_literal(
+        &self,
+        expr: &Expression<'_>,
+        context: TypeId,
+        provenance: ContextualLiteralProvenance,
+    ) -> bool {
         let context = contextual_literal_target(self.interner.store(), context);
         match expr {
             Expression::ParenthesizedExpression(paren) => {
-                self.context_can_shape_fresh_literal(&paren.expression, context)
+                self.context_can_shape_fresh_literal(&paren.expression, context, provenance)
             }
             // M31: an intersection whose members include an object type can shape a fresh
             // object literal (via its merged apparent object — resolved in `infer_initializer`).
             Expression::ObjectExpression(_) => {
                 let store = self.interner.store();
-                store.object_type(context).is_some()
+                provenance
+                    .shape_members(store, context, TypeTag::Object)
+                    .is_some()
                     || store
                         .intersection_members(context)
                         .is_some_and(|ms| ms.iter().any(|&m| store.object_type(m).is_some()))
             }
             Expression::ArrayExpression(_) => {
-                self.interner.store().tag(context) == TypeTag::Tuple
-                    || self.interner.store().array_type(context).is_some()
+                provenance
+                    .shape_members(self.interner.store(), context, TypeTag::Tuple)
+                    .is_some()
+                    || provenance
+                        .shape_members(self.interner.store(), context, TypeTag::Array)
+                        .is_some()
             }
             // Backlog 101: a ternary / logical passes the target on to the operands that
             // carry the value, so it is re-walkable exactly when one of them is.
             _ => contextual_value_operands(expr).is_some_and(|operands| {
-                operands
-                    .into_iter()
-                    .flatten()
-                    .any(|operand| self.context_can_shape_fresh_literal(operand, context))
+                operands.into_iter().flatten().any(|operand| {
+                    self.context_can_shape_fresh_literal(operand, context, provenance)
+                })
             }),
         }
     }
@@ -1370,6 +1679,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         obj: &ObjectExpression<'_>,
         context: TypeId,
         contextual_this: Option<TypeId>,
+        provenance: ContextualLiteralProvenance,
     ) -> TypeId {
         let saved_this = self.current_this;
         if let Some(contextual_this) = contextual_this {
@@ -1385,19 +1695,52 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.record_object_computed_key_skip(&prop.key);
                 continue;
             };
-            let value_context = self.object_literal_property_context(context, &name);
+            let value_context = self.object_literal_property_context(context, &name, provenance);
+            let check_mark = self.satisfies_check_mark();
             let value = match value_context {
-                Some(ctx) => self.infer_initializer(scope, &prop.value, Some(ctx)),
+                Some(ctx) => {
+                    self.infer_contextual_initializer_child(scope, &prop.value, ctx, provenance)
+                }
                 None => self.infer_expr(scope, &prop.value),
             };
             let Some((value_ty, _)) = value else {
                 continue;
             };
-            let ty = if value_context.is_some() {
+            let preserve_literal = value_context.is_some_and(|context| {
+                contextual_source_preserves_literal(
+                    self.interner.store(),
+                    &prop.value,
+                    context,
+                    provenance,
+                )
+            });
+            let ty = if preserve_literal {
                 value_ty
             } else {
                 widen(self.interner, value_ty)
             };
+            if provenance == ContextualLiteralProvenance::Satisfies {
+                if let Some(target) = value_context {
+                    let explicit_arrow = matches!(
+                        peel_parenthesized_expression(&prop.value),
+                        Expression::ArrowFunctionExpression(arrow)
+                            if !satisfies_arrow_needs_context(arrow)
+                    );
+                    if explicit_arrow {
+                        self.truncate_satisfies_checks(check_mark);
+                    }
+                    if self.satisfies_check_mark() > check_mark {
+                        self.reanchor_satisfies_checks(check_mark, Span::from_oxc(prop.key.span()));
+                    }
+                    if explicit_arrow || self.satisfies_check_mark() == check_mark {
+                        self.record_satisfies_child_check(
+                            ty,
+                            target,
+                            Span::from_oxc(prop.key.span()),
+                        );
+                    }
+                }
+            }
             properties.push(PropertyType::public(name.into_owned(), ty));
         }
 
@@ -1406,6 +1749,31 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             properties,
             ..Default::default()
         })
+    }
+
+    fn infer_contextual_initializer_child(
+        &mut self,
+        scope: ScopeId,
+        expression: &Expression<'_>,
+        context: TypeId,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<(TypeId, Span)> {
+        if provenance == ContextualLiteralProvenance::Satisfies {
+            if let Expression::ArrowFunctionExpression(arrow) =
+                peel_parenthesized_expression(expression)
+            {
+                let contextual = self.infer_contextual_arrow_with_return_context(
+                    scope,
+                    arrow.as_ref(),
+                    context,
+                    true,
+                );
+                if let Some(ty) = contextual {
+                    return Some((ty, Span::from_oxc(expression.span())));
+                }
+            }
+        }
+        self.infer_initializer_with_provenance(scope, expression, Some(context), provenance)
     }
 
     /// Find the one retained `ThisType<T>` marker in a contextual intersection.
@@ -1419,19 +1787,47 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             .find_map(|&member| self.interner.well_known().this_type_operand(store, member))
     }
 
-    fn object_literal_property_context(&self, context: TypeId, name: &str) -> Option<TypeId> {
+    fn object_literal_property_context(
+        &mut self,
+        context: TypeId,
+        name: &str,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<TypeId> {
         let store = self.interner.store();
         let context = contextual_literal_target(store, context);
-        let target = self.interner.store().object_type(context)?;
-        if let Some(prop) = target.property(name) {
-            return Some(contextual_literal_target(store, prop.ty));
-        }
-        let index_value = if is_numeric_property_name(name) {
-            target.number_index.or(target.string_index)
-        } else {
-            target.string_index
-        };
-        index_value.map(|ty| contextual_literal_target(store, ty))
+        let contexts = provenance.shape_members(store, context, TypeTag::Object)?;
+        let candidates: Vec<TypeId> = contexts
+            .iter()
+            .filter_map(|context| {
+                let target = self.interner.store().object_type(*context)?;
+                target.property(name).map(|prop| prop.ty).or_else(|| {
+                    if is_numeric_property_name(name) {
+                        target.number_index.or(target.string_index)
+                    } else {
+                        target.string_index
+                    }
+                })
+            })
+            .collect();
+        (!candidates.is_empty()).then(|| self.interner.union(candidates))
+    }
+
+    fn contextual_array_element_context(
+        &mut self,
+        context: TypeId,
+        provenance: ContextualLiteralProvenance,
+    ) -> Option<TypeId> {
+        let contexts = provenance.shape_members(self.interner.store(), context, TypeTag::Array)?;
+        let candidates: Vec<TypeId> = contexts
+            .iter()
+            .filter_map(|context| {
+                self.interner
+                    .store()
+                    .array_type(*context)
+                    .map(|array| array.element)
+            })
+            .collect();
+        (!candidates.is_empty()).then(|| self.interner.union(candidates))
     }
 
     /// Infer an array literal against a concrete array target. Element values are kept
@@ -1442,16 +1838,46 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         array: &ArrayExpression<'_>,
         element_context: TypeId,
+        provenance: ContextualLiteralProvenance,
     ) -> TypeId {
         let mut element_types: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for element in &array.elements {
             let Some(expr) = self.array_element_expr(element) else {
                 continue;
             };
-            let Some((elem_ty, _)) = self.infer_initializer(scope, expr, Some(element_context))
+            let check_mark = self.satisfies_check_mark();
+            let Some((elem_ty, _)) =
+                self.infer_contextual_initializer_child(scope, expr, element_context, provenance)
             else {
                 continue;
             };
+            let elem_ty = if contextual_source_preserves_literal(
+                self.interner.store(),
+                expr,
+                element_context,
+                provenance,
+            ) {
+                elem_ty
+            } else {
+                widen(self.interner, elem_ty)
+            };
+            if provenance == ContextualLiteralProvenance::Satisfies {
+                let explicit_arrow = matches!(
+                    peel_parenthesized_expression(expr),
+                    Expression::ArrowFunctionExpression(arrow)
+                        if !satisfies_arrow_needs_context(arrow)
+                );
+                if explicit_arrow {
+                    self.truncate_satisfies_checks(check_mark);
+                }
+                if explicit_arrow || self.satisfies_check_mark() == check_mark {
+                    self.record_satisfies_child_check(
+                        elem_ty,
+                        element_context,
+                        Span::from_oxc(expr.span()),
+                    );
+                }
+            }
             element_types.push(elem_ty);
         }
         let element = self.interner.union(element_types);
@@ -1466,11 +1892,17 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         array: &ArrayExpression<'_>,
         context: TypeId,
+        provenance: ContextualLiteralProvenance,
     ) -> TypeId {
         // Snapshot the target tuple up front (immutable borrow) so the recursive
         // contextual inference below can take `&mut self`. The shared tuple call-shape
         // helper accounts for a represented rest segment and a trailing fixed suffix.
-        let context_tuple = self.interner.store().tuple_type(context).cloned();
+        let context_tuples: Vec<_> = provenance
+            .shape_members(self.interner.store(), context, TypeTag::Tuple)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|context| self.interner.store().tuple_type(context).cloned())
+            .collect();
 
         let mut elements: Vec<TypeId> = Vec::with_capacity(array.elements.len());
         for (index, element) in array.elements.iter().enumerate() {
@@ -1482,25 +1914,65 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // Contextually type this position against its tuple element. In particular,
             // direct callback elements need their function parameter bindings before the
             // arrow body is checked.
-            let elem_context = context_tuple
-                .as_ref()
-                .and_then(|tuple| self.tuple_context_element(tuple, index, array.elements.len()));
-            let inferred = match (expr, elem_context) {
-                (Expression::ArrowFunctionExpression(arrow), Some(ctx))
-                    if self.interner.store().function_type(ctx).is_some() =>
-                {
-                    self.infer_contextual_arrow(scope, arrow, ctx)
-                        .map(|ty| (ty, Span::from_oxc(arrow.span)))
+            let candidates: Vec<TypeId> = context_tuples
+                .iter()
+                .filter_map(|tuple| self.tuple_context_element(tuple, index, array.elements.len()))
+                .collect();
+            let elem_context = (!candidates.is_empty()).then(|| self.interner.union(candidates));
+            let check_mark = self.satisfies_check_mark();
+            let inferred = match (provenance, expr, elem_context) {
+                (
+                    ContextualLiteralProvenance::Existing,
+                    Expression::ArrowFunctionExpression(arrow),
+                    Some(context),
+                ) if self.interner.store().function_type(context).is_some() => self
+                    .infer_contextual_arrow_with_return_context(
+                        scope,
+                        arrow.as_ref(),
+                        context,
+                        true,
+                    )
+                    .map(|ty| (ty, Span::from_oxc(arrow.span))),
+                (_, _, Some(context)) => {
+                    self.infer_contextual_initializer_child(scope, expr, context, provenance)
                 }
-                _ => self.infer_initializer(scope, expr, elem_context),
+                (_, _, None) => self.infer_initializer(scope, expr, None),
             };
             let Some((elem_ty, _)) = inferred else {
                 continue;
             };
-            // Do NOT widen: the literal element type relates correctly to BOTH a literal
-            // target (`1` <: `1`) and a base target (`1` <: `number`) via the relation, so
-            // keeping it is what makes a literal-type tuple target work without breaking
-            // the base-type case.
+            let preserve_literal = elem_context.is_some_and(|context| {
+                contextual_source_preserves_literal(
+                    self.interner.store(),
+                    expr,
+                    context,
+                    provenance,
+                )
+            });
+            let elem_ty = if preserve_literal {
+                elem_ty
+            } else {
+                widen(self.interner, elem_ty)
+            };
+            if provenance == ContextualLiteralProvenance::Satisfies {
+                if let Some(target) = elem_context {
+                    let explicit_arrow = matches!(
+                        peel_parenthesized_expression(expr),
+                        Expression::ArrowFunctionExpression(arrow)
+                            if !satisfies_arrow_needs_context(arrow)
+                    );
+                    if explicit_arrow {
+                        self.truncate_satisfies_checks(check_mark);
+                    }
+                    if explicit_arrow || self.satisfies_check_mark() == check_mark {
+                        self.record_satisfies_child_check(
+                            elem_ty,
+                            target,
+                            Span::from_oxc(expr.span()),
+                        );
+                    }
+                }
+            }
             elements.push(elem_ty);
         }
         self.interner.intern_tuple(elements)
@@ -2798,6 +3270,19 @@ fn is_number_keyed(store: &Store, key: TypeId) -> bool {
     store.intrinsic_kind(key) == Some(IntrinsicKind::Number)
 }
 
+fn peel_parenthesized_expression<'expr, 'ast>(
+    mut expression: &'expr Expression<'ast>,
+) -> &'expr Expression<'ast> {
+    while let Expression::ParenthesizedExpression(parenthesized) = expression {
+        expression = &parenthesized.expression;
+    }
+    expression
+}
+
+fn satisfies_operator_gap_span(expression: &Expression<'_>, type_annotation: &TSType<'_>) -> Span {
+    Span::new(expression.span().end, type_annotation.span().start)
+}
+
 pub(in crate::check::checker) fn contextual_literal_target(store: &Store, ty: TypeId) -> TypeId {
     if let Some(operand) = store.readonly_operand(ty) {
         if is_contextual_literal_shape(store, operand) {
@@ -2824,11 +3309,108 @@ pub(in crate::check::checker) fn contextual_literal_target(store: &Store, ty: Ty
     shape.unwrap_or(ty)
 }
 
+pub(in crate::check::checker) fn contextual_shape_members(
+    store: &Store,
+    ty: TypeId,
+    shape: TypeTag,
+) -> Option<Vec<TypeId>> {
+    let ty = store.readonly_operand(ty).unwrap_or(ty);
+    if store.tag(ty) == shape {
+        return Some(vec![ty]);
+    }
+    let members = store.union_members(ty)?;
+    let mut shapes = Vec::new();
+    for member in members {
+        let member = store.readonly_operand(*member).unwrap_or(*member);
+        if store.tag(member) == shape {
+            shapes.push(member);
+        } else if !matches!(
+            store.intrinsic_kind(member),
+            Some(IntrinsicKind::Null | IntrinsicKind::Undefined)
+        ) {
+            return None;
+        }
+    }
+    (!shapes.is_empty()).then_some(shapes)
+}
+
+pub(in crate::check::checker) fn satisfies_arrow_needs_context(
+    arrow: &ArrowFunctionExpression<'_>,
+) -> bool {
+    arrow
+        .params
+        .items
+        .iter()
+        .any(|parameter| parameter.type_annotation.is_none())
+        || arrow
+            .params
+            .rest
+            .as_ref()
+            .is_some_and(|rest| rest.type_annotation.is_none())
+}
+
 fn is_contextual_literal_shape(store: &Store, ty: TypeId) -> bool {
     matches!(
         store.tag(ty),
         TypeTag::Object | TypeTag::Array | TypeTag::Tuple
     )
+}
+
+fn context_preserves_literal(store: &Store, context: TypeId) -> bool {
+    if store.literal_value(context).is_some() {
+        return true;
+    }
+    store.union_members(context).is_some_and(|members| {
+        members
+            .iter()
+            .all(|member| store.literal_value(*member).is_some())
+    })
+}
+
+fn contextual_source_preserves_literal(
+    store: &Store,
+    expression: &Expression<'_>,
+    context: TypeId,
+    provenance: ContextualLiteralProvenance,
+) -> bool {
+    if context_preserves_literal(store, context)
+        || provenance == ContextualLiteralProvenance::Existing
+    {
+        return true;
+    }
+    match peel_parenthesized_expression(expression) {
+        Expression::BooleanLiteral(_) => context_contains_boolean(store, context),
+        Expression::NumericLiteral(_) | Expression::StringLiteral(_) => false,
+        Expression::UnaryExpression(unary)
+            if unary.operator == UnaryOperator::UnaryNegation
+                && matches!(unary.argument, Expression::NumericLiteral(_)) =>
+        {
+            false
+        }
+        _ => true,
+    }
+}
+
+pub(in crate::check::checker) fn satisfies_context_preserves_literal(
+    store: &Store,
+    expression: &Expression<'_>,
+    context: TypeId,
+) -> bool {
+    contextual_source_preserves_literal(
+        store,
+        expression,
+        context,
+        ContextualLiteralProvenance::Satisfies,
+    )
+}
+
+fn context_contains_boolean(store: &Store, context: TypeId) -> bool {
+    store.intrinsic_kind(context) == Some(IntrinsicKind::Boolean)
+        || store.union_members(context).is_some_and(|members| {
+            members
+                .iter()
+                .any(|member| store.intrinsic_kind(*member) == Some(IntrinsicKind::Boolean))
+        })
 }
 
 /// The sub-expressions a ternary / logical expression passes its contextual target
@@ -2929,5 +3511,99 @@ mod enum_type_contains_tests {
         let parameter = interner.intern_type_param(TypeParamId(0), "T");
         assert!(interner.set_type_param_constraint(TypeParamId(0), parameter));
         assert!(!type_contains_enum(interner.store(), parameter));
+    }
+}
+
+#[cfg(test)]
+mod satisfies_context_tests {
+    use super::{
+        satisfies_arrow_needs_context, satisfies_context_preserves_literal,
+        satisfies_operator_gap_span,
+    };
+    use crate::span::Span;
+    use crate::types::Interner;
+    use oxc_allocator::Allocator;
+    use oxc_ast::ast::{Expression, Statement};
+    use oxc_parser::Parser;
+    use oxc_span::{GetSpan, SourceType};
+
+    fn with_initializer<R>(source: &str, check: impl FnOnce(&str, &Expression<'_>) -> R) -> R {
+        let allocator = Allocator::default();
+        let source = format!("const value = {source};");
+        let parsed = Parser::new(&allocator, &source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:#?}", parsed.diagnostics);
+        let Statement::VariableDeclaration(declaration) = &parsed.program.body[0] else {
+            panic!("expected variable declaration");
+        };
+        let initializer = declaration.declarations[0]
+            .init
+            .as_ref()
+            .expect("expected initializer");
+        check(&source, initializer)
+    }
+
+    #[test]
+    fn satisfies_literal_provenance_is_syntax_directed() {
+        let interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        for (source, context, expected) in [
+            (r#""raw""#, wk.string, false),
+            ("1", wk.number, false),
+            ("true", wk.boolean, true),
+            ("typed", wk.string, true),
+            (r#""asserted" as "asserted""#, wk.string, true),
+            (r#"(("raw"))"#, wk.string, false),
+        ] {
+            with_initializer(source, |_, expression| {
+                assert_eq!(
+                    satisfies_context_preserves_literal(interner.store(), expression, context),
+                    expected,
+                    "{source}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn satisfies_span_policy_uses_ast_operator_gap() {
+        with_initializer(
+            r#"((value) => "wrong")   satisfies
+number"#,
+            |source, expression| {
+                let Expression::TSSatisfiesExpression(satisfies) = expression else {
+                    panic!("expected satisfies expression");
+                };
+                let gap =
+                    satisfies_operator_gap_span(&satisfies.expression, &satisfies.type_annotation);
+                assert_eq!(
+                    &source[gap.range()],
+                    "   satisfies\n",
+                    "the AST exposes the complete operator gap, not a keyword token"
+                );
+                assert_eq!(
+                    gap,
+                    Span::new(
+                        satisfies.expression.span().end,
+                        satisfies.type_annotation.span().start
+                    )
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn only_implicit_callback_parameters_request_satisfies_context() {
+        for (source, expected) in [
+            (r#"(value) => "bad""#, true),
+            (r#"(value: number) => "bad""#, false),
+            (r#"(value: number, other) => "bad""#, true),
+        ] {
+            with_initializer(source, |_, expression| {
+                let Expression::ArrowFunctionExpression(arrow) = expression else {
+                    panic!("expected arrow");
+                };
+                assert_eq!(satisfies_arrow_needs_context(arrow), expected, "{source}");
+            });
+        }
     }
 }

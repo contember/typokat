@@ -2,4 +2,4 @@
 
 declare function need(x: number): number;
 
-need("bad") satisfies number; // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number' | incomplete[expr-infer/satisfies-expression/self]
+need("bad") satisfies number; // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'

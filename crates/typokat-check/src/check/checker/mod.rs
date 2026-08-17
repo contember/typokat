@@ -94,7 +94,8 @@ use context::{
     AssertionCompatibilityObligation, AssignObligation, CheckerEffects, CheckerRecordBatch,
     ClassFillState, ConstructionDrafts, DeclTypes, DeferredRelationObligation,
     InterfaceRelationKind, InterfaceRelationObligation, InterfaceRelationReport, OverrideCheck,
-    Pass, ProvisionalArgumentWalk, TemplateFillTable, TypeDecl, TypeDeclTable, TypeResolvedTable,
+    Pass, ProvisionalArgumentWalk, SatisfiesObligation, TemplateFillTable, TypeDecl, TypeDeclTable,
+    TypeResolvedTable,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use decls::type_decl_id;
@@ -807,6 +808,10 @@ fn try_bootstrap_test_support_prelude<Error>(
     let intrinsic_markers = prelude_intrinsic_markers(pass.interner);
     seed_prelude_intrinsics(&binder, &mut pass.type_resolved, intrinsic_markers);
     pass.fill_type_decls(binder.prelude_module);
+    pass.pre_reserve_query_free_var_annotation_surfaces(
+        binder.prelude_module,
+        &parsed.program.body,
+    );
     pass.publish_class_surfaces();
     pass.fill_enum_decls();
     pass.fill_pending_interfaces_range(binder.prelude_module, 0, pass.type_decls.len());
@@ -1233,6 +1238,7 @@ where
     pass.fill_type_decls(binder.module);
     pass.prepare_attached_namespace_values(binder.module, &program.body);
     pass.prepare_standalone_namespace_values(binder.module, &program.body);
+    pass.pre_reserve_query_free_var_annotation_surfaces(binder.module, &program.body);
     pass.publish_class_surfaces();
     // Direct function signatures are reserved once after their annotation types
     // are complete and before enum initializer typing.
@@ -2771,6 +2777,23 @@ where
         };
         pass.reserve_local_type_annotation_surfaces(scope, &unit.program.body);
     }
+    for (ordinal, scope, statements) in &selected_library_units {
+        pass.current_module = *scope;
+        pass.current_source = SourceUnit::Library {
+            file_ordinal: LibraryFileOrdinal::new(*ordinal),
+        };
+        for statements in statements {
+            pass.pre_reserve_query_free_var_annotation_surfaces(*scope, statements);
+        }
+    }
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        pass.pre_reserve_query_free_var_annotation_surfaces(scope, &unit.program.body);
+    }
     pass.prepare_project_attached_namespace_values(&standalone_modules);
     pass.prepare_project_standalone_namespace_values(&standalone_modules);
     if pass.namespace_terminal_planning_failed() {
@@ -4267,6 +4290,14 @@ where
         .zip(units.iter())
         .map(|(scope, unit)| (scope, unit.program.body.as_slice()))
         .collect::<Vec<_>>();
+    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+        pass.current_module = scope;
+        pass.current_source = SourceUnit::User {
+            module_ordinal: unit.module_ordinal,
+            unit_slot: unit.unit_slot,
+        };
+        pass.pre_reserve_query_free_var_annotation_surfaces(scope, &unit.program.body);
+    }
     pass.prepare_project_attached_namespace_values(&standalone_modules);
     pass.prepare_project_standalone_namespace_values(&standalone_modules);
     pass.publish_class_surfaces();
@@ -5539,6 +5570,76 @@ where
     reporting.finish(batches, inspect)
 }
 
+fn evaluate_assign_obligation<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    effects: &mut CheckerEffects<Ticket>,
+    obligation: &AssignObligation,
+) -> bool {
+    let outcome =
+        pass.with_semantic_query(|query| query.is_assignable(obligation.src, obligation.tgt));
+    match outcome {
+        RelationOutcome::Yes => true,
+        RelationOutcome::No(chain) => {
+            let diagnostic =
+                emit_obligation_failure(pass.interner.store(), obligation, chain.head());
+            pass.append_effect_diagnostic(effects, diagnostic);
+            false
+        }
+        RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
+            let diagnostic = emit_exhausted_obligation(pass.interner.store(), obligation);
+            pass.append_effect_diagnostic(effects, diagnostic);
+            pass.append_effect_incomplete(
+                effects,
+                IncompleteSurface::new(
+                    "relation/class-projection-budget",
+                    obligation.src_span,
+                    "class projection budget exhausted",
+                ),
+            );
+            false
+        }
+        RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { .. }) => {
+            pass.append_effect_incomplete(
+                effects,
+                IncompleteSurface::new(
+                    "semantic-query/invalid-evaluation-node",
+                    obligation.src_span,
+                    "semantic evaluation reached an invalid type node",
+                ),
+            );
+            false
+        }
+        RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
+        | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
+        | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison { .. })
+        | RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
+        | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_))
+        | RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
+        | RelationOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => false,
+    }
+}
+
+fn evaluate_satisfies_check<Ticket: Copy + PartialEq>(
+    pass: &mut Pass<'_, '_, Ticket>,
+    effects: &mut CheckerEffects<Ticket>,
+    check: &context::SatisfiesCheckNode,
+) -> bool {
+    let mut children_clean = true;
+    for child in &check.children {
+        children_clean &= evaluate_satisfies_check(pass, effects, child);
+    }
+    if !children_clean {
+        return false;
+    }
+    if !check.excess.is_empty() {
+        for diagnostic in &check.excess {
+            pass.append_effect_diagnostic(effects, diagnostic.clone());
+        }
+        return false;
+    }
+    evaluate_assign_obligation(pass, effects, &check.residual)
+}
+
 fn finish_semantic_effects<Ticket: Copy + PartialEq>(
     pass: &mut Pass<'_, '_, Ticket>,
 ) -> Vec<CheckerRecordBatch<Ticket>> {
@@ -5649,54 +5750,10 @@ fn finish_semantic_effects<Ticket: Copy + PartialEq>(
                 owner.and_then(|owner| pass.replay_trace.as_ref().map(|trace| trace.scope(owner)));
             match obligation {
                 DeferredRelationObligation::Assign(obligation) => {
-                    let outcome = pass.with_semantic_query(|query| {
-                        query.is_assignable(obligation.src, obligation.tgt)
-                    });
-                    match outcome {
-                        RelationOutcome::Yes => {}
-                        RelationOutcome::No(chain) => {
-                            let diagnostic = emit_obligation_failure(
-                                pass.interner.store(),
-                                &obligation,
-                                chain.head(),
-                            );
-                            pass.append_effect_diagnostic(&mut effects, diagnostic);
-                        }
-                        RelationOutcome::Exhausted(Exhaustion::ClassProjectionBudget) => {
-                            let diagnostic =
-                                emit_exhausted_obligation(pass.interner.store(), &obligation);
-                            pass.append_effect_diagnostic(&mut effects, diagnostic);
-                            pass.append_effect_incomplete(
-                                &mut effects,
-                                IncompleteSurface::new(
-                                    "relation/class-projection-budget",
-                                    obligation.src_span,
-                                    "class projection budget exhausted",
-                                ),
-                            );
-                        }
-                        RelationOutcome::Exhausted(Exhaustion::EvaluationInvalidNode {
-                            ..
-                        }) => {
-                            pass.append_effect_incomplete(
-                                &mut effects,
-                                IncompleteSurface::new(
-                                    "semantic-query/invalid-evaluation-node",
-                                    obligation.src_span,
-                                    "semantic evaluation reached an invalid type node",
-                                ),
-                            );
-                        }
-                        RelationOutcome::Exhausted(Exhaustion::ClassNotPublished { .. })
-                        | RelationOutcome::Exhausted(Exhaustion::ClassHeritagePoison { .. })
-                        | RelationOutcome::Exhausted(Exhaustion::ClassInitializerPoison {
-                            ..
-                        })
-                        | RelationOutcome::Exhausted(Exhaustion::ClassSurfacePoison { .. })
-                        | RelationOutcome::Exhausted(Exhaustion::ClassApplicationArguments(_))
-                        | RelationOutcome::Exhausted(Exhaustion::EvaluationBudget)
-                        | RelationOutcome::Exhausted(Exhaustion::EvaluationCycle { .. }) => {}
-                    }
+                    evaluate_assign_obligation(pass, &mut effects, &obligation);
+                }
+                DeferredRelationObligation::Satisfies(obligation) => {
+                    evaluate_satisfies_check(pass, &mut effects, &obligation.root);
                 }
                 DeferredRelationObligation::AssertionCompatibility(obligation) => {
                     let source_to_asserted = pass.with_semantic_query(|query| {
@@ -6672,6 +6729,17 @@ impl<Ticket: Copy + PartialEq> Pass<'_, '_, Ticket> {
             .push_obligation(DeferredRelationObligation::Assign(obligation), owner);
     }
 
+    pub(in crate::check::checker) fn schedule_satisfies_obligation(
+        &mut self,
+        obligation: SatisfiesObligation,
+    ) {
+        let owner = self.current_replay_owner();
+        self.effect_stack
+            .last_mut()
+            .expect("satisfies obligation requires a lexical owner")
+            .push_obligation(DeferredRelationObligation::Satisfies(obligation), owner);
+    }
+
     pub(in crate::check::checker) fn schedule_assertion_compatibility(
         &mut self,
         obligation: AssertionCompatibilityObligation,
@@ -7108,6 +7176,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         namespace_values: namespace_values::NamespaceValueRegistry::default(),
         var_annotation_surfaces: FxHashMap::default(),
         var_value_type_states: FxHashMap::default(),
+        satisfies_check_sinks: Vec::new(),
         object_binding_pending_groups: Vec::new(),
         object_binding_pending_by_exact: FxHashMap::default(),
         object_binding_pending_by_effective: FxHashMap::default(),

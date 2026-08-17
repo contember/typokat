@@ -17,14 +17,15 @@ use crate::class_semantics::DemandOutcome;
 use crate::diagnostics::{render_reason_chain, render_type, Diagnostic};
 use crate::relate::{Reason, RelationOutcome};
 use crate::span::Span;
-use crate::types::repr::{FunctionType, ObjectType};
+use crate::types::repr::{FunctionType, LiteralValue, ObjectType};
 use crate::types::store::{Store, TypeId};
 use oxc_ast::ast::{
     BindingIdentifier, BindingPattern, BindingProperty, BlockStatement, Declaration,
     ExportDefaultDeclarationKind, Expression, ForInStatement, ForOfStatement, ForStatement,
     ForStatementInit, ForStatementLeft, Function, ObjectPattern, ObjectPropertyKind, Statement,
-    TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName, TSType, TSTypeName,
-    TryStatement, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    TSLiteral, TSModuleDeclaration, TSModuleDeclarationBody, TSModuleDeclarationName, TSType,
+    TSTypeName, TryStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -35,6 +36,25 @@ enum StatementListMode<'a> {
     Ordinary,
     Ambient,
     SourceGlobalContributors(&'a FxHashSet<String>),
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::check::checker) enum ReturnCheckPolicy {
+    Inferred,
+    Declared(TypeId),
+    SatisfiesUnannotated(TypeId),
+}
+
+impl ReturnCheckPolicy {
+    pub(in crate::check::checker) fn ordinary(declared: Option<TypeId>) -> Self {
+        declared.map_or(Self::Inferred, Self::Declared)
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum VarAnnotationReservation {
+    QueryFree,
+    Full,
 }
 
 #[derive(Copy, Clone)]
@@ -89,10 +109,10 @@ fn parenthesized_identifier<'expr, 'ast>(
     }
 }
 
-fn binding_initializer_member_spans(
+fn binding_initializer_source_sites(
     pattern: &BindingPattern<'_>,
     initializer: &Expression<'_>,
-) -> Vec<(AssignSourceMember, Span)> {
+) -> Vec<AssignSourceSite> {
     let initializer = match initializer {
         Expression::ParenthesizedExpression(parenthesized) => &parenthesized.expression,
         other => other,
@@ -106,10 +126,10 @@ fn binding_initializer_member_spans(
                     return None;
                 };
                 let name = property.key.static_name()?.into_owned();
-                Some((
-                    AssignSourceMember::Property(name),
-                    Span::from_oxc(property.span),
-                ))
+                Some(AssignSourceSite {
+                    path: vec![AssignSourceMember::Property(name)],
+                    span: Span::from_oxc(property.span),
+                })
             })
             .collect(),
         (BindingPattern::ArrayPattern(_), Expression::ArrayExpression(array)) => array
@@ -117,11 +137,9 @@ fn binding_initializer_member_spans(
             .iter()
             .enumerate()
             .filter_map(|(index, element)| {
-                element.as_expression().map(|expression| {
-                    (
-                        AssignSourceMember::Element(index),
-                        Span::from_oxc(expression.span()),
-                    )
+                element.as_expression().map(|expression| AssignSourceSite {
+                    path: vec![AssignSourceMember::Element(index)],
+                    span: Span::from_oxc(expression.span()),
                 })
             })
             .collect(),
@@ -234,7 +252,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.check_statement_list_with_surfaces_mode(
             scope,
             body,
-            None,
+            ReturnCheckPolicy::Inferred,
             &mut no_return,
             surfaces,
             StatementListMode::Ambient,
@@ -399,11 +417,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
     /// switch clauses, loop bodies — so a *local* overload set is grouped exactly
     /// like a top-level one (no spurious TK2391; calls select the declared
     /// signatures, not the implementation signature).
+    #[cfg(any(test, feature = "test-utils"))]
     pub(in crate::check::checker) fn check_statement_list(
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
         declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        self.check_statement_list_with_return_policy(
+            scope,
+            statements,
+            ReturnCheckPolicy::ordinary(declared_ret),
+            inferred,
+        );
+    }
+
+    pub(in crate::check::checker) fn check_statement_list_with_return_policy(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         // The binder has already made every function name visible in this scope. Reserve
@@ -414,10 +448,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // function/module. The reservation does not inspect initializers or add flow.
         self.reserve_var_annotation_surfaces(scope, statements);
         self.reserve_continuation_global_augmentation_surfaces(statements, &mut surfaces);
-        self.check_statement_list_with_surfaces(
+        self.check_statement_list_with_surfaces_policy(
             scope,
             statements,
-            declared_ret,
+            return_policy,
             inferred,
             &mut surfaces,
         );
@@ -434,10 +468,27 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         inferred: &mut Option<TypeId>,
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
     ) {
+        self.check_statement_list_with_surfaces_policy(
+            scope,
+            statements,
+            ReturnCheckPolicy::ordinary(declared_ret),
+            inferred,
+            surfaces,
+        );
+    }
+
+    pub(in crate::check::checker) fn check_statement_list_with_surfaces_policy(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+        return_policy: ReturnCheckPolicy,
+        inferred: &mut Option<TypeId>,
+        surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
+    ) {
         self.check_statement_list_with_surfaces_mode(
             scope,
             statements,
-            declared_ret,
+            return_policy,
             inferred,
             surfaces,
             StatementListMode::Ordinary,
@@ -456,7 +507,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.check_statement_list_with_surfaces_mode(
             scope,
             statements,
-            declared_ret,
+            ReturnCheckPolicy::ordinary(declared_ret),
             inferred,
             surfaces,
             StatementListMode::SourceGlobalContributors(contributor_names),
@@ -467,7 +518,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         statements: &[Statement<'_>],
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
         surfaces: &mut FxHashMap<u32, FunctionReservation<Ticket>>,
         mode: StatementListMode<'_>,
@@ -480,7 +531,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 self.continuation_global_augmentation(&statements[index])
             {
                 self.check_continuation_global_augmentation_body(binding_start, body, surfaces);
-                self.check_stmt(scope, &statements[index], declared_ret, inferred);
+                self.check_stmt_with_return_policy(
+                    scope,
+                    &statements[index],
+                    return_policy,
+                    inferred,
+                );
                 index += 1;
                 continue;
             }
@@ -521,7 +577,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     continue;
                 }
             }
-            self.check_stmt(scope, &statements[index], declared_ret, inferred);
+            self.check_stmt_with_return_policy(scope, &statements[index], return_policy, inferred);
             index += 1;
         }
     }
@@ -533,6 +589,21 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         scope: ScopeId,
         stmt: &Statement<'_>,
         declared_ret: Option<TypeId>,
+        inferred: &mut Option<TypeId>,
+    ) {
+        self.check_stmt_with_return_policy(
+            scope,
+            stmt,
+            ReturnCheckPolicy::ordinary(declared_ret),
+            inferred,
+        );
+    }
+
+    pub(in crate::check::checker) fn check_stmt_with_return_policy(
+        &mut self,
+        scope: ScopeId,
+        stmt: &Statement<'_>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         match stmt {
@@ -573,7 +644,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
         self.with_lexical_effects(stmt.span().start, LexicalOwnerPhase::Immediate, |pass| {
             pass.emit_direct_script_global_this_conflicts(stmt);
-            pass.check_stmt_immediate(scope, stmt, declared_ret, inferred)
+            pass.check_stmt_immediate(scope, stmt, return_policy, inferred)
         });
     }
 
@@ -699,7 +770,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         stmt: &Statement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         match stmt {
@@ -726,30 +797,30 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 }
             }
             Statement::ReturnStatement(ret) => {
-                self.check_return(scope, ret, declared_ret, inferred);
+                self.check_return(scope, ret, return_policy, inferred);
             }
             // M7/M23: narrowing lives in the flow graph; the checker just walks the
             // condition + branches (each reference resolves against its flow node).
             Statement::IfStatement(if_stmt) => {
-                self.check_if(scope, if_stmt, declared_ret, inferred);
+                self.check_if(scope, if_stmt, return_policy, inferred);
             }
             // A `{ … }` block runs its statements in its own (binder-created) block scope.
             Statement::BlockStatement(block) => {
-                self.check_block(scope, block, declared_ret, inferred);
+                self.check_block(scope, block, return_policy, inferred);
             }
             // M8: `switch` — walk the discriminant + clause bodies.
             Statement::SwitchStatement(switch) => {
-                self.check_switch(scope, switch, declared_ret, inferred);
+                self.check_switch(scope, switch, return_policy, inferred);
             }
             // M23: a `while` loop — walk the condition + body (the flow graph carries
             // the loop-edge narrowing).
             Statement::WhileStatement(while_stmt) => {
-                self.check_while(scope, while_stmt, declared_ret, inferred);
+                self.check_while(scope, while_stmt, return_policy, inferred);
             }
             // A label is transparent to the type-check walk; any block inside it still
             // enters its own binder-created block scope through the usual block case.
             Statement::LabeledStatement(labeled) => {
-                self.check_stmt(scope, &labeled.body, declared_ret, inferred);
+                self.check_stmt_with_return_policy(scope, &labeled.body, return_policy, inferred);
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(decl) = &export.declaration {
@@ -761,16 +832,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // checked. Precise per-iteration narrowing stays deferred to backlog 51 —
             // body references fall back to the declared/START-flow type (sound).
             Statement::ForStatement(for_stmt) => {
-                self.check_for(scope, for_stmt, declared_ret, inferred);
+                self.check_for(scope, for_stmt, return_policy, inferred);
             }
             Statement::ForInStatement(for_in) => {
-                self.check_for_in(scope, for_in, declared_ret, inferred);
+                self.check_for_in(scope, for_in, return_policy, inferred);
             }
             Statement::ForOfStatement(for_of) => {
-                self.check_for_of(scope, for_of, declared_ret, inferred);
+                self.check_for_of(scope, for_of, return_policy, inferred);
             }
             Statement::DoWhileStatement(do_stmt) => {
-                self.check_do(scope, do_stmt, declared_ret, inferred);
+                self.check_do(scope, do_stmt, return_policy, inferred);
             }
             // A `throw expr` — type-check the operand so nested calls/assignments inside
             // it are checked (its own value type is irrelevant; the throw is a diverge).
@@ -781,7 +852,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // walked through the existing block walker so nested errors surface (WU4).
             // The catch parameter's type stays unmodeled (recorded incomplete inside).
             Statement::TryStatement(try_stmt) => {
-                self.check_try(scope, try_stmt, declared_ret, inferred);
+                self.check_try(scope, try_stmt, return_policy, inferred);
             }
             // Declaration statements the statement checker does not model. Their type/
             // value side is skipped, so record the incomplete surface before dropping
@@ -924,10 +995,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         try_stmt: &TryStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
-        self.check_block(scope, &try_stmt.block, declared_ret, inferred);
+        self.check_block(scope, &try_stmt.block, return_policy, inferred);
         if let Some(handler) = &try_stmt.handler {
             let catch_scope = self.block_scope(scope, handler.span.start);
             if let Some(param) = &handler.param {
@@ -938,10 +1009,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 );
                 self.check_syntax_only_pattern_initializers(catch_scope, &param.pattern);
             }
-            self.check_block(catch_scope, &handler.body, declared_ret, inferred);
+            self.check_block(catch_scope, &handler.body, return_policy, inferred);
         }
         if let Some(finalizer) = &try_stmt.finalizer {
-            self.check_block(scope, finalizer, declared_ret, inferred);
+            self.check_block(scope, finalizer, return_policy, inferred);
         }
     }
 
@@ -1019,15 +1090,15 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         ret: &oxc_ast::ast::ReturnStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         let Some(arg) = &ret.argument else {
             return;
         };
-        match declared_ret {
+        match return_policy {
             // Declared return type: check the returned expression against it.
-            Some(tgt) => {
+            ReturnCheckPolicy::Declared(tgt) => {
                 let Some((src, src_span)) = self.infer_initializer(scope, arg, Some(tgt)) else {
                     return;
                 };
@@ -1046,7 +1117,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     src,
                     tgt,
                     src_span,
-                    source_member_spans: Vec::new(),
+                    source_sites: Vec::new(),
                     kind: ObligationKind::Assignment,
                 });
             }
@@ -1054,7 +1125,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             // return's widened type, independent of visitation order (`union` canonicalizes
             // its member set). Stopping at the first return would drop `string | number`
             // down to whichever return was seen first.
-            None => {
+            ReturnCheckPolicy::Inferred => {
                 let Some((src, _)) = self.infer_expr(scope, arg) else {
                     return;
                 };
@@ -1062,6 +1133,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 *inferred = Some(match *inferred {
                     Some(existing) => self.interner.union(vec![existing, widened]),
                     None => widened,
+                });
+            }
+            ReturnCheckPolicy::SatisfiesUnannotated(tgt) => {
+                let check_mark = self.satisfies_check_mark();
+                let Some((src, _)) = self.infer_initializer_with_provenance(
+                    scope,
+                    arg,
+                    Some(tgt),
+                    super::expr::ContextualLiteralProvenance::Satisfies,
+                ) else {
+                    return;
+                };
+                self.truncate_satisfies_checks(check_mark);
+                *inferred = Some(match *inferred {
+                    Some(existing) => self.interner.union(vec![existing, src]),
+                    None => src,
                 });
             }
         }
@@ -1075,11 +1162,16 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         block: &BlockStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         let block_scope = self.block_scope(scope, block.span.start);
-        self.check_statement_list(block_scope, &block.body, declared_ret, inferred);
+        self.check_statement_list_with_return_policy(
+            block_scope,
+            &block.body,
+            return_policy,
+            inferred,
+        );
     }
 
     /// The lexical scope for a block-like container (an explicit block or switch).
@@ -1110,7 +1202,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         for_stmt: &ForStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         let head = self.loop_head_scope(scope, for_stmt.span.start);
@@ -1134,7 +1226,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if let Some(update) = &for_stmt.update {
             self.infer_expr(head, update);
         }
-        self.check_stmt(head, &for_stmt.body, declared_ret, inferred);
+        self.check_stmt_with_return_policy(head, &for_stmt.body, return_policy, inferred);
     }
 
     /// Check `for (left in right) body`. The iteration variable is always typed
@@ -1144,7 +1236,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         for_in: &ForInStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         let head = self.loop_head_scope(scope, for_in.span.start);
@@ -1170,7 +1262,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let key_ty = self.interner.well_known().string;
             self.declare_for_left(head, &for_in.left, key_ty);
         }
-        self.check_stmt(head, &for_in.body, declared_ret, inferred);
+        self.check_stmt_with_return_policy(head, &for_in.body, return_policy, inferred);
     }
 
     /// Check `for (left of right) body`. The iteration variable is typed as the
@@ -1180,7 +1272,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         for_of: &ForOfStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
         let head = self.loop_head_scope(scope, for_of.span.start);
@@ -1189,7 +1281,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             None => self.interner.well_known().error,
         };
         self.declare_for_left(head, &for_of.left, element_ty);
-        self.check_stmt(head, &for_of.body, declared_ret, inferred);
+        self.check_stmt_with_return_policy(head, &for_of.body, return_policy, inferred);
     }
 
     /// Check `do body while (test)`: the body runs first (its own block scope), then
@@ -1198,10 +1290,10 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         do_stmt: &oxc_ast::ast::DoWhileStatement<'_>,
-        declared_ret: Option<TypeId>,
+        return_policy: ReturnCheckPolicy,
         inferred: &mut Option<TypeId>,
     ) {
-        self.check_stmt(scope, &do_stmt.body, declared_ret, inferred);
+        self.check_stmt_with_return_policy(scope, &do_stmt.body, return_policy, inferred);
         self.infer_expr(scope, &do_stmt.test);
     }
 
@@ -1309,7 +1401,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             annotation,
             init,
             Span::from_oxc(pattern.span()),
-            binding_initializer_member_spans(pattern, init),
+            binding_initializer_source_sites(pattern, init),
         )
     }
 
@@ -1319,7 +1411,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         annotation: Option<TypeId>,
         init: &Expression<'_>,
         diagnostic_span: Span,
-        source_member_spans: Vec<(AssignSourceMember, Span)>,
+        source_sites: Vec<AssignSourceSite>,
     ) -> Option<(TypeId, Span)> {
         let initializer = self.infer_initializer(scope, init, annotation);
 
@@ -1340,7 +1432,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 src: init_ty,
                 tgt: ann,
                 src_span: diagnostic_span,
-                source_member_spans,
+                source_sites,
                 kind: ObligationKind::Assignment,
             };
             if let Some(owner) = self
@@ -2083,7 +2175,23 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         statements: &[Statement<'_>],
     ) {
         for statement in statements {
-            self.reserve_var_annotation_statement(scope, statement);
+            self.reserve_var_annotation_statement(scope, statement, VarAnnotationReservation::Full);
+        }
+    }
+
+    /// Make only syntax-terminal annotation types available to class publication.
+    /// The ordinary reservation pass owns every annotation that may demand a type group.
+    pub(in crate::check::checker) fn pre_reserve_query_free_var_annotation_surfaces(
+        &mut self,
+        scope: ScopeId,
+        statements: &[Statement<'_>],
+    ) {
+        for statement in statements {
+            self.reserve_var_annotation_statement(
+                scope,
+                statement,
+                VarAnnotationReservation::QueryFree,
+            );
         }
     }
 
@@ -2161,72 +2269,95 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         }
     }
 
-    fn reserve_var_annotation_statement(&mut self, scope: ScopeId, statement: &Statement<'_>) {
+    fn reserve_var_annotation_statement(
+        &mut self,
+        scope: ScopeId,
+        statement: &Statement<'_>,
+        reservation: VarAnnotationReservation,
+    ) {
         match statement {
             Statement::VariableDeclaration(decl) => {
-                self.reserve_var_annotation_declaration(scope, decl);
+                self.reserve_var_annotation_declaration(scope, decl, reservation);
             }
             Statement::ExportNamedDeclaration(export) => {
                 if let Some(Declaration::VariableDeclaration(decl)) = &export.declaration {
-                    self.reserve_var_annotation_declaration(scope, decl);
+                    self.reserve_var_annotation_declaration(scope, decl, reservation);
                 }
             }
             Statement::BlockStatement(block) => {
                 let block_scope = self.block_scope(scope, block.span.start);
-                self.reserve_var_annotation_surfaces(block_scope, &block.body);
+                for statement in &block.body {
+                    self.reserve_var_annotation_statement(block_scope, statement, reservation);
+                }
             }
             Statement::IfStatement(if_stmt) => {
-                self.reserve_var_annotation_statement(scope, &if_stmt.consequent);
+                self.reserve_var_annotation_statement(scope, &if_stmt.consequent, reservation);
                 if let Some(alternate) = &if_stmt.alternate {
-                    self.reserve_var_annotation_statement(scope, alternate);
+                    self.reserve_var_annotation_statement(scope, alternate, reservation);
                 }
             }
             Statement::SwitchStatement(switch) => {
                 let switch_scope = self.block_scope(scope, switch.span.start);
                 for case in &switch.cases {
-                    self.reserve_var_annotation_surfaces(switch_scope, &case.consequent);
+                    for statement in &case.consequent {
+                        self.reserve_var_annotation_statement(switch_scope, statement, reservation);
+                    }
                 }
             }
             Statement::ForStatement(for_stmt) => {
                 let head = self.loop_head_scope(scope, for_stmt.span.start);
                 if let Some(ForStatementInit::VariableDeclaration(decl)) = &for_stmt.init {
-                    self.reserve_var_annotation_declaration(head, decl);
+                    self.reserve_var_annotation_declaration(head, decl, reservation);
                 }
-                self.reserve_var_annotation_statement(head, &for_stmt.body);
+                self.reserve_var_annotation_statement(head, &for_stmt.body, reservation);
             }
             Statement::ForInStatement(for_in) => {
                 let head = self.loop_head_scope(scope, for_in.span.start);
                 if let ForStatementLeft::VariableDeclaration(decl) = &for_in.left {
-                    self.reserve_var_annotation_declaration(head, decl);
+                    self.reserve_var_annotation_declaration(head, decl, reservation);
                 }
-                self.reserve_var_annotation_statement(head, &for_in.body);
+                self.reserve_var_annotation_statement(head, &for_in.body, reservation);
             }
             Statement::ForOfStatement(for_of) => {
                 let head = self.loop_head_scope(scope, for_of.span.start);
                 if let ForStatementLeft::VariableDeclaration(decl) = &for_of.left {
-                    self.reserve_var_annotation_declaration(head, decl);
+                    self.reserve_var_annotation_declaration(head, decl, reservation);
                 }
-                self.reserve_var_annotation_statement(head, &for_of.body);
+                self.reserve_var_annotation_statement(head, &for_of.body, reservation);
             }
             Statement::WhileStatement(while_stmt) => {
-                self.reserve_var_annotation_statement(scope, &while_stmt.body);
+                self.reserve_var_annotation_statement(scope, &while_stmt.body, reservation);
             }
             Statement::DoWhileStatement(do_stmt) => {
-                self.reserve_var_annotation_statement(scope, &do_stmt.body);
+                self.reserve_var_annotation_statement(scope, &do_stmt.body, reservation);
             }
             Statement::LabeledStatement(labeled) => {
-                self.reserve_var_annotation_statement(scope, &labeled.body);
+                self.reserve_var_annotation_statement(scope, &labeled.body, reservation);
             }
             Statement::TryStatement(try_stmt) => {
                 let try_scope = self.block_scope(scope, try_stmt.block.span.start);
-                self.reserve_var_annotation_surfaces(try_scope, &try_stmt.block.body);
+                for statement in &try_stmt.block.body {
+                    self.reserve_var_annotation_statement(try_scope, statement, reservation);
+                }
                 if let Some(handler) = &try_stmt.handler {
                     let handler_scope = self.block_scope(scope, handler.body.span.start);
-                    self.reserve_var_annotation_surfaces(handler_scope, &handler.body.body);
+                    for statement in &handler.body.body {
+                        self.reserve_var_annotation_statement(
+                            handler_scope,
+                            statement,
+                            reservation,
+                        );
+                    }
                 }
                 if let Some(finalizer) = &try_stmt.finalizer {
                     let finalizer_scope = self.block_scope(scope, finalizer.span.start);
-                    self.reserve_var_annotation_surfaces(finalizer_scope, &finalizer.body);
+                    for statement in &finalizer.body {
+                        self.reserve_var_annotation_statement(
+                            finalizer_scope,
+                            statement,
+                            reservation,
+                        );
+                    }
                 }
             }
             // Function and class bodies own independent hoist containers.
@@ -2239,9 +2370,13 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         &mut self,
         scope: ScopeId,
         declaration: &VariableDeclaration<'_>,
+        reservation: VarAnnotationReservation,
     ) {
+        if reservation == VarAnnotationReservation::QueryFree && declaration.kind.is_var() {
+            return;
+        }
         for declarator in &declaration.declarations {
-            if declaration.kind.is_var() {
+            if reservation == VarAnnotationReservation::Full && declaration.kind.is_var() {
                 if let BindingPattern::ObjectPattern(object) = &declarator.id {
                     if flat_object_binding_pattern(object) {
                         for property in &object.properties {
@@ -2292,17 +2427,22 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             }
             let annotation =
                 self.with_replay_owner(super::replay_index::ReplayOwner::Value(decl_id), |pass| {
-                    let annotation = pass.with_lexical_effects(
-                        declarator.span.start,
-                        LexicalOwnerPhase::Immediate,
-                        |pass| {
-                            pass.lower_declared_annotation_or_fallback(
-                                scope,
-                                &type_annotation.type_annotation,
-                                false,
-                            )
-                        },
-                    );
+                    let annotation = match reservation {
+                        VarAnnotationReservation::QueryFree => {
+                            pass.query_free_annotation_type(&type_annotation.type_annotation)
+                        }
+                        VarAnnotationReservation::Full => pass.with_lexical_effects(
+                            declarator.span.start,
+                            LexicalOwnerPhase::Immediate,
+                            |pass| {
+                                pass.lower_declared_annotation_or_fallback(
+                                    scope,
+                                    &type_annotation.type_annotation,
+                                    false,
+                                )
+                            },
+                        ),
+                    };
                     if let Some(annotation) = annotation {
                         pass.reserve_variable_annotation_type(
                             scope,
@@ -2314,8 +2454,55 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     }
                     annotation
                 });
+            if reservation == VarAnnotationReservation::QueryFree && annotation.is_none() {
+                continue;
+            }
             self.var_annotation_surfaces
                 .insert(surface_key, VarAnnotationSurface { annotation });
+        }
+    }
+
+    fn query_free_annotation_type(&mut self, annotation: &TSType<'_>) -> Option<TypeId> {
+        let wk = self.interner.well_known();
+        match annotation {
+            TSType::TSAnyKeyword(_) => Some(wk.any),
+            TSType::TSUnknownKeyword(_) => Some(wk.unknown),
+            TSType::TSNeverKeyword(_) => Some(wk.never),
+            TSType::TSVoidKeyword(_) => Some(wk.void),
+            TSType::TSNullKeyword(_) => Some(wk.null),
+            TSType::TSUndefinedKeyword(_) => Some(wk.undefined),
+            TSType::TSBooleanKeyword(_) => Some(wk.boolean),
+            TSType::TSNumberKeyword(_) => Some(wk.number),
+            TSType::TSStringKeyword(_) => Some(wk.string),
+            TSType::TSBigIntKeyword(_) => Some(wk.bigint),
+            TSType::TSSymbolKeyword(_) => Some(wk.symbol),
+            TSType::TSObjectKeyword(_) => Some(wk.object),
+            TSType::TSParenthesizedType(parenthesized) => {
+                self.query_free_annotation_type(&parenthesized.type_annotation)
+            }
+            TSType::TSLiteralType(literal) => {
+                let value = match &literal.literal {
+                    TSLiteral::StringLiteral(literal) => {
+                        LiteralValue::String(literal.value.to_string())
+                    }
+                    TSLiteral::NumericLiteral(literal) => LiteralValue::Number(literal.value),
+                    TSLiteral::BooleanLiteral(literal) => LiteralValue::Boolean(literal.value),
+                    TSLiteral::UnaryExpression(unary)
+                        if unary.operator == UnaryOperator::UnaryNegation =>
+                    {
+                        let Expression::NumericLiteral(literal) = &unary.argument else {
+                            return None;
+                        };
+                        let value = -literal.value;
+                        LiteralValue::Number(if value == 0.0 { 0.0 } else { value })
+                    }
+                    TSLiteral::BigIntLiteral(_)
+                    | TSLiteral::TemplateLiteral(_)
+                    | TSLiteral::UnaryExpression(_) => return None,
+                };
+                Some(self.interner.intern_literal(value))
+            }
+            _ => None,
         }
     }
 
@@ -3779,39 +3966,13 @@ pub(in crate::check::checker) fn emit_obligation_failure(
     let diagnostic_span = obligation_source_span(ob, head);
 
     match ob.kind {
-        ObligationKind::Assignment => match head {
-            Reason::MissingProperty { name, tgt, .. } => {
-                let tgt = render_type(store, *tgt, /* widen */ false);
-                Diagnostic::property_missing(diagnostic_span, &name.to_string(), &tgt)
-            }
-            Reason::Leaf { .. }
-            | Reason::Property { .. }
-            | Reason::ParameterCount { .. }
-            | Reason::Parameter { .. }
-            | Reason::ReturnType { .. }
-            | Reason::UnionSourceMember { .. }
-            | Reason::NoUnionMember { .. }
-            // M17: an array-element mismatch (`S[]` not assignable to `T[]`) is a
-            // `TK2322`; the headline states the two array types, the element's cause
-            // nests below it.
-            | Reason::ArrayElement { .. }
-            // M18: a tuple length mismatch or a positional element mismatch is a
-            // `TK2322`; the headline states the two tuple types, with any element
-            // cause nested below it.
-            | Reason::TupleLength { .. }
-            | Reason::TupleElement { .. }
-            // M19: a value not fitting the target's index signature is a `TK2322`;
-            // the headline states the two object types, the value's cause nested below.
-            | Reason::IndexSignature { .. } => {
-                // Widen source literals for non-literal targets; keep unit/literal
-                // source forms and union offending members in the headline.
-                let widen = !is_literal_target(store, ob.tgt);
-                let src = render_type(store, headline_src(ob, head), widen);
-                let tgt = render_type(store, ob.tgt, /* widen */ false);
-                let message = format!("Type '{src}' is not assignable to type '{tgt}'");
-                Diagnostic::not_assignable(diagnostic_span, message).with_elaboration(elaboration)
-            }
-        },
+        ObligationKind::Assignment => emit_assignment_style_failure(
+            store,
+            diagnostic_span,
+            headline_src(ob, head),
+            ob.tgt,
+            head,
+        ),
         ObligationKind::Argument => {
             let widen = !is_literal_target(store, ob.tgt);
             let src = render_type(store, headline_src(ob, head), widen);
@@ -3844,27 +4005,140 @@ pub(in crate::check::checker) fn emit_obligation_failure(
                 Diagnostic::not_assignable(diagnostic_span, message).with_elaboration(elaboration)
             }
         },
+        ObligationKind::SatisfiesDirect => {
+            let widen = !is_literal_target(store, ob.tgt);
+            let src = render_type(store, ob.src, widen);
+            let tgt = render_type(store, ob.tgt, false);
+            Diagnostic::does_not_satisfy(ob.src_span, &src, &tgt).with_elaboration(elaboration)
+        }
+        ObligationKind::SatisfiesContextual => match head {
+            Reason::Property { because, .. }
+            | Reason::ReturnType { because, .. }
+            | Reason::ArrayElement { because, .. }
+            | Reason::TupleElement { because, .. }
+            | Reason::IndexSignature { because, .. } => {
+                let reason = contextual_assignment_reason(because);
+                let (src, tgt) = reason_source_target(reason);
+                emit_assignment_style_failure(store, diagnostic_span, src, tgt, reason)
+            }
+            Reason::Leaf { src, tgt } => {
+                emit_assignment_style_failure(store, diagnostic_span, *src, *tgt, head)
+            }
+            Reason::MissingProperty { .. }
+            | Reason::ParameterCount { .. }
+            | Reason::Parameter { .. }
+            | Reason::UnionSourceMember { .. }
+            | Reason::NoUnionMember { .. }
+            | Reason::TupleLength { .. } => {
+                let widen = !is_literal_target(store, ob.tgt);
+                let src = render_type(store, ob.src, widen);
+                let tgt = render_type(store, ob.tgt, false);
+                Diagnostic::does_not_satisfy(diagnostic_span, &src, &tgt)
+                    .with_elaboration(elaboration)
+            }
+        },
+    }
+}
+
+fn emit_assignment_style_failure(
+    store: &Store,
+    span: Span,
+    src: TypeId,
+    tgt: TypeId,
+    reason: &Reason,
+) -> Diagnostic {
+    match reason {
+        Reason::MissingProperty { name, tgt, .. } => {
+            let tgt = render_type(store, *tgt, false);
+            Diagnostic::property_missing(span, &name.to_string(), &tgt)
+        }
+        Reason::Leaf { .. }
+        | Reason::Property { .. }
+        | Reason::ParameterCount { .. }
+        | Reason::Parameter { .. }
+        | Reason::ReturnType { .. }
+        | Reason::UnionSourceMember { .. }
+        | Reason::NoUnionMember { .. }
+        | Reason::ArrayElement { .. }
+        | Reason::TupleLength { .. }
+        | Reason::TupleElement { .. }
+        | Reason::IndexSignature { .. } => {
+            let src = render_type(store, src, !is_literal_target(store, tgt));
+            let tgt = render_type(store, tgt, false);
+            Diagnostic::not_assignable(
+                span,
+                format!("Type '{src}' is not assignable to type '{tgt}'"),
+            )
+            .with_elaboration(render_reason_chain(store, reason))
+        }
+    }
+}
+
+fn contextual_assignment_reason(mut reason: &Reason) -> &Reason {
+    while let Reason::Property { because, .. }
+    | Reason::ReturnType { because, .. }
+    | Reason::UnionSourceMember { because, .. }
+    | Reason::ArrayElement { because, .. }
+    | Reason::TupleElement { because, .. }
+    | Reason::IndexSignature { because, .. } = reason
+    {
+        reason = because;
+    }
+    reason
+}
+
+fn reason_source_target(reason: &Reason) -> (TypeId, TypeId) {
+    match reason {
+        Reason::Leaf { src, tgt }
+        | Reason::MissingProperty { src, tgt, .. }
+        | Reason::Property { src, tgt, .. }
+        | Reason::ParameterCount { src, tgt }
+        | Reason::Parameter { src, tgt, .. }
+        | Reason::ReturnType { src, tgt, .. }
+        | Reason::UnionSourceMember { src, tgt, .. }
+        | Reason::NoUnionMember { src, tgt }
+        | Reason::ArrayElement { src, tgt, .. }
+        | Reason::TupleLength { src, tgt }
+        | Reason::TupleElement { src, tgt, .. }
+        | Reason::IndexSignature { src, tgt, .. } => (*src, *tgt),
     }
 }
 
 fn obligation_source_span(ob: &AssignObligation, reason: &Reason) -> Span {
-    let member = match reason {
-        Reason::Property { name, .. } => Some(AssignSourceMember::Property(name.to_string())),
-        Reason::TupleElement { index, .. } => Some(AssignSourceMember::Element(*index)),
+    let mut path = Vec::new();
+    collect_reason_source_path(reason, &mut path);
+    source_site_span(ob, &path).map_or(ob.src_span, |span| span)
+}
+
+fn collect_reason_source_path(reason: &Reason, path: &mut Vec<AssignSourceMember>) {
+    match reason {
+        Reason::Property { name, because, .. } => {
+            path.push(AssignSourceMember::Property(name.to_string()));
+            collect_reason_source_path(because, path);
+        }
+        Reason::TupleElement { index, because, .. } => {
+            path.push(AssignSourceMember::Element(*index));
+            collect_reason_source_path(because, path);
+        }
         Reason::UnionSourceMember { because, .. }
         | Reason::ArrayElement { because, .. }
-        | Reason::IndexSignature { because, .. } => {
-            return obligation_source_span(ob, because);
+        | Reason::IndexSignature { because, .. }
+        | Reason::ReturnType { because, .. } => {
+            collect_reason_source_path(because, path);
         }
-        _ => None,
-    };
-    member
-        .and_then(|member| {
-            ob.source_member_spans
-                .iter()
-                .find_map(|(candidate, span)| (candidate == &member).then_some(*span))
-        })
-        .unwrap_or(ob.src_span)
+        Reason::Leaf { .. }
+        | Reason::MissingProperty { .. }
+        | Reason::ParameterCount { .. }
+        | Reason::Parameter { .. }
+        | Reason::NoUnionMember { .. }
+        | Reason::TupleLength { .. } => {}
+    }
+}
+
+fn source_site_span(ob: &AssignObligation, path: &[AssignSourceMember]) -> Option<Span> {
+    ob.source_sites
+        .iter()
+        .find_map(|site| (site.path == path).then_some(site.span))
 }
 
 pub(in crate::check::checker) fn emit_exhausted_obligation(
@@ -3879,6 +4153,9 @@ pub(in crate::check::checker) fn emit_exhausted_obligation(
             format!("Type '{src}' is not assignable to type '{tgt}'"),
         ),
         ObligationKind::Argument => Diagnostic::argument_not_assignable(ob.src_span, &src, &tgt),
+        ObligationKind::SatisfiesDirect | ObligationKind::SatisfiesContextual => {
+            Diagnostic::does_not_satisfy(ob.src_span, &src, &tgt)
+        }
     }
 }
 
@@ -3898,6 +4175,454 @@ fn headline_src(ob: &AssignObligation, head: &Reason) -> TypeId {
 /// `string`) against a non-literal target.
 fn is_literal_target(store: &Store, tgt: TypeId) -> bool {
     store.literal_value(tgt).is_some()
+}
+
+#[cfg(test)]
+mod satisfies_obligation_tests {
+    use super::{emit_obligation_failure, AssignObligation, ObligationKind};
+    use crate::diagnostics::{render_type, DiagnosticCode};
+    use crate::relate::Reason;
+    use crate::span::Span;
+    use crate::types::repr::{ObjectType, PropertyKey, PropertyType};
+    use crate::types::Interner;
+
+    #[test]
+    fn satisfies_provenance_controls_code_and_member_span() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let src = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", wk.string)],
+            ..Default::default()
+        });
+        let tgt = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public("value", wk.number)],
+            ..Default::default()
+        });
+        let reason = Reason::Property {
+            name: PropertyKey::String("value".to_owned()),
+            src: wk.string,
+            tgt: wk.number,
+            because: Box::new(Reason::Leaf {
+                src: wk.string,
+                tgt: wk.number,
+            }),
+        };
+        let operator_span = Span::new(20, 31);
+        let property_span = Span::new(2, 7);
+        let direct = emit_obligation_failure(
+            interner.store(),
+            &AssignObligation {
+                src,
+                tgt,
+                src_span: operator_span,
+                source_sites: Vec::new(),
+                kind: ObligationKind::SatisfiesDirect,
+            },
+            &reason,
+        );
+        assert_eq!(direct.code, DiagnosticCode::TK1360);
+        assert_eq!(direct.span, operator_span);
+
+        let contextual = emit_obligation_failure(
+            interner.store(),
+            &AssignObligation {
+                src,
+                tgt,
+                src_span: property_span,
+                source_sites: Vec::new(),
+                kind: ObligationKind::SatisfiesContextual,
+            },
+            &reason,
+        );
+        assert_eq!(contextual.code, DiagnosticCode::TK2322);
+        assert_eq!(contextual.span, property_span);
+    }
+
+    #[test]
+    fn direct_satisfies_union_headline_uses_the_complete_source() {
+        let mut interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let src = interner.union(vec![wk.string, wk.boolean]);
+        let reason = Reason::UnionSourceMember {
+            member: wk.string,
+            src,
+            tgt: wk.number,
+            because: Box::new(Reason::Leaf {
+                src: wk.string,
+                tgt: wk.number,
+            }),
+        };
+        let diagnostic = emit_obligation_failure(
+            interner.store(),
+            &AssignObligation {
+                src,
+                tgt: wk.number,
+                src_span: Span::new(5, 16),
+                source_sites: Vec::new(),
+                kind: ObligationKind::SatisfiesDirect,
+            },
+            &reason,
+        );
+        let rendered_source = render_type(interner.store(), src, true);
+
+        assert_eq!(diagnostic.code, DiagnosticCode::TK1360);
+        assert!(diagnostic.message.contains(&format!("'{rendered_source}'")));
+    }
+
+    #[test]
+    fn contextual_satisfies_uses_the_recorded_child_span() {
+        let interner = Interner::with_intrinsics();
+        let wk = interner.well_known();
+        let right_value = Span::new(24, 29);
+        let reason = Reason::Property {
+            name: PropertyKey::String("value".to_owned()),
+            src: wk.string,
+            tgt: wk.number,
+            because: Box::new(Reason::Leaf {
+                src: wk.string,
+                tgt: wk.number,
+            }),
+        };
+        let obligation = AssignObligation {
+            src: wk.string,
+            tgt: wk.number,
+            src_span: right_value,
+            source_sites: Vec::new(),
+            kind: ObligationKind::SatisfiesContextual,
+        };
+        let diagnostic = emit_obligation_failure(interner.store(), &obligation, &reason);
+        assert_eq!(diagnostic.code, DiagnosticCode::TK2322);
+        assert_eq!(diagnostic.span, right_value);
+    }
+}
+
+#[cfg(test)]
+mod satisfies_grouped_replay_tests {
+    use crate::check::test_support::check_source;
+    use crate::diagnostics::DiagnosticCode;
+
+    #[test]
+    fn call_and_construct_residuals_use_one_direct_fallback_each() {
+        let source = r#"
+({ value: 1 }) satisfies { (): void; value: number };
+({ value: 1 }) satisfies { new (): object; value: number };
+"#;
+        let output = check_source(source);
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK1360, DiagnosticCode::TK1360]
+        );
+        assert!(output
+            .diagnostics
+            .iter()
+            .all(|diagnostic| source[diagnostic.span.range()].contains("satisfies")));
+    }
+
+    #[test]
+    fn array_children_report_each_bad_element_once() {
+        let source = r#"
+const mixed = ["wrong", 1] satisfies number[];
+const two = [
+  "wrong",
+  false,
+] satisfies number[];
+"#;
+        let output = check_source(source);
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [
+                DiagnosticCode::TK2322,
+                DiagnosticCode::TK2322,
+                DiagnosticCode::TK2322,
+            ]
+        );
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| &source[diagnostic.span.range()])
+                .collect::<Vec<_>>(),
+            [r#""wrong""#, r#""wrong""#, "false"]
+        );
+    }
+
+    #[test]
+    fn contextual_arrows_retain_structured_source_returns() {
+        let output = check_source(
+            r#"
+const explicit = ((value: number) => ({ kind: "a", count: value })) satisfies
+  (value: number) => { kind: "a" | "b"; count: number };
+const exactExplicit: "a" = explicit(1).kind;
+
+const implicit = ((value) => ({ kind: "a", count: value })) satisfies
+  (value: number) => { kind: "a" | "b"; count: number };
+const exactImplicit: "a" = implicit(1).kind;
+
+const tuple = (() => ["a", 1]) satisfies () => ["a" | "b", number];
+const exactTuple: "a" = tuple()[0];
+"#,
+        );
+
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn block_return_policy_reaches_control_flow_without_entering_nested_functions() {
+        let output = check_source(
+            r#"
+const callback = ((value) => {
+  function nested(): string { return "independent"; }
+  if (value === 0) return { kind: "if" };
+  switch (value) {
+    case 1: return { kind: "switch" };
+  }
+  while (value > 1) return { kind: "loop" };
+  return { kind: "tail" };
+}) satisfies (value: number) => { kind: "if" | "switch" | "loop" | "tail" };
+const result: "if" | "switch" | "loop" | "tail" = callback(1).kind;
+"#,
+        );
+
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn block_object_and_tuple_returns_retain_source_literals() {
+        let output = check_source(
+            r#"
+const object = ((value: number) => {
+  return { kind: "a", count: value };
+}) satisfies (value: number) => { kind: "a" | "b"; count: number };
+const exactObject: "a" = object(1).kind;
+
+const tuple = (() => { return ["a", 1]; }) satisfies () => ["a" | "b", number];
+const exactTuple: "a" = tuple()[0];
+
+const excess = ((flag) => {
+  return { value: flag ? 1 : 2, extra: true };
+}) satisfies (flag: boolean) => { value: number };
+const exactExtra: boolean = excess(true).extra;
+"#,
+        );
+
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn block_return_shapes_defer_compatibility_to_the_enclosing_function_node() {
+        let source = r#"
+const top = ((flag) => {
+  if (flag) return { value: "wrong" };
+  return { value: 1 };
+}) satisfies (flag: boolean) => { value: number };
+
+const nested = {
+  callback: (flag) => {
+    if (flag) return { value: "wrong" };
+    return { value: 1 };
+  },
+} satisfies { callback: (flag: boolean) => { value: number } };
+
+const standalone = (() => {
+  return ("wrong" satisfies number);
+}) satisfies () => string;
+"#;
+        let output = check_source(source);
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [
+                DiagnosticCode::TK1360,
+                DiagnosticCode::TK2322,
+                DiagnosticCode::TK1360,
+            ]
+        );
+        assert!(source[output.diagnostics[0].span.range()].contains("satisfies"));
+        assert_eq!(&source[output.diagnostics[1].span.range()], "callback");
+        assert!(source[output.diagnostics[2].span.range()].contains("satisfies"));
+    }
+
+    #[test]
+    fn explicit_return_annotation_owns_body_check_and_published_return() {
+        let output = check_source(
+            r#"
+const invalid = ((value: number): { kind: "a" } => ({ kind: "b" })) satisfies
+  (value: number) => { kind: "a" };
+const annotated = ((value): { kind: "a" | "b" } => ({ kind: value > 0 ? "a" : "b" })) satisfies
+  (value: number) => { kind: "a" | "b" };
+const narrowed: "a" = annotated(1).kind;
+"#,
+        );
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK2322, DiagnosticCode::TK2322]
+        );
+    }
+
+    #[test]
+    fn ordinary_union_targets_do_not_shape_discriminant_literals() {
+        let output = check_source(
+            r#"
+type Circle = { kind: "circle"; radius: number };
+type Square = { kind: "square"; size: number };
+type Figure = Circle | Square;
+declare const flag: boolean;
+
+const first: Figure = flag
+  ? { kind: "circle", radius: 1, extra: 1 }
+  : { kind: "square", size: 2 };
+const second: Figure = flag
+  ? { kind: "circle", radius: 1 }
+  : { kind: "square", size: 2, extra: 1 };
+"#,
+        );
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::TK2322, DiagnosticCode::TK2322]
+        );
+        assert!(output
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message.contains("kind: string")));
+    }
+
+    #[test]
+    fn ordinary_object_callback_mismatch_stays_owned_by_the_outer_obligation() {
+        let source = r#"
+declare function want(value: { a: () => string }): void;
+class C {
+  field: number = 1;
+  method(): void {
+    want({ a: () => this.field });
+  }
+}
+"#;
+        let output = check_source(source);
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        assert_eq!(output.diagnostics[0].code, DiagnosticCode::TK2322);
+        assert_eq!(
+            &source[output.diagnostics[0].span.range()],
+            "{ a: () => this.field }"
+        );
+    }
+
+    #[test]
+    fn ordinary_object_callback_source_keeps_uncontextual_parameter_type() {
+        let source = r#"
+const value: { callback: (value: number) => number } = {
+  callback: value => "bad",
+};
+"#;
+        let output = check_source(source);
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        let diagnostic = &output.diagnostics[0];
+        assert_eq!(diagnostic.code, DiagnosticCode::TK2322);
+        assert!(diagnostic
+            .message
+            .contains("{ callback: (value: any) => string }"));
+    }
+
+    #[test]
+    fn ordinary_tuple_callback_keeps_contextual_parameter_type() {
+        let source = r#"
+declare function takesString(value: string): void;
+declare function tupleOn(callbacks: [(first: number, second: string) => void]): void;
+
+tupleOn([first => takesString(first)]);
+"#;
+        let output = check_source(source);
+
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+        assert_eq!(output.diagnostics.len(), 1, "{:?}", output.diagnostics);
+        assert_eq!(output.diagnostics[0].code, DiagnosticCode::TK2345);
+        assert_eq!(&source[output.diagnostics[0].span.range()], "first");
+    }
+}
+
+#[cfg(test)]
+mod class_publication_annotation_prepass_tests {
+    use crate::check::test_support::check_source;
+
+    #[test]
+    fn query_free_literal_annotations_are_ready_for_class_publication() {
+        let output = check_source(
+            r#"
+                const text: "typed" = "typed";
+                let count: 2 = 2;
+                const flag: boolean = true;
+                class Published {
+                    field = { text: text, tuple: [count], flag: flag } satisfies {
+                        text: string;
+                        tuple: [number];
+                        flag: boolean;
+                    };
+                }
+                declare const published: Published;
+                const exactText: "typed" = published.field.text;
+                const exactCount: 2 = published.field.tuple[0];
+            "#,
+        );
+
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert!(output.incomplete.is_empty(), "{:?}", output.incomplete);
+    }
+
+    #[test]
+    fn type_reference_annotations_wait_for_the_full_reservation_phase() {
+        let output = check_source(
+            r#"
+                class Target { marker = "target"; }
+                const typed: Target = new Target();
+                class Published { field = typed; }
+            "#,
+        );
+
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        assert_eq!(
+            output
+                .incomplete
+                .iter()
+                .map(|incomplete| incomplete.id.as_str())
+                .collect::<Vec<_>>(),
+            ["class/property-definition/initializer-inference"]
+        );
+    }
 }
 
 #[cfg(test)]

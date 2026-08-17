@@ -31,6 +31,8 @@ pub enum DiagnosticCode {
     TK1314,
     /// `export as namespace` appears in a non-declaration source file.
     TK1315,
+    /// An expression does not satisfy its `satisfies` target.
+    TK1360,
     TK1545,
     TK2300,
     /// Static member references its containing class's type parameter.
@@ -192,6 +194,7 @@ impl DiagnosticCode {
             DiagnosticCode::TK1192 => "TK1192",
             DiagnosticCode::TK1314 => "TK1314",
             DiagnosticCode::TK1315 => "TK1315",
+            DiagnosticCode::TK1360 => "TK1360",
             DiagnosticCode::TK1545 => "TK1545",
             DiagnosticCode::TK2300 => "TK2300",
             DiagnosticCode::TK2302 => "TK2302",
@@ -659,6 +662,17 @@ impl Diagnostic {
             code: DiagnosticCode::TK2322,
             severity: Severity::Error,
             message,
+            span,
+            elaboration: Vec::new(),
+        }
+    }
+
+    /// Construct a `TK1360` `satisfies` failure.
+    pub fn does_not_satisfy(span: Span, src: &str, tgt: &str) -> Self {
+        Diagnostic {
+            code: DiagnosticCode::TK1360,
+            severity: Severity::Error,
+            message: format!("Type '{src}' does not satisfy the expected type '{tgt}'."),
             span,
             elaboration: Vec::new(),
         }
@@ -1458,6 +1472,26 @@ mod default_module_diagnostic_tests {
         assert_eq!(
             diagnostic.message,
             "Module './source.js' has no default export"
+        );
+        assert_eq!(diagnostic.span, span);
+    }
+}
+
+#[cfg(test)]
+mod satisfies_diagnostic_tests {
+    use super::{Diagnostic, DiagnosticCode};
+    use crate::span::Span;
+
+    #[test]
+    fn satisfies_failure_uses_tk1360() {
+        let span = Span::new(4, 9);
+        let diagnostic = Diagnostic::does_not_satisfy(span, "string", "number");
+
+        assert_eq!(DiagnosticCode::TK1360.as_str(), "TK1360");
+        assert_eq!(diagnostic.code, DiagnosticCode::TK1360);
+        assert_eq!(
+            diagnostic.message,
+            "Type 'string' does not satisfy the expected type 'number'."
         );
         assert_eq!(diagnostic.span, span);
     }

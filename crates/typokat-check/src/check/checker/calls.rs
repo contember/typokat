@@ -8,7 +8,7 @@ use super::classes::surface_types::SurfaceTypeFactory;
 use super::context::*;
 use super::decls::alloc_type_param_ids;
 use super::eval::{contains_deferred_argument, contains_deferred_keyof};
-use super::expr::{contextual_literal_target, ContextualRewalk};
+use super::expr::{contextual_literal_target, ContextualLiteralProvenance, ContextualRewalk};
 use super::function_groups::FunctionGroupDemand;
 use super::type_groups::{
     PublishedTypeGroupSurface, PublishedTypeGroupTerminal, TypeEnvironmentState,
@@ -37,6 +37,16 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::hash::{Hash, Hasher};
+
+#[derive(Clone, Copy)]
+enum ArrowReturnPolicy {
+    Ordinary(Option<TypeId>),
+    Satisfies {
+        context: TypeId,
+        return_target: TypeId,
+        annotation: Option<TypeId>,
+    },
+}
 
 #[cfg(test)]
 mod contextual_duplicate_diagnostics_spec;
@@ -2719,7 +2729,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                 src,
                 tgt: relation_target,
                 src_span,
-                source_member_spans: Vec::new(),
+                source_sites: Vec::new(),
                 kind: self.call_argument_obligation_kind(arg_expr, target.declared),
             });
             // A `never` parameter makes this call candidate impossible. Later
@@ -2764,7 +2774,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             src,
             tgt: rest.ty,
             src_span: span,
-            source_member_spans: Vec::new(),
+            source_sites: Vec::new(),
             kind: ObligationKind::Argument,
         });
     }
@@ -4229,26 +4239,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             pass.with_type_params(frame, |pass| {
                 let body_scope = fn_scope.unwrap_or(enclosing);
                 pass.check_reserved_parameter_initializers(body_scope, &arrow.params, &params);
-                pass.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret)
+                pass.finish_arrow_inference(
+                    enclosing,
+                    arrow,
+                    fn_scope,
+                    params,
+                    ArrowReturnPolicy::Ordinary(declared_ret),
+                )
             })
         };
         match tickets {
             Some(tickets) => self.with_ticket_effects(tickets.body, fill_body),
             None => fill_body(self),
         }
-    }
-
-    /// Re-infer a non-generic arrow against a function parameter's shape. This is
-    /// intentionally limited to call-site contextual typing: the first uncontextual
-    /// walk has already handled side effects, while this pass supplies the callback
-    /// parameter types needed for generic method inference and checking.
-    pub(in crate::check::checker) fn infer_contextual_arrow(
-        &mut self,
-        enclosing: ScopeId,
-        arrow: &ArrowFunctionExpression<'_>,
-        context: TypeId,
-    ) -> Option<TypeId> {
-        self.infer_contextual_arrow_with_return_context(enclosing, arrow, context, true)
     }
 
     /// Contextualize an arrow's parameters and, when requested, its return. Call
@@ -4264,7 +4267,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         if arrow.type_parameters.is_some() {
             return None;
         }
-        let context = self.contextual_function_shape(context)?;
+        let context_type = context;
+        let context = self.contextual_function_shape(context_type)?;
         let fn_scope = self
             .binder
             .fn_scopes
@@ -4276,16 +4280,31 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             &arrow.params,
             &context.params,
         );
-        let declared_ret = match arrow.return_type.as_ref() {
-            Some(ann) => self.lower_annotation(enclosing, &ann.type_annotation),
-            None if !contextual_return => None,
+        let annotation = arrow
+            .return_type
+            .as_ref()
+            .and_then(|ann| self.lower_annotation(enclosing, &ann.type_annotation));
+        let declared_ret = if arrow.return_type.is_some() {
+            annotation
+        } else if !contextual_return || self.interner.store().tag(context.ret) == TypeTag::TypeParam
+        {
             // An unresolved generic return is the inference variable itself. Infer
-            // the callback return normally so that variable can receive a candidate;
-            // a concrete expected return is checked in the arrow body instead.
-            None if self.interner.store().tag(context.ret) == TypeTag::TypeParam => None,
-            None => Some(context.ret),
+            // the callback return normally so that variable can receive a candidate.
+            None
+        } else {
+            Some(context.ret)
         };
-        Some(self.finish_arrow_inference(enclosing, arrow, fn_scope, params, declared_ret))
+        let annotation_ready = arrow.return_type.is_none() || annotation.is_some();
+        let policy = if contextual_return && annotation_ready && self.has_satisfies_check_sink() {
+            ArrowReturnPolicy::Satisfies {
+                context: context_type,
+                return_target: context.ret,
+                annotation,
+            }
+        } else {
+            ArrowReturnPolicy::Ordinary(declared_ret)
+        };
+        Some(self.finish_arrow_inference(enclosing, arrow, fn_scope, params, policy))
     }
 
     fn contextual_function_shape(&self, context: TypeId) -> Option<FunctionType> {
@@ -4369,64 +4388,131 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         arrow: &ArrowFunctionExpression<'_>,
         fn_scope: Option<ScopeId>,
         params: Vec<ParameterType>,
-        declared_ret: Option<TypeId>,
+        policy: ArrowReturnPolicy,
     ) -> TypeId {
         let body_scope = fn_scope.unwrap_or(enclosing);
-
-        let inferred_ret = if let Some(body_expr) = arrow.get_expression() {
-            // Expression body `() => expr`: the return value is the expression.
-            let value = match declared_ret {
-                Some(ret) => self.infer_initializer(body_scope, body_expr, Some(ret)),
-                None => self.infer_expr(body_scope, body_expr),
-            };
-            match (declared_ret, value) {
-                // With a declared return type, the body expression is checked against
-                // it (primary span = the expression), like a `return <expr>`.
-                (Some(ret), Some((src, src_span))) => {
-                    let target_ready = match self.check_excess_properties_for_target(body_expr, ret)
-                    {
-                        DemandOutcome::Ready(diagnostics) => {
-                            for diagnostic in diagnostics {
-                                self.emit_diagnostic(diagnostic);
-                            }
-                            true
-                        }
-                        DemandOutcome::Exhausted(exhaustion) => {
-                            self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
-                            false
-                        }
-                    };
-                    if target_ready {
-                        self.schedule_obligation(AssignObligation {
-                            src,
-                            tgt: ret,
-                            src_span,
-                            source_member_spans: Vec::new(),
-                            kind: ObligationKind::Assignment,
-                        });
-                    }
-                    None
-                }
-                // No annotation: infer the return type from the body, widened.
-                (None, Some((value_ty, _))) => Some(widen(self.interner, value_ty)),
-                // An expression body that could not produce a type is not a
-                // value-less body; retain recovery so the missing child cannot
-                // fabricate a `void` return and trigger a cascading relation.
-                (None, None) => Some(self.interner.well_known().error),
-                _ => None,
-            }
-        } else {
-            // Block body `() => { ... }`: same as a function body.
-            Some(self.check_function_body(body_scope, &arrow.body, declared_ret))
+        let grouped_context = match policy {
+            ArrowReturnPolicy::Satisfies {
+                context,
+                annotation: None,
+                ..
+            } => Some(context),
+            ArrowReturnPolicy::Ordinary(_)
+            | ArrowReturnPolicy::Satisfies {
+                annotation: Some(_),
+                ..
+            } => None,
         };
-
-        let ret = resolve_return_type(self.interner, declared_ret, inferred_ret);
-        self.interner.intern_function(FunctionType {
+        if grouped_context.is_some() {
+            self.begin_satisfies_container();
+        }
+        let ret = match policy {
+            ArrowReturnPolicy::Ordinary(declared) => {
+                if let Some(body_expr) = arrow.get_expression() {
+                    self.infer_ordinary_arrow_expression_return(body_scope, body_expr, declared)
+                } else {
+                    let inferred = self.check_function_body(body_scope, &arrow.body, declared);
+                    resolve_return_type(self.interner, declared, Some(inferred))
+                }
+            }
+            ArrowReturnPolicy::Satisfies {
+                annotation: Some(annotation),
+                ..
+            } => {
+                if let Some(body_expr) = arrow.get_expression() {
+                    self.infer_ordinary_arrow_expression_return(
+                        body_scope,
+                        body_expr,
+                        Some(annotation),
+                    )
+                } else {
+                    self.check_function_body(body_scope, &arrow.body, Some(annotation));
+                    annotation
+                }
+            }
+            ArrowReturnPolicy::Satisfies { return_target, .. } => {
+                if let Some(body_expr) = arrow.get_expression() {
+                    let mark = self.satisfies_check_mark();
+                    let value = self.infer_initializer_with_provenance(
+                        body_scope,
+                        body_expr,
+                        Some(return_target),
+                        ContextualLiteralProvenance::Satisfies,
+                    );
+                    match value {
+                        Some((source, span)) => {
+                            if self.satisfies_check_mark() == mark {
+                                self.record_satisfies_child_check(source, return_target, span);
+                            }
+                            source
+                        }
+                        None => self.interner.well_known().error,
+                    }
+                } else {
+                    self.check_function_body_with_return_policy(
+                        body_scope,
+                        &arrow.body,
+                        super::statements::ReturnCheckPolicy::SatisfiesUnannotated(return_target),
+                    )
+                }
+            }
+        };
+        let function = self.interner.intern_function(FunctionType {
             type_params: Vec::new(),
             receiver: None,
             params,
             ret,
-        })
+        });
+        if let Some(context) = grouped_context {
+            self.finish_satisfies_relation_container(
+                function,
+                context,
+                Span::from_oxc(arrow.span),
+                Vec::new(),
+            );
+        }
+        function
+    }
+
+    fn infer_ordinary_arrow_expression_return(
+        &mut self,
+        body_scope: ScopeId,
+        body_expr: &Expression<'_>,
+        declared: Option<TypeId>,
+    ) -> TypeId {
+        let value = match declared {
+            Some(ret) => self.infer_initializer(body_scope, body_expr, Some(ret)),
+            None => self.infer_expr(body_scope, body_expr),
+        };
+        match (declared, value) {
+            (Some(ret), Some((src, src_span))) => {
+                let target_ready = match self.check_excess_properties_for_target(body_expr, ret) {
+                    DemandOutcome::Ready(diagnostics) => {
+                        for diagnostic in diagnostics {
+                            self.emit_diagnostic(diagnostic);
+                        }
+                        true
+                    }
+                    DemandOutcome::Exhausted(exhaustion) => {
+                        self.own_type_demand(DemandOutcome::Exhausted(exhaustion), src_span);
+                        false
+                    }
+                };
+                if target_ready {
+                    self.schedule_obligation(AssignObligation {
+                        src,
+                        tgt: ret,
+                        src_span,
+                        source_sites: Vec::new(),
+                        kind: ObligationKind::Assignment,
+                    });
+                }
+                ret
+            }
+            (None, Some((value_ty, _))) => widen(self.interner, value_ty),
+            (None, None) => self.interner.well_known().error,
+            (Some(ret), None) => ret,
+        }
     }
 
     /// Lower a function's/arrow's parameters to `ParameterType`s and, when a function
@@ -4769,6 +4855,19 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         body: &FunctionBody<'_>,
         declared_ret: Option<TypeId>,
     ) -> TypeId {
+        self.check_function_body_with_return_policy(
+            scope,
+            body,
+            super::statements::ReturnCheckPolicy::ordinary(declared_ret),
+        )
+    }
+
+    fn check_function_body_with_return_policy(
+        &mut self,
+        scope: ScopeId,
+        body: &FunctionBody<'_>,
+        return_policy: super::statements::ReturnCheckPolicy,
+    ) -> TypeId {
         let void_ty = self.interner.well_known().void;
         let mut inferred: Option<TypeId> = None;
 
@@ -4777,7 +4876,12 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         // narrowing — the documented closure divergence). The check walk here just
         // descends into the body, via the shared list walker so a *local* overload
         // set is grouped exactly like a top-level one (M33).
-        self.check_statement_list(scope, &body.statements, declared_ret, &mut inferred);
+        self.check_statement_list_with_return_policy(
+            scope,
+            &body.statements,
+            return_policy,
+            &mut inferred,
+        );
 
         inferred.unwrap_or(void_ty)
     }

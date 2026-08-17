@@ -25,11 +25,11 @@ use super::type_syntax::{
     SurfaceTypeResolver, TypeSyntaxLowerer,
 };
 use super::visibility::{has_public_constructor, lower_visibility};
-use crate::binder::declaration::{DeclarationKind, TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{DeclarationKind, TypeGroupId};
 use crate::binder::scope::ScopeId;
 use crate::check::checker::context::{
     CheckerEffects, ClassNamespacePropertyPayload, ClassNamespacePropertySourceOrder,
-    ConstraintCheckObligation, OverrideCheck, Pass, PublishedClassNewMetadata,
+    ConstraintCheckObligation, DeclTypes, OverrideCheck, Pass, PublishedClassNewMetadata,
     PublishedClassValueBinding, TypeDecl, TypeDeclTable, TypeDeclView, TypeResolvedTable,
 };
 use crate::check::checker::decls::type_decl_id;
@@ -52,8 +52,9 @@ use crate::types::repr::{
 };
 use crate::types::store::TypeId;
 use oxc_ast::ast::{
-    BindingPattern, Class, ClassElement, Expression, MethodDefinitionKind, MethodDefinitionType,
-    PropertyDefinitionType, PropertyKey, TSAccessibility, TSType, TSTypeName,
+    ArrayExpressionElement, BindingPattern, Class, ClassElement, Expression, MethodDefinitionKind,
+    MethodDefinitionType, ObjectPropertyKind, PropertyDefinitionType, PropertyKey, PropertyKind,
+    TSAccessibility, TSType, TSTypeName,
 };
 use oxc_span::{GetSpan, Span};
 use rustc_hash::FxHashMap;
@@ -273,7 +274,6 @@ impl<Ticket: Copy> TicketRecord<Ticket> {
 struct Resolver<'a, 'ast, Ticket: Copy> {
     binder: &'a crate::binder::Binder,
     scope: ScopeId,
-    lexical_values: FxHashMap<String, (ValueStorageId, TypeId)>,
     declarations: &'a TypeDeclTable<'ast>,
     resolved: &'a TypeResolvedTable,
     reservations: &'a LexicalReservations<Ticket>,
@@ -289,11 +289,16 @@ struct Resolver<'a, 'ast, Ticket: Copy> {
 }
 
 impl<Ticket: Copy + PartialEq> Resolver<'_, '_, Ticket> {
-    fn resolve_value_type(&self, name: &str) -> Option<TypeId> {
+    fn resolve_value_type(&self, name: &str, values: &DeclTypes) -> Option<TypeId> {
         if let Some(trace) = &self.replay_trace {
             trace.demand_root_slot(name, super::super::replay_index::RootSlotKind::Value);
         }
-        let (storage, ty) = self.lexical_values.get(name).copied()?;
+        let storage = self
+            .binder
+            .resolve_value(self.scope, name)
+            .and_then(|symbol| self.binder.symbols.get(symbol))
+            .and_then(|symbol| symbol.value)?;
+        let ty = values.get(storage)?;
         if let Some(trace) = &self.replay_trace {
             trace.demand_at(ReplayOwner::Value(storage), "class-surface-value-terminal");
         }
@@ -649,7 +654,7 @@ struct InitializerContext {
     annotations: FxHashMap<u32, TypeId>,
     fields: FxHashMap<String, TypeId>,
     methods: FxHashMap<String, EarlierMethodSurface>,
-    lexical_values: FxHashMap<String, TypeId>,
+    lexical_values: FxHashMap<u32, TypeId>,
 }
 
 impl SurfaceInitializerContext for InitializerContext {
@@ -671,8 +676,8 @@ impl SurfaceInitializerContext for InitializerContext {
         self.methods.get(name).copied()
     }
 
-    fn lexical_value(&self, name: &str) -> Option<TypeId> {
-        self.lexical_values.get(name).copied()
+    fn lexical_value(&self, reference_start: u32, _name: &str) -> Option<TypeId> {
+        self.lexical_values.get(&reference_start).copied()
     }
 }
 
@@ -722,7 +727,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
-                lexical_values: FxHashMap::default(),
                 declarations: &drafts.type_decls,
                 resolved: &drafts.type_resolved,
                 reservations: &self.lexical_events,
@@ -765,7 +769,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
-                lexical_values: FxHashMap::default(),
                 declarations: &drafts.type_decls,
                 resolved: &drafts.type_resolved,
                 reservations: &self.lexical_events,
@@ -1003,27 +1006,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             let mut resolver = Resolver {
                 binder: self.binder,
                 scope,
-                lexical_values: class
-                    .body
-                    .body
-                    .iter()
-                    .filter_map(|element| {
-                        let ClassElement::PropertyDefinition(property) = element else {
-                            return None;
-                        };
-                        let Expression::Identifier(identifier) = property.value.as_ref()? else {
-                            return None;
-                        };
-                        let storage = self
-                            .binder
-                            .resolve_value(scope, identifier.name.as_str())
-                            .and_then(|symbol| self.binder.symbols.get(symbol))
-                            .and_then(|symbol| symbol.value)?;
-                        self.decl_types
-                            .get(storage)
-                            .map(|ty| (identifier.name.to_string(), (storage, ty)))
-                    })
-                    .collect(),
                 declarations: &type_decls,
                 resolved: &type_resolved,
                 reservations: &self.lexical_events,
@@ -1243,6 +1225,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         frame: &frame,
                         reservation: &reservation,
                         reservations: &self.lexical_events,
+                        declaration_values: &self.decl_types,
                     },
                 );
                 let namespace_payload = self.class_namespace_payloads.remove(&binding.type_decl);
@@ -2095,6 +2078,7 @@ struct ClassLoweringInput<'a, 'ast, Ticket: Copy> {
     frame: &'a [(String, TypeId)],
     reservation: &'a ClassReservation<Ticket>,
     reservations: &'a LexicalReservations<Ticket>,
+    declaration_values: &'a DeclTypes,
 }
 
 struct LoweredClassSurface<Ticket: Copy> {
@@ -2129,6 +2113,7 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
         frame,
         reservation,
         reservations,
+        declaration_values,
     } = input;
     let open_application = match build_open_class_application(
         factory,
@@ -2233,14 +2218,16 @@ fn lower_class<'ast, Ticket: Copy + PartialEq>(
                     }
                     annotation_ty
                 } else if let Some(value) = property.value.as_ref() {
-                    if let Expression::Identifier(identifier) = value {
-                        if let Some(ty) = resolver.resolve_value_type(identifier.name.as_str()) {
-                            initializer
-                                .lexical_values
-                                .insert(identifier.name.to_string(), ty);
-                        }
-                    }
-                    seed_initializer_annotations(factory, resolver, value, frame, &mut initializer);
+                    resolver.fallback = immediate_owner;
+                    resolver.qualified_outer_type_parameters_visible = !property.r#static;
+                    seed_initializer_annotations(
+                        factory,
+                        resolver,
+                        declaration_values,
+                        value,
+                        frame,
+                        &mut initializer,
+                    );
                     match SurfaceInitializerInferer::new(factory, &mut initializer).infer(
                         value,
                         property.readonly,
@@ -3304,7 +3291,6 @@ fn register_reserved_surface_roots<'ast, Ticket: Copy + PartialEq>(
                 let mut resolver = Resolver {
                     binder,
                     scope,
-                    lexical_values: FxHashMap::default(),
                     declarations,
                     resolved,
                     reservations,
@@ -3450,17 +3436,33 @@ fn lower_callable<Ticket: Copy + PartialEq>(
 fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
     factory: &mut SurfaceTypeFactory<'_>,
     resolver: &mut Resolver<'_, '_, Ticket>,
+    declaration_values: &DeclTypes,
     expression: &Expression<'_>,
     frame: &[(String, TypeId)],
     context: &mut InitializerContext,
 ) {
     match expression {
+        Expression::Identifier(identifier) => {
+            if let Some(ty) =
+                resolver.resolve_value_type(identifier.name.as_str(), declaration_values)
+            {
+                context.lexical_values.insert(identifier.span.start, ty);
+            }
+        }
         Expression::TSAsExpression(assertion) => {
             if let Ok(ty) = lower_type(factory, resolver, &assertion.type_annotation, frame).0 {
                 context
                     .annotations
                     .insert(assertion.type_annotation.span().start, ty);
             }
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &assertion.expression,
+                frame,
+                context,
+            );
         }
         Expression::TSTypeAssertion(assertion) => {
             if let Ok(ty) = lower_type(factory, resolver, &assertion.type_annotation, frame).0 {
@@ -3468,8 +3470,91 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                     .annotations
                     .insert(assertion.type_annotation.span().start, ty);
             }
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &assertion.expression,
+                frame,
+                context,
+            );
         }
-        Expression::ArrowFunctionExpression(arrow) => {
+        Expression::TSSatisfiesExpression(satisfies) => {
+            if let Ok(ty) = lower_type(factory, resolver, &satisfies.type_annotation, frame).0 {
+                context
+                    .annotations
+                    .insert(satisfies.type_annotation.span().start, ty);
+            }
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &satisfies.expression,
+                frame,
+                context,
+            );
+        }
+        Expression::ParenthesizedExpression(parenthesized) => {
+            seed_initializer_annotations(
+                factory,
+                resolver,
+                declaration_values,
+                &parenthesized.expression,
+                frame,
+                context,
+            );
+        }
+        Expression::ObjectExpression(object) => {
+            for member in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(property) = member else {
+                    continue;
+                };
+                if property.computed
+                    || property.method
+                    || property.shorthand
+                    || property.kind != PropertyKind::Init
+                {
+                    continue;
+                }
+                seed_initializer_annotations(
+                    factory,
+                    resolver,
+                    declaration_values,
+                    &property.value,
+                    frame,
+                    context,
+                );
+            }
+        }
+        Expression::ArrayExpression(array) => {
+            for element in &array.elements {
+                let expression = match element {
+                    ArrayExpressionElement::SpreadElement(_)
+                    | ArrayExpressionElement::Elision(_) => continue,
+                    _ => element.as_expression(),
+                };
+                if let Some(expression) = expression {
+                    seed_initializer_annotations(
+                        factory,
+                        resolver,
+                        declaration_values,
+                        expression,
+                        frame,
+                        context,
+                    );
+                }
+            }
+        }
+        Expression::ArrowFunctionExpression(arrow)
+            if arrow.expression
+                && !arrow.r#async
+                && arrow.type_parameters.is_none()
+                && arrow.params.rest.is_none()
+                && arrow.params.items.iter().all(|parameter| {
+                    parameter.initializer.is_none()
+                        && matches!(parameter.pattern, BindingPattern::BindingIdentifier(_))
+                }) =>
+        {
             for parameter in &arrow.params.items {
                 if let Some(annotation) = parameter.type_annotation.as_ref() {
                     if let Ok(ty) =
@@ -3480,6 +3565,24 @@ fn seed_initializer_annotations<Ticket: Copy + PartialEq>(
                             .insert(annotation.type_annotation.span().start, ty);
                     }
                 }
+            }
+            if let Some(annotation) = arrow.return_type.as_ref() {
+                if let Ok(ty) = lower_type(factory, resolver, &annotation.type_annotation, frame).0
+                {
+                    context
+                        .annotations
+                        .insert(annotation.type_annotation.span().start, ty);
+                }
+            }
+            if let Some(body) = arrow.get_expression() {
+                seed_initializer_annotations(
+                    factory,
+                    resolver,
+                    declaration_values,
+                    body,
+                    frame,
+                    context,
+                );
             }
         }
         _ => {}

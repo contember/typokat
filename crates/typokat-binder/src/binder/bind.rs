@@ -3111,6 +3111,9 @@ fn bind_expression(state: &mut BindState, scope: ScopeId, expr: &Expression<'_>)
         Expression::TSAsExpression(assertion) => {
             bind_expression(state, scope, &assertion.expression);
         }
+        Expression::TSSatisfiesExpression(satisfies) => {
+            bind_expression(state, scope, &satisfies.expression);
+        }
         Expression::TSTypeAssertion(assertion) => {
             bind_expression(state, scope, &assertion.expression);
         }
@@ -5837,6 +5840,21 @@ namespace Standalone { export const value = 1; }
             .unwrap()
             .lookup_local("inner")
             .is_none());
+    }
+
+    #[test]
+    fn satisfies_source_binds_nested_arrow_parameters() {
+        let source = "const holder = { callback: value => value } satisfies { callback: (value: number) => number };";
+        let binder = bind(source);
+        let arrow_start = u32::try_from(source.find("value =>").expect("arrow source"))
+            .expect("arrow offset fits u32");
+        let scope = binder
+            .fn_scopes
+            .get(&(binder.module, arrow_start))
+            .and_then(|scope| binder.graph.get(*scope))
+            .expect("satisfies source arrow scope");
+
+        assert!(scope.lookup_local("value").is_some());
     }
 
     #[test]

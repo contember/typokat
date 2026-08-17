@@ -9,6 +9,7 @@ use crate::binder::symbol::SymbolId;
 use crate::binder::Binder;
 use crate::check::flow::{FlowNode, FlowNodeId};
 use crate::check::query::SemanticQueryState;
+use crate::diagnostics::Diagnostic;
 use crate::source::{LibraryFileOrdinal, SourceUnit};
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredSet, LayeredVec};
@@ -69,6 +70,12 @@ pub(in crate::check::checker) enum ObligationKind {
     /// mismatches stay assignment-style, but missing required properties and
     /// tuple length mismatches remain call-argument failures.
     FreshArgument,
+    /// A `satisfies` source that was not contextually re-walked. Every failure maps
+    /// to `TK1360`, regardless of the relation reason's structural shape.
+    SatisfiesDirect,
+    /// A `satisfies` source that was contextually re-walked. Member, element, and
+    /// return failures retain their established assignment diagnostics.
+    SatisfiesContextual,
 }
 
 /// One assignability obligation: `src` must be assignable to `tgt`, with the
@@ -78,14 +85,30 @@ pub(in crate::check::checker) struct AssignObligation {
     pub(in crate::check::checker) src: TypeId,
     pub(in crate::check::checker) tgt: TypeId,
     pub(in crate::check::checker) src_span: Span,
-    pub(in crate::check::checker) source_member_spans: Vec<(AssignSourceMember, Span)>,
+    pub(in crate::check::checker) source_sites: Vec<AssignSourceSite>,
     pub(in crate::check::checker) kind: ObligationKind,
+}
+
+pub(in crate::check::checker) struct SatisfiesCheckNode {
+    pub(in crate::check::checker) children: Vec<SatisfiesCheckNode>,
+    pub(in crate::check::checker) residual: AssignObligation,
+    pub(in crate::check::checker) excess: Vec<Diagnostic>,
+}
+
+pub(in crate::check::checker) struct SatisfiesObligation {
+    pub(in crate::check::checker) root: SatisfiesCheckNode,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::check::checker) enum AssignSourceMember {
     Property(String),
     Element(usize),
+}
+
+#[derive(Clone)]
+pub(in crate::check::checker) struct AssignSourceSite {
+    pub(in crate::check::checker) path: Vec<AssignSourceMember>,
+    pub(in crate::check::checker) span: Span,
 }
 
 /// The assertion spelling determines the stable incomplete-surface identity.
@@ -115,6 +138,7 @@ pub(in crate::check::checker) struct AssertionCompatibilityObligation {
 /// Relation work retains one scheduling order within its lexical effect owner.
 pub(in crate::check::checker) enum DeferredRelationObligation {
     Assign(AssignObligation),
+    Satisfies(SatisfiesObligation),
     AssertionCompatibility(AssertionCompatibilityObligation),
 }
 
@@ -340,6 +364,8 @@ impl<Ticket: Copy> CheckerEffects<Ticket> {
                 .map(CheckerEffects::observable_count)
                 .sum::<usize>()
     }
+
+    pub(in crate::check::checker) fn discard(self) {}
 }
 
 impl CheckerEffects<UserRecordTicket> {
@@ -1970,6 +1996,9 @@ pub(in crate::check::checker) struct Pass<'a, 'ast, Ticket: Copy + PartialEq = U
     /// forward annotation provisional without overwriting a parameter type.
     pub(in crate::check::checker) var_value_type_states:
         FxHashMap<ValueStorageId, VarValueTypeState>,
+    /// Nested `satisfies` walks collect exact contextual child checks before one
+    /// grouped deferred relation decision is scheduled.
+    pub(in crate::check::checker) satisfies_check_sinks: Vec<Vec<SatisfiesCheckNode>>,
     /// Exact deferred accounting for unsupported variable object-binding groups.
     pub(in crate::check::checker) object_binding_pending_groups:
         Vec<ObjectBindingPendingGroup<Ticket>>,

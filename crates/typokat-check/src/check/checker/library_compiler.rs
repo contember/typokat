@@ -7771,6 +7771,17 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             pass.reserve_local_type_annotation_surfaces(scope, &program.body);
         }
     }
+    for (index, (((input, program), module), semantic_scope)) in canonical
+        .iter()
+        .zip(&parsed)
+        .zip(module_scopes.iter().copied())
+        .zip(semantic_scopes.iter().copied())
+        .enumerate()
+    {
+        pass.current_module = module;
+        pass.current_source = source_unit_for_index(index, input);
+        pass.pre_reserve_query_free_var_annotation_surfaces(semantic_scope, &program.body);
+    }
     pass.combined_user_source = user_start.is_some();
     pass.prepare_project_attached_namespace_values(&module_programs);
     pass.prepare_project_standalone_namespace_values(&module_programs);
