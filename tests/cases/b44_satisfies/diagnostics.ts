@@ -78,5 +78,24 @@ const invalidAnnotatedReturn =
   ((value: number): { kind: "a" } => ({ kind: "b" })) satisfies // error[TK2322]
   (value: number) => { kind: "a" };
 
+const nestedResidualMissing = {
+  nested: { value: 1 }, // error[TK2741]
+} satisfies { nested: { value: number; missing: string } };
+
+const nestedResidualCallable = {
+  nested: { value: 1 }, // error[TK2322]
+} satisfies { nested: { (): void; value: number } };
+
+const nestedResidualExcess = {
+  nested: {
+    value: 1,
+    extra: true, // error[TK2353]
+  },
+} satisfies { nested: { value: number; missing: string } };
+
+const nestedResidualTuple = {
+  nested: [1], // error[TK2322]
+} satisfies { nested: [number, number] };
+
 declare const wholeUnion: { kind: "a"; value: string } | { kind: "b"; value: boolean };
 wholeUnion satisfies { kind: "a" | "b"; value: number }; // error[TK1360]
