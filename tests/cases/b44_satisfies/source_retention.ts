@@ -29,6 +29,32 @@ const exactTupleCount: 1 = widenedTuple[1]; // error[TK2322]: Type 'number' is n
 const widenedArray = ["left", "right"] satisfies string[];
 const exactArrayElement: "left" | "right" = widenedArray[0]; // error[TK2322]
 
+const rawBoolean = { flag: true } satisfies { flag: boolean };
+const retainedRawBoolean: true = rawBoolean.flag;
+
+const typedText: "typed" = "typed";
+const typedCount: 2 = 2;
+const typedObject = { text: typedText, count: typedCount } satisfies {
+  text: string;
+  count: number;
+};
+const retainedTypedText: "typed" = typedObject.text;
+const retainedTypedCount: 2 = typedObject.count;
+
+const assertedObject = { text: "asserted" as "asserted", count: 3 as 3 } satisfies {
+  text: string;
+  count: number;
+};
+const retainedAssertedText: "asserted" = assertedObject.text;
+const retainedAssertedCount: 3 = assertedObject.count;
+
+const typedTuple = [typedText, typedCount] satisfies [string, number];
+const retainedTupleText: "typed" = typedTuple[0];
+const retainedTupleCount: 2 = typedTuple[1];
+
+const typedArray = [typedText] satisfies string[];
+const retainedArrayText: "typed" = typedArray[0];
+
 class Published {
   field = { kind: "left" } satisfies { kind: "left" | "right" };
 }

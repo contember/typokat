@@ -13,5 +13,15 @@
 
 ({ nested: { value: 1, extra: true } }) satisfies { nested: { value: number } }; // error[TK2353]
 
+const nestedMemberMismatch = {
+  nested: {
+    value: "wrong", // error[TK2322]: Type 'string' is not assignable to type 'number'
+  },
+} satisfies { nested: { value: number } };
+
+const contextualReturnMismatch = ((value) =>
+  "wrong" // error[TK2322]: Type 'string' is not assignable to type 'number'
+) satisfies (value: number) => number;
+
 declare const wholeUnion: { kind: "a"; value: string } | { kind: "b"; value: boolean };
 wholeUnion satisfies { kind: "a" | "b"; value: number }; // error[TK1360]

@@ -101,6 +101,28 @@ one aggregate diffstat is explicitly insufficient.
   `statements.rs`, `classes/initializer.rs`, `crates/typokat-diagnostics/src/diagnostics/mod.rs`,
   `tests/surface/inventory.toml`, and the B73 witnesses.
 
+### WU1b — preserve contextual literal provenance and diagnostic source sites (effort M)
+
+- **Problem.** The first WU1 review proved that target-only widening loses the distinction between
+  raw string/number literals, which contextual typing widens, and boolean or explicitly typed/
+  asserted literal sources, whose exact types survive `satisfies`. It also proved that one-level
+  source-member spans cannot identify a nested property or contextual arrow return.
+- **Verify first.** Use the committed raw string/number controls, then pair them with otherwise
+  identical raw booleans, literal-typed identifiers, literal assertions, tuple elements, and array
+  elements. Put nested property keys and arrow returns on separate lines so the ordinary corpus
+  observes their source sites; keep the direct operator's exact column in a focused span unit.
+- **Scope.** Add a syntax-directed contextual provenance policy only for `satisfies`: widen raw
+  string/number literals under base primitive targets; preserve booleans and exact types obtained
+  from identifiers/assertions; recurse through parentheses and admitted object/array/tuple syntax.
+  Carry nested source-member/return paths far enough to choose the tsc-owned source line. This does
+  not implement backlog `111`'s call-site candidate provenance model or alter generic inference.
+- **Acceptance.** Every WU0/WU1b row matches tsc code, count, type retention, and primary source
+  line; direct non-fresh structures remain `TK1360`; ordinary assignment/argument contextual
+  behavior is unchanged; and a second independent review returns PASS.
+- **Touch points.** The WU1 expression/provenance/span helpers and their focused unit tests only;
+  backlog `111`, call-site inference, fixtures, and expectations are read-only after this spec
+  amendment.
+
 ### WU2 — independent adversarial review and inference gates (effort M)
 
 - **Verify first.** Freeze the WU1 diff. Dispatch an independent review subagent that did not
@@ -160,3 +182,11 @@ official harness, so they are not parallel implementation units.
 
 <!-- Append as work proceeds. Graduate durable decisions/findings to ADR/backlog and trim this log
      to pointers. -->
+
+- 2026-08-17: WU1 first review FAIL exposed contextual-provenance, direct-vs-contextual diagnostic,
+  union-headline, and source-span defects. The implementation agent fixed the direct/contextual
+  obligation provenance and headline issues in one fix round.
+- 2026-08-17: independent re-review remained FAIL: target-only widening destroyed boolean and
+  typed/asserted literal provenance, while nested member/arrow/operator spans remained shallow.
+  Per orchestration policy, work stopped before a production commit. The user approved this WU1b
+  reslice; it is explicitly narrower than backlog `111`'s call-site inference model.
