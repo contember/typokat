@@ -91,6 +91,7 @@ EOF spans.
 | `TK1192` | Resolved module has no default export (narrow Bundler default-import exception) |
 | `TK1314` | `export as namespace` appears outside a module |
 | `TK1315` | `export as namespace` appears in a non-declaration source file |
+| `TK1360` | Expression type does not satisfy the expected type in a `satisfies` expression |
 | `TK2300` | Duplicate identifier across incompatible merged members |
 | `TK2302` | Static members cannot reference class type parameters |
 | `TK2304` | Cannot find name (unresolved identifier) |
