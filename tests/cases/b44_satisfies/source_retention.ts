@@ -18,5 +18,27 @@ class Published {
 declare const published: Published;
 const publishedTag: "left" = published.field.kind;
 
+class PublishedExplicitCallback {
+  field = {
+    callback: (value: number) => value,
+  } satisfies {
+    callback: (value: number) => number;
+  };
+}
+
+declare const publishedExplicit: PublishedExplicitCallback;
+const explicitResult: number = publishedExplicit.field.callback(1);
+
+class PublishedContextualCallback {
+  field = {
+    callback: value => value,
+  } satisfies {
+    callback: (value: number) => number;
+  };
+}
+
+declare const publishedContextual: PublishedContextualCallback;
+const contextualResult: number = publishedContextual.field.callback(1);
+
 declare function needNumber(value: number): number;
 needNumber("bad") satisfies number; // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'
