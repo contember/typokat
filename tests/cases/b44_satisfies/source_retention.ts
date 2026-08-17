@@ -11,6 +11,13 @@ const exactSecond: number = pair[1];
 const callback = ((value) => value + 1) satisfies (value: number) => number;
 const callbackResult: number = callback(1);
 
+const holder = {
+  callback: value => value,
+} satisfies {
+  callback: (value: number) => number;
+};
+const holderResult: number = holder.callback(1);
+
 class Published {
   field = { kind: "left" } satisfies { kind: "left" | "right" };
 }
