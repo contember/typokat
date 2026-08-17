@@ -4,7 +4,7 @@
 let value = 1;
 
 (value satisfies number)++;
-((value satisfies number)!)++;
+((value satisfies number)!)++; // incomplete[expr-infer/non-null-assertion/self]
 
 const unresolved = Missing satisfies number; // error[TK2304]: Cannot find name 'Missing'
 

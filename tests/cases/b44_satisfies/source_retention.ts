@@ -18,6 +18,17 @@ const holder = {
 };
 const holderResult: number = holder.callback(1);
 
+const widenedObject = { text: "value", count: 1 } satisfies { text: string; count: number };
+const exactText: "value" = widenedObject.text; // error[TK2322]: Type 'string' is not assignable to type '"value"'
+const exactCount: 1 = widenedObject.count; // error[TK2322]: Type 'number' is not assignable to type '1'
+
+const widenedTuple = ["value", 1] satisfies [string | number, string | number];
+const exactTupleText: "value" = widenedTuple[0]; // error[TK2322]: Type 'string' is not assignable to type '"value"'
+const exactTupleCount: 1 = widenedTuple[1]; // error[TK2322]: Type 'number' is not assignable to type '1'
+
+const widenedArray = ["left", "right"] satisfies string[];
+const exactArrayElement: "left" | "right" = widenedArray[0]; // error[TK2322]
+
 class Published {
   field = { kind: "left" } satisfies { kind: "left" | "right" };
 }
