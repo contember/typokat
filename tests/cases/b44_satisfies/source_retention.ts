@@ -18,6 +18,14 @@ const holder = {
 };
 const holderResult: number = holder.callback(1);
 
+const explicitLiteralCallback =
+  ((value: number) => "fixed") satisfies (value: number) => "fixed";
+const retainedExplicitReturn: "fixed" = explicitLiteralCallback(1);
+
+const contextualLiteralCallback =
+  ((value) => "fixed") satisfies (value: number) => "fixed";
+const retainedContextualReturn: "fixed" = contextualLiteralCallback(1);
+
 const widenedObject = { text: "value", count: 1 } satisfies { text: string; count: number };
 const exactText: "value" = widenedObject.text; // error[TK2322]: Type 'string' is not assignable to type '"value"'
 const exactCount: 1 = widenedObject.count; // error[TK2322]: Type 'number' is not assignable to type '1'
@@ -94,6 +102,30 @@ class PublishedLiteralProvenance {
 declare const publishedLiteralProvenance: PublishedLiteralProvenance;
 const publishedFlag: true = publishedLiteralProvenance.field.flag;
 const publishedText: "fixed" = publishedLiteralProvenance.field.text;
+
+class PublishedNestedIdentifiers {
+  field = {
+    text: typedText,
+    tuple: [typedCount],
+    array: [typedText],
+  } satisfies {
+    text: string;
+    tuple: [number];
+    array: string[];
+  };
+}
+
+declare const publishedNestedIdentifiers: PublishedNestedIdentifiers;
+const publishedNestedText: "typed" = publishedNestedIdentifiers.field.text;
+const publishedNestedTuple: 2 = publishedNestedIdentifiers.field.tuple[0];
+const publishedNestedArray: "typed" = publishedNestedIdentifiers.field.array[0];
+
+class PublishedLiteralCallback {
+  field = ((value) => "fixed") satisfies (value: number) => "fixed";
+}
+
+declare const publishedLiteralCallback: PublishedLiteralCallback;
+const publishedLiteralReturn: "fixed" = publishedLiteralCallback.field(1);
 
 declare function needNumber(value: number): number;
 needNumber("bad") satisfies number; // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'

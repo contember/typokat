@@ -16,3 +16,11 @@ mutablePoint[0] = 3;
 
 const parenthesized = ({ value: 1 }) satisfies { value: number };
 const parenthesizedValue: number = parenthesized.value;
+
+const objectUnion = { kind: "a", value: 1 } satisfies
+  | { kind: "a"; value: number }
+  | { kind: "b"; value: string };
+const objectUnionKind: "a" = objectUnion.kind;
+
+const tupleUnion = ["a", 1] satisfies ["a", number] | ["b", string];
+const tupleUnionKind: "a" = tupleUnion[0];
