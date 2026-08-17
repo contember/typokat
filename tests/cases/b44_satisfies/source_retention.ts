@@ -70,6 +70,11 @@ const contextualAnnotatedUnionReturn =
   (value: number) => { kind: "a" | "b" };
 const narrowedContextualAnnotatedReturn: "a" = contextualAnnotatedUnionReturn(1).kind; // error[TK2322]
 
+const blockReturnWithExcess = ((flag) => {
+  return { value: flag ? 1 : 2, extra: true };
+}) satisfies (flag: boolean) => { value: number };
+const retainedBlockExcess: boolean = blockReturnWithExcess(true).extra;
+
 const widenedObject = { text: "value", count: 1 } satisfies { text: string; count: number };
 const exactText: "value" = widenedObject.text; // error[TK2322]: Type 'string' is not assignable to type '"value"'
 const exactCount: 1 = widenedObject.count; // error[TK2322]: Type 'number' is not assignable to type '1'
@@ -170,6 +175,15 @@ class PublishedLiteralCallback {
 
 declare const publishedLiteralCallback: PublishedLiteralCallback;
 const publishedLiteralReturn: "fixed" = publishedLiteralCallback.field(1);
+
+class PublishedAnnotatedReturn {
+  field =
+    ((value: number): { kind: "a" | "b" } => ({ kind: "a" })) satisfies
+    (value: number) => { kind: "a" | "b" };
+}
+
+declare const publishedAnnotatedReturn: PublishedAnnotatedReturn;
+const narrowedPublishedAnnotatedReturn: "a" = publishedAnnotatedReturn.field(1).kind; // error[TK2322]
 
 declare function needNumber(value: number): number;
 needNumber("bad") satisfies number; // error[TK2345]: Argument of type 'string' is not assignable to parameter of type 'number'

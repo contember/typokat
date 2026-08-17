@@ -97,5 +97,21 @@ const nestedResidualTuple = {
   nested: [1], // error[TK2322]
 } satisfies { nested: [number, number] };
 
+const blockReturnMismatch = ((flag) => {
+  if (flag) return { value: "wrong" };
+  return { value: 1 };
+}) satisfies (flag: boolean) => { value: number }; // error[TK1360]
+
+const blockReturnMissing = ((flag) => {
+  return { value: flag ? 1 : 2 };
+}) satisfies (flag: boolean) => { value: number; missing: string }; // error[TK1360]
+
+const nestedBlockCallback = {
+  callback: (flag) => { // error[TK2322]
+    if (flag) return { value: "wrong" };
+    return { value: 1 };
+  },
+} satisfies { callback: (flag: boolean) => { value: number } };
+
 declare const wholeUnion: { kind: "a"; value: string } | { kind: "b"; value: boolean };
 wholeUnion satisfies { kind: "a" | "b"; value: number }; // error[TK1360]
