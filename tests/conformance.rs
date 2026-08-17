@@ -107,6 +107,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b64_readonly_infer_binder", true),
     ("b34_fix_params_keyof", true),
     ("b33_as_cast_assignability", true),
+    // Backlog 44 `satisfies`: disabled RED acceptance spec. The implementation
+    // enables it after source-preserving contextual assignability lands.
+    ("b44_satisfies", false),
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),

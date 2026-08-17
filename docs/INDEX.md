@@ -24,6 +24,10 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-17-satisfies.md`](sprints/sprint-2026-08-17-satisfies.md) — ordered first;
+  source-preserving contextual checking and a checker-only comparison with TypeScript PR #46827.
+- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — ordered second;
+  bounded AST-directed const contexts and an explicit comparison with the broader PR #29510.
 - [`sprint-2026-08-15-library-compiler-decomposition.md`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) —
   active move-only decomposition of the largest remaining Rust source hotspot, with a frozen
   full-token/path manifest, one implementation writer, and complete library lifecycle gates.
@@ -32,6 +36,10 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Backlog 44 split into two ordered sprints on 2026-08-17** —
+  [`satisfies`](sprints/sprint-2026-08-17-satisfies.md) runs first as the smaller contextual-
+  assignability slice; [`as const`](sprints/sprint-2026-08-17-as-const.md) follows with the approved
+  bounded shared-capability boundary. Each records semantic and generated diff costs separately.
 - **Library compiler decomposition active 2026-08-15** — the
   [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
   12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,

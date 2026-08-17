@@ -34,6 +34,8 @@ The currently unowned tail includes:
 - deferred model shapes without an exact dedicated diagnostic: type-parameter defaults, optional
   tuple elements, and generic/deferred `T[K]` outside mapped templates;
 - assertion source/target overlap validation (`TK2352`);
+- const-assertion surface deliberately excluded from backlog `44`'s shared-capability slice:
+  object-literal computed keys and methods under const context, plus invalid-operand `TS1355`;
 - exception/catch flow, async/generator expression semantics, bigint/symbol/unique and
   literal-type forms, private expressions, and class static blocks, auto-accessors, and index
   signatures; polymorphic `this` type annotations/qualified `this` type names (distinct from the
