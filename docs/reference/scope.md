@@ -31,7 +31,7 @@ most of in/out:
 
 | Range | Count | Theme | In scope? |
 |---|---:|---|---|
-| `1xxx` | 398 | parse / grammar | **No**, except semantic-module `TK1192` on the bounded direct-default-import route |
+| `1xxx` | 398 | parse / grammar | **No**, except semantic `TK1192` and `TK1360` on their bounded checker routes |
 | **`2xxx`** | **529** | **semantic / type** | **Yes** — the core (with a handful of module/emit strays called out below) |
 | `4xxx` | 109 | declaration emit | **No** — typokat does not emit |
 | `5xxx` | 65 | compiler options / tsconfig | **No** — no compiler-config surface |
@@ -45,9 +45,9 @@ The `2xxx` + `7xxx` ranges are the **candidate pool**, minus the module/emit
 exceptions below. The marked Tier S/A/B families are the canonical 1.0 inventory;
 an unlisted code is not implicitly promised. Backlog `75` owns the remaining
 candidate-range census and either promotes each family here or records a sound OOS
-disposition. `TK1192` is the one deliberate `1xxx` exception: TypeScript numbers the
-resolved-module missing-default diagnostic in the grammar range, but typokat emits it from semantic
-default-slot lookup, not parsing.
+disposition. `TK1192` and `TK1360` are the deliberate `1xxx` exceptions. TypeScript numbers them in
+the grammar range, but typokat emits them from semantic default-slot lookup and `satisfies`
+assignability, respectively, not parsing.
 
 ## In-scope tiers
 
@@ -62,7 +62,8 @@ already emitted.
 
 **Assignability & calls**
 <!-- scope-family: s-assignability -->
-- `TK2322` Type '{0}' is not assignable to type '{1}'.
+- `TK2322` Type '{0}' is not assignable to type '{1}'. · `TK1360` Type '{0}' does not satisfy the
+  expected type '{1}'.
 <!-- scope-family: s-call-arguments -->
 - `TK2345` Argument of type '{0}' is not assignable to parameter of type '{1}'.
 <!-- scope-family: s-call-arity -->

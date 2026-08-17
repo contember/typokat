@@ -70,8 +70,8 @@ spec, review, differential, or final gate above.
 6. Run the ordinary exact conformance gate when the cluster closes, not after every edit, unless no
    narrower gate can observe the bug. Use
    `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture`. It
-   covers the frozen 567-project / 683-source inventory once through the shared route and prints
-   receipt `567/683/567/0`. Freeze the resulting small diff and hand that exact diff to the
+   covers the frozen 572-project / 688-source inventory once through the shared route and prints
+   receipt `572/688/572/0`. Freeze the resulting small diff and hand that exact diff to the
    independent adversarial reviewer. Start no new RED cluster until the reviewed cluster lands.
 7. Check progress every 20 minutes. Progress means an edit, a test result, or concrete root-cause
    evidence. If there is none, transfer ownership and context to another implementation agent.
@@ -91,14 +91,13 @@ spec, review, differential, or final gate above.
       conformance_full_shared_cold_parity -- --ignored --exact --nocapture
     ```
 
-    It uses the same frozen inventory, prints receipt `567/683/567/567`, and passed in 1,075.40 s
-    (wall 1,076.01 s). `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and
-    on manual dispatch.
+    It uses the same frozen inventory, prints receipt `572/688/572/572`, and passed in 1,768.47 s
+    in the sprint-closure run.
+    `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and on manual dispatch.
 
-The ordinary exact gate's three warm two-vCPU measurements are 120.35 s, 110.62 s, and 111.28 s
-(median 111.28 s, maximum 120.35 s). `conformance_inventory_matches_frozen_receipt` is the count
-and ordering authority; the printed receipt repeats aggregate totals. Do not maintain a second
-hand-counted inventory.
+The expanded ordinary exact gate took 117.12 s in its sprint-closure two-vCPU run.
+`conformance_inventory_matches_frozen_receipt` is the count and ordering authority; the printed
+receipt repeats aggregate totals. Do not maintain a second hand-counted inventory.
 
 ### Required extra gate: inference / contextual typing changes
 

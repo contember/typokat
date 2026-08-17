@@ -1,3 +1,13 @@
+> **OUTCOME — shipped 2026-08-17.** Typokat now contextually checks `satisfies`, preserves the
+> source type, reports `TK1360`/`TK2322`/`TK2353` at the owned source sites, and publishes the same
+> type through class fields. WU0 and review amendments are `24dcf99` through `2fc46ec`; semantic
+> implementation is `23b9a74`; the official gate and archive closure are in the archive commit.
+> Independent adversarial review passed. Verification passed: full `cargo test`, workspace clippy,
+> ordinary conformance `572/688/572/0` in 117.12 s, shared/cold parity `572/688/572/572` in
+> 1,768.47 s, three 400-program differential seeds with zero divergence, and the 874-case official
+> suite with 379 in scope, zero regressions, zero progress, and an unchanged scoreboard. Deferred:
+> the approved cosmetic operator-gap span and the separate `as const` sprint.
+
 # Sprint — source-preserving `satisfies` checking (2026-08-17)
 
 **Goal.** Ship the `satisfies` half of backlog `44`: contextually type and check the source
@@ -191,3 +201,24 @@ official harness, so they are not parallel implementation units.
   typed/asserted literal provenance, while nested member/arrow/operator spans remained shallow.
   Per orchestration policy, work stopped before a production commit. The user approved this WU1b
   reslice; it is explicitly narrower than backlog `111`'s call-site inference model.
+- 2026-08-17: later review rounds replaced flat/eager shape probes with one tree-shaped obligation
+  sink built by the existing contextual walk. They also fixed explicit and block return authority,
+  nested residual/excess precedence, class publication, query-free lexical annotation readiness,
+  and ordinary contextual-typing regressions. Final independent review returned PASS.
+- 2026-08-17: comparison receipt. Semantic production is `+1,743/-415` across 13 Rust files:
+  expression/callback inference `+840/-154`, statement/replay/effects `+582/-196`, class
+  publication `+293/-65`, and binder/diagnostic/route support `+28/-0`. Colocated Rust tests are
+  `+760/-6`; the committed B44 fixtures add 362 lines; external acceptance/inventory changes are
+  `+19/-20`; the official harness is `+2/-5`; generated baselines and the scoreboard change by
+  zero lines.
+- 2026-08-17: TypeScript PR #46827 changes its semantic checker by only `+18/-0`, versus typokat's
+  1,743 production additions (about 97x; 2,158 changed production lines total). TypeScript reused a
+  mature contextual checker and diagnostic elaboration path. Typokat had to add source-literal
+  provenance, deterministic tree replay and diagnostic cardinality, scoped return policies,
+  class syntax-only publication and phase readiness, effect reachability, binder traversal, and
+  `TK1360`. Parser/emitter/language-service churn is excluded because OXC owns typokat's AST and
+  typokat does not emit JavaScript.
+- 2026-08-17: closure gates passed. Differential seeds 1/2/3 were 400/400 MATCH in 1,427.1 s,
+  1,449.3 s, and 1,447.2 s. Ordinary and full-parity receipts were `572/688/572/0` and
+  `572/688/572/572`; the official report remained 874/379 with zero scoreboard movement. The only
+  retained deviation is the documented AST operator-gap span.

@@ -787,6 +787,14 @@ property, fixed tuple positions, function param/return; same-name covariant cand
     <!-- div: id=conditional/buried-in-named-body dir=over scope=b-type-level-tail owner=../backlog/27-template-buried-conditional-evaluation.md witness=../../tests/cases/m25_conditional_types -->
   - An `infer` left unbound in a taken true branch resolves to `unknown` (matches tsc).
 
+## Contextual expressions
+
+- **`satisfies` uses the AST operator gap as its primary span (cosmetic).** OXC exposes the source
+  expression and target annotation spans, but not the `satisfies` token span. Typokat therefore
+  highlights the gap between those nodes, which can include adjacent whitespace; tsc starts at the
+  keyword. The diagnostic code, line, and rejection are unchanged.
+  <!-- div: id=contextual/satisfies-operator-gap-span dir=cosmetic scope=s-assignability owner=design-oos witness=../../tests/cases/b44_satisfies -->
+
 ## Optional properties (M21)
 
 Implemented (M21): optional properties (`a?: T`) on object types, interfaces, and class instance

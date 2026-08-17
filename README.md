@@ -18,11 +18,11 @@ model** faithfully; when in doubt it *over-reports* (the safe direction). Full d
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
   <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
-  <img alt="Conformance inventory" src="https://img.shields.io/badge/conformance-567%20projects%20%2F%20683%20sources-blue">
+  <img alt="Conformance inventory" src="https://img.shields.io/badge/conformance-572%20projects%20%2F%20688%20sources-blue">
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-The enabled conformance inventory contains **567 fixture projects / 683 source files**. The
+The enabled conformance inventory contains **572 fixture projects / 688 source files**. The
 inventory and ordering are frozen by
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary marker gate prints the same totals in its run receipt. `clippy -D warnings` is clean,
@@ -179,7 +179,7 @@ By design `typokat` keeps types and drops emit/runtime; beyond that, these are c
   `keyof` over unions/`never`/template-literal key sources plus two tsc-parity conditional
   edges are documented divergences (backlog `26`, `27`, `35`–`37`). (A bytecode VM is a
   deferred, profiling-gated refactor — see `docs/decisions/0001-…`.)
-- **Remaining type-model gaps** — `satisfies`/`as const` are not modeled yet. Enums now have
+- **Remaining type-model gaps** — `satisfies` is modeled; `as const` remains deferred. Enums now have
   nominal whole/member types, initializer checking, value access, flow narrowing, legal merges,
   and project slots. Function-local and other nested enum declarations remain explicitly
   incomplete, and an enum nested in an attached-owner namespace remains withheld with that owner
@@ -253,10 +253,10 @@ cargo test --test conformance conformance -- --exact --nocapture
 cargo clippy --all-targets -- -D warnings
 ```
 
-The exact conformance command checks all 567 fixture projects / 683 source files through the
-ordinary shared route and prints receipt `567/683/567/0` (projects/sources/shared/cold). Three warm
-runs under `cpu-lease run -n 2 --` took 120.35 s, 110.62 s, and 111.28 s (median 111.28 s, maximum
-120.35 s). The unchanged pull-request risk matrix is reproduced by
+The exact conformance command checks all 572 fixture projects / 688 source files through the
+ordinary shared route and prints receipt `572/688/572/0` (projects/sources/shared/cold). A
+sprint-closure run over this inventory took 117.12 s under `cpu-lease run -n 2 --`. The unchanged
+pull-request risk matrix is reproduced by
 `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s).
 
 Full shared/cold parity over the identical inventory is intentionally separate:
@@ -266,7 +266,7 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `567/683/567/567`; the measured run passed in 1,075.40 s (wall 1,076.01 s).
+It prints receipt `572/688/572/572` and passed in 1,768.47 s in the sprint-closure run.
 `.github/workflows/full-parity.yml` runs this unsharded command weekly and on manual dispatch.
 
 ## Continuous integration

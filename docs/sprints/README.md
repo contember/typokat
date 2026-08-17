@@ -20,8 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-17-satisfies.md`](sprint-2026-08-17-satisfies.md) — ordered first; implement and
-  measure source-preserving contextual `satisfies` checking against TypeScript PR #46827.
 - [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — ordered second; resolve the
   approved bounded parity slice, implement AST-directed const contexts, and compare with PR #29510.
 - [`sprint-2026-08-15-library-compiler-decomposition.md`](sprint-2026-08-15-library-compiler-decomposition.md) —

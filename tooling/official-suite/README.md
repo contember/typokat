@@ -106,7 +106,7 @@ redirects make the cache incompatible.
    - `multifile` — more than one `@filename` unit (modules / cross-file).
    - `syntax:<feature>` — uses a checking feature typokat doesn't model and that
      wouldn't self-report (decorators, `namespace`/`import`/`export`,
-     `satisfies`, `as const`, user-defined type predicates/assertions, or
+     `as const`, user-defined type predicates/assertions, or
      `instanceof` narrowing).
      Heuristic regex — see `OUT_OF_SCOPE_SYNTAX`.
    - `unsupported` — typokat exited **3** (incomplete): it recorded an in-scope

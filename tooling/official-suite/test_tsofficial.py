@@ -152,13 +152,12 @@ class SyntaxBucketTests(unittest.TestCase):
     def test_enum_is_no_longer_syntax_gated(self):
         self.assertIsNone(ts.syntax_bucket("enum E { A }"))
 
-    def test_satisfies_gate_ignores_line_comment_prose(self):
+    def test_satisfies_is_no_longer_syntax_gated(self):
         self.assertIsNone(ts.syntax_bucket(
             "const x = 1; // x satisfies the constraint\n"
             "// Initializer satisfies strict initialization\n"
         ))
-        self.assertEqual(ts.syntax_bucket("const x = 1 satisfies number;"),
-                         "satisfies")
+        self.assertIsNone(ts.syntax_bucket("const x = 1 satisfies number;"))
 
 
 # --- Finding 1: identity-based ratchet ---------------------------------------

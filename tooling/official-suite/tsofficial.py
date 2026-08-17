@@ -160,8 +160,6 @@ OUT_OF_SCOPE_SYNTAX = [
     # conditional-type + infer gates removed — M25 models them (backlog 09).
     # mapped-type gate removed — M26 models them (backlog 10).
     # template-lit-type gate removed — M27 models them (backlog 11).
-    # Ignore prose in line comments; the curated corpus uses "satisfies" there.
-    ("satisfies", re.compile(r"^(?:(?!//).)*\bsatisfies\b", re.M)),
     ("as-const", re.compile(r"\bas\s+const\b")),
     # Deferred narrowing (README: type predicates + unstructured-flow CFG = M23).
     # The conformance typeGuards/ tests exercise exactly these, so gate them until
