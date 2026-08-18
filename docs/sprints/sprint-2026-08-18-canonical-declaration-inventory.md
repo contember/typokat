@@ -43,23 +43,18 @@ passes its closure gates.
 
 ## Work units
 
-### WU0 — commit disabled RED crash and parity specifications (effort M)
+### WU0a — commit the binding-pattern owner RED specification (effort S)
 
 - **Problem.** The first official-suite failure is a missing lexical owner for a default expression
-  inside a binding pattern. After that is fixed, a block-local type used by an annotation or
-  assertion reaches a binder group absent from the published registry.
-- **Verify first.** Reproduce both panics at `709cf26`; cross-check admitted rows with pinned
-  TypeScript 6.0.3; record the exact binder declaration, scope, group, lexical owner, and published
-  group count before writing production code.
-- **Scope.** Add behavior-neutral disabled or unit-level RED witnesses for object/parameter/catch
-  defaults; script-continuation blocks; function and arrow bodies; external-module controls;
-  interface, alias, class, and enum kinds; namespaces/global augmentations; duplicate source
-  offsets in continued binders; and selected collision replay.
-- **Acceptance / witness.** The spec commit contains no production change. Every intended row is
-  RED for the measured cause, not parser failure. The pre-existing declaration/group/replay order
-  for currently admitted declarations is captured as an exact comparison oracle.
-- **Touch points.** Focused checker/binder test modules, a disabled conformance corpus if needed,
-  `tests/conformance.rs`, and this run log.
+  inside a binding pattern.
+- **Verify first.** Reproduce the panic at `709cf26` for object, parameter, and catch defaults and
+  cross-check all three with pinned TypeScript 6.0.3.
+- **Scope.** Add one disabled behavior-neutral corpus containing only the binding-pattern owner
+  cluster.
+- **Acceptance / witness.** The spec commit contains no production change. Forced execution is RED
+  for the missing-owner panic, while tsc is clean.
+- **Touch points.** `tests/cases/b84_binding_pattern_owners/`, `tests/conformance.rs`, fixture index,
+  and this run log.
 
 ### WU1 — land binding-pattern lexical reservation completeness (effort S)
 
@@ -70,51 +65,107 @@ passes its closure gates.
 - **Scope.** Recurse object/array/rest/assignment binding patterns in source order. Reserve the
   assignment right-hand side through the existing initializer and expression reservation paths.
   Do not add computed-key semantics or change unsupported binding-pattern accounting.
-- **Acceptance / witness.** Object, parameter, and catch defaults no longer panic. Existing
-  unsupported array-pattern output is byte-identical. The ordinary conformance gate has no delta
-  beyond the new witnesses.
+- **Acceptance / witness.** Enable `b84_binding_pattern_owners`. Object, parameter, and catch
+  defaults no longer panic. Existing unsupported array-pattern output is byte-identical. The
+  ordinary conformance gate has no delta beyond the new witnesses. Independently review and commit
+  this cluster before starting the declaration-inventory RED cluster.
 - **Touch points.** `crates/typokat-check/src/check/checker/lexical_events.rs` and colocated tests.
+
+### WU0b — commit the inventory RED corpus and GREEN parity oracle (effort M)
+
+- **Problem.** After WU1, a block-local type used by an annotation or assertion reaches a binder
+  group absent from the published registry. A declaration inventory also risks admitting syntax
+  the semantic binder rejects or changing route-specific group order.
+- **Verify first.** Reproduce the publication panic after WU1. Record exact binder declaration,
+  scope, group, lexical owner, and published group counts on every route before implementation.
+- **Scope.** Add a disabled RED corpus for used and unused block/function/control-flow local
+  interface, alias, class, and enum declarations. Add GREEN parity controls for sibling shadowing
+  versus real merges, named and anonymous default classes, and a named class expression that must
+  not become a type fragment. Pin test-support prelude, legacy library-only compile, shared-provider
+  user, sparse selected replay, complete-source library+user, and multi-user project routes.
+- **Acceptance / witness.** RED rows fail for the measured publication/owner causes. GREEN controls
+  retain exact declaration/group/order/owner receipts. Each witness names its future owner: WU3a
+  activates interface-owner rows, WU3b activates reservation/publication rows, and WU3c removes the
+  legacy parity oracle only after every remaining consumer moves.
+- **Touch points.** `tests/cases/b84_declaration_inventory/`, `tests/conformance.rs`, fixture index,
+  binder/checker route contract tests, and this run log.
 
 ### WU2 — build and prove a canonical bound type-declaration inventory (effort L)
 
 - **Problem.** The binder knows declaration identity and scope, while the checker independently
   rediscovers AST payloads and scope ancestry.
-- **Verify first.** Prototype a read-only inventory and compare it against the WU0 oracle without
+- **Verify first.** Prototype a read-only inventory and compare it against the WU0b oracle without
   switching any production consumer. Stop if it cannot reproduce existing fragment order, owner
   identity, and selected-replay membership.
 - **Scope.** Extend the existing source declaration visitor with a type-fragment projection and
   interface header/heritage/member occurrence sites. After binding, join each source fragment to
-  its exact `LexicalDeclaration` and build a checker-private dense mapping keyed by `DeclId`. Use
-  `TypeGroup::fragments` as the only fragment-order authority. Do not add a second exact-site index
-  or a second publication registry.
+  its exact `LexicalDeclaration` and build a checker-private dense mapping keyed by `DeclId`. Build
+  the manifest and bound inventory exactly once per `(module, program)` and pass them read-only
+  through each route. Use `TypeGroup::fragments` as the only fragment-order authority. Add test-only
+  comparison with the legacy walker. Do not change ticket reservation or any semantic consumer,
+  and do not add a second exact-site index or publication registry.
 - **Acceptance / witness.** For every selected source, each admitted binder type fragment has
   exactly one AST payload and owner set; each source type fragment either joins exactly one bound
   declaration or is explicitly rejected. Current supported rows reproduce identical `DeclId`,
   `ScopeId`, `TypeGroupId`, fragment order, and replay ownership. The known local-block misses are
   the only intentional delta.
 - **Touch points.** `crates/typokat-binder/src/binder/declaration.rs`, a checker-private inventory
-  module under `checker/decls/`, `checker/lexical_events.rs`, and focused contract tests.
+  module under `checker/decls/`, route plumbing, and focused contract tests. Production
+  `checker/lexical_events.rs` remains unchanged in this WU.
 
-### WU3 — cut reservation and publication over to the inventory (effort L)
+### ADR — freeze the proven inventory boundary (effort S)
 
-- **Problem.** `reserve_type_decls*`, class-owner attachment, and trusted-prelude validation still
-  depend on the parallel `walk_type_decls` traversal.
+- **Problem.** Consumer cutover must not drift from the behavior-neutral seam WU2 proved.
+- **Verify first.** Require WU2's exact route/order/replay receipts.
+- **Scope.** Record the accepted identity, ordering, terminality, and single-publication contract as
+  an ADR before any semantic consumer moves.
+- **Acceptance / witness.** The ADR names `DeclId` and `TypeGroup::fragments` as authorities,
+  preserves one `Pass`/published environment, and states the selected-owner terminality rules below.
+- **Touch points.** `docs/decisions/`, its index, and this sprint.
+
+### WU3a — cut interface occurrence owners over to the manifest (effort M)
+
+- **Problem.** The shallow interface census misses ordinary blocks and function bodies.
+- **Verify first.** Freeze interface owner order for all existing top-level, namespace, and global
+  rows, then compare manifest coverage before changing ticket reservation.
+- **Scope.** Reserve interface header/heritage/member tickets from the canonical source manifest and
+  remove only the shallow interface census.
+- **Acceptance / witness.** Backlog-84 function/arrow-local interface rows match tsc; existing
+  interface event order remains exact; non-interface reservation and type publication are unchanged.
+- **Touch points.** `checker/lexical_events.rs`, manifest plumbing, and WU3a fixtures/tests.
+
+### WU3b — cut type reservation and publication over to the inventory (effort L)
+
+- **Problem.** All four `reserve_type_decls*` routes still depend on the parallel
+  `walk_type_decls` traversal.
 - **Verify first.** Freeze WU2 receipts for standalone, combined library/user, external-module,
   namespace/global, and selected collision routes. Confirm `TypeDeclTable` remains the only
   construction table and the published type environment remains the only semantic authority.
-- **Scope.** Drive reservation, fill preparation, class binding attachment, trusted-prelude checks,
-  and selected replay from the bound inventory. Iterate group fragments in binder order. Before
-  semantic checking, make every bound group terminal either through the existing supported
-  construction policy or an explicit `TypeDecl::Unavailable`. Remove `walk_type_decls`, its scope
-  mirror, its parent-root filter, and the shallow interface occurrence walker after all consumers
-  move.
-- **Acceptance / witness.** The script-continuation local interface/alias/class controls check to
-  completion; supported mismatches report the expected `TK2322`; unsupported local enum policy is
-  explicit and non-panicking. Backlog-84 function/arrow-local interface witnesses match tsc. The
-  assertion in `decls/resolve.rs` remains unchanged and reachable tests never trip it.
-- **Touch points.** `checker/decls/mod.rs`, its consumers in `checker/mod.rs` and
-  `checker/library_compiler.rs`, class-owner attachment, lexical owner lookup, and focused route
-  tests.
+- **Scope.** Drive all four reservation variants, fill preparation, combined library/user handling,
+  and selected replay from the bound inventory. Iterate group fragments in binder order. A
+  local/delta group selected for the current construction pass must finish `Ready` or
+  `Unavailable`; an unselected frozen-prefix group retains its existing terminal. Missing payload
+  for an authenticated selected owner is a route/schedule failure, not `Unavailable`; syntax the
+  binder rejected creates no group terminal.
+- **Acceptance / witness.** Script-continuation local interface/alias/class controls check to
+  completion and mismatches report `TK2322`; unsupported local enum policy is explicit and
+  non-panicking. Complete/private routes and selected replay preserve exact terminal and owner sets.
+- **Touch points.** `checker/decls/mod.rs`, reservation call sites in `checker/mod.rs` and
+  `checker/library_compiler.rs`, and focused route/replay tests.
+
+### WU3c — move final consumers and remove the legacy walker (effort M)
+
+- **Problem.** Class attachment and trusted-prelude validation remain independent semantic
+  consumers even after reservation moves.
+- **Verify first.** Confirm WU3b has no legacy/new disagreement for every supported declaration.
+- **Scope.** Move class binding attachment and trusted-prelude checks to the inventory. Remove
+  `walk_type_decls`, its scope mirror, parent-root filter, and the test-only parity adapter only
+  after `rg` proves no consumer remains.
+- **Acceptance / witness.** Named/anonymous default class controls and named class-expression
+  negative controls remain exact; trusted prelude and class allocation order are unchanged; the
+  published-registry assertion remains and no reachable test trips it.
+- **Touch points.** Final consumers in `checker/mod.rs`, declaration walker removal in
+  `checker/decls/mod.rs`, route plumbing, and focused tests.
 
 ### WU4 — independent adversarial architecture review (effort M)
 
@@ -140,8 +191,7 @@ passes its closure gates.
 - **Scope.** Run full tests, ordinary conformance, complete shared/cold parity, clippy, format, docs,
   official-suite regression check, and the required randomized differential seeds if inference
   output changes. Update architecture/reference text to describe the single inventory. Delete or
-  rescope backlog 84 only after its acceptance passes. Record the accepted design as an ADR if WU2
-  validates the proposed inventory boundary, then archive this sprint.
+  rescope backlog 84 only after its acceptance passes, then archive this sprint.
 - **Acceptance / witness.** Zero unclassified regression; exact inventory/order receipts on every
   route; no reachable local-type publication panic; docs lifecycle clean. Rebase or cherry-pick the
   saved B44 WIP only after this sprint is archived, then rerun the entire `as const` integration
@@ -168,20 +218,25 @@ passes its closure gates.
   scope or merge order.
 - The inventory is an input manifest for the existing construction pipeline, not a semantic type
   registry. `TypeDeclTable` construction and one atomically published type environment remain.
-- Missing inventory coverage fails closed as an explicit unavailable/incomplete outcome before
-  semantic checking. The published-registry assertion is retained.
+- A local/delta group selected for the current construction pass must finish `Ready` or
+  `Unavailable`. An unselected frozen-prefix group retains its existing terminal. Missing payload
+  for an authenticated selected owner is a route/schedule failure; source syntax rejected by the
+  binder creates no group terminal. The published-registry assertion is retained.
 - WU2 is the falsifiability gate. If exact order and replay ownership cannot be reproduced without
   a second authority or broad binder rewrite, stop before WU3 and reconsider the narrow root-parity
   alternative.
 
 ## Sequencing
 
-1. WU0 lands alone as the RED specification and parity oracle.
-2. WU1 lands as an independent lexical-reservation fix.
-3. WU2 builds the read-only inventory and must pass its equivalence gate before any consumer moves.
-4. WU3 performs the single consumer cutover.
-5. WU4 uses an independent reviewer after the diff freezes.
-6. WU5 closes the lifecycle, then hands control back to the `as const` sprint.
+1. WU0a lands alone as the binding-pattern RED specification.
+2. WU1 fixes, reviews, enables, and commits that cluster.
+3. WU0b lands the separate inventory RED corpus and GREEN route/order oracle.
+4. WU2 builds the read-only inventory and must pass its equivalence gate before any consumer moves.
+5. The ADR freezes the proven seam.
+6. WU3a moves interface owners; WU3b moves reservation/publication; WU3c moves final consumers and
+   deletes the legacy walker. Each lands separately.
+7. WU4 uses an independent reviewer after the full cutover diff freezes.
+8. WU5 closes the lifecycle, then hands control back to the `as const` sprint.
 
 ## Run log
 
@@ -195,3 +250,7 @@ passes its closure gates.
   rest of the B44 WIP on `wip/b44-as-const` at `996eb5a`. The second minimized repro binds a local
   type group but omits it from the frozen published registry because the checker declaration walk
   starts from a different script-continuation root and silently drops the block.
+- 2026-08-18 — Independent decomposition review split the two RED clusters, made WU2 strictly
+  behavior-neutral, divided the consumer cutover into interface-owner/reservation/final-consumer
+  commits, narrowed terminality to selected local/delta groups, expanded the route/syntax matrix,
+  and moved the ADR before semantic cutover.
