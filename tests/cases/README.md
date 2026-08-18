@@ -414,6 +414,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b33_as_cast_assignability/` | backlog `33` | `as` / angle-bracket assertions participate in normal assignment and call-argument assignability |
 | `b44_satisfies/` | backlog `44` | `satisfies` contextually checks one-way assignability while preserving the source type and exact diagnostic ownership |
 | `b44_as_const/` | backlog `44` (disabled) | bounded `as const` contexts preserve owned literals, readonly object members and readonly tuples while stopping at referenced values; spread/elision remain `71`, computed keys/object methods/invalid operands remain `75` |
+| `b84_binding_pattern_owners/` | declaration-inventory sprint WU0a (disabled) | object, parameter, and catch binding-pattern default expressions preallocate their nested callable/body lexical owners before semantic checking |
 | `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |

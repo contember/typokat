@@ -112,6 +112,9 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 44 `as const`: disabled RED acceptance spec. WU1 enables it after
     // AST-directed const contexts land on ordinary and class-publication paths.
     ("b44_as_const", false),
+    // Declaration-inventory sprint WU0a. Disabled RED acceptance spec; WU1
+    // enables it after binding-pattern default expressions reserve lexical owners.
+    ("b84_binding_pattern_owners", false),
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),
