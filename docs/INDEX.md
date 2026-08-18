@@ -24,8 +24,12 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-18-canonical-declaration-inventory.md`](sprints/sprint-2026-08-18-canonical-declaration-inventory.md) —
+  binder-authenticated declaration inventory, publication completeness, and backlog-84 closure;
+  blocks the saved B44 `as const` WIP.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — ordered second;
-  bounded AST-directed const contexts and an explicit comparison with the broader PR #29510.
+  bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
+  paused with WIP preserved at `996eb5a`.
 - [`sprint-2026-08-15-library-compiler-decomposition.md`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) —
   active move-only decomposition of the largest remaining Rust source hotspot, with a frozen
   full-token/path manifest, one implementation writer, and complete library lifecycle gates.
@@ -34,11 +38,14 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Backlog 44 is halfway shipped** — the archived
+- **Declaration inventory blocks backlog 44** — the active
+  [`declaration-inventory sprint`](sprints/sprint-2026-08-18-canonical-declaration-inventory.md)
+  replaces parallel binder/checker/interface declaration traversals with one authenticated
+  inventory and closes the reachable local-type publication panic. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
   contextual checking and records the comparison with TypeScript PR #46827. The active
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) follows with the approved bounded
-  shared-capability boundary.
+  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) is paused behind that blocker; its WIP
+  is preserved at `996eb5a`.
 - **Library compiler decomposition active 2026-08-15** — the
   [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
   12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,

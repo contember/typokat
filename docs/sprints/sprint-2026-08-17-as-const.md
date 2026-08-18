@@ -194,3 +194,8 @@ outcome must state the difference instead of presenting an apples-to-apples feat
   remains registered `false`. A fresh isolated-target inventory test passed under a two-vCPU lease
   with the unchanged `572/688` inventory receipt; the isolated target avoids the pre-existing stale
   Rust object in the shared target without deleting shared build artifacts.
+- 2026-08-18 — WU1–WU3 implementation and review state is preserved on local branch
+  `wip/b44-as-const` at `996eb5a`. Removing the official syntax gate exposed a pre-existing
+  binder/publication split for block-local type declarations. This sprint pauses until the
+  [`canonical declaration inventory sprint`](sprint-2026-08-18-canonical-declaration-inventory.md)
+  ships; the saved B44 diff must then be reapplied and all integration gates rerun.
