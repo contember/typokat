@@ -14,10 +14,10 @@ use crate::source::{SourceOrdinal, SourceUnit};
 use crate::span::Span;
 use crate::types::repr::{ClassId, TypeParamId};
 use oxc_ast::ast::{
-    Argument, ArrayExpressionElement, ChainElement, Class, ClassElement, Declaration,
-    ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft, FormalParameters,
-    Function, ObjectPropertyKind, Program, PropertyKey, Statement, TSModuleDeclaration,
-    TSModuleDeclarationBody, TSSignature, VariableDeclaration,
+    Argument, ArrayExpressionElement, BindingPattern, ChainElement, Class, ClassElement,
+    Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft,
+    FormalParameters, Function, ObjectPropertyKind, Program, PropertyKey, Statement,
+    TSModuleDeclaration, TSModuleDeclarationBody, TSSignature, VariableDeclaration,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -807,6 +807,16 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             Statement::TryStatement(statement) => {
                 self.reserve_statement_list(unit, &statement.block.body, false, allocator)?;
                 if let Some(handler) = &statement.handler {
+                    if let Some(parameter) = &handler.param {
+                        self.reserve_binding_pattern_expressions(
+                            SourceSite {
+                                unit,
+                                source_start: parameter.span.start,
+                            },
+                            &parameter.pattern,
+                            allocator,
+                        )?;
+                    }
                     self.reserve_statement_list(unit, &handler.body.body, false, allocator)?;
                 }
                 if let Some(finalizer) = &statement.finalizer {
@@ -870,6 +880,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
             self.declarators_by_source
                 .entry((source.ordinal(), source.source_start))
                 .or_insert(index);
+            self.reserve_binding_pattern_expressions(source, &declarator.id, allocator)?;
             if let Some(initializer) = &declarator.init {
                 self.reserve_initializer(source.unit, initializer, allocator);
                 self.reserve_expression(source, initializer, allocator)?;
@@ -1173,9 +1184,46 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
         for parameter in &parameters.items {
+            self.reserve_binding_pattern_expressions(source, &parameter.pattern, allocator)?;
             if let Some(initializer) = &parameter.initializer {
                 self.reserve_initializer(source.unit, initializer, allocator);
                 self.reserve_expression(source, initializer, allocator)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn reserve_binding_pattern_expressions<Allocator>(
+        &mut self,
+        source: SourceSite,
+        pattern: &BindingPattern<'_>,
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        match pattern {
+            BindingPattern::BindingIdentifier(_) => {}
+            BindingPattern::ObjectPattern(object) => {
+                for property in &object.properties {
+                    self.reserve_binding_pattern_expressions(source, &property.value, allocator)?;
+                }
+                if let Some(rest) = &object.rest {
+                    self.reserve_binding_pattern_expressions(source, &rest.argument, allocator)?;
+                }
+            }
+            BindingPattern::ArrayPattern(array) => {
+                for element in array.elements.iter().flatten() {
+                    self.reserve_binding_pattern_expressions(source, element, allocator)?;
+                }
+                if let Some(rest) = &array.rest {
+                    self.reserve_binding_pattern_expressions(source, &rest.argument, allocator)?;
+                }
+            }
+            BindingPattern::AssignmentPattern(assignment) => {
+                self.reserve_binding_pattern_expressions(source, &assignment.left, allocator)?;
+                self.reserve_initializer(source.unit, &assignment.right, allocator);
+                self.reserve_expression(source, &assignment.right, allocator)?;
             }
         }
         Ok(())
@@ -3573,6 +3621,66 @@ interface Combined extends First, Second {
             store.complete(ticket, Vec::new()).unwrap();
         }
         assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn binding_pattern_defaults_reserve_nested_callable_owners() {
+        let source = r#"
+const { variable = (() => { throw 1; })() } = { variable: 1 };
+function read({ parameter = (() => { throw 2; })() }: { parameter?: number }): void {}
+try { throw {}; } catch ({ caught = (() => { throw 3; })() }: unknown) {}
+"#;
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let module = ModuleOrdinal::new(0);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+
+        for (arrow, statement) in [
+            ("() => { throw 1;", "throw 1"),
+            ("() => { throw 2;", "throw 2"),
+            ("() => { throw 3;", "throw 3"),
+        ] {
+            let arrow_start = u32::try_from(source.find(arrow).unwrap()).unwrap();
+            assert!(reservations
+                .callable_at(SourceOrdinal::User(module), arrow_start)
+                .is_some());
+            let statement_start = u32::try_from(source.find(statement).unwrap()).unwrap();
+            assert!(reservations
+                .owner_at(
+                    SourceOrdinal::User(module),
+                    statement_start,
+                    LexicalOwnerPhase::Immediate,
+                )
+                .is_some());
+        }
+
+        for ticket in reservations.tickets() {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn array_binding_pattern_default_keeps_existing_incomplete_output() {
+        let source = "const [value = (() => { throw 0; })()] = [1];";
+        let output = crate::check::test_support::check_source(source);
+
+        assert!(output.parse_errors.is_empty(), "{:?}", output.parse_errors);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let [incomplete] = output.incomplete.as_slice() else {
+            panic!("expected one array-binding incomplete record");
+        };
+        assert_eq!(incomplete.id, "bind/binding-pattern/array-pattern");
+        assert_eq!(
+            incomplete.span,
+            source_span(source, "[value = (() => { throw 0; })()]")
+        );
+        assert_eq!(incomplete.context, "array binding pattern not typed");
     }
 
     #[test]
