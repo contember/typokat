@@ -11,8 +11,8 @@ The ordinary gate is:
 cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture
 ```
 
-It discovers 573 fixture projects / 689 source files, checks each project once through the shared
-route, and prints receipt `573/689/573/0` (projects/sources/shared/cold). A sprint-closure run over
+It discovers 574 fixture projects / 690 source files, checks each project once through the shared
+route, and prints receipt `574/690/574/0` (projects/sources/shared/cold). A sprint-closure run over
 this inventory took 117.12 s under `cpu-lease run -n 2 --`. The inventory and ordering authority is
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary command's printed receipt repeats the aggregate totals.
@@ -26,7 +26,7 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `573/689/573/573`; the previous 572-project sprint-closure run passed in 1,768.47 s. The separate
+It prints receipt `574/690/574/574`; the previous 572-project sprint-closure run passed in 1,768.47 s. The separate
 `.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
 
 This file is **test tooling**: how to write and read these fixtures. The substantive record of
@@ -415,6 +415,9 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b44_satisfies/` | backlog `44` | `satisfies` contextually checks one-way assignability while preserving the source type and exact diagnostic ownership |
 | `b44_as_const/` | backlog `44` (disabled) | bounded `as const` contexts preserve owned literals, readonly object members and readonly tuples while stopping at referenced values; spread/elision remain `71`, computed keys/object methods/invalid operands remain `75` |
 | `b84_binding_pattern_owners/` | declaration-inventory sprint WU1 | object, parameter, and catch binding-pattern default expressions preallocate their nested callable/body lexical owners before semantic checking |
+| `b84_interface_occurrence_owners/` | declaration-inventory sprint WU3a (disabled) | function, arrow, block, and control-flow local interfaces receive exact header/heritage/member lexical owners while namespace/global controls keep their order |
+| `b84_declaration_inventory/` | declaration-inventory sprint WU3b (disabled) | used and unused script/function/control-flow local interface, alias, class, and enum groups publish in binder fragment order; sibling shadowing stays distinct from same-scope merge |
+| `b84_declaration_inventory_controls/` | declaration-inventory sprint WU0b | supported namespace/global interface owners retain exact diagnostics and event order while the canonical inventory is introduced |
 | `b54_labeled_statements/` | backlog `54` | labeled statements are checked and labeled `break` / `continue` participate in flow |
 | `b59_modules_hygiene/` | backlog `59` | project-mode pending diagnostics are attributed to the owning module, and export lists validate local names |
 | `b65_inference_candidate_policy/` | backlog `65` | call-site inference fixes same-parameter candidates before replaying each argument, rather than unioning incompatible candidates |
@@ -936,8 +939,8 @@ The directory contains 74 flat fixtures. Six older fixtures, the WU6A unavailabl
 slice, so the whole directory stays disabled; the conformance harness gates the other 65 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
 `wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. The whole-flat registration
-class contains 425 one-source projects; the frozen inventory test above is the authority for the
-complete 573-project / 689-source inventory. WU6 adds
+class contains 427 one-source projects; the frozen inventory test above is the authority for the
+complete 574-project / 690-source inventory. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,

@@ -9549,6 +9549,20 @@ mod tests {
     use super::*;
     use crate::check::checker::type_groups::PublishedTypeGroup;
 
+    const DECLARATION_RECEIPT_LIBRARY: [InjectedLibrarySource<'static>; 2] = [
+        InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "declaration-receipt-a.d.ts",
+            source:
+                "interface ReceiptMerge { first: string } type ReceiptAlias = { value: string };",
+        },
+        InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(1),
+            name: "declaration-receipt-b.d.ts",
+            source: "interface ReceiptMerge { second: number } declare class ReceiptClass {}",
+        },
+    ];
+
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
 
     #[test]
@@ -9587,6 +9601,106 @@ mod tests {
         assert_eq!(work.semantic_publications, 1);
         assert_eq!(work.replay_plan_constructions, 0);
         assert_eq!(work.frozen_base_seals, 0);
+    }
+
+    #[test]
+    fn legacy_library_only_declaration_receipt_is_exact() {
+        with_canonical_library_frontend(&DECLARATION_RECEIPT_LIBRARY, |frontend| {
+            let groups = frontend
+                .binder
+                .type_groups
+                .local_groups()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                groups
+                    .iter()
+                    .map(|group| (group.name.as_str(), group.fragments.len()))
+                    .collect::<Vec<_>>(),
+                [
+                    ("ReceiptMerge", 2),
+                    ("ReceiptAlias", 1),
+                    ("ReceiptClass", 1),
+                ]
+            );
+            assert_eq!(frontend.module_scopes.len(), 2);
+            assert_eq!(
+                groups[0].fragments[0].site.module,
+                frontend.module_scopes[0]
+            );
+            assert_eq!(
+                groups[0].fragments[1].site.module,
+                frontend.module_scopes[1]
+            );
+            assert!(groups[0].fragments[0].declaration.0 < groups[0].fragments[1].declaration.0);
+            Ok(())
+        })
+        .expect("canonical library frontend receipt");
+
+        let (run, state) = compile_owned_injected_profile(&DECLARATION_RECEIPT_LIBRARY)
+            .expect("legacy library-only declaration receipt");
+        assert_eq!(run.phase_counts.parse_units, 2);
+        assert_eq!(run.phase_counts.bind_units, 2);
+        assert_eq!(state.binder.type_groups.len(), 3);
+        assert_eq!(state.published_types.groups().len(), 3);
+        assert_eq!(
+            state
+                .binder
+                .declarations
+                .iter()
+                .filter(|declaration| declaration.type_group.is_some())
+                .count(),
+            4
+        );
+        assert!((0..3).all(|index| state
+            .published_types
+            .groups()
+            .get(TypeGroupId(index))
+            .is_some()));
+    }
+
+    #[test]
+    fn complete_combined_declaration_receipt_preserves_library_prefix_and_user_suffix() {
+        let sources = [
+            DECLARATION_RECEIPT_LIBRARY[0],
+            DECLARATION_RECEIPT_LIBRARY[1],
+            InjectedLibrarySource {
+                file_ordinal: LibraryFileOrdinal::new(2),
+                name: "declaration-receipt-user.ts",
+                source: "export {}; interface UserReceiptInterface { value: string } type UserReceiptAlias = { value: string }; class UserReceiptClass {} const invalid: UserReceiptInterface = { value: 1 };",
+            },
+        ];
+        let scope = CompleteSourceRouteWorkScopeForTest::start();
+        let (run, state) = compile_complete_combined_profile_for_test(&sources, 2)
+            .expect("complete combined declaration receipt");
+        let work = scope.finish();
+
+        assert_eq!(run.phase_counts.parse_units, 3);
+        assert_eq!(run.phase_counts.bind_units, 3);
+        assert_eq!(work.semantic_publications, 1);
+        assert_eq!(work.replay_plan_constructions, 0);
+        assert_eq!(state.binder.type_groups.len(), 6);
+        assert_eq!(state.published_types.groups().len(), 6);
+        assert_eq!(
+            state
+                .binder
+                .type_groups
+                .iter()
+                .map(|group| (group.name.as_str(), group.fragments.len()))
+                .collect::<Vec<_>>(),
+            [
+                ("ReceiptMerge", 2),
+                ("ReceiptAlias", 1),
+                ("ReceiptClass", 1),
+                ("UserReceiptInterface", 1),
+                ("UserReceiptAlias", 1),
+                ("UserReceiptClass", 1),
+            ]
+        );
+        let user_results = run.into_complete_source_user_results_for_test();
+        assert_eq!(user_results.len(), 1);
+        assert_eq!(user_results[0].diagnostics.len(), 1);
+        assert_eq!(user_results[0].diagnostics[0].code.as_str(), "TK2322");
+        assert!(user_results[0].incomplete.is_empty());
     }
 
     #[test]

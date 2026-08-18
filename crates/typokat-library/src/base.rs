@@ -1179,6 +1179,7 @@ pub(super) struct RoutedProjectCheckReceiptForTest {
     pub(super) execution: PrivateExecutionForTest,
     pub(super) normalized_semantics_by_source: BTreeMap<String, Vec<String>>,
     pub(super) normalized_diagnostics: Vec<String>,
+    pub(super) declaration_receipt: Option<crate::check::checker::DeclarationParityReceiptForTest>,
 }
 
 #[cfg(test)]
@@ -1200,7 +1201,10 @@ enum RoutedCandidateForTest {
 
 #[cfg(test)]
 enum RoutedProjectProductForTest {
-    Shared(Vec<crate::check::checker::CheckResult>),
+    Shared(
+        Vec<crate::check::checker::CheckResult>,
+        crate::check::checker::DeclarationParityReceiptForTest,
+    ),
     Private(Box<crate::check::checker::PrivateProjectSemanticEvidenceForTest>),
 }
 
@@ -2132,8 +2136,13 @@ impl FrozenLibraryBase {
         {
             RoutedLibraryProject::Shared(state) => {
                 let run = crate::frontend::run_project_frontend(files, move |_, units| {
-                    crate::check::checker::check_project_programs_with_library(state, units)
-                        .map(RoutedProjectProductForTest::Shared)
+                    crate::check::checker::
+                        check_project_programs_with_library_declaration_receipt_for_test(
+                            state, units,
+                        )
+                        .map(|(results, receipt)| {
+                            RoutedProjectProductForTest::Shared(results, receipt)
+                        })
                 });
                 (PrivateExecutionForTest::SharedDelta, run)
             }
@@ -2246,12 +2255,13 @@ impl FrozenLibraryBase {
             return Err("test project contains parse errors".to_owned());
         }
         let product = run.product.map_err(str::to_owned)?;
-        let (results, semantic_evidence) = match product {
-            RoutedProjectProductForTest::Shared(results) => (results, None),
+        let (results, semantic_evidence, declaration_receipt) = match product {
+            RoutedProjectProductForTest::Shared(results, receipt) => (results, None, Some(receipt)),
             RoutedProjectProductForTest::Private(evidence) => {
                 let mut evidence = *evidence;
                 let results = std::mem::take(&mut evidence.results);
-                (results, Some(evidence))
+                let declaration_receipt = Some(evidence.declaration_receipt.clone());
+                (results, Some(evidence), declaration_receipt)
             }
         };
         let mut semantics = run
@@ -2301,6 +2311,7 @@ impl FrozenLibraryBase {
             execution,
             normalized_semantics_by_source: semantics,
             normalized_diagnostics: diagnostics,
+            declaration_receipt,
         };
         let candidate = match private_evidence {
             Some((
@@ -2996,6 +3007,7 @@ impl FrozenLibraryBase {
                 execution: PrivateExecutionForTest::SelectiveReplay,
                 normalized_semantics_by_source: semantics,
                 normalized_diagnostics: diagnostics,
+                declaration_receipt: Some(semantic_evidence.declaration_receipt.clone()),
             },
             route_receipt: route_receipt.clone(),
             affected_owners,

@@ -3065,6 +3065,102 @@ pub fn check_project_programs_with_library<'ast>(
     check_project_programs_with_owned_library(state, units, |_, _| {}, |_, _| {})
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclarationParityRowForTest {
+    pub name: String,
+    pub group: TypeGroupId,
+    pub fragment_index: usize,
+    pub declaration: DeclId,
+    pub source: crate::binder::namespace::SourceUnitKey,
+    pub module: ScopeId,
+    pub scope: ScopeId,
+    pub kind: crate::binder::declaration::TypeFragmentKind,
+    pub owner_attached: bool,
+    pub terminal: &'static str,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclarationParityReceiptForTest {
+    pub user_type_start: u32,
+    pub rows: Vec<DeclarationParityRowForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn declaration_parity_receipt_for_test<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
+) -> DeclarationParityReceiptForTest {
+    let user_type_start = pass.binder.prelude_type_group_count;
+    let published = pass.type_environment.published();
+    let rows = pass
+        .binder
+        .type_groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .fragments
+                .iter()
+                .enumerate()
+                .filter(|(_, fragment)| {
+                    matches!(
+                        pass.binder
+                            .namespaces
+                            .compilation_origin_for_source(fragment.source),
+                        Some(crate::source::CompilationOrigin::User(_))
+                    )
+                })
+                .map(
+                    move |(fragment_index, fragment)| DeclarationParityRowForTest {
+                        name: group.name.clone(),
+                        group: group.id,
+                        fragment_index,
+                        declaration: fragment.declaration,
+                        source: fragment.source,
+                        module: fragment.site.module,
+                        scope: fragment.scope,
+                        kind: fragment.kind,
+                        owner_attached: pass
+                            .lexical_events
+                            .declaration_owner(fragment.declaration)
+                            .is_some(),
+                        terminal: match published.groups().get(group.id) {
+                            Some(type_groups::PublishedTypeGroupTerminal::Ready(_)) => "ready",
+                            Some(type_groups::PublishedTypeGroupTerminal::Unavailable(_)) => {
+                                "unavailable"
+                            }
+                            None => "missing",
+                        },
+                    },
+                )
+        })
+        .collect();
+    DeclarationParityReceiptForTest {
+        user_type_start,
+        rows,
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn check_project_programs_with_library_declaration_receipt_for_test<'ast>(
+    state: library_compiler::OwnedLibraryRuntimeState,
+    units: &[ProjectProgram<'ast>],
+) -> Result<(Vec<CheckResult>, DeclarationParityReceiptForTest), &'static str> {
+    let receipt = std::cell::RefCell::new(None);
+    let results = check_project_programs_with_owned_library(
+        state,
+        units,
+        |_, _| {},
+        |pass, _| {
+            receipt.replace(Some(declaration_parity_receipt_for_test(pass)));
+        },
+    )?;
+    let receipt = receipt
+        .into_inner()
+        .ok_or("declaration parity receipt was not observed")?;
+    Ok((results, receipt))
+}
+
 pub fn check_private_project_programs_with_library<'ast>(
     state: library_compiler::OwnedLibraryRuntimeState,
     library_programs: &[crate::frontend::AuxiliaryProgram<'ast>],
@@ -3117,6 +3213,7 @@ pub struct PrivateProjectRootSlotsForTest {
 #[cfg(any(test, feature = "test-utils"))]
 pub struct PrivateProjectSemanticEvidenceForTest {
     pub results: Vec<CheckResult>,
+    pub declaration_receipt: DeclarationParityReceiptForTest,
     pub normalized_records: Vec<(ModuleOrdinal, String)>,
     pub root_slots: BTreeMap<String, PrivateProjectRootSlotsForTest>,
     pub final_identity_ends: [usize; 9],
@@ -3349,6 +3446,7 @@ fn private_project_semantic_evidence_for_test(
         });
     PrivateProjectSemanticEvidenceForTest {
         results: Vec::new(),
+        declaration_receipt: declaration_parity_receipt_for_test(pass),
         normalized_records: Vec::new(),
         root_slots,
         final_identity_ends: [

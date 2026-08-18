@@ -1003,6 +1003,82 @@ export {};
 }
 
 #[test]
+fn shared_provider_declaration_receipt_is_exact() {
+    let receipt = acquire()
+        .check_routed_user_project_for_test(&[input(
+            "/project/declarations.ts",
+            r#"export {};
+interface SharedReceiptInterface { value: string }
+type SharedReceiptAlias = { value: string };
+class SharedReceiptClass { value!: string }
+const invalid: SharedReceiptInterface = { value: 1 };
+"#,
+        )])
+        .expect("shared provider declaration receipt");
+
+    assert_eq!(receipt.preflight.route, CollisionRouteForTest::SharedDelta);
+    assert_eq!(receipt.execution, PrivateExecutionForTest::SharedDelta);
+    assert_eq!(receipt.normalized_diagnostics.len(), 1);
+    let declarations = receipt
+        .declaration_receipt
+        .expect("shared route records its declaration suffix");
+    assert_eq!(
+        declarations
+            .rows
+            .iter()
+            .map(|row| (
+                row.name.as_str(),
+                row.fragment_index,
+                row.owner_attached,
+                row.terminal
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("SharedReceiptInterface", 0, true, "ready"),
+            ("SharedReceiptAlias", 0, true, "ready"),
+            ("SharedReceiptClass", 0, true, "ready"),
+        ]
+    );
+    assert!(declarations
+        .rows
+        .windows(2)
+        .all(|rows| rows[0].group.0 < rows[1].group.0
+            && rows[0].declaration.0 < rows[1].declaration.0));
+}
+
+#[test]
+fn selected_replay_declaration_receipt_is_exact() {
+    let receipt = acquire()
+        .check_routed_user_project_for_test(&array_project(false))
+        .expect("selected replay declaration receipt");
+
+    assert_eq!(
+        receipt.preflight.route,
+        CollisionRouteForTest::PrivateCombined
+    );
+    assert_eq!(receipt.execution, PrivateExecutionForTest::SelectiveReplay);
+    let declarations = receipt
+        .declaration_receipt
+        .expect("selected replay records its declaration inventory");
+    assert_eq!(declarations.rows.len(), 1);
+    let row = &declarations.rows[0];
+    assert_eq!(row.name, "Array");
+    assert_eq!(row.group.0, 48);
+    assert!(row.group.0 < declarations.user_type_start);
+    assert_eq!(row.fragment_index, 8);
+    assert_eq!(row.declaration.0, 13_958);
+    assert_eq!(row.source.0, 83);
+    assert_eq!(row.module.0, 261);
+    assert_eq!(row.scope.0, 261);
+    assert_eq!(
+        row.kind,
+        crate::binder::declaration::TypeFragmentKind::Interface
+    );
+    assert!(row.owner_attached);
+    assert_eq!(row.terminal, "ready");
+}
+
+#[test]
 fn completed_private_run_cannot_leak_into_the_next_shared_delta() {
     let base = acquire();
     let private = base

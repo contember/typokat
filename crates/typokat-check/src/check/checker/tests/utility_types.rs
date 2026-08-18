@@ -3,14 +3,16 @@
 //! preservation. Fixture acceptance lives in `m28_utility_types/`.
 
 use super::super::{
-    expected_trusted_prelude_incomplete, trusted_prelude_records_are_clean, TEST_AMBIENT_SOURCE,
+    check_program_with_publication_inspector, expected_trusted_prelude_incomplete,
+    trusted_prelude_records_are_clean, walk_type_decls, TEST_AMBIENT_SOURCE,
 };
 use crate::binder::bind_module_with_prelude;
 use crate::check::test_support::{check_project, check_source};
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
 use crate::frontend::FileInput;
-use crate::source::ModuleOrdinal;
+use crate::source::{ModuleOrdinal, SourceOrdinal, UnitSlot};
 use crate::span::Span;
+use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -80,6 +82,102 @@ fn prelude_checks_clean() {
         diags(TEST_AMBIENT_SOURCE).is_empty(),
         "the prelude source must also check clean as ordinary user code"
     );
+}
+
+#[test]
+fn trusted_prelude_declaration_inventory_receipt_is_exact() {
+    const EXPECTED_GROUPS: usize = 18;
+
+    let prelude_allocator = Allocator::default();
+    let prelude = Parser::new(&prelude_allocator, TEST_AMBIENT_SOURCE, SourceType::ts()).parse();
+    let user_allocator = Allocator::default();
+    let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
+    assert!(prelude.diagnostics.is_empty(), "{:?}", prelude.diagnostics);
+    let binder = bind_module_with_prelude(&prelude.program, &user.program);
+    assert_eq!(
+        usize::try_from(binder.prelude_type_group_count).expect("group count fits usize"),
+        EXPECTED_GROUPS
+    );
+    let prefix_groups = (0..binder.prelude_type_group_count)
+        .map(crate::binder::declaration::TypeGroupId)
+        .map(|group| binder.type_groups.get(group).expect("prelude group"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prefix_groups
+            .iter()
+            .map(|group| group.fragments.len())
+            .sum::<usize>(),
+        EXPECTED_GROUPS
+    );
+    assert_eq!(
+        binder
+            .declarations
+            .iter()
+            .filter(|declaration| {
+                declaration
+                    .type_group
+                    .is_some_and(|group| group.0 < binder.prelude_type_group_count)
+            })
+            .count(),
+        EXPECTED_GROUPS
+    );
+    let prelude_ordinal = ModuleOrdinal::new(0);
+    let prelude_slot = UnitSlot::new(0);
+    let (mut reporting, _) = super::super::reserve_internal_reporting(
+        &prelude.program,
+        prelude_ordinal,
+        prelude_slot,
+        None,
+    );
+    super::super::attach_type_decl_owners(
+        &mut reporting.lexical_events,
+        SourceOrdinal::User(prelude_ordinal),
+        &binder,
+        binder.prelude_module,
+        &prelude.program,
+        &super::super::ModuleDeclarationSpans::index(&binder),
+    );
+    assert!(prefix_groups
+        .iter()
+        .flat_map(|group| &group.fragments)
+        .all(|fragment| reporting
+            .lexical_events
+            .declaration_owner(fragment.declaration)
+            .is_some()));
+    let mut walked = 0;
+    walk_type_decls(
+        &binder,
+        binder.prelude_module,
+        &prelude.program,
+        &mut |_, _, _| walked += 1,
+    );
+    assert_eq!(walked, EXPECTED_GROUPS);
+
+    let mut interner = Interner::with_intrinsics();
+    let result = check_program_with_publication_inspector(
+        &mut interner,
+        &prelude.program,
+        |binder, published, _| {
+            let local_groups = binder
+                .type_groups
+                .local_groups()
+                .filter(|group| group.id.0 >= binder.prelude_type_group_count)
+                .collect::<Vec<_>>();
+            assert_eq!(local_groups.len(), EXPECTED_GROUPS);
+            assert_eq!(
+                local_groups
+                    .iter()
+                    .map(|group| group.fragments.len())
+                    .sum::<usize>(),
+                EXPECTED_GROUPS
+            );
+            assert!(local_groups
+                .iter()
+                .all(|group| published.groups().get(group.id).is_some()));
+        },
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(result.incomplete.len(), 6);
 }
 
 #[test]

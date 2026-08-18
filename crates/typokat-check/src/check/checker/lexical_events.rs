@@ -3192,6 +3192,115 @@ interface Combined extends First, Second {
     }
 
     #[test]
+    fn namespace_and_global_interface_occurrence_order_is_exact() {
+        let source = r#"export {};
+namespace InventorySpace {
+  export interface NestedInterface {
+    nestedValue: string;
+  }
+}
+declare global {
+  interface InventoryGlobal {
+    globalValue: string;
+  }
+}
+"#;
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let module = ModuleOrdinal::new(0);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_program(module, UnitSlot::new(0), &parsed.program, &mut store)
+            .unwrap();
+        super::super::attach_type_decl_owners(
+            &mut reservations,
+            SourceOrdinal::User(module),
+            &binder,
+            binder.module,
+            &parsed.program,
+            &super::super::ModuleDeclarationSpans::index(&binder),
+        );
+
+        let starts = [
+            source.find("NestedInterface").unwrap(),
+            source.find("nestedValue").unwrap(),
+            source.find("InventoryGlobal").unwrap(),
+            source.find("globalValue").unwrap(),
+        ]
+        .map(|start| u32::try_from(start).unwrap());
+        assert_eq!(
+            reservations
+                .interface_occurrences
+                .iter()
+                .map(|occurrence| (
+                    occurrence.kind,
+                    occurrence.source.source_start,
+                    occurrence.owner.event.index(),
+                    occurrence.owner.record_ordinal,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (InterfaceOccurrenceKind::Header, starts[0], 4, 0),
+                (InterfaceOccurrenceKind::Member, starts[1], 5, 0),
+                (InterfaceOccurrenceKind::Header, starts[2], 6, 0),
+                (InterfaceOccurrenceKind::Member, starts[3], 7, 0),
+            ]
+        );
+
+        for (name, kinds) in [
+            (
+                "NestedInterface",
+                [
+                    (InterfaceOccurrenceKind::Header, starts[0]),
+                    (InterfaceOccurrenceKind::Member, starts[1]),
+                ],
+            ),
+            (
+                "InventoryGlobal",
+                [
+                    (InterfaceOccurrenceKind::Header, starts[2]),
+                    (InterfaceOccurrenceKind::Member, starts[3]),
+                ],
+            ),
+        ] {
+            let declaration = binder
+                .type_groups
+                .iter()
+                .find(|group| group.name == name)
+                .and_then(|group| group.fragments.first())
+                .map(|fragment| fragment.declaration)
+                .expect("interface declaration");
+            for (kind, source_start) in kinds {
+                assert!(reservations
+                    .interface_occurrence_owner(declaration, kind, source_start)
+                    .is_some());
+            }
+        }
+        let occurrence_owners = reservations
+            .interface_occurrences
+            .iter()
+            .map(|occurrence| occurrence.owner)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(occurrence_owners.len(), 4);
+        let all_tickets = reservations.tickets();
+        assert!(occurrence_owners.iter().all(|owner| all_tickets
+            .iter()
+            .filter(|ticket| *ticket == owner)
+            .count()
+            == 1));
+
+        for ticket in all_tickets {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
     fn every_class_header_child_has_a_distinct_source_owner() {
         let source = "class C<T extends object = string, U extends unknown = number> {}";
         let allocator = Allocator::default();

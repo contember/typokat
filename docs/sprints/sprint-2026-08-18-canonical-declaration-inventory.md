@@ -240,6 +240,27 @@ passes its closure gates.
 
 ## Run log
 
+- **WU0a — complete.** Commit `433f333` added the disabled binding-pattern owner spec. Commit
+  `1cc6681` corrected it to isolate the owner defect from existing object-parameter and catch
+  accounting.
+- **WU1 — complete.** Commit `df1f755` recursively reserves binding-pattern default expressions
+  for declarators, parameters, and catches. Independent review passed. The enabled ordinary gate
+  passed with receipt `573/689/573/0`; inventory order was
+  `0d4555f21f30b471` before WU0b added its GREEN control.
+- **WU0b RED evidence.** `b84_interface_occurrence_owners` fails before WU3a because a nested
+  interface header has no exact preallocated owner. `b84_declaration_inventory` fails before WU3b
+  because selected local groups remain absent or pending at atomic publication. Both corpora are
+  disabled. TypeScript 6.0.3 reports exactly their inline marker diagnostics.
+- **WU0b GREEN oracles.** Active tests pin the trusted prelude (`18` fragments/groups/owners/
+  terminals), legacy library-only (`4` fragments in `3` groups), complete library+user prefix and
+  suffix, shared-provider user suffix, sparse selected-replay equality, multi-user module
+  ownership, same-scope merge versus sibling shadowing, source-only class syntax, and existing
+  named/anonymous default-class project admission. The active namespace/global corpus moves the
+  frozen inventory to `574/690`, whole-flat `427/427`, fingerprint `1194c8aeed8cb968`.
+  The sparse receipt selects user-origin fragments, including the user `Array` reopening inside a
+  frozen-prefix group, and namespace/global interface occurrences retain their exact ticket order.
+  The ordinary gate passed with receipt `574/690/574/0` in 143.55 s.
+
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,

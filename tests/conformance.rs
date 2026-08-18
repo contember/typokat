@@ -112,9 +112,14 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Backlog 44 `as const`: disabled RED acceptance spec. WU1 enables it after
     // AST-directed const contexts land on ordinary and class-publication paths.
     ("b44_as_const", false),
-    // Declaration-inventory sprint WU0a. Disabled RED acceptance spec; WU1
-    // enables it after binding-pattern default expressions reserve lexical owners.
+    // Declaration-inventory sprint WU1: binding-pattern default expressions own
+    // their nested callable/body events before semantic checking.
     ("b84_binding_pattern_owners", true),
+    // Declaration-inventory sprint WU0b. WU3a enables interface-owner rows;
+    // WU3b enables script-continuation publication rows.
+    ("b84_interface_occurrence_owners", false),
+    ("b84_declaration_inventory", false),
+    ("b84_declaration_inventory_controls", true),
     ("b54_labeled_statements", true),
     ("b59_modules_hygiene", true),
     ("b65_inference_candidate_policy", true),
@@ -566,7 +571,7 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
-const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x0d4555f21f30b471;
+const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x1194c8aeed8cb968;
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
@@ -628,9 +633,9 @@ fn conformance() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 573,
-                source_files: 689,
-                shared_executions: 573,
+                fixture_projects: 574,
+                source_files: 690,
+                shared_executions: 574,
                 cold_executions: 0,
             }
         );
@@ -647,10 +652,10 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 573,
-                source_files: 689,
-                shared_executions: 573,
-                cold_executions: 573,
+                fixture_projects: 574,
+                source_files: 690,
+                shared_executions: 574,
+                cold_executions: 574,
             }
         );
         print_run_receipt(&receipt);
@@ -660,12 +665,12 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
 #[test]
 fn conformance_inventory_matches_frozen_receipt() {
     let inventory = discover_enabled_inventory();
-    assert_eq!(inventory.projects.len(), 573);
-    assert_eq!(inventory.source_files, 689);
+    assert_eq!(inventory.projects.len(), 574);
+    assert_eq!(inventory.source_files, 690);
     assert_eq!(
         inventory.discovery,
         DiscoveryReceipt {
-            whole_flat: (426, 426),
+            whole_flat: (427, 427),
             whole_project: (74, 184),
             selected_flat: (67, 67),
             selected_project: (6, 12),
