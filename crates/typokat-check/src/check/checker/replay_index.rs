@@ -4238,6 +4238,7 @@ mod raw_access_audit {
         "crates/typokat-check/src/check/checker/classes/type_syntax.rs",
         "crates/typokat-check/src/check/checker/classes/visibility.rs",
         "crates/typokat-check/src/check/checker/context.rs",
+        "crates/typokat-check/src/check/checker/decls/inventory.rs",
         "crates/typokat-check/src/check/checker/decls/interface.rs",
         "crates/typokat-check/src/check/checker/decls/mod.rs",
         "crates/typokat-check/src/check/checker/decls/params.rs",
