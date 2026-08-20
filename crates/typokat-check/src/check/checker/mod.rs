@@ -2164,6 +2164,37 @@ pub fn check_project_programs_with_default_candidates<'ast>(
     )
 }
 
+#[cfg(test)]
+fn check_project_programs_with_default_candidates_and_class_attachment_receipt<'ast>(
+    interner: &mut Interner,
+    units: &[ProjectProgram<'ast>],
+    candidates: &DefaultModuleCandidates,
+) -> Result<(Vec<CheckResult>, ClassAttachmentReceiptForTest), &'static str> {
+    let plan = build_validated_default_module_plan(candidates, units)
+        .map_err(ProjectDefaultInvariantError::message)?;
+    let receipt = std::cell::RefCell::new(None);
+    let results = check_project_programs_inner(
+        interner,
+        units,
+        None,
+        Some(&plan),
+        |binder, reservations, _| {
+            receipt.replace(Some(class_attachment_receipt_for_test(
+                binder,
+                reservations,
+            )));
+        },
+        |_, _, _, _, _, _, _| {},
+        |_| {},
+    )?;
+    Ok((
+        results,
+        receipt
+            .into_inner()
+            .expect("validated default route reaches class attachment inspection"),
+    ))
+}
+
 pub(in crate::check::checker) fn check_project_programs_with_owned_library<'ast, F, G>(
     state: library_compiler::OwnedLibraryRuntimeState,
     units: &[ProjectProgram<'ast>],
@@ -3286,6 +3317,70 @@ pub struct DeclarationParityReceiptForTest {
 
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassAttachmentRowForTest {
+    pub source: lexical_events::SourceSite,
+    pub declaration: Option<DeclId>,
+    pub group: Option<TypeGroupId>,
+    pub class: Option<ClassId>,
+    pub header_type_params: Vec<crate::types::repr::TypeParamId>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassAttachmentReceiptForTest {
+    pub rows: Vec<ClassAttachmentRowForTest>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn class_attachment_receipt_for_test<Ticket: Copy + PartialEq>(
+    binder: &Binder,
+    reservations: &LexicalReservations<Ticket>,
+) -> ClassAttachmentReceiptForTest {
+    let rows = reservations
+        .classes()
+        .iter()
+        .map(|reservation| {
+            let declaration = reservation.binding.as_ref().and_then(|binding| {
+                let group = binder.type_groups.get(binding.type_decl)?;
+                let candidates = group
+                    .fragments
+                    .iter()
+                    .filter(|fragment| {
+                        fragment.kind == crate::binder::declaration::TypeFragmentKind::Class
+                            && reservations
+                                .declaration_source(fragment.declaration)
+                                .is_some_and(|source| source.unit == reservation.source.unit)
+                    })
+                    .collect::<Vec<_>>();
+                candidates
+                    .iter()
+                    .find(|fragment| {
+                        reservations.declaration_source(fragment.declaration)
+                            == Some(reservation.source)
+                    })
+                    .or_else(|| (candidates.len() == 1).then_some(&candidates[0]))
+                    .map(|fragment| fragment.declaration)
+            });
+            ClassAttachmentRowForTest {
+                source: reservation.source,
+                declaration,
+                group: reservation
+                    .binding
+                    .as_ref()
+                    .map(|binding| binding.type_decl),
+                class: reservation.binding.as_ref().map(|binding| binding.class_id),
+                header_type_params: reservation
+                    .binding
+                    .as_ref()
+                    .map_or_else(Vec::new, |binding| binding.header_type_params.clone()),
+            }
+        })
+        .collect();
+    ClassAttachmentReceiptForTest { rows }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectedLibraryTerminalEvidenceForTest {
     pub owner: ReplayOwner,
     pub group: TypeGroupId,
@@ -3500,6 +3595,7 @@ pub struct PrivateProjectRootSlotsForTest {
 pub struct PrivateProjectSemanticEvidenceForTest {
     pub results: Vec<CheckResult>,
     pub declaration_receipt: DeclarationParityReceiptForTest,
+    pub class_attachments: ClassAttachmentReceiptForTest,
     pub selected_library_terminals: Vec<SelectedLibraryTerminalEvidenceForTest>,
     pub normalized_records: Vec<(ModuleOrdinal, String)>,
     pub root_slots: BTreeMap<String, PrivateProjectRootSlotsForTest>,
@@ -3734,6 +3830,7 @@ fn private_project_semantic_evidence_for_test(
     PrivateProjectSemanticEvidenceForTest {
         results: Vec::new(),
         declaration_receipt: declaration_parity_receipt_for_test(pass),
+        class_attachments: class_attachment_receipt_for_test(pass.binder, &pass.lexical_events),
         selected_library_terminals: selected_library_terminal_evidence_for_test(pass),
         normalized_records: Vec::new(),
         root_slots,
@@ -8203,6 +8300,7 @@ mod default_module_slot_tests {
     ) -> (
         Result<Vec<CheckResult>, &'static str>,
         AuthoritativeProjectBindingWorkForTest,
+        Option<ClassAttachmentReceiptForTest>,
     ) {
         let sequence = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(
@@ -8251,8 +8349,15 @@ mod default_module_slot_tests {
         let run = run_project_frontend(ordered, |interner, units| {
             let work = AuthoritativeProjectBindingWorkScopeForTest::start();
             let result =
-                check_project_programs_with_default_candidates(interner, units, &candidates);
-            (result, work.finish())
+                check_project_programs_with_default_candidates_and_class_attachment_receipt(
+                    interner,
+                    units,
+                    &candidates,
+                );
+            match result {
+                Ok((results, receipt)) => (Ok(results), work.finish(), Some(receipt)),
+                Err(error) => (Err(error), work.finish(), None),
+            }
         });
         std::fs::remove_dir_all(directory).expect("remove default-module project");
         assert!(run.parse_errors.iter().all(Vec::is_empty));
@@ -8372,6 +8477,28 @@ mod default_module_slot_tests {
         for results in orders {
             assert_eq!(codes(&results), vec!["TK2322"]);
             assert!(results.iter().all(|result| result.incomplete.is_empty()));
+        }
+    }
+
+    #[test]
+    fn validated_named_and_anonymous_default_classes_attach_one_exact_declaration() {
+        for source in [
+            "export default class NamedDefault<T> { value!: T }",
+            "export default class<T> { value!: T }",
+        ] {
+            let (result, _, receipt) = check_with_work(&[("source.ts", source)]);
+            let results = result.expect("validated default class checks");
+            assert!(results
+                .iter()
+                .all(|result| result.diagnostics.is_empty() && result.incomplete.is_empty()));
+            let receipt = receipt.expect("validated default class reaches attachment");
+            let [row] = receipt.rows.as_slice() else {
+                panic!("one validated default class reservation")
+            };
+            assert!(row.declaration.is_some(), "{row:?}");
+            assert!(row.group.is_some());
+            assert!(row.class.is_some());
+            assert_eq!(row.header_type_params.len(), 1);
         }
     }
 
@@ -8695,7 +8822,7 @@ mod default_module_slot_tests {
             ("consumer.ts", "import Local from './source.js'; Local;"),
         ];
         for order in [files.to_vec(), files.into_iter().rev().collect()] {
-            let (result, work) = check_with_work(&order);
+            let (result, work, _) = check_with_work(&order);
             assert_eq!(
                 result.expect_err("enum+namespace default candidate must be refused"),
                 ProjectDefaultInvariantError::UnsupportedCandidate.message()

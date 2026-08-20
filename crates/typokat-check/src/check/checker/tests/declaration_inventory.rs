@@ -1,15 +1,50 @@
 //! GREEN controls for the canonical declaration-inventory sprint.
 
-use super::super::check_project_programs_with_binding_inspector;
+use super::super::{
+    check_project_programs_with_binding_inspector, class_attachment_receipt_for_test,
+    ClassAttachmentRowForTest,
+};
 use crate::binder::declaration::{
-    source_declaration_occurrences, DeclarationKind, TypeFragmentKind,
+    source_declaration_occurrences, DeclarationKind, SourceDeclarationManifest,
+    SourceTypeFragmentPayload, TypeFragmentKind,
 };
 use crate::check::test_support::check_project_with_checker;
 use crate::frontend::FileInput;
+use crate::source::{ModuleOrdinal, SourceOrdinal, UnitSlot};
 use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+
+fn class_attachment_observations(
+    inputs: Vec<FileInput>,
+) -> Vec<(Option<String>, ClassAttachmentRowForTest)> {
+    let observations = std::cell::RefCell::new(None);
+    let reports = check_project_with_checker(inputs, |interner, units| {
+        check_project_programs_with_binding_inspector(interner, units, |binder, reservations, _| {
+            let rows = class_attachment_receipt_for_test(binder, reservations)
+                .rows
+                .into_iter()
+                .map(|row| {
+                    let name = row.group.and_then(|group| {
+                        binder
+                            .type_groups
+                            .get(group)
+                            .map(|group| group.name.clone())
+                    });
+                    (name, row)
+                })
+                .collect();
+            observations.replace(Some(rows));
+        })
+    });
+    assert!(reports
+        .iter()
+        .all(|report| report.output.parse_errors.is_empty()));
+    observations
+        .into_inner()
+        .expect("project reaches class attachment inspection")
+}
 
 fn bind(source: &str) -> crate::binder::Binder {
     let prelude_allocator = Allocator::default();
@@ -211,7 +246,260 @@ fn script_block_local_interface_and_alias_are_ready_while_enum_is_explicitly_una
 }
 
 #[test]
-#[ignore = "WU3c deferred GREEN: legacy class attachment checks to completion"]
+fn legacy_class_attachment_covers_nested_declarations_and_rejects_expressions() {
+    let source = r#"
+export {};
+declare const condition: boolean;
+class Ordinary<T> { value!: T }
+class Host {
+  method() {
+    class MethodLocal {}
+    return MethodLocal;
+  }
+}
+function checkFunction() {
+  class FunctionLocal {}
+  { class BlockLocal {} }
+  switch (condition) { case true: { class SwitchLocal {} break; } }
+  while (condition) { class LoopLocal {} break; }
+  try { throw 1; } catch { class CatchLocal {} }
+}
+const checkArrow = () => { class ArrowLocal {}; return ArrowLocal; };
+const NamedExpression = class NamedClassExpression {};
+const AnonymousExpression = class {};
+"#;
+    let observations = class_attachment_observations(vec![FileInput {
+        name: "/project/class-attachment-matrix.ts".to_owned(),
+        source: source.to_owned(),
+    }]);
+    let attached = observations
+        .iter()
+        .filter_map(|(name, row)| row.class.map(|_| name.as_deref().unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        attached,
+        [
+            "Ordinary",
+            "Host",
+            "MethodLocal",
+            "FunctionLocal",
+            "BlockLocal",
+            "SwitchLocal",
+            "LoopLocal",
+            "CatchLocal",
+            "ArrowLocal",
+        ]
+    );
+    assert!(observations.iter().take(9).all(|(_, row)| {
+        row.declaration.is_some() && row.group.is_some() && row.class.is_some()
+    }));
+    assert_eq!(observations[0].1.header_type_params.len(), 1);
+    assert!(observations[1..9]
+        .iter()
+        .all(|(_, row)| row.header_type_params.is_empty()));
+    assert_eq!(observations.len(), 11);
+    assert!(observations[9..].iter().all(|(name, row)| name.is_none()
+        && row.declaration.is_none()
+        && row.group.is_none()
+        && row.class.is_none()));
+}
+
+#[test]
+fn legacy_class_attachment_merges_interface_and_class_in_both_orders_once() {
+    let observations = class_attachment_observations(vec![FileInput {
+        name: "/project/class-interface-orders.ts".to_owned(),
+        source: r#"
+export {};
+interface InterfaceFirst<T> { fromInterface: T }
+class InterfaceFirst<T> { fromClass!: T }
+class ClassFirst<T> { fromClass!: T }
+interface ClassFirst<T> { fromInterface: T }
+"#
+        .to_owned(),
+    }]);
+    assert_eq!(observations.len(), 2);
+    assert_eq!(
+        observations
+            .iter()
+            .map(|(name, _)| name.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        ["InterfaceFirst", "ClassFirst"]
+    );
+    assert!(observations.iter().all(|(_, row)| {
+        row.declaration.is_some()
+            && row.group.is_some()
+            && row.class.is_some()
+            && row.header_type_params.len() == 1
+    }));
+    assert_ne!(observations[0].1.group, observations[1].1.group);
+    assert_ne!(observations[0].1.declaration, observations[1].1.declaration);
+}
+
+#[test]
+fn unvalidated_default_candidates_and_class_expressions_have_no_attachment() {
+    let observations = class_attachment_observations(vec![
+        FileInput {
+            name: "/project/named-default.ts".to_owned(),
+            source: r#"
+export default class RejectedNamedDefault<T> {}
+const NamedExpression = class RejectedNamedExpression {};
+const AnonymousExpression = class {};
+"#
+            .to_owned(),
+        },
+        FileInput {
+            name: "/project/anonymous-default.ts".to_owned(),
+            source: "export default class<T> {}".to_owned(),
+        },
+    ]);
+    assert_eq!(observations.len(), 4);
+    assert!(observations.iter().all(|(name, row)| {
+        name.is_none()
+            && row.declaration.is_none()
+            && row.group.is_none()
+            && row.class.is_none()
+            && row.header_type_params.is_empty()
+    }));
+}
+
+#[test]
+fn trusted_prelude_inventory_and_terminal_oracle_is_exact_in_source_order() {
+    const EXPECTED_NAMES: [&str; 18] = [
+        "Array",
+        "Partial",
+        "Required",
+        "Readonly",
+        "Pick",
+        "Record",
+        "Exclude",
+        "Extract",
+        "Omit",
+        "NonNullable",
+        "ReturnType",
+        "ThisParameterType",
+        "OmitThisParameter",
+        "Uppercase",
+        "Lowercase",
+        "Capitalize",
+        "Uncapitalize",
+        "ThisType",
+    ];
+    let prelude_allocator = Allocator::default();
+    let prelude = Parser::new(
+        &prelude_allocator,
+        super::super::TEST_AMBIENT_SOURCE,
+        SourceType::ts(),
+    )
+    .parse();
+    let user_allocator = Allocator::default();
+    let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
+    assert!(prelude.diagnostics.is_empty(), "{:?}", prelude.diagnostics);
+    let manifest = SourceDeclarationManifest::build(&prelude.program);
+    assert_eq!(
+        manifest
+            .type_fragments()
+            .iter()
+            .map(|fragment| match fragment.payload {
+                SourceTypeFragmentPayload::TypeAlias(alias) => alias.id.name.as_str(),
+                _ => panic!("trusted prelude contains only alias fragments"),
+            })
+            .collect::<Vec<_>>(),
+        EXPECTED_NAMES
+    );
+    let binder = crate::binder::bind_module_with_prelude(&prelude.program, &user.program);
+    let source = binder
+        .source_for_module(binder.prelude_module)
+        .expect("trusted prelude has a source key");
+    let inventory = super::super::decls::inventory::BoundTypeDeclarationInventory::build(
+        &binder,
+        binder.prelude_module,
+        source,
+        manifest.clone(),
+        None,
+    )
+    .expect("trusted prelude inventory joins exactly");
+    let receipt = inventory.receipt();
+    assert_eq!(receipt.admitted, 18);
+    assert_eq!(receipt.rejected, 0);
+    assert_eq!(receipt.selected, 18);
+    for fragment in manifest.type_fragments() {
+        let exact = binder
+            .exact_declaration_at(
+                binder.prelude_module,
+                fragment.binding_span.start,
+                fragment.kind,
+            )
+            .expect("source-order prelude row has an exact declaration");
+        let row = inventory
+            .declarations()
+            .get(exact.id)
+            .expect("source-order prelude row is admitted");
+        assert_eq!(row.declaration, exact.id);
+        assert_eq!(row.group, exact.type_group.expect("prelude alias group"));
+    }
+
+    let prelude_ordinal = ModuleOrdinal::new(0);
+    let prelude_slot = UnitSlot::new(0);
+    let (mut reporting, _) = super::super::reserve_internal_reporting_with_declaration_manifest(
+        &prelude.program,
+        &manifest,
+        prelude_ordinal,
+        prelude_slot,
+        None,
+    );
+    super::super::attach_type_decl_owners(
+        &mut reporting.lexical_events,
+        SourceOrdinal::User(prelude_ordinal),
+        &binder,
+        binder.prelude_module,
+        &prelude.program,
+        &super::super::ModuleDeclarationSpans::index(&binder),
+    );
+    assert!(inventory.declarations().iter().all(|row| reporting
+        .lexical_events
+        .declaration_owner(row.declaration)
+        .is_some()));
+
+    let mut interner = Interner::with_intrinsics();
+    let checked = super::super::check_program_with_publication_inspector(
+        &mut interner,
+        &prelude.program,
+        |binder, published, _| {
+            let local = binder
+                .type_groups
+                .local_groups()
+                .filter(|group| group.id.0 >= binder.prelude_type_group_count)
+                .collect::<Vec<_>>();
+            assert_eq!(local.len(), 18);
+            assert!(local
+                .iter()
+                .all(|group| published.groups().get(group.id).is_some()));
+        },
+    );
+    assert!(checked.diagnostics.is_empty());
+    let expected_incomplete =
+        super::super::expected_trusted_prelude_incomplete(&binder, &prelude.program)
+            .expect("trusted prelude intrinsic aliases are exact");
+    assert_eq!(expected_incomplete.len(), 6);
+    assert_eq!(checked.incomplete, expected_incomplete);
+}
+
+#[test]
+fn script_continuation_block_class_legacy_attachment_is_exact() {
+    let observations = class_attachment_observations(vec![FileInput {
+        name: "/project/script-block-class.ts".to_owned(),
+        source: "{ class ScriptBlockLocal<T> { value!: T } }".to_owned(),
+    }]);
+    let [(_, row)] = observations.as_slice() else {
+        panic!("one script-block class reservation")
+    };
+    assert!(row.declaration.is_some());
+    assert!(row.group.is_some());
+    assert!(row.class.is_some());
+    assert_eq!(row.header_type_params.len(), 1);
+}
+
+#[test]
 fn arrow_local_class_attachment_legacy_control_checks_to_completion() {
     let reports = check_project_with_checker(
         vec![FileInput {

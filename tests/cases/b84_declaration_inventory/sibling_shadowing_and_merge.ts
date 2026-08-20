@@ -23,3 +23,26 @@ const missingMerged: Merged = { first: "ready" }; // error[TK2741]
   }
   const invalidRight: Shadowed = { right: "wrong" }; // error[TK2322]
 }
+
+// WU3c acceptance: the class fragment attaches exactly once regardless of merge order.
+interface InterfaceFirst<T> {
+  interfaceValue: T;
+}
+class InterfaceFirst<T> {
+  classValue!: T;
+}
+const invalidInterfaceFirst: InterfaceFirst<string> = {
+  interfaceValue: "ready",
+  classValue: 1, // error[TK2322]
+};
+
+class ClassFirst<T> {
+  classValue!: T;
+}
+interface ClassFirst<T> {
+  interfaceValue: T;
+}
+const invalidClassFirst: ClassFirst<string> = {
+  interfaceValue: "ready",
+  classValue: 1, // error[TK2322]
+};

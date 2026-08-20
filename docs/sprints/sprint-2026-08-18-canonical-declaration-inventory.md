@@ -162,11 +162,15 @@ passes its closure gates.
 - **Verify first.** Confirm WU3b has no legacy/new disagreement for every supported declaration.
 - **Scope.** Move class binding attachment and trusted-prelude checks to the inventory. Remove
   `walk_type_decls`, its scope mirror, parent-root filter, and the test-only parity adapter only
-  after `rg` proves no consumer remains.
+  after `rg` proves no consumer remains. Add the authenticated inventory `DeclId` to
+  `ClassBinding`; one source class reservation consumes that row once and records one exact
+  attachment with its already-reserved `ClassId`, value storage, and header type parameters.
 - **Acceptance / witness.** Local class attachment consumes the WU3b terminal and local class
   mismatches check to completion. Named/anonymous default class controls and named
   class-expression negative controls remain exact; trusted prelude and class allocation order are
-  unchanged; the published-registry assertion remains and no reachable test trips it.
+  unchanged. A one-shot attachment receipt proves exact `DeclId`, class/group identity, fresh
+  header parameters, merge cardinality, and zero mutation for unselected peers. The
+  published-registry assertion remains and no reachable test trips it.
 - **Touch points.** Final consumers in `checker/mod.rs`, declaration walker removal in
   `checker/decls/mod.rs`, route plumbing, and focused tests.
 
@@ -342,6 +346,24 @@ passes its closure gates.
   passed with no remaining blocker. The ordinary conformance gate passed with receipt
   `576/692/576/0` in `151.83 s`; the declaration corpus remains disabled for the WU3c class
   attachment cutover.
+- **WU3c Wave 1 — SPEC/RED.** Test-only class attachment receipts observe existing reservation
+  rows, declaration-owner provenance, class/group identity, and header parameters without adding a
+  semantic lookup. Ordinary named classes, both class/interface merge orders, validated named and
+  anonymous defaults, nested method/function/arrow/block/switch/loop/catch classes, and
+  script-continuation block classes are exact GREEN legacy baselines. Unvalidated default
+  candidates and named/anonymous class expressions remain unattached. TypeGroup-only and
+  TypeGroup+Class sparse schedules attach the fresh rebuilt class, while the unselected peer stays
+  unattached. The two ignored semantic REDs are class-only sparse replay: both a pure generic class
+  and a class/interface merged group preserve the correct frozen terminal under WU3b but currently
+  lack the exact `DeclId` attachment. The trusted-prelude source-order oracle pins `18` admitted
+  aliases/groups/owners/terminals and the six intrinsic incompletes. Production WU3c must add
+  `ClassBinding.declaration` and consume each inventory class row once; Wave 1 adds no production
+  field or behavior. Leased GREEN filters passed: declaration-inventory/class/prelude controls
+  `10/10`, sparse controls `6/6` with the two WU3c REDs ignored, and validated defaults `1/1`.
+  Running the two ignored sparse REDs explicitly fails both first at exact provenance:
+  `None != Some(DeclId(0))` for the pure class and `None != Some(DeclId(1))` for the merged class.
+  `cargo check -p typokat-check --all-targets`, `cargo clippy -p typokat-check --all-targets -- -D
+  warnings`, formatting, and diff checks passed.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

@@ -14,6 +14,10 @@ switch (condition) {
     type SwitchLocal = { value: string };
     type UnusedSwitchLocal = { unused: true };
     const invalid: SwitchLocal = { value: 1 }; // error[TK2322]
+    class SwitchClass {
+      value!: string;
+    }
+    const invalidClass: SwitchClass = { value: 1 }; // error[TK2322]
     break;
   }
 }

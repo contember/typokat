@@ -22,3 +22,22 @@ function checkFunctionLocals(): void {
 }
 
 checkFunctionLocals();
+
+class MethodContainer {
+  checkMethodLocal(): void {
+    class MethodLocal {
+      value!: string;
+    }
+    const invalid: MethodLocal = { value: 1 }; // error[TK2322]
+  }
+}
+
+const checkArrowLocals = (): void => {
+  class ArrowLocal {
+    value!: string;
+  }
+  const invalid: ArrowLocal = { value: 1 }; // error[TK2322]
+};
+
+new MethodContainer().checkMethodLocal();
+checkArrowLocals();

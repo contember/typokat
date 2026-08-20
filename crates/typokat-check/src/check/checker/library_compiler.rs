@@ -10155,6 +10155,10 @@ declare class SparseUnselectedClass { value: number }
         assert!(evidence.selected_library_terminals.iter().all(|row| {
             row.group != unselected_group && row.owner != ReplayOwner::Class(unselected_class)
         }));
+        assert_eq!(evidence.class_attachments.rows.len(), 2);
+        assert!(evidence.class_attachments.rows[1].declaration.is_none());
+        assert!(evidence.class_attachments.rows[1].group.is_none());
+        assert!(evidence.class_attachments.rows[1].class.is_none());
     }
 
     #[test]
@@ -10208,6 +10212,12 @@ declare class SparseUnselectedClass { value: number }
                 && row.terminal == "ready"
                 && row.final_class == Some(rebuilt_class)
         }));
+        let [attachment] = evidence.class_attachments.rows.as_slice() else {
+            panic!("one type-group-selected class reservation")
+        };
+        assert_eq!(attachment.group, Some(group));
+        assert_eq!(attachment.class, Some(rebuilt_class));
+        assert!(attachment.declaration.is_some());
     }
 
     #[test]
@@ -10266,6 +10276,12 @@ declare class SparseUnselectedClass { value: number }
                 && row.terminal == "ready"
                 && row.final_class == Some(rebuilt_class)
         }));
+        let [attachment] = evidence.class_attachments.rows.as_slice() else {
+            panic!("one type-group-and-class-selected reservation")
+        };
+        assert_eq!(attachment.group, Some(group));
+        assert_eq!(attachment.class, Some(rebuilt_class));
+        assert!(attachment.declaration.is_some());
     }
 
     #[test]
@@ -10326,6 +10342,128 @@ declare class SparseMergedClass<T> { classValue: T }
                 && row.terminal == "ready"
                 && row.final_class == Some(original_class)
         }));
+    }
+
+    #[test]
+    #[ignore = "WU3c RED: class-only replay attachment must consume the preserved inventory row"]
+    fn sparse_class_only_attachment_keeps_original_identity_and_fresh_header_params() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-class-attachment-red.d.ts",
+            source: r#"
+declare class SparseAttachedClass<T> { value: T }
+declare class SparseUnselectedPeer { value: number }
+"#,
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("class-only attachment prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseAttachedClass")
+            .expect("selected attachment group")
+            .id;
+        let declaration = state
+            .binder
+            .type_groups
+            .get(group)
+            .and_then(|group| {
+                group
+                    .fragments
+                    .iter()
+                    .find(|fragment| fragment.kind == TypeFragmentKind::Class)
+            })
+            .expect("selected attachment class fragment")
+            .declaration;
+        let original_class = match state.published_types.groups().get(group) {
+            Some(PublishedTypeGroupTerminal::Ready(group)) => match &group.surface {
+                PublishedTypeGroupSurface::Class(class) => *class,
+                surface => panic!("selected attachment surface changed: {surface:?}"),
+            },
+            terminal => panic!("selected attachment prefix is not ready: {terminal:?}"),
+        };
+        let fresh_header_param = TypeParamId(state.next_type_param);
+        let selected = BTreeSet::from([ReplayOwner::Class(original_class)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec![
+                "SparseAttachedClass".to_owned(),
+                "SparseUnselectedPeer".to_owned(),
+            ],
+        )
+        .expect("class-only attachment replay completes");
+        assert_eq!(evidence.class_attachments.rows.len(), 2);
+        let attached = &evidence.class_attachments.rows[0];
+        assert_eq!(attached.declaration, Some(declaration));
+        assert_eq!(attached.group, Some(group));
+        assert_eq!(attached.class, Some(original_class));
+        assert_eq!(attached.header_type_params, [fresh_header_param]);
+        let peer = &evidence.class_attachments.rows[1];
+        assert!(peer.declaration.is_none());
+        assert!(peer.group.is_none());
+        assert!(peer.class.is_none());
+    }
+
+    #[test]
+    #[ignore = "WU3c RED: class-only merged replay must attach exactly the class fragment"]
+    fn sparse_class_only_merged_group_attaches_once_to_the_class_decl_id() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-class-merge-attachment-red.d.ts",
+            source: r#"
+interface SparseAttachedMerge<T> { interfaceValue: T }
+declare class SparseAttachedMerge<T> { classValue: T }
+"#,
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("class-only merge attachment prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseAttachedMerge")
+            .expect("class-only merge attachment group")
+            .id;
+        let class_declaration = state
+            .binder
+            .type_groups
+            .get(group)
+            .into_iter()
+            .flat_map(|group| &group.fragments)
+            .find(|fragment| fragment.kind == TypeFragmentKind::Class)
+            .expect("merged group has one class fragment")
+            .declaration;
+        let original_class = match state.published_types.groups().get(group) {
+            Some(PublishedTypeGroupTerminal::Ready(group)) => match &group.surface {
+                PublishedTypeGroupSurface::Class(class) => *class,
+                surface => panic!("merged attachment surface changed: {surface:?}"),
+            },
+            terminal => panic!("merged attachment prefix is not ready: {terminal:?}"),
+        };
+        let selected = BTreeSet::from([ReplayOwner::Class(original_class)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec!["SparseAttachedMerge".to_owned()],
+        )
+        .expect("class-only merged attachment replay completes");
+        let [attachment] = evidence.class_attachments.rows.as_slice() else {
+            panic!("one class reservation for a class-interface merged group")
+        };
+        assert_eq!(attachment.declaration, Some(class_declaration));
+        assert_eq!(attachment.group, Some(group));
+        assert_eq!(attachment.class, Some(original_class));
+        assert_eq!(attachment.header_type_params.len(), 1);
     }
 
     #[test]
