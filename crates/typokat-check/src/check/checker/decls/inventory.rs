@@ -137,6 +137,10 @@ pub(in crate::check::checker) enum InventoryBuildError {
         expected_binding_span: crate::span::Span,
         actual_binding_span: crate::span::Span,
     },
+    UnexpectedSemanticAdmission {
+        declaration: DeclId,
+        placement: SourceTypeFragmentPlacement,
+    },
     DuplicatePayload(DeclId),
     AuthenticatedFragmentMissingPayload {
         declaration: DeclId,
@@ -317,6 +321,18 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 source.binding_span.start,
                 source.kind,
             );
+            let matches_source = |declaration: &LexicalDeclaration| {
+                declaration.kind == source.kind
+                    && declaration.site.module == module
+                    && declaration.site.declaration_span == source.declaration_span
+                    && declaration.site.binding_span == source.binding_span
+            };
+            let global_has_issues = match source.placement {
+                SourceTypeFragmentPlacement::GlobalAugmentationBody { global_start } => {
+                    binder.global_augmentation_has_issues(module, global_start)
+                }
+                _ => None,
+            };
             let disposition = match source.placement {
                 SourceTypeFragmentPlacement::ClassExpression => {
                     Some(SourceTypeFragmentRejection::ClassExpression)
@@ -326,12 +342,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 {
                     Some(SourceTypeFragmentRejection::DefaultCandidateNotAdmitted)
                 }
-                SourceTypeFragmentPlacement::Ordinary
-                    if exact.is_some_and(|declaration| declaration.type_group.is_none()) =>
-                {
-                    Some(SourceTypeFragmentRejection::NotSemanticallyAdmitted)
-                }
-                SourceTypeFragmentPlacement::Ordinary
+                SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
                     if exact.is_none()
                         && recorded.is_some_and(|declaration| {
                             declaration.site.scope.is_none()
@@ -341,6 +352,21 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                                 && declaration.site.declaration_span == source.declaration_span
                                 && declaration.site.binding_span == source.binding_span
                         }) =>
+                {
+                    Some(SourceTypeFragmentRejection::NotSemanticallyAdmitted)
+                }
+                SourceTypeFragmentPlacement::GlobalAugmentationBody { .. }
+                    if global_has_issues == Some(true)
+                        && match exact {
+                            Some(declaration) => {
+                                matches_source(declaration) && declaration.type_group.is_none()
+                            }
+                            None => recorded.is_some_and(|declaration| {
+                                matches_source(declaration)
+                                    && declaration.site.scope.is_none()
+                                    && declaration.type_group.is_none()
+                            }),
+                        } =>
                 {
                     Some(SourceTypeFragmentRejection::NotSemanticallyAdmitted)
                 }
@@ -367,11 +393,6 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     binding_start: source.binding_span.start,
                 });
             };
-            let Some(group) = exact.type_group else {
-                return Err(InventoryBuildError::AttachedDeclarationMissingGroup(
-                    exact.id,
-                ));
-            };
             if exact.kind != source.kind
                 || exact.site.module != module
                 || exact.site.declaration_span != source.declaration_span
@@ -389,6 +410,17 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     actual_binding_span: exact.site.binding_span,
                 });
             }
+            if source.placement == SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule {
+                return Err(InventoryBuildError::UnexpectedSemanticAdmission {
+                    declaration: exact.id,
+                    placement: source.placement,
+                });
+            }
+            let Some(group) = exact.type_group else {
+                return Err(InventoryBuildError::AttachedDeclarationMissingGroup(
+                    exact.id,
+                ));
+            };
             let bound = binder
                 .type_groups
                 .get(group)
@@ -851,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_missing_is_hard_but_attached_without_group_is_rejected() {
+    fn ordinary_missing_or_attached_without_group_is_hard() {
         let prelude_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
         let allocator = Allocator::default();
@@ -896,20 +928,39 @@ mod tests {
         binder
             .declarations
             .clear_type_group_for_inventory_test(alias);
-        let rejected_manifest = SourceDeclarationManifest::build(&parsed.program);
-        let rejected = BoundTypeDeclarationInventory::build(
+        let missing_group_manifest = SourceDeclarationManifest::build(&parsed.program);
+        let missing_group = BoundTypeDeclarationInventory::build(
             &binder,
             module,
             SourceUnitKey::SINGLE_SOURCE,
-            rejected_manifest,
+            missing_group_manifest,
             None,
         )
-        .expect("an attached ordinary control without a type group is explicitly rejected");
-        assert_eq!(rejected.rejected().len(), 1);
+        .expect_err("an attached ordinary control without a type group is a hard error");
         assert_eq!(
-            rejected.rejected()[0].disposition,
-            SourceTypeFragmentRejection::NotSemanticallyAdmitted
+            missing_group,
+            InventoryBuildError::AttachedDeclarationMissingGroup(alias)
         );
+
+        binder
+            .declarations
+            .clear_semantic_attachment_for_inventory_test(alias);
+        let missing_attachment_manifest = SourceDeclarationManifest::build(&parsed.program);
+        let missing_attachment = BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            missing_attachment_manifest,
+            None,
+        )
+        .expect_err("an ordinary raw row without semantic attachment is a hard error");
+        assert!(matches!(
+            missing_attachment,
+            InventoryBuildError::MissingSourceDeclaration {
+                kind: DeclarationKind::TypeAlias,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -969,6 +1020,185 @@ mod tests {
     }
 
     #[test]
+    fn inventory_rejects_only_authenticated_invalid_global_body_rows() {
+        fn assert_invalid(source: &str, clear_attachment: bool) {
+            let prelude_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+            assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+            let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+            let manifest = SourceDeclarationManifest::build(&parsed.program);
+            assert!(manifest.type_fragments().iter().all(|fragment| matches!(
+                fragment.placement,
+                SourceTypeFragmentPlacement::GlobalAugmentationBody { .. }
+            )));
+            let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+                &prelude.program,
+                &prelude_manifest,
+            );
+            let unit =
+                CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+            let (module, _) =
+                builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+            let mut binder = builder.finish(module);
+            let global_start = match manifest.type_fragments()[0].placement {
+                SourceTypeFragmentPlacement::GlobalAugmentationBody { global_start } => {
+                    global_start
+                }
+                placement => panic!("unexpected placement: {placement:?}"),
+            };
+            assert_eq!(
+                binder.global_augmentation_has_issues(module, global_start),
+                Some(true)
+            );
+            assert_eq!(
+                binder.global_augmentation_has_issues(module, u32::MAX),
+                None
+            );
+            if clear_attachment {
+                let fragment = &manifest.type_fragments()[0];
+                let declaration = binder
+                    .declarations
+                    .declaration_at_site(module, fragment.binding_span.start, fragment.kind)
+                    .expect("global body declaration is preseeded")
+                    .id;
+                binder
+                    .declarations
+                    .clear_semantic_attachment_for_inventory_test(declaration);
+            }
+            let inventory = BoundTypeDeclarationInventory::build(
+                &binder,
+                module,
+                SourceUnitKey::SINGLE_SOURCE,
+                manifest,
+                None,
+            )
+            .expect("invalid global body rows are explicit rejections");
+            assert!(inventory.declarations().iter().next().is_none());
+            assert_eq!(inventory.rejected().len(), 1);
+            assert_eq!(
+                inventory.rejected()[0].disposition,
+                SourceTypeFragmentRejection::NotSemanticallyAdmitted
+            );
+        }
+
+        assert_invalid("declare global { interface InvalidScriptGlobal {} }", false);
+        assert_invalid(
+            "export {}; global { interface InvalidUndeclaredGlobal {} }",
+            false,
+        );
+        assert_invalid(
+            "export {}; global { interface RawUnattachedGlobal {} }",
+            true,
+        );
+    }
+
+    #[test]
+    fn inventory_admits_legal_and_grouped_descendant_global_body_rows() {
+        for source in [
+            "export {}; declare global { interface LegalGlobal {} }",
+            "export {}; global { namespace Private { interface GroupedDescendant {} } }",
+        ] {
+            let prelude_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+            assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+            let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+            let manifest = SourceDeclarationManifest::build(&parsed.program);
+            let [fragment] = manifest.type_fragments() else {
+                panic!("one global-body type fragment")
+            };
+            let SourceTypeFragmentPlacement::GlobalAugmentationBody { global_start } =
+                fragment.placement
+            else {
+                panic!("global body placement")
+            };
+            let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+                &prelude.program,
+                &prelude_manifest,
+            );
+            let unit =
+                CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+            let (module, _) =
+                builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+            let binder = builder.finish(module);
+            assert_eq!(
+                binder.global_augmentation_has_issues(module, global_start),
+                Some(source.contains("GroupedDescendant"))
+            );
+            let inventory = BoundTypeDeclarationInventory::build(
+                &binder,
+                module,
+                SourceUnitKey::SINGLE_SOURCE,
+                manifest,
+                None,
+            )
+            .expect("grouped global body rows remain admitted");
+            assert_eq!(inventory.declarations().iter().count(), 1);
+            assert!(inventory.rejected().is_empty());
+        }
+    }
+
+    #[test]
+    fn frozen_continuation_rejects_invalid_global_body_rows() {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let library_allocator = Allocator::default();
+        let library = Parser::new(
+            &library_allocator,
+            "interface FrozenGlobalInventoryMarker {}",
+            SourceType::d_ts(),
+        )
+        .parse();
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let library_manifest = SourceDeclarationManifest::build(&library.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let library_unit = CompilationUnit::library(
+            SourceUnitKey(1),
+            crate::source::LibraryFileOrdinal::new(0),
+            &library.program,
+        );
+        let [library_module] = builder
+            .try_add_library_modules_with_declaration_manifests(&[(
+                &library.program,
+                &library_manifest,
+                library_unit,
+            )])
+            .expect("library base binds")
+            .try_into()
+            .expect("one library module");
+        let mut base = builder.finish(library_module);
+        base.freeze_as_base().expect("library base freezes");
+
+        let allocator = Allocator::default();
+        let parsed = Parser::new(
+            &allocator,
+            "export {}; global { interface FrozenInvalidGlobal {} }",
+            SourceType::ts(),
+        )
+        .parse();
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(base);
+        let unit = CompilationUnit::implementation(source, &parsed.program);
+        builder.reserve_script_namespace_roots([(&parsed.program, unit)]);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder
+            .finish_frozen_library_continuation(Some(module))
+            .expect("continuation binder finishes");
+        let inventory =
+            BoundTypeDeclarationInventory::build(&binder, module, source, manifest, None)
+                .expect("invalid continuation global body is rejected explicitly");
+        assert!(inventory.declarations().iter().next().is_none());
+        assert_eq!(inventory.rejected().len(), 1);
+    }
+
+    #[test]
     fn inventory_rejects_types_inside_unadmitted_ambient_external_modules() {
         let prelude_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
@@ -978,6 +1208,12 @@ mod tests {
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
         let manifest = SourceDeclarationManifest::build(&parsed.program);
+        assert!(matches!(
+            manifest.type_fragments(),
+            [fragment]
+                if fragment.placement
+                    == SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+        ));
         let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
             &prelude.program,
             &prelude_manifest,
@@ -1000,6 +1236,70 @@ mod tests {
         assert_eq!(
             inventory.rejected()[0].disposition,
             SourceTypeFragmentRejection::NotSemanticallyAdmitted
+        );
+
+        let allocator = Allocator::default();
+        let source = r#"
+            type Attached = string;
+            declare module "external" { export interface Payload { value: string } }
+        "#;
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let ambient = manifest
+            .type_fragments()
+            .iter()
+            .find(|fragment| {
+                fragment.placement == SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+            })
+            .expect("ambient fragment");
+        let ambient_kind = ambient.kind;
+        let ambient_binding_start = ambient.binding_span.start;
+        let ambient_declaration_span = ambient.declaration_span;
+        let ambient_binding_span = ambient.binding_span;
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        let attached_start =
+            u32::try_from(source.find("Attached").expect("Attached binding offset"))
+                .expect("source offset fits u32");
+        let mut attached = binder
+            .exact_declaration_at(module, attached_start, DeclarationKind::TypeAlias)
+            .expect("attached alias")
+            .clone();
+        attached.kind = ambient_kind;
+        attached.site.declaration_span = ambient_declaration_span;
+        attached.site.binding_span = ambient_binding_span;
+
+        let error = BoundTypeDeclarationInventory::build_with_exact_lookup(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            None,
+            |lookup_module, binding_start, kind| {
+                if lookup_module == module
+                    && binding_start == ambient_binding_start
+                    && kind == ambient_kind
+                {
+                    Some(&attached)
+                } else {
+                    binder.exact_declaration_at(lookup_module, binding_start, kind)
+                }
+            },
+        )
+        .expect_err("semantic admission of an ambient source-only row is a hard error");
+        assert_eq!(
+            error,
+            InventoryBuildError::UnexpectedSemanticAdmission {
+                declaration: attached.id,
+                placement: SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule,
+            }
         );
     }
 }

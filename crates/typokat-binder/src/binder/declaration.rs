@@ -7,8 +7,8 @@ use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{
     Class, ClassType, Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
     ImportOrExportKind, ModuleDeclaration, Program, Statement, TSEnumDeclaration,
-    TSInterfaceDeclaration, TSModuleDeclarationName, TSSignature, TSTypeAliasDeclaration,
-    VariableDeclarationKind,
+    TSGlobalDeclaration, TSInterfaceDeclaration, TSModuleDeclaration, TSModuleDeclarationName,
+    TSSignature, TSTypeAliasDeclaration, VariableDeclarationKind,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
@@ -115,6 +115,8 @@ pub enum SourceTypeFragmentPlacement {
     Ordinary,
     ClassExpression,
     DefaultClass,
+    UnadmittedAmbientExternalModule,
+    GlobalAugmentationBody { global_start: u32 },
 }
 
 /// AST payload retained by the one-pass source declaration manifest.
@@ -314,6 +316,8 @@ struct SourceDeclarationVisitor<'ast> {
     interface_occurrences: Vec<SourceInterfaceOccurrence>,
     global_census: Option<SourceGlobalCensusProjection>,
     direct_default_class_start: Option<u32>,
+    ambient_external_module_depth: u32,
+    global_augmentation_start: Option<u32>,
 }
 
 struct SourceGlobalCensusProjection {
@@ -345,6 +349,8 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             interface_occurrences: Vec::new(),
             global_census: None,
             direct_default_class_start: None,
+            ambient_external_module_depth: 0,
+            global_augmentation_start: None,
         }
     }
 
@@ -355,6 +361,8 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             interface_occurrences: Vec::new(),
             global_census: None,
             direct_default_class_start: None,
+            ambient_external_module_depth: 0,
+            global_augmentation_start: None,
         }
     }
 
@@ -377,6 +385,8 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
                 explicit_global_this_sites: None,
             }),
             direct_default_class_start: None,
+            ambient_external_module_depth: 0,
+            global_augmentation_start: None,
         }
     }
 
@@ -468,6 +478,18 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
                 }));
         }
         let interface_end = self.interface_occurrences.len();
+        let placement = if placement == SourceTypeFragmentPlacement::Ordinary
+            && self.ambient_external_module_depth > 0
+        {
+            SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+        } else if placement == SourceTypeFragmentPlacement::Ordinary {
+            self.global_augmentation_start
+                .map_or(SourceTypeFragmentPlacement::Ordinary, |global_start| {
+                    SourceTypeFragmentPlacement::GlobalAugmentationBody { global_start }
+                })
+        } else {
+            placement
+        };
         self.type_fragments
             .as_mut()
             .expect("type-fragment projection is enabled")
@@ -614,6 +636,26 @@ struct GlobalRootPlacement {
 }
 
 impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
+    fn visit_ts_global_declaration(&mut self, declaration: &TSGlobalDeclaration<'ast>) {
+        let previous = self.global_augmentation_start;
+        self.global_augmentation_start = Some(declaration.global_span.start);
+        walk::walk_ts_global_declaration(self, declaration);
+        self.global_augmentation_start = previous;
+    }
+
+    fn visit_ts_module_declaration(&mut self, declaration: &TSModuleDeclaration<'ast>) {
+        let ambient_external = matches!(declaration.id, TSModuleDeclarationName::StringLiteral(_));
+        if ambient_external {
+            self.ambient_external_module_depth =
+                self.ambient_external_module_depth.saturating_add(1);
+        }
+        walk::walk_ts_module_declaration(self, declaration);
+        if ambient_external {
+            self.ambient_external_module_depth =
+                self.ambient_external_module_depth.saturating_sub(1);
+        }
+    }
+
     fn visit_export_default_declaration(&mut self, declaration: &ExportDefaultDeclaration<'ast>) {
         let previous = self.direct_default_class_start;
         if let ExportDefaultDeclarationKind::ClassDeclaration(class) = &declaration.declaration {
@@ -1092,6 +1134,13 @@ impl DeclarationTable {
             .type_group = None;
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn clear_semantic_attachment_for_inventory_test(&mut self, id: DeclId) {
+        let declaration = self.get_mut(id).expect("inventory test declaration exists");
+        declaration.site.scope = None;
+        declaration.type_group = None;
+    }
+
     pub fn len(&self) -> usize {
         self.declarations.len()
     }
@@ -1433,6 +1482,61 @@ mod tests {
         );
         assert_eq!(interfaces[0].interface_occurrences, 0..1);
         assert_eq!(interfaces[1].interface_occurrences, 1..5);
+    }
+
+    #[test]
+    fn manifest_projects_the_nearest_global_augmentation_body_site() {
+        let source = r#"
+            interface Outside {}
+            export {};
+            global {
+                interface Direct {}
+                namespace Nested { global { interface Nearest {} } }
+            }
+            declare module "external" {
+                global { interface AmbientWins {} }
+            }
+        "#;
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let placement = |name: &str| {
+            manifest
+                .type_fragments()
+                .iter()
+                .find(|fragment| &source[fragment.binding_span.range()] == name)
+                .map(|fragment| fragment.placement)
+                .expect("named source type fragment")
+        };
+        let direct_global = u32::try_from(source.find("global {").expect("direct global"))
+            .expect("source offset fits u32");
+        let nearest_global = u32::try_from(
+            source
+                .match_indices("global {")
+                .nth(1)
+                .expect("nested global")
+                .0,
+        )
+        .expect("source offset fits u32");
+
+        assert_eq!(placement("Outside"), SourceTypeFragmentPlacement::Ordinary);
+        assert_eq!(
+            placement("Direct"),
+            SourceTypeFragmentPlacement::GlobalAugmentationBody {
+                global_start: direct_global,
+            }
+        );
+        assert_eq!(
+            placement("Nearest"),
+            SourceTypeFragmentPlacement::GlobalAugmentationBody {
+                global_start: nearest_global,
+            }
+        );
+        assert_eq!(
+            placement("AmbientWins"),
+            SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+        );
     }
 
     #[test]

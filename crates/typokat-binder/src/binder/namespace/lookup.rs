@@ -69,6 +69,19 @@ pub(super) fn ambient_member_union(
 }
 
 impl Binder {
+    /// Return whether the exact global-augmentation site has placement issues.
+    pub fn global_augmentation_has_issues(
+        &self,
+        module: ScopeId,
+        binding_start: u32,
+    ) -> Option<bool> {
+        self.namespaces
+            .global_augmentations_by_site
+            .get(&(module, binding_start))
+            .and_then(|global| self.namespaces.globals.get(global.index()))
+            .map(|global| !global.issues.is_empty())
+    }
+
     pub fn global_augmentation_scope(
         &self,
         module: ScopeId,
