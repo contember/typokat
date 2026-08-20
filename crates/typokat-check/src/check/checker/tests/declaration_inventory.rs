@@ -87,6 +87,9 @@ fn multi_user_project_inventory_is_module_exact_and_ordered() {
             source: "export {}; interface Shape { second: number } const invalid: Shape = { second: 'wrong' };".to_owned(),
         },
     ];
+    let manifest_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+    let inventory_scope = crate::check::checker::DeclarationInventoryWorkScopeForTest::start();
     let reports = check_project_with_checker(inputs, |interner, units| {
         check_project_programs_with_binding_inspector(
             interner,
@@ -112,6 +115,22 @@ fn multi_user_project_inventory_is_module_exact_and_ordered() {
             },
         )
     });
+    let manifests = manifest_scope.finish();
+    let inventory_work = inventory_scope.finish();
+    assert_eq!(manifests, 3);
+    assert_eq!(inventory_work.builds, manifests);
+    assert_eq!(
+        inventory_work,
+        crate::check::checker::DeclarationInventoryWorkForTest {
+            builds: 3,
+            source_type_rows: 20,
+            admitted: 20,
+            rejected: 0,
+            exact_join_attempts: 20,
+            dense_slots: 23,
+            legacy_top_level_block_deltas: 0,
+        }
+    );
     assert_eq!(reports.len(), 2);
     for report in reports {
         assert!(report.output.parse_errors.is_empty());

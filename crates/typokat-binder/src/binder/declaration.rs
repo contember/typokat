@@ -5,12 +5,38 @@ use crate::binder::scope::ScopeId;
 use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{
-    ClassType, Declaration, ImportOrExportKind, ModuleDeclaration, Program, Statement,
-    TSModuleDeclarationName, VariableDeclarationKind,
+    Class, ClassType, Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
+    ImportOrExportKind, ModuleDeclaration, Program, Statement, TSEnumDeclaration,
+    TSInterfaceDeclaration, TSModuleDeclarationName, TSSignature, TSTypeAliasDeclaration,
+    VariableDeclarationKind,
 };
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
+
+#[cfg(any(test, feature = "test-utils"))]
+thread_local! {
+    static SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub struct SourceDeclarationManifestBuildScopeForTest(u64);
+
+#[cfg(any(test, feature = "test-utils"))]
+impl SourceDeclarationManifestBuildScopeForTest {
+    pub fn start() -> Self {
+        Self(SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST.get())
+    }
+
+    pub fn finish(self) -> u64 {
+        SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST
+            .get()
+            .saturating_sub(self.0)
+    }
+}
 
 /// Unified lexical identity of one source declaration occurrence.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -81,6 +107,110 @@ pub struct SourceDeclarationOccurrence {
     pub kind: DeclarationKind,
     pub declaration_span: Span,
     pub binding_span: Span,
+}
+
+/// Source placement of one type-fragment AST payload.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SourceTypeFragmentPlacement {
+    Ordinary,
+    ClassExpression,
+    DefaultClass,
+}
+
+/// AST payload retained by the one-pass source declaration manifest.
+#[derive(Copy, Clone, Debug)]
+pub enum SourceTypeFragmentPayload<'ast> {
+    TypeAlias(&'ast TSTypeAliasDeclaration<'ast>),
+    Interface(&'ast TSInterfaceDeclaration<'ast>),
+    Class(&'ast Class<'ast>),
+    Enum(&'ast TSEnumDeclaration<'ast>),
+}
+
+impl SourceTypeFragmentPayload<'_> {
+    pub fn kind(self) -> TypeFragmentKind {
+        match self {
+            Self::TypeAlias(_) => TypeFragmentKind::TypeAlias,
+            Self::Interface(_) => TypeFragmentKind::Interface,
+            Self::Class(_) => TypeFragmentKind::Class,
+            Self::Enum(_) => TypeFragmentKind::Enum,
+        }
+    }
+}
+
+/// One interface owner site in source order.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SourceInterfaceOccurrenceKind {
+    Header,
+    Heritage,
+    Member,
+}
+
+/// Header, heritage, or member site projected with an interface payload.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct SourceInterfaceOccurrence {
+    pub kind: SourceInterfaceOccurrenceKind,
+    pub span: Span,
+}
+
+/// One source type-fragment candidate from the shared declaration visitor.
+#[derive(Clone, Debug)]
+pub struct SourceTypeFragmentOccurrence<'ast> {
+    pub kind: DeclarationKind,
+    pub declaration_span: Span,
+    pub binding_span: Span,
+    pub placement: SourceTypeFragmentPlacement,
+    pub payload: SourceTypeFragmentPayload<'ast>,
+    pub interface_occurrences: Range<usize>,
+}
+
+/// One exhaustive declaration pass shared by semantic binding and checker inventory construction.
+#[derive(Clone, Debug)]
+pub struct SourceDeclarationManifest<'ast> {
+    program: &'ast Program<'ast>,
+    declarations: Box<[SourceDeclarationOccurrence]>,
+    type_fragments: Box<[SourceTypeFragmentOccurrence<'ast>]>,
+    interface_occurrences: Box<[SourceInterfaceOccurrence]>,
+}
+
+impl<'ast> SourceDeclarationManifest<'ast> {
+    pub fn build(program: &'ast Program<'ast>) -> Self {
+        #[cfg(any(test, feature = "test-utils"))]
+        SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST.set(
+            SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST
+                .get()
+                .saturating_add(1),
+        );
+        let mut visitor = SourceDeclarationVisitor::manifest();
+        visitor.visit_program(program);
+        Self {
+            program,
+            declarations: visitor
+                .occurrences
+                .expect("declaration occurrence projection is enabled")
+                .into_boxed_slice(),
+            type_fragments: visitor
+                .type_fragments
+                .expect("type-fragment projection is enabled")
+                .into_boxed_slice(),
+            interface_occurrences: visitor.interface_occurrences.into_boxed_slice(),
+        }
+    }
+
+    pub fn declarations(&self) -> &[SourceDeclarationOccurrence] {
+        &self.declarations
+    }
+
+    pub fn type_fragments(&self) -> &[SourceTypeFragmentOccurrence<'ast>] {
+        &self.type_fragments
+    }
+
+    pub fn interface_occurrences(&self, range: Range<usize>) -> &[SourceInterfaceOccurrence] {
+        &self.interface_occurrences[range]
+    }
+
+    pub fn belongs_to(&self, program: &Program<'_>) -> bool {
+        std::ptr::eq(self.program, program)
+    }
 }
 
 /// Global binding projection from the exhaustive visitor shared with semantic binding.
@@ -178,9 +308,12 @@ pub struct SourceGlobalContributorSite {
     pub span: Span,
 }
 
-struct SourceDeclarationVisitor {
+struct SourceDeclarationVisitor<'ast> {
     occurrences: Option<Vec<SourceDeclarationOccurrence>>,
+    type_fragments: Option<Vec<SourceTypeFragmentOccurrence<'ast>>>,
+    interface_occurrences: Vec<SourceInterfaceOccurrence>,
     global_census: Option<SourceGlobalCensusProjection>,
+    direct_default_class_start: Option<u32>,
 }
 
 struct SourceGlobalCensusProjection {
@@ -204,17 +337,32 @@ enum GlobalBoundaryDisposition {
     NestedUncertain,
 }
 
-impl SourceDeclarationVisitor {
+impl<'ast> SourceDeclarationVisitor<'ast> {
+    fn manifest() -> Self {
+        Self {
+            occurrences: Some(Vec::new()),
+            type_fragments: Some(Vec::new()),
+            interface_occurrences: Vec::new(),
+            global_census: None,
+            direct_default_class_start: None,
+        }
+    }
+
     fn occurrences_only() -> Self {
         Self {
             occurrences: Some(Vec::new()),
+            type_fragments: None,
+            interface_occurrences: Vec::new(),
             global_census: None,
+            direct_default_class_start: None,
         }
     }
 
     fn with_global_census(context: ModuleBindingContext) -> Self {
         Self {
             occurrences: None,
+            type_fragments: None,
+            interface_occurrences: Vec::new(),
             global_census: Some(SourceGlobalCensusProjection {
                 result: SourceGlobalBindingCensus::default(),
                 context,
@@ -228,6 +376,7 @@ impl SourceDeclarationVisitor {
                 contributor_sites: None,
                 explicit_global_this_sites: None,
             }),
+            direct_default_class_start: None,
         }
     }
 
@@ -274,6 +423,62 @@ impl SourceDeclarationVisitor {
                 binding_span: Span::from_oxc(identifier.span),
             });
         }
+    }
+
+    fn push_type_fragment(
+        &mut self,
+        kind: DeclarationKind,
+        declaration_span: oxc_span::Span,
+        binding_span: oxc_span::Span,
+        placement: SourceTypeFragmentPlacement,
+        payload: SourceTypeFragmentPayload<'ast>,
+    ) {
+        if self.type_fragments.is_none() {
+            return;
+        }
+        let interface_start = self.interface_occurrences.len();
+        if let SourceTypeFragmentPayload::Interface(interface) = payload {
+            self.interface_occurrences.push(SourceInterfaceOccurrence {
+                kind: SourceInterfaceOccurrenceKind::Header,
+                span: Span::from_oxc(interface.id.span),
+            });
+            self.interface_occurrences
+                .extend(
+                    interface
+                        .extends
+                        .iter()
+                        .map(|heritage| SourceInterfaceOccurrence {
+                            kind: SourceInterfaceOccurrenceKind::Heritage,
+                            span: Span::from_oxc(heritage.span),
+                        }),
+                );
+            self.interface_occurrences
+                .extend(interface.body.body.iter().map(|member| {
+                    let span = match member {
+                        TSSignature::TSPropertySignature(signature) => signature.span,
+                        TSSignature::TSMethodSignature(signature) => signature.span,
+                        TSSignature::TSCallSignatureDeclaration(signature) => signature.span,
+                        TSSignature::TSConstructSignatureDeclaration(signature) => signature.span,
+                        TSSignature::TSIndexSignature(signature) => signature.span,
+                    };
+                    SourceInterfaceOccurrence {
+                        kind: SourceInterfaceOccurrenceKind::Member,
+                        span: Span::from_oxc(span),
+                    }
+                }));
+        }
+        let interface_end = self.interface_occurrences.len();
+        self.type_fragments
+            .as_mut()
+            .expect("type-fragment projection is enabled")
+            .push(SourceTypeFragmentOccurrence {
+                kind,
+                declaration_span: Span::from_oxc(declaration_span),
+                binding_span: Span::from_oxc(binding_span),
+                placement,
+                payload,
+                interface_occurrences: interface_start..interface_end,
+            });
     }
 
     fn root_placement(&self) -> Option<GlobalRootPlacement> {
@@ -408,8 +613,17 @@ struct GlobalRootPlacement {
     legal: bool,
 }
 
-impl<'a> Visit<'a> for SourceDeclarationVisitor {
-    fn visit_statement(&mut self, statement: &Statement<'a>) {
+impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
+    fn visit_export_default_declaration(&mut self, declaration: &ExportDefaultDeclaration<'ast>) {
+        let previous = self.direct_default_class_start;
+        if let ExportDefaultDeclarationKind::ClassDeclaration(class) = &declaration.declaration {
+            self.direct_default_class_start = Some(class.span.start);
+        }
+        walk::walk_export_default_declaration(self, declaration);
+        self.direct_default_class_start = previous;
+    }
+
+    fn visit_statement(&mut self, statement: &Statement<'ast>) {
         let nested_placement = match statement {
             Statement::BlockStatement(_)
             | Statement::DoWhileStatement(_)
@@ -458,7 +672,7 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
         }
     }
 
-    fn visit_declaration(&mut self, declaration: &Declaration<'a>) {
+    fn visit_declaration(&mut self, declaration: &Declaration<'ast>) {
         match declaration {
             Declaration::VariableDeclaration(_)
             | Declaration::FunctionDeclaration(_)
@@ -473,7 +687,7 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
         walk::walk_declaration(self, declaration);
     }
 
-    fn visit_module_declaration(&mut self, declaration: &ModuleDeclaration<'a>) {
+    fn visit_module_declaration(&mut self, declaration: &ModuleDeclaration<'ast>) {
         match declaration {
             ModuleDeclaration::ImportDeclaration(_)
             | ModuleDeclaration::ExportAllDeclaration(_)
@@ -485,7 +699,7 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
         walk::walk_module_declaration(self, declaration);
     }
 
-    fn enter_node(&mut self, kind: AstKind<'a>) {
+    fn enter_node(&mut self, kind: AstKind<'ast>) {
         if let Some(census) = self.global_census.as_mut() {
             census.result.source_nodes_visited =
                 census.result.source_nodes_visited.saturating_add(1);
@@ -547,6 +761,23 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
                         );
                     }
                 }
+                let placement = if self.direct_default_class_start == Some(class.span.start) {
+                    SourceTypeFragmentPlacement::DefaultClass
+                } else if class.r#type == ClassType::ClassExpression {
+                    SourceTypeFragmentPlacement::ClassExpression
+                } else {
+                    SourceTypeFragmentPlacement::Ordinary
+                };
+                self.push_type_fragment(
+                    DeclarationKind::Class,
+                    class.span,
+                    class
+                        .id
+                        .as_ref()
+                        .map_or(class.span, |identifier| identifier.span),
+                    placement,
+                    SourceTypeFragmentPayload::Class(class),
+                );
                 if let Some(census) = self.global_census.as_mut() {
                     census.class_depth = census.class_depth.saturating_add(1);
                 }
@@ -587,6 +818,13 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
                     declaration.span,
                     declaration.id.span,
                 );
+                self.push_type_fragment(
+                    DeclarationKind::TypeAlias,
+                    declaration.span,
+                    declaration.id.span,
+                    SourceTypeFragmentPlacement::Ordinary,
+                    SourceTypeFragmentPayload::TypeAlias(declaration),
+                );
                 if self
                     .root_placement()
                     .is_some_and(|placement| placement.direct_lexical)
@@ -605,6 +843,13 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
                     declaration.span,
                     declaration.id.span,
                 );
+                self.push_type_fragment(
+                    DeclarationKind::Interface,
+                    declaration.span,
+                    declaration.id.span,
+                    SourceTypeFragmentPlacement::Ordinary,
+                    SourceTypeFragmentPayload::Interface(declaration),
+                );
                 if self
                     .root_placement()
                     .is_some_and(|placement| placement.direct_lexical)
@@ -619,6 +864,13 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
             }
             AstKind::TSEnumDeclaration(declaration) => {
                 self.push(DeclarationKind::Enum, declaration.span, declaration.id.span);
+                self.push_type_fragment(
+                    DeclarationKind::Enum,
+                    declaration.span,
+                    declaration.id.span,
+                    SourceTypeFragmentPlacement::Ordinary,
+                    SourceTypeFragmentPayload::Enum(declaration),
+                );
                 if self
                     .root_placement()
                     .is_some_and(|placement| placement.direct_lexical)
@@ -738,7 +990,7 @@ impl<'a> Visit<'a> for SourceDeclarationVisitor {
         }
     }
 
-    fn leave_node(&mut self, kind: AstKind<'a>) {
+    fn leave_node(&mut self, kind: AstKind<'ast>) {
         let Some(census) = self.global_census.as_mut() else {
             return;
         };
@@ -831,6 +1083,13 @@ impl DeclarationTable {
 
     pub fn local_declarations(&self) -> impl Iterator<Item = &LexicalDeclaration> {
         self.declarations.local_iter()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn clear_type_group_for_inventory_test(&mut self, id: DeclId) {
+        self.get_mut(id)
+            .expect("inventory test declaration exists")
+            .type_group = None;
     }
 
     pub fn len(&self) -> usize {
@@ -1115,6 +1374,128 @@ mod tests {
     }
 
     #[test]
+    fn manifest_projects_type_payloads_and_one_flat_interface_site_order() {
+        let source = "type Alias = string; interface Base {} interface Shape extends Base { value: string; method(): void; } enum Choice { One } class Model {}";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+
+        assert_eq!(
+            manifest
+                .type_fragments()
+                .iter()
+                .map(|fragment| (fragment.payload.kind(), fragment.placement))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    TypeFragmentKind::TypeAlias,
+                    SourceTypeFragmentPlacement::Ordinary
+                ),
+                (
+                    TypeFragmentKind::Interface,
+                    SourceTypeFragmentPlacement::Ordinary
+                ),
+                (
+                    TypeFragmentKind::Interface,
+                    SourceTypeFragmentPlacement::Ordinary
+                ),
+                (
+                    TypeFragmentKind::Enum,
+                    SourceTypeFragmentPlacement::Ordinary
+                ),
+                (
+                    TypeFragmentKind::Class,
+                    SourceTypeFragmentPlacement::Ordinary
+                ),
+            ]
+        );
+        let interfaces = manifest
+            .type_fragments()
+            .iter()
+            .filter(|fragment| fragment.payload.kind() == TypeFragmentKind::Interface)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            interfaces
+                .iter()
+                .flat_map(|fragment| {
+                    manifest.interface_occurrences(fragment.interface_occurrences.clone())
+                })
+                .map(|occurrence| occurrence.kind)
+                .collect::<Vec<_>>(),
+            [
+                SourceInterfaceOccurrenceKind::Header,
+                SourceInterfaceOccurrenceKind::Header,
+                SourceInterfaceOccurrenceKind::Heritage,
+                SourceInterfaceOccurrenceKind::Member,
+                SourceInterfaceOccurrenceKind::Member,
+            ]
+        );
+        assert_eq!(interfaces[0].interface_occurrences, 0..1);
+        assert_eq!(interfaces[1].interface_occurrences, 1..5);
+    }
+
+    #[test]
+    fn manifest_distinguishes_class_expression_and_default_candidates() {
+        let allocator = Allocator::default();
+        let expression = Parser::new(
+            &allocator,
+            "const Value = class NamedExpression {};",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(
+            expression.diagnostics.is_empty(),
+            "{:?}",
+            expression.diagnostics
+        );
+        let manifest = SourceDeclarationManifest::build(&expression.program);
+        let [candidate] = manifest.type_fragments() else {
+            panic!("one named class-expression candidate");
+        };
+        assert_eq!(
+            candidate.placement,
+            SourceTypeFragmentPlacement::ClassExpression
+        );
+        assert_eq!(
+            &expression.program.source_text[candidate.binding_span.range()],
+            "NamedExpression"
+        );
+
+        for (source, binding) in [
+            ("export default class NamedDefault {}", "NamedDefault"),
+            ("export default class {}", "class {}"),
+        ] {
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+            assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+            let manifest = SourceDeclarationManifest::build(&parsed.program);
+            let [candidate] = manifest.type_fragments() else {
+                panic!("one default class candidate");
+            };
+            assert_eq!(
+                candidate.placement,
+                SourceTypeFragmentPlacement::DefaultClass
+            );
+            assert_eq!(&source[candidate.binding_span.range()], binding);
+        }
+    }
+
+    #[test]
+    fn legacy_occurrence_projection_matches_the_full_manifest_exactly() {
+        let source = "interface Shape { value: string } const Value = class Named {}; function read({ leaf }: { leaf: number }): void {}";
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+
+        assert_eq!(
+            source_declaration_occurrences(&parsed.program),
+            manifest.declarations()
+        );
+    }
+
+    #[test]
     fn complete_visitor_reaches_declarations_inside_unmodeled_expressions() {
         let source = "tag`${(function nested({ leaf: [deep] }) {})}`;";
         let allocator = Allocator::default();
@@ -1140,6 +1521,8 @@ mod tests {
         let mut occurrence_only = SourceDeclarationVisitor::occurrences_only();
         occurrence_only.visit_program(&parsed.program);
         assert!(occurrence_only.global_census.is_none());
+        assert!(occurrence_only.type_fragments.is_none());
+        assert!(occurrence_only.interface_occurrences.is_empty());
         let occurrences = occurrence_only
             .occurrences
             .expect("occurrence-only projection owns occurrence rows");

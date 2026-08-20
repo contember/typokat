@@ -260,6 +260,25 @@ passes its closure gates.
   The sparse receipt selects user-origin fragments, including the user `Array` reopening inside a
   frozen-prefix group, and namespace/global interface occurrences retain their exact ticket order.
   The ordinary gate passed with receipt `574/690/574/0` in 143.55 s.
+- **WU2 implementation evidence.** The binder's existing declaration visitor now emits one owned
+  source manifest with type payloads and a flat interface-site projection. Manifest-aware binder
+  entry points preserve the legacy APIs, and the checker builds a read-only module-local dense
+  inventory without changing reservation, publication, or semantic consumers. Test-only route
+  guards prove one manifest per source program, exact legacy identity/order parity, and selected
+  replay membership; only a block-scoped legacy omission may differ. Narrow gates passed:
+  binder manifest `3/3`, checker inventory `11/11`, library/complete receipts `2/2`, default-class
+  controls `3/3`, shared-provider `1/1`, and sparse selected replay `1/1`. The authenticated sparse
+  closure for the `Array` oracle is `60` selected library programs plus `2` user programs, with
+  exactly `62` manifests and `62` inventories; the earlier `1 + 1` estimate was incorrect, and the
+  route has no duplicate build. An ordinary conformance probe also fixed the explicit rejection
+  boundary for recorded but semantically unadmitted types inside ambient external modules. The
+  final focused commands were
+  `CARGO_TARGET_DIR=/tmp/typokat-binding-owner-review.pYuunY cpu-lease run -n 2 -- cargo test -p
+  typokat-check inventory --lib -- --nocapture` (`11/11`) and the same leased prefix with `cargo
+  test -p typokat-library selected_replay_declaration_receipt_is_exact --lib -- --nocapture`
+  (`1/1`). The ordinary conformance gate passed with receipt `574/690/574/0` in `154.53 s`;
+  `cargo check --all-targets` and `cargo clippy --all-targets -- -D warnings` also passed. The
+  complete shared/cold and official-suite gates remain WU5.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

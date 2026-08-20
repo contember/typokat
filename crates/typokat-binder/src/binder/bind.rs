@@ -4,8 +4,8 @@
 //! The checker owns type construction and semantic diagnostics.
 
 use crate::binder::declaration::{
-    source_declaration_occurrences, source_global_binding_census_with_provenance, DeclId,
-    DeclarationKind, DeclarationSite, DeclarationTable, LexicalDeclaration, TypeFragmentKind,
+    source_global_binding_census_with_provenance, DeclId, DeclarationKind, DeclarationSite,
+    DeclarationTable, LexicalDeclaration, SourceDeclarationManifest, TypeFragmentKind,
     TypeGroupFragment, TypeGroupId, TypeGroupTable, ValueStorageId,
 };
 use crate::binder::namespace::{
@@ -1236,8 +1236,8 @@ impl BindState {
         }
     }
 
-    fn record_source_declarations(&mut self, program: &Program<'_>) {
-        for occurrence in source_declaration_occurrences(program) {
+    fn record_source_declarations(&mut self, manifest: &SourceDeclarationManifest<'_>) {
+        for occurrence in manifest.declarations() {
             let site = DeclarationSite {
                 module: self.current_module,
                 scope: None,
@@ -1483,6 +1483,19 @@ enum BuilderUseMode {
 impl<'ast> ProjectBinderBuilder<'ast> {
     /// Bind the prelude first so its checker storage keeps the low id ranges.
     pub fn new(prelude: &Program<'_>) -> Self {
+        let manifest = SourceDeclarationManifest::build(prelude);
+        Self::new_with_declaration_manifest(prelude, &manifest)
+    }
+
+    /// Bind the prelude from a caller-owned one-pass declaration manifest.
+    pub fn new_with_declaration_manifest<'source>(
+        prelude: &'source Program<'source>,
+        manifest: &SourceDeclarationManifest<'source>,
+    ) -> Self {
+        assert!(
+            manifest.belongs_to(prelude),
+            "prelude declaration manifest belongs to the bound AST"
+        );
         let mut state = BindState {
             graph: ScopeGraph::new(),
             symbols: SymbolTable::new(),
@@ -1509,7 +1522,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         let prelude_module = state.graph.push(Scope::new(ScopeKind::Module, None));
         state.current_module = prelude_module;
         state.record_module_source(prelude_module, SourceUnitKey::PRELUDE);
-        state.record_source_declarations(prelude);
+        state.record_source_declarations(manifest);
         bind_statements(&mut state, prelude_module, &prelude.body);
         let prelude_type_group_count =
             u32::try_from(state.type_groups.len()).expect("prelude type group count fits u32");
@@ -1678,6 +1691,22 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         imports: &[ImportedSymbol],
         unit: CompilationUnit,
     ) -> (ScopeId, Vec<ImportPlaceholder>) {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.add_module_with_declaration_manifest(program, &manifest, imports, unit)
+    }
+
+    /// Add one project module from its caller-owned one-pass declaration manifest.
+    pub fn add_module_with_declaration_manifest(
+        &mut self,
+        program: &'ast Program<'ast>,
+        manifest: &SourceDeclarationManifest<'ast>,
+        imports: &[ImportedSymbol],
+        unit: CompilationUnit,
+    ) -> (ScopeId, Vec<ImportPlaceholder>) {
+        assert!(
+            manifest.belongs_to(program),
+            "module declaration manifest belongs to the bound AST"
+        );
         #[cfg(any(test, feature = "test-utils"))]
         match self.use_mode {
             BuilderUseMode::Pristine | BuilderUseMode::Project => {
@@ -1700,7 +1729,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .push(Scope::new(ScopeKind::Module, Some(module_parent)));
         self.state.current_module = module;
         self.state.record_module_source(module, unit.source);
-        self.state.record_source_declarations(program);
+        self.state.record_source_declarations(manifest);
         let mut placeholders = Vec::new();
         for import in imports {
             placeholders.push(declare_import(&mut self.state, module, import));
@@ -1832,6 +1861,27 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         &mut self,
         units: &[(&'ast Program<'ast>, CompilationUnit)],
     ) -> Result<Vec<ScopeId>, LibraryBinderError> {
+        let manifests = units
+            .iter()
+            .map(|(program, _)| SourceDeclarationManifest::build(program))
+            .collect::<Vec<_>>();
+        let manifested = units
+            .iter()
+            .zip(&manifests)
+            .map(|((program, unit), manifest)| (*program, manifest, *unit))
+            .collect::<Vec<_>>();
+        self.try_add_library_modules_with_declaration_manifests(&manifested)
+    }
+
+    /// Bind declaration-library files from caller-owned one-pass declaration manifests.
+    pub fn try_add_library_modules_with_declaration_manifests(
+        &mut self,
+        units: &[(
+            &'ast Program<'ast>,
+            &SourceDeclarationManifest<'ast>,
+            CompilationUnit,
+        )],
+    ) -> Result<Vec<ScopeId>, LibraryBinderError> {
         if units.is_empty() {
             return Err(LibraryBinderError::EmptyBatch);
         }
@@ -1841,7 +1891,11 @@ impl<'ast> ProjectBinderBuilder<'ast> {
         let mut sources = rustc_hash::FxHashSet::default();
         let mut origins = rustc_hash::FxHashSet::default();
         let mut canonical_units = Vec::with_capacity(units.len());
-        for (input_index, (program, unit)) in units.iter().enumerate() {
+        for (input_index, (program, manifest, unit)) in units.iter().enumerate() {
+            assert!(
+                manifest.belongs_to(program),
+                "library declaration manifest belongs to the bound AST"
+            );
             let CompilationOrigin::Library(file_ordinal) = unit.origin else {
                 return Err(LibraryBinderError::NonLibraryUnit { input_index });
             };
@@ -1854,9 +1908,9 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             if !origins.insert(unit.origin) {
                 return Err(LibraryBinderError::DuplicateFileOrdinal { input_index });
             }
-            canonical_units.push((file_ordinal, input_index, *program, *unit));
+            canonical_units.push((file_ordinal, input_index, *program, *manifest, *unit));
         }
-        canonical_units.sort_by_key(|(file_ordinal, _, _, _)| *file_ordinal);
+        canonical_units.sort_by_key(|(file_ordinal, _, _, _, _)| *file_ordinal);
         match self.use_mode {
             BuilderUseMode::Pristine => self.use_mode = BuilderUseMode::Library,
             #[cfg(any(test, feature = "test-utils"))]
@@ -1871,7 +1925,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             .library_root_projection
             .get_or_insert_with(LibraryRootProjection::default);
         projection.canonical_unit_count = canonical_units.len();
-        for (file_ordinal, input_index, program, unit) in canonical_units {
+        for (file_ordinal, input_index, program, manifest, unit) in canonical_units {
             let module = self
                 .state
                 .graph
@@ -1884,7 +1938,7 @@ impl<'ast> ProjectBinderBuilder<'ast> {
             self.state
                 .type_group_library_ordinals
                 .insert(module, file_ordinal);
-            self.state.record_source_declarations(program);
+            self.state.record_source_declarations(manifest);
             let provenance = source_global_binding_census_with_provenance(program, unit.binding);
             projection.source_census_count = projection.source_census_count.saturating_add(1);
             projection.uncertain_candidate_count = projection

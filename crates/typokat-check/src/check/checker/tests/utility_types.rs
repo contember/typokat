@@ -3,7 +3,7 @@
 //! preservation. Fixture acceptance lives in `m28_utility_types/`.
 
 use super::super::{
-    check_program_with_publication_inspector, expected_trusted_prelude_incomplete,
+    check_program, check_program_with_publication_inspector, expected_trusted_prelude_incomplete,
     trusted_prelude_records_are_clean, walk_type_decls, TEST_AMBIENT_SOURCE,
 };
 use crate::binder::bind_module_with_prelude;
@@ -87,6 +87,31 @@ fn prelude_checks_clean() {
 #[test]
 fn trusted_prelude_declaration_inventory_receipt_is_exact() {
     const EXPECTED_GROUPS: usize = 18;
+
+    let manifest_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+    let inventory_scope = crate::check::checker::DeclarationInventoryWorkScopeForTest::start();
+    let route_allocator = Allocator::default();
+    let route_user = Parser::new(&route_allocator, "", SourceType::ts()).parse();
+    let mut route_interner = Interner::with_intrinsics();
+    let route_result = check_program(&mut route_interner, &route_user.program);
+    assert!(route_result.diagnostics.is_empty());
+    let manifests = manifest_scope.finish();
+    let inventory_work = inventory_scope.finish();
+    assert_eq!(manifests, 2);
+    assert_eq!(inventory_work.builds, manifests);
+    assert_eq!(
+        inventory_work,
+        crate::check::checker::DeclarationInventoryWorkForTest {
+            builds: 2,
+            source_type_rows: 18,
+            admitted: 18,
+            rejected: 0,
+            exact_join_attempts: 18,
+            dense_slots: 21,
+            legacy_top_level_block_deltas: 0,
+        }
+    );
 
     let prelude_allocator = Allocator::default();
     let prelude = Parser::new(&prelude_allocator, TEST_AMBIENT_SOURCE, SourceType::ts()).parse();

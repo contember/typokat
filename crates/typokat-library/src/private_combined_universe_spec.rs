@@ -1004,7 +1004,11 @@ export {};
 
 #[test]
 fn shared_provider_declaration_receipt_is_exact() {
-    let receipt = acquire()
+    let base = acquire();
+    let manifest_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+    let inventory_scope = crate::check::checker::DeclarationInventoryWorkScopeForTest::start();
+    let receipt = base
         .check_routed_user_project_for_test(&[input(
             "/project/declarations.ts",
             r#"export {};
@@ -1015,6 +1019,22 @@ const invalid: SharedReceiptInterface = { value: 1 };
 "#,
         )])
         .expect("shared provider declaration receipt");
+    let manifests = manifest_scope.finish();
+    let inventory_work = inventory_scope.finish();
+    assert_eq!(manifests, 1);
+    assert_eq!(inventory_work.builds, manifests);
+    assert_eq!(
+        inventory_work,
+        crate::check::checker::DeclarationInventoryWorkForTest {
+            builds: 1,
+            source_type_rows: 3,
+            admitted: 3,
+            rejected: 0,
+            exact_join_attempts: 3,
+            dense_slots: 3,
+            legacy_top_level_block_deltas: 0,
+        }
+    );
 
     assert_eq!(receipt.preflight.route, CollisionRouteForTest::SharedDelta);
     assert_eq!(receipt.execution, PrivateExecutionForTest::SharedDelta);
@@ -1048,9 +1068,29 @@ const invalid: SharedReceiptInterface = { value: 1 };
 
 #[test]
 fn selected_replay_declaration_receipt_is_exact() {
-    let receipt = acquire()
+    let base = acquire();
+    let manifest_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+    let inventory_scope = crate::check::checker::DeclarationInventoryWorkScopeForTest::start();
+    let receipt = base
         .check_routed_user_project_for_test(&array_project(false))
         .expect("selected replay declaration receipt");
+    let manifests = manifest_scope.finish();
+    let inventory_work = inventory_scope.finish();
+    assert_eq!(manifests, 62);
+    assert_eq!(inventory_work.builds, manifests);
+    assert_eq!(
+        inventory_work,
+        crate::check::checker::DeclarationInventoryWorkForTest {
+            builds: 62,
+            source_type_rows: 2_378,
+            admitted: 2_378,
+            rejected: 0,
+            exact_join_attempts: 2_378,
+            dense_slots: 13_538,
+            legacy_top_level_block_deltas: 0,
+        }
+    );
 
     assert_eq!(
         receipt.preflight.route,

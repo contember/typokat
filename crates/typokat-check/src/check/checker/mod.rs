@@ -6,10 +6,10 @@
 use crate::binder::bind::{
     ImportPlaceholder, ImportedSymbol, ImportedSymbolProvenance, ProjectBinderBuilder,
 };
-#[cfg(any(test, feature = "test-utils"))]
-use crate::binder::bind_module_with_prelude;
 use crate::binder::declaration::source_global_binding_census;
-use crate::binder::declaration::{DeclId, DeclarationKind, TypeGroupId, ValueStorageId};
+use crate::binder::declaration::{
+    DeclId, DeclarationKind, SourceDeclarationManifest, TypeGroupId, ValueStorageId,
+};
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::namespace::{
     CompilationUnit, GlobalIssue, LocalAmbientExportAliasFailureKind, ModuleBindingContext,
@@ -66,6 +66,8 @@ mod declaration_surface_lazy_spec;
 #[cfg(test)]
 pub(crate) mod declaration_surface_measure;
 mod decls;
+#[cfg(any(test, feature = "test-utils"))]
+pub use decls::inventory::{DeclarationInventoryWorkForTest, DeclarationInventoryWorkScopeForTest};
 pub(in crate::check) mod eval;
 pub mod events;
 pub mod events_library;
@@ -733,10 +735,13 @@ pub(in crate::check::checker) struct BoundUserBase {
 #[cfg(any(test, feature = "test-utils"))]
 fn bootstrap_test_support_prelude(
     interner: &mut Interner,
-    bind: impl FnOnce(&Program<'_>) -> Binder,
+    bind: impl for<'source> FnOnce(
+        &'source Program<'source>,
+        &SourceDeclarationManifest<'source>,
+    ) -> Binder,
 ) -> (Binder, TrustedPreludeHandoff) {
-    match try_bootstrap_test_support_prelude(interner, |program| {
-        Ok::<Binder, std::convert::Infallible>(bind(program))
+    match try_bootstrap_test_support_prelude(interner, |program, manifest| {
+        Ok::<Binder, std::convert::Infallible>(bind(program, manifest))
     }) {
         Ok(output) => output,
         Err(never) => match never {},
@@ -746,7 +751,10 @@ fn bootstrap_test_support_prelude(
 #[cfg(any(test, feature = "test-utils"))]
 fn try_bootstrap_test_support_prelude<Error>(
     interner: &mut Interner,
-    bind: impl FnOnce(&Program<'_>) -> Result<Binder, Error>,
+    bind: impl for<'source> FnOnce(
+        &'source Program<'source>,
+        &SourceDeclarationManifest<'source>,
+    ) -> Result<Binder, Error>,
 ) -> Result<(Binder, TrustedPreludeHandoff), Error> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, TEST_AMBIENT_SOURCE, SourceType::ts()).parse();
@@ -756,7 +764,22 @@ fn try_bootstrap_test_support_prelude<Error>(
         parsed.diagnostics
     );
 
-    let binder = bind(&parsed.program)?;
+    let manifest = SourceDeclarationManifest::build(&parsed.program);
+    let binder = bind(&parsed.program, &manifest)?;
+    let prelude_source = binder
+        .source_for_module(binder.prelude_module)
+        .expect("trusted prelude has a source identity");
+    let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+        &binder,
+        binder.prelude_module,
+        prelude_source,
+        manifest,
+        None,
+    )
+    .expect("trusted prelude has one canonical declaration inventory");
+    #[cfg(any(test, feature = "test-utils"))]
+    inventory.assert_legacy_walker_parity(&binder, &parsed.program, None);
+    let _inventory_receipt = inventory.receipt();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
     let mut type_resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
@@ -964,6 +987,7 @@ where
         &namespace_values::NamespaceValueRegistry,
     ),
 {
+    let manifest = SourceDeclarationManifest::build(program);
     let (
         binder,
         TrustedPreludeHandoff {
@@ -974,8 +998,13 @@ where
             next_type_param,
             next_class_id,
         },
-    ) = bootstrap_test_support_prelude(interner, |prelude| {
-        bind_module_with_prelude(prelude, program)
+    ) = bootstrap_test_support_prelude(interner, |prelude, prelude_manifest| {
+        let mut builder =
+            ProjectBinderBuilder::new_with_declaration_manifest(prelude, prelude_manifest);
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(program, &manifest, &[], unit);
+        builder.finish(module)
     });
 
     let reporting = reserve_internal_reporting(
@@ -991,6 +1020,7 @@ where
         interner,
         binder,
         program,
+        manifest,
         reporting,
         BoundUserBase {
             published_types,
@@ -1031,6 +1061,7 @@ pub(in crate::check::checker) fn check_bound_user_program<'ast, F>(
     interner: &mut Interner,
     binder: Binder,
     program: &'ast Program<'ast>,
+    manifest: SourceDeclarationManifest<'ast>,
     reporting: (PassReporting<UserRecordTicket>, UserReportingAdapter),
     base: BoundUserBase,
     inspect: F,
@@ -1048,6 +1079,7 @@ where
         interner,
         binder,
         program,
+        manifest,
         reporting,
         base,
         inspect,
@@ -1064,6 +1096,7 @@ pub(in crate::check::checker) fn check_bound_user_program_with_final_identity_in
     interner: &mut Interner,
     binder: Binder,
     program: &'ast Program<'ast>,
+    manifest: SourceDeclarationManifest<'ast>,
     base: BoundUserBase,
     inspect: F,
     inspect_final: G,
@@ -1094,6 +1127,7 @@ where
         interner,
         binder,
         program,
+        manifest,
         reporting,
         base,
         inspect,
@@ -1101,10 +1135,12 @@ where
     ))
 }
 
+#[allow(clippy::too_many_arguments)] // The manifest stays paired with the existing route inputs.
 fn check_bound_user_program_inner<'ast, F, G>(
     interner: &mut Interner,
     binder: Binder,
     program: &'ast Program<'ast>,
+    manifest: SourceDeclarationManifest<'ast>,
     reporting: (PassReporting<UserRecordTicket>, UserReportingAdapter),
     base: BoundUserBase,
     inspect: F,
@@ -1125,6 +1161,20 @@ where
     let module_ordinal = ModuleOrdinal::new(0);
     let unit_slot = UnitSlot::new(0);
     let (mut reporting, reporting_adapter) = reporting;
+    let source = binder
+        .source_for_module(binder.module)
+        .expect("bound user module has a source identity");
+    let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+        &binder,
+        binder.module,
+        source,
+        manifest,
+        None,
+    )
+    .expect("bound user module has one canonical declaration inventory");
+    #[cfg(any(test, feature = "test-utils"))]
+    inventory.assert_legacy_walker_parity(&binder, program, None);
+    let _inventory_receipt = inventory.receipt();
     let BoundUserBase {
         published_types,
         library_semantic_identities,
@@ -2192,6 +2242,24 @@ where
         return Ok(Vec::new());
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    let manifest_build_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+    #[cfg(any(test, feature = "test-utils"))]
+    let inventory_work_scope = DeclarationInventoryWorkScopeForTest::start();
+
+    let user_declaration_manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let user_source_type_rows = user_declaration_manifests
+        .iter()
+        .map(|manifest| manifest.type_fragments().len())
+        .sum::<usize>();
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut library_source_type_rows = 0usize;
+
     let (mut interner, binder, base) = state.into_user_project_base();
     let mut event_store = EventStore::default();
     let mut library_event_ledger = LibraryEventLedger::default();
@@ -2270,6 +2338,7 @@ where
         let mut bound = bind_authoritative_project_core_with_module_admission(
             builder,
             units,
+            &user_declaration_manifests,
             ProjectModuleAdmission {
                 source_reexports,
                 default_module,
@@ -2312,8 +2381,11 @@ where
                 .map(|(unit, compilation)| (unit.program, *compilation)),
         );
         let mut exports: Vec<ExportSurface> = Vec::with_capacity(units.len());
-        for (unit_index, (unit, compilation_unit)) in
-            units.iter().zip(continuation_units).enumerate()
+        for (unit_index, ((unit, compilation_unit), manifest)) in units
+            .iter()
+            .zip(continuation_units)
+            .zip(&user_declaration_manifests)
+            .enumerate()
         {
             let imports = imported_symbols(
                 unit,
@@ -2324,8 +2396,12 @@ where
                 &lexical_events,
                 &mut external_effects,
             )?;
-            let (scope, placeholders) =
-                builder.add_module(unit.program, &imports, compilation_unit);
+            let (scope, placeholders) = builder.add_module_with_declaration_manifest(
+                unit.program,
+                manifest,
+                &imports,
+                compilation_unit,
+            );
             if let Some(default_export) = default_module
                 .and_then(|plan| plan.exports_by_owner.get(unit_index))
                 .copied()
@@ -2617,6 +2693,30 @@ where
                 .get(library.source_ordinal)
                 .copied()
                 .ok_or("scheduled private library source has no retained module")?;
+            let manifest = SourceDeclarationManifest::build(library.program);
+            #[cfg(any(test, feature = "test-utils"))]
+            {
+                library_source_type_rows =
+                    library_source_type_rows.saturating_add(manifest.type_fragments().len());
+            }
+            let source = binder
+                .source_for_module(module)
+                .ok_or("scheduled private library module has no source identity")?;
+            let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+                &binder,
+                module,
+                source,
+                manifest,
+                Some(&epoch.affected_owners),
+            )
+            .map_err(|_| "selected library source has no canonical declaration inventory")?;
+            #[cfg(any(test, feature = "test-utils"))]
+            inventory.assert_legacy_walker_parity(
+                &binder,
+                library.program,
+                Some(&epoch.affected_owners),
+            );
+            let _inventory_receipt = inventory.receipt();
             reserve_type_decls_selected(
                 decls::TypeDeclReservationState {
                     interner: &mut interner,
@@ -2649,7 +2749,22 @@ where
     } else if !library_programs.is_empty() {
         return Err("private library programs require a collision epoch");
     }
-    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+    for ((scope, unit), manifest) in module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(user_declaration_manifests)
+    {
+        let source = binder
+            .source_for_module(scope)
+            .ok_or("bound project module has no source identity")?;
+        let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+            &binder, scope, source, manifest, None,
+        )
+        .map_err(|_| "bound project module has no canonical declaration inventory")?;
+        #[cfg(any(test, feature = "test-utils"))]
+        inventory.assert_legacy_walker_parity(&binder, unit.program, None);
+        let _inventory_receipt = inventory.receipt();
         reserve_type_decls(
             &mut interner,
             &binder,
@@ -3038,7 +3153,7 @@ where
     let _drained_library_records = library_output.records;
     let mut records = UserReportingAdapter { event_store }.finish(Vec::new(), inspect_records);
     inspect_final(&pass, next_class_id);
-    Ok(units
+    let results = units
         .iter()
         .map(|unit| {
             let (mut diagnostics, mut incomplete) =
@@ -3051,7 +3166,40 @@ where
                 incomplete,
             }
         })
-        .collect())
+        .collect();
+    #[cfg(any(test, feature = "test-utils"))]
+    {
+        let expected_builds =
+            u64::try_from(library_programs.len().saturating_add(units.len())).unwrap_or(u64::MAX);
+        let manifest_builds = manifest_build_scope.finish();
+        let inventory_work = inventory_work_scope.finish();
+        assert_eq!(
+            manifest_builds, expected_builds,
+            "owned-library route builds one declaration manifest per source program"
+        );
+        assert_eq!(
+            inventory_work.builds, manifest_builds,
+            "owned-library route builds one declaration inventory per source manifest"
+        );
+        assert_eq!(
+            inventory_work.source_type_rows,
+            u64::try_from(library_source_type_rows.saturating_add(user_source_type_rows))
+                .unwrap_or(u64::MAX),
+            "owned-library inventory rows split exactly into selected-library and user rows"
+        );
+        assert_eq!(
+            inventory_work
+                .admitted
+                .saturating_add(inventory_work.rejected),
+            inventory_work.source_type_rows,
+            "owned-library inventory accounts for every source type row"
+        );
+        assert_eq!(
+            inventory_work.exact_join_attempts, inventory_work.source_type_rows,
+            "owned-library inventory joins every source type row exactly once"
+        );
+    }
+    Ok(results)
 }
 
 /// Check a dependency-ordered project in a universe forked from a published default-library base.
@@ -3620,11 +3768,12 @@ pub fn check_program_with_owned_library<'ast>(
     state: library_compiler::OwnedLibraryRuntimeState,
     program: &'ast Program<'ast>,
 ) -> Result<CheckResult, &'static str> {
+    let manifest = SourceDeclarationManifest::build(program);
     let (mut interner, binder, base) = state.into_user_project_base();
     let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(binder);
     let unit = CompilationUnit::implementation(source, program);
     builder.reserve_script_namespace_roots([(program, unit)]);
-    let (module, _) = builder.add_module(program, &[], unit);
+    let (module, _) = builder.add_module_with_declaration_manifest(program, &manifest, &[], unit);
     let binder = builder.finish_frozen_library_continuation(Some(module))?;
     binder
         .namespaces
@@ -3641,6 +3790,7 @@ pub fn check_program_with_owned_library<'ast>(
         &mut interner,
         binder,
         program,
+        manifest,
         reporting,
         base,
         |_, _, _, _, _| {},
@@ -3779,6 +3929,10 @@ pub(crate) fn bind_library_checkpoint_project_programs(
     checkpoint: crate::binder::bind::LibraryBinderCheckpoint,
     units: &[ProjectProgram<'_>],
 ) -> Result<BoundProjectBinder, String> {
+    let manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
     let checkpoint_ends = checkpoint.checkpoint_ends();
     let (builder, _) = checkpoint.into_continuation();
     let source_offset = u32::try_from(checkpoint_ends.next_source)
@@ -3808,11 +3962,35 @@ pub(crate) fn bind_library_checkpoint_project_programs(
     let bound = bind_authoritative_project_core(
         builder,
         units,
+        &manifests,
         source_offset,
         &lexical_events,
         &mut external_effects,
         AuthoritativeProjectBinderFinish::Continuation,
     )?;
+    for ((module, _unit), manifest) in bound
+        .module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(manifests)
+    {
+        let source = bound
+            .binder
+            .source_for_module(module)
+            .ok_or_else(|| "bound project module has no source identity".to_owned())?;
+        let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+            &bound.binder,
+            module,
+            source,
+            manifest,
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+        #[cfg(any(test, feature = "test-utils"))]
+        inventory.assert_legacy_walker_parity(&bound.binder, _unit.program, None);
+        let _inventory_receipt = inventory.receipt();
+    }
     #[cfg(any(test, feature = "test-utils"))]
     {
         PROJECT_BINDING_CHECKPOINT_PRODUCTS
@@ -3822,9 +4000,12 @@ pub(crate) fn bind_library_checkpoint_project_programs(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+#[allow(clippy::too_many_arguments)] // The manifest batch stays paired with the source batch.
 fn bind_fresh_project_programs(
     prelude: &Program<'_>,
+    prelude_manifest: &SourceDeclarationManifest<'_>,
     units: &[ProjectProgram<'_>],
+    manifests: &[SourceDeclarationManifest<'_>],
     source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
     default_module: Option<&ValidatedDefaultModulePlan<'_>>,
     lexical_events: &LexicalReservations,
@@ -3833,8 +4014,9 @@ fn bind_fresh_project_programs(
     #[cfg(any(test, feature = "test-utils"))]
     PROJECT_BINDING_FRESH_SEEDS.set(PROJECT_BINDING_FRESH_SEEDS.get().saturating_add(1));
     let bound = bind_authoritative_project_core_with_module_admission(
-        ProjectBinderBuilder::new(prelude),
+        ProjectBinderBuilder::new_with_declaration_manifest(prelude, prelude_manifest),
         units,
+        manifests,
         ProjectModuleAdmission {
             source_reexports,
             default_module,
@@ -3866,6 +4048,7 @@ struct ProjectModuleAdmission<'p> {
 fn bind_authoritative_project_core<'ast, Ticket>(
     builder: ProjectBinderBuilder<'ast>,
     units: &[ProjectProgram<'ast>],
+    manifests: &[SourceDeclarationManifest<'ast>],
     source_offset: u32,
     lexical_events: &LexicalReservations<Ticket>,
     external_effects: &mut BTreeMap<UserRecordTicket, CandidateEffects>,
@@ -3878,6 +4061,7 @@ where
     bind_authoritative_project_core_with_source_reexports(
         builder,
         units,
+        manifests,
         None,
         source_offset,
         lexical_events,
@@ -3886,9 +4070,11 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)] // The manifest batch stays paired with the source batch.
 fn bind_authoritative_project_core_with_source_reexports<'ast, Ticket>(
     builder: ProjectBinderBuilder<'ast>,
     units: &[ProjectProgram<'ast>],
+    manifests: &[SourceDeclarationManifest<'ast>],
     source_reexports: Option<&ValidatedSourceReexportPlan<'_>>,
     source_offset: u32,
     lexical_events: &LexicalReservations<Ticket>,
@@ -3902,6 +4088,7 @@ where
     bind_authoritative_project_core_with_module_admission(
         builder,
         units,
+        manifests,
         ProjectModuleAdmission {
             source_reexports,
             default_module: None,
@@ -3913,9 +4100,11 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)] // The manifest batch stays paired with the source batch.
 fn bind_authoritative_project_core_with_module_admission<'ast, Ticket>(
     mut builder: ProjectBinderBuilder<'ast>,
     units: &[ProjectProgram<'ast>],
+    manifests: &[SourceDeclarationManifest<'ast>],
     admission: ProjectModuleAdmission<'_>,
     source_offset: u32,
     lexical_events: &LexicalReservations<Ticket>,
@@ -3926,6 +4115,14 @@ where
     Ticket: UserReportingOwner,
     Ticket::Error: std::fmt::Display,
 {
+    if manifests.len() != units.len()
+        || units
+            .iter()
+            .zip(manifests)
+            .any(|(unit, manifest)| !manifest.belongs_to(unit.program))
+    {
+        return Err("project declaration manifests do not match source programs".to_owned());
+    }
     let ProjectModuleAdmission {
         source_reexports,
         default_module,
@@ -3972,7 +4169,12 @@ where
         )
         .map_err(|error| format!("project import reporting owner failed: {error}"))?;
         let compilation = shifted_unit(unit)?;
-        let (scope, placeholders) = builder.add_module(unit.program, &imports, compilation);
+        let (scope, placeholders) = builder.add_module_with_declaration_manifest(
+            unit.program,
+            &manifests[unit_index],
+            &imports,
+            compilation,
+        );
         if let Some(default_export) = default_module
             .and_then(|plan| plan.exports_by_owner.get(unit_index))
             .copied()
@@ -4205,6 +4407,11 @@ where
         return Ok(Vec::new());
     }
 
+    let declaration_manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
+
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
     for (slot, unit) in units.iter().enumerate() {
@@ -4264,10 +4471,12 @@ where
             mut next_type_param,
             mut next_class_id,
         },
-    ) = try_bootstrap_test_support_prelude(interner, |prelude| {
+    ) = try_bootstrap_test_support_prelude(interner, |prelude, prelude_manifest| {
         let bound = bind_fresh_project_programs(
             prelude,
+            prelude_manifest,
             units,
+            &declaration_manifests,
             source_reexports,
             default_module,
             &lexical_events,
@@ -4287,7 +4496,22 @@ where
     type_resolved.resize(binder.type_groups.len(), None);
     let error = interner.well_known().error;
     let declaration_spans = ModuleDeclarationSpans::index(&binder);
-    for (scope, unit) in module_scopes.iter().copied().zip(units) {
+    for ((scope, unit), manifest) in module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(declaration_manifests)
+    {
+        let source = binder
+            .source_for_module(scope)
+            .ok_or("bound project module has no source identity")?;
+        let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+            &binder, scope, source, manifest, None,
+        )
+        .map_err(|_| "bound project module has no canonical declaration inventory")?;
+        #[cfg(any(test, feature = "test-utils"))]
+        inventory.assert_legacy_walker_parity(&binder, unit.program, None);
+        let _inventory_receipt = inventory.receipt();
         reserve_type_decls(
             interner,
             &binder,

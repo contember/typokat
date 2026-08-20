@@ -68,8 +68,8 @@ use crate::binder::declaration::DeclId;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::declaration::TypeFragmentKind;
 use crate::binder::declaration::{
-    source_global_binding_census_with_provenance, SourceBindingSlot, SourceGlobalContributorKind,
-    TypeGroupId, ValueStorageId,
+    source_global_binding_census_with_provenance, SourceBindingSlot, SourceDeclarationManifest,
+    SourceGlobalContributorKind, TypeGroupId, ValueStorageId,
 };
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::namespace::MergeDeclarationKind;
@@ -3746,6 +3746,7 @@ fn verify_independent_event_owner_sites(
 struct CanonicalLibraryFrontend<'source, 'ast> {
     canonical: Vec<CanonicalInput<'source>>,
     parsed: Vec<&'ast Program<'ast>>,
+    declaration_manifests: Vec<SourceDeclarationManifest<'ast>>,
     binder: Binder,
     module_scopes: Vec<ScopeId>,
     semantic_scopes: Vec<ScopeId>,
@@ -6139,6 +6140,9 @@ fn complete_source_project_frontend<'source, 'ast>(
     source_reexports: Option<&crate::frontend::AdmittedSourceReexports>,
     default_module: Option<&super::ValidatedDefaultModulePlan<'_>>,
 ) -> Result<CanonicalLibraryFrontend<'source, 'ast>, InjectedProfileError> {
+    #[cfg(any(test, feature = "test-utils"))]
+    let manifest_build_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
     let source_reexport_plan = source_reexports
         .map(|admitted| super::build_validated_source_reexport_plan(admitted, units))
         .transpose()
@@ -6201,10 +6205,16 @@ fn complete_source_project_frontend<'source, 'ast>(
         }
         parsed.push(program.program);
     }
+    let mut declaration_manifests = parsed
+        .iter()
+        .map(|program| SourceDeclarationManifest::build(program))
+        .collect::<Vec<_>>();
 
     let prelude_allocator = Allocator::default();
     let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
-    let mut builder = ProjectBinderBuilder::new(&prelude.program);
+    let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+    let mut builder =
+        ProjectBinderBuilder::new_with_declaration_manifest(&prelude.program, &prelude_manifest);
     let library_units = canonical
         .iter()
         .zip(&parsed)
@@ -6219,8 +6229,13 @@ fn complete_source_project_frontend<'source, 'ast>(
             )
         })
         .collect::<Vec<_>>();
+    let library_units_with_manifests = library_units
+        .iter()
+        .zip(&declaration_manifests)
+        .map(|((program, unit), manifest)| (*program, manifest, *unit))
+        .collect::<Vec<_>>();
     let mut module_scopes = builder
-        .try_add_library_modules(&library_units)
+        .try_add_library_modules_with_declaration_manifests(&library_units_with_manifests)
         .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
     let mut library_binder = builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)));
     let collision_root_provenance =
@@ -6307,9 +6322,14 @@ fn complete_source_project_frontend<'source, 'ast>(
         }
     }
     let mut external_effects = BTreeMap::new();
+    let user_declaration_manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
     let bound = super::bind_authoritative_project_core_with_module_admission(
         builder,
         units,
+        &user_declaration_manifests,
         super::ProjectModuleAdmission {
             source_reexports: source_reexport_plan.as_ref(),
             default_module,
@@ -6352,6 +6372,7 @@ fn complete_source_project_frontend<'source, 'ast>(
         });
         parsed.push(unit.program);
     }
+    declaration_manifests.extend(user_declaration_manifests);
     module_scopes.extend(user_module_scopes);
     let semantic_scopes = canonical
         .iter()
@@ -6367,9 +6388,38 @@ fn complete_source_project_frontend<'source, 'ast>(
             }
         })
         .collect();
+    let prelude_source = binder
+        .source_for_module(binder.prelude_module)
+        .ok_or_else(|| {
+            InjectedProfileError::Binder("prelude module has no source identity".to_owned())
+        })?;
+    let prelude_inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+        &binder,
+        binder.prelude_module,
+        prelude_source,
+        prelude_manifest,
+        None,
+    )
+    .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+    #[cfg(any(test, feature = "test-utils"))]
+    prelude_inventory.assert_legacy_walker_parity(&binder, &prelude.program, None);
+    let _prelude_inventory_receipt = prelude_inventory.receipt();
+    #[cfg(any(test, feature = "test-utils"))]
+    assert_eq!(
+        manifest_build_scope.finish(),
+        u64::try_from(
+            library_programs
+                .len()
+                .saturating_add(units.len())
+                .saturating_add(1)
+        )
+        .unwrap_or(u64::MAX),
+        "complete-source frontend builds one manifest per source and prelude"
+    );
     Ok(CanonicalLibraryFrontend {
         canonical,
         parsed,
+        declaration_manifests,
         binder,
         module_scopes,
         semantic_scopes,
@@ -6462,6 +6512,9 @@ fn with_canonical_frontend<'source, Output>(
         CanonicalLibraryFrontend<'source, 'ast>,
     ) -> Result<Output, InjectedProfileError>,
 ) -> Result<Output, InjectedProfileError> {
+    #[cfg(any(test, feature = "test-utils"))]
+    let manifest_build_scope =
+        crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
     #[cfg(any(test, feature = "test-utils"))]
     let parse_started = Instant::now();
     let mut canonical = canonical_inputs(sources)?;
@@ -6556,6 +6609,10 @@ fn with_canonical_frontend<'source, Output>(
         .iter()
         .map(|parsed| &parsed.program)
         .collect::<Vec<_>>();
+    let declaration_manifests = parsed
+        .iter()
+        .map(|program| SourceDeclarationManifest::build(program))
+        .collect::<Vec<_>>();
     #[cfg(any(test, feature = "test-utils"))]
     let parse_elapsed = parse_started.elapsed();
 
@@ -6600,10 +6657,17 @@ fn with_canonical_frontend<'source, Output>(
     };
     let prelude_allocator = Allocator::default();
     let prelude = Parser::new(&prelude_allocator, "", SourceType::d_ts()).parse();
-    let mut builder = ProjectBinderBuilder::new(&prelude.program);
+    let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+    let mut builder =
+        ProjectBinderBuilder::new_with_declaration_manifest(&prelude.program, &prelude_manifest);
     let library_count = user_start.unwrap_or(units.len());
+    let library_units_with_manifests = units[..library_count]
+        .iter()
+        .zip(&declaration_manifests[..library_count])
+        .map(|((program, unit), manifest)| (*program, manifest, *unit))
+        .collect::<Vec<_>>();
     let mut module_scopes = builder
-        .try_add_library_modules(&units[..library_count])
+        .try_add_library_modules_with_declaration_manifests(&library_units_with_manifests)
         .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
     let mut library_binder = builder.finish(module_scopes.last().copied().unwrap_or(ScopeId(0)));
     let collision_root_provenance =
@@ -6629,8 +6693,12 @@ fn with_canonical_frontend<'source, Output>(
     let mut module_placeholders = Vec::with_capacity(units.len().saturating_sub(library_count));
     if library_count < units.len() {
         builder.reserve_script_namespace_roots(units[library_count..].iter().copied());
-        for (program, unit) in &units[library_count..] {
-            let (module, placeholders) = builder.add_module(program, &[], *unit);
+        for ((program, unit), manifest) in units[library_count..]
+            .iter()
+            .zip(&declaration_manifests[library_count..])
+        {
+            let (module, placeholders) =
+                builder.add_module_with_declaration_manifest(program, manifest, &[], *unit);
             module_scopes.push(module);
             module_placeholders.push(placeholders);
             appended_module = Some(module);
@@ -6651,6 +6719,22 @@ fn with_canonical_frontend<'source, Output>(
             }
         })
         .collect::<Vec<_>>();
+    let prelude_source = binder
+        .source_for_module(binder.prelude_module)
+        .ok_or_else(|| {
+            InjectedProfileError::Binder("prelude module has no source identity".to_owned())
+        })?;
+    let prelude_inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+        &binder,
+        binder.prelude_module,
+        prelude_source,
+        prelude_manifest,
+        None,
+    )
+    .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+    #[cfg(any(test, feature = "test-utils"))]
+    prelude_inventory.assert_legacy_walker_parity(&binder, &prelude.program, None);
+    let _prelude_inventory_receipt = prelude_inventory.receipt();
     #[cfg(any(test, feature = "test-utils"))]
     let bind_elapsed = bind_started.elapsed();
     #[cfg(any(test, feature = "test-utils"))]
@@ -6669,9 +6753,16 @@ fn with_canonical_frontend<'source, Output>(
                 .saturating_add(u64::try_from(module_scopes.len()).unwrap_or(u64::MAX)),
         );
     }
+    #[cfg(any(test, feature = "test-utils"))]
+    assert_eq!(
+        manifest_build_scope.finish(),
+        u64::try_from(canonical.len().saturating_add(1)).unwrap_or(u64::MAX),
+        "canonical frontend builds one manifest per source and prelude"
+    );
     consume(CanonicalLibraryFrontend {
         canonical,
         parsed,
+        declaration_manifests,
         binder,
         module_scopes,
         semantic_scopes,
@@ -7402,6 +7493,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     let CanonicalLibraryFrontend {
         canonical,
         parsed,
+        declaration_manifests,
         binder,
         module_scopes,
         semantic_scopes,
@@ -7417,6 +7509,24 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         #[cfg(any(test, feature = "test-utils"))]
         bind_elapsed,
     } = frontend;
+    for (((input, _program), module), manifest) in canonical
+        .iter()
+        .zip(&parsed)
+        .zip(module_scopes.iter().copied())
+        .zip(declaration_manifests)
+    {
+        let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            input.source_key,
+            manifest,
+            None,
+        )
+        .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+        #[cfg(any(test, feature = "test-utils"))]
+        inventory.assert_legacy_walker_parity(&binder, _program, None);
+        let _inventory_receipt = inventory.receipt();
+    }
     validate_complete_source_user_units(canonical.len(), user_start, &user_units)?;
     #[cfg(any(test, feature = "test-utils"))]
     let user_file_ordinals =
@@ -8336,10 +8446,30 @@ pub fn compile_library_binder_checkpoint(
         );
         let CanonicalLibraryFrontend {
             canonical,
+            parsed,
+            declaration_manifests,
             binder,
             module_scopes,
             ..
         } = frontend;
+        for (((input, _program), module), manifest) in canonical
+            .iter()
+            .zip(&parsed)
+            .zip(module_scopes.iter().copied())
+            .zip(declaration_manifests)
+        {
+            let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+                &binder,
+                module,
+                input.source_key,
+                manifest,
+                None,
+            )
+            .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+            #[cfg(any(test, feature = "test-utils"))]
+            inventory.assert_legacy_walker_parity(&binder, _program, None);
+            let _inventory_receipt = inventory.receipt();
+        }
         let library_units = canonical
             .iter()
             .zip(module_scopes)
@@ -8784,10 +8914,12 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         .and_then(|symbol| binder.symbols.get(symbol))
         .and_then(|symbol| symbol.value);
     let bind_started = Instant::now();
+    let manifest = SourceDeclarationManifest::build(&parsed.program);
     let (mut builder, source_key) = ProjectBinderBuilder::resume_frozen_library(binder);
     let unit = CompilationUnit::implementation(source_key, &parsed.program);
     builder.reserve_script_namespace_roots([(&parsed.program, unit)]);
-    let (module, _) = builder.add_module(&parsed.program, &[], unit);
+    let (module, _) =
+        builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
     let binder = builder
         .finish_frozen_library_continuation(Some(module))
         .map_err(str::to_owned)?;
@@ -8815,6 +8947,7 @@ fn check_caller_certified_collision_free_source_with_owned_library_impl(
         &mut interner,
         binder,
         &parsed.program,
+        manifest,
         BoundUserBase {
             published_types,
             library_semantic_identities: semantic_identities,
@@ -9605,6 +9738,8 @@ mod tests {
 
     #[test]
     fn legacy_library_only_declaration_receipt_is_exact() {
+        let manifest_scope =
+            crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
         with_canonical_library_frontend(&DECLARATION_RECEIPT_LIBRARY, |frontend| {
             let groups = frontend
                 .binder
@@ -9635,9 +9770,29 @@ mod tests {
             Ok(())
         })
         .expect("canonical library frontend receipt");
+        assert_eq!(manifest_scope.finish(), 3);
 
+        let manifest_scope =
+            crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+        let inventory_scope = crate::check::checker::DeclarationInventoryWorkScopeForTest::start();
         let (run, state) = compile_owned_injected_profile(&DECLARATION_RECEIPT_LIBRARY)
             .expect("legacy library-only declaration receipt");
+        let manifests = manifest_scope.finish();
+        let inventory_work = inventory_scope.finish();
+        assert_eq!(manifests, 3);
+        assert_eq!(inventory_work.builds, manifests);
+        assert_eq!(
+            inventory_work,
+            crate::check::checker::DeclarationInventoryWorkForTest {
+                builds: 3,
+                source_type_rows: 4,
+                admitted: 4,
+                rejected: 0,
+                exact_join_attempts: 4,
+                dense_slots: 4,
+                legacy_top_level_block_deltas: 0,
+            }
+        );
         assert_eq!(run.phase_counts.parse_units, 2);
         assert_eq!(run.phase_counts.bind_units, 2);
         assert_eq!(state.binder.type_groups.len(), 3);
@@ -9670,9 +9825,28 @@ mod tests {
             },
         ];
         let scope = CompleteSourceRouteWorkScopeForTest::start();
+        let manifest_scope =
+            crate::binder::declaration::SourceDeclarationManifestBuildScopeForTest::start();
+        let inventory_scope = crate::check::checker::DeclarationInventoryWorkScopeForTest::start();
         let (run, state) = compile_complete_combined_profile_for_test(&sources, 2)
             .expect("complete combined declaration receipt");
         let work = scope.finish();
+        let manifests = manifest_scope.finish();
+        let inventory_work = inventory_scope.finish();
+        assert_eq!(manifests, 4);
+        assert_eq!(inventory_work.builds, manifests);
+        assert_eq!(
+            inventory_work,
+            crate::check::checker::DeclarationInventoryWorkForTest {
+                builds: 4,
+                source_type_rows: 7,
+                admitted: 7,
+                rejected: 0,
+                exact_join_attempts: 7,
+                dense_slots: 7,
+                legacy_top_level_block_deltas: 0,
+            }
+        );
 
         assert_eq!(run.phase_counts.parse_units, 3);
         assert_eq!(run.phase_counts.bind_units, 3);

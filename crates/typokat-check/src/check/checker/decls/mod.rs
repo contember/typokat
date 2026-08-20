@@ -1,5 +1,7 @@
 //! decls module (extracted from checker/mod.rs).
 
+pub(in crate::check::checker) mod inventory;
+
 use super::classes::construction::HeritageDependency;
 use super::context::*;
 use super::lexical_events::InterfaceOccurrenceKind;
