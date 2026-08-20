@@ -12,11 +12,6 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 #[cfg(any(test, feature = "test-utils"))]
-use super::{class_binding_start, walk_type_decls, TopTypeDecl};
-#[cfg(any(test, feature = "test-utils"))]
-use crate::binder::scope::ScopeKind;
-
-#[cfg(any(test, feature = "test-utils"))]
 thread_local! {
     static DECLARATION_INVENTORY_WORK_FOR_TEST: std::cell::Cell<DeclarationInventoryWorkForTest> =
         const { std::cell::Cell::new(DeclarationInventoryWorkForTest::ZERO) };
@@ -31,7 +26,6 @@ pub struct DeclarationInventoryWorkForTest {
     pub rejected: u64,
     pub exact_join_attempts: u64,
     pub dense_slots: u64,
-    pub legacy_top_level_block_deltas: u64,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -43,7 +37,6 @@ impl DeclarationInventoryWorkForTest {
         rejected: 0,
         exact_join_attempts: 0,
         dense_slots: 0,
-        legacy_top_level_block_deltas: 0,
     };
 
     fn saturating_sub(self, start: Self) -> Self {
@@ -56,9 +49,6 @@ impl DeclarationInventoryWorkForTest {
                 .exact_join_attempts
                 .saturating_sub(start.exact_join_attempts),
             dense_slots: self.dense_slots.saturating_sub(start.dense_slots),
-            legacy_top_level_block_deltas: self
-                .legacy_top_level_block_deltas
-                .saturating_sub(start.legacy_top_level_block_deltas),
         }
     }
 }
@@ -301,7 +291,6 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 dense_slots: work
                     .dense_slots
                     .saturating_add(u64::try_from(dense_slots).unwrap_or(u64::MAX)),
-                legacy_top_level_block_deltas: work.legacy_top_level_block_deltas,
             });
         });
         result
@@ -645,93 +634,10 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             interface_occurrences,
         }
     }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn assert_legacy_walker_parity(
-        &self,
-        binder: &Binder,
-        program: &'ast oxc_ast::ast::Program<'ast>,
-        selected: Option<&BTreeSet<ReplayOwner>>,
-    ) {
-        assert!(self.manifest.belongs_to(program));
-        let mut legacy = Vec::new();
-        walk_type_decls(
-            binder,
-            self.module,
-            program,
-            &mut |legacy_scope, _, declaration| {
-                let (binding_start, kind) = match declaration {
-                    TopTypeDecl::Alias(alias) => (alias.id.span.start, DeclarationKind::TypeAlias),
-                    TopTypeDecl::Interface(interface) => {
-                        (interface.id.span.start, DeclarationKind::Interface)
-                    }
-                    TopTypeDecl::Class(class) => {
-                        (class_binding_start(class), DeclarationKind::Class)
-                    }
-                    TopTypeDecl::Enum(enumeration) => {
-                        (enumeration.id.span.start, DeclarationKind::Enum)
-                    }
-                };
-                let source_index = self
-                    .manifest
-                    .type_fragments()
-                    .iter()
-                    .position(|source| {
-                        source.binding_span.start == binding_start && source.kind == kind
-                    })
-                    .expect("legacy row exists in the canonical source manifest");
-                if matches!(
-                    self.outcomes.get(source_index),
-                    Some(SourceTypeDeclarationOutcome::Rejected(_))
-                ) {
-                    return;
-                }
-                let exact = binder
-                    .exact_declaration_at(self.module, binding_start, kind)
-                    .expect("legacy admitted row has an exact bound declaration");
-                let row = self
-                    .declarations
-                    .get(exact.id)
-                    .expect("legacy declaration walker row exists in the canonical inventory");
-                assert_eq!(row.scope, legacy_scope);
-                assert_eq!(Some(row.group), exact.type_group);
-                assert_eq!(row.source, self.source);
-                assert_eq!(
-                    row.selected,
-                    selected.is_none_or(|owners| {
-                        owners.contains(&ReplayOwner::TypeGroup(row.group))
-                    })
-                );
-                legacy.push(exact.id);
-            },
-        );
-        assert!(legacy.windows(2).all(|rows| rows[0].0 < rows[1].0));
-        for row in self.declarations.iter() {
-            if legacy.contains(&row.declaration) {
-                continue;
-            }
-            assert!(
-                binder.graph.get(row.scope).is_some_and(|scope| {
-                    scope.kind == ScopeKind::Block && scope.parent == Some(self.module)
-                }) && binder.statement_lexical_root(self.module) != self.module,
-                "only the top-level script-continuation block-root legacy miss may differ"
-            );
-            DECLARATION_INVENTORY_WORK_FOR_TEST.with(|cell| {
-                let work = cell.get();
-                cell.set(DeclarationInventoryWorkForTest {
-                    legacy_top_level_block_deltas: work
-                        .legacy_top_level_block_deltas
-                        .saturating_add(1),
-                    ..work
-                });
-            });
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{class_binding_start, walk_type_decls, TopTypeDecl};
     use super::*;
     use crate::binder::bind::ProjectBinderBuilder;
     use crate::binder::declaration::DeclarationKind;
@@ -741,7 +647,7 @@ mod tests {
     use oxc_span::SourceType;
 
     #[test]
-    fn inventory_is_decl_id_dense_and_matches_the_fresh_legacy_walk() {
+    fn inventory_is_decl_id_dense_in_canonical_source_order() {
         let prelude_allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
         let allocator = Allocator::default();
@@ -788,110 +694,17 @@ mod tests {
             [0, 1]
         );
 
-        let mut legacy = Vec::new();
-        walk_type_decls(
-            &binder,
-            module,
-            &parsed.program,
-            &mut |_, _, declaration| {
-                let (binding_start, kind) = match declaration {
-                    TopTypeDecl::Alias(alias) => (alias.id.span.start, DeclarationKind::TypeAlias),
-                    TopTypeDecl::Interface(interface) => {
-                        (interface.id.span.start, DeclarationKind::Interface)
-                    }
-                    TopTypeDecl::Class(class) => {
-                        (class_binding_start(class), DeclarationKind::Class)
-                    }
-                    TopTypeDecl::Enum(enumeration) => {
-                        (enumeration.id.span.start, DeclarationKind::Enum)
-                    }
-                };
-                if let Some(exact) = binder.exact_declaration_at(module, binding_start, kind) {
-                    legacy.push(exact.id);
-                }
-            },
-        );
-        assert_eq!(legacy.len(), 3);
-        assert!(legacy
-            .iter()
-            .all(|declaration| inventory.declarations().get(*declaration).is_some()));
         assert_eq!(
             inventory
-                .declarations()
-                .iter()
-                .filter(|row| !legacy.contains(&row.declaration))
-                .count(),
-            0
-        );
-    }
-
-    #[test]
-    fn comparator_allows_only_the_script_continuation_top_level_block_miss() {
-        let prelude_allocator = Allocator::default();
-        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
-        let library_allocator = Allocator::default();
-        let library = Parser::new(
-            &library_allocator,
-            "interface FrozenLibraryMarker {}",
-            SourceType::d_ts(),
-        )
-        .parse();
-        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
-        let library_manifest = SourceDeclarationManifest::build(&library.program);
-        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
-            &prelude.program,
-            &prelude_manifest,
-        );
-        let library_unit = CompilationUnit::library(
-            SourceUnitKey(1),
-            crate::source::LibraryFileOrdinal::new(0),
-            &library.program,
-        );
-        let [library_module] = builder
-            .try_add_library_modules_with_declaration_manifests(&[(
-                &library.program,
-                &library_manifest,
-                library_unit,
-            )])
-            .expect("library base binds")
-            .try_into()
-            .expect("one library module");
-        let mut base = builder.finish(library_module);
-        base.freeze_as_base().expect("binder base freezes once");
-
-        let allocator = Allocator::default();
-        let parsed = Parser::new(
-            &allocator,
-            "{ interface Local { value: string } }",
-            SourceType::ts(),
-        )
-        .parse();
-        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-        let manifest = SourceDeclarationManifest::build(&parsed.program);
-        let (mut builder, source) = ProjectBinderBuilder::resume_frozen_library(base);
-        let unit = CompilationUnit::implementation(source, &parsed.program);
-        builder.reserve_script_namespace_roots([(&parsed.program, unit)]);
-        let (module, _) =
-            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
-        let binder = builder
-            .finish_frozen_library_continuation(Some(module))
-            .expect("script continuation binder finishes");
-        let work = DeclarationInventoryWorkScopeForTest::start();
-        let inventory =
-            BoundTypeDeclarationInventory::build(&binder, module, source, manifest, None)
-                .expect("script continuation inventory builds");
-        inventory.assert_legacy_walker_parity(&binder, &parsed.program, None);
-        assert_eq!(
-            work.finish(),
-            DeclarationInventoryWorkForTest {
-                builds: 1,
-                source_type_rows: 1,
-                admitted: 1,
-                rejected: 0,
-                exact_join_attempts: 1,
-                dense_slots: 1,
-                legacy_top_level_block_deltas: 1,
-            }
+                .outcomes()
+                .map(|outcome| match outcome {
+                    TypeDeclarationInventoryOutcome::Admitted(row) => row.declaration,
+                    TypeDeclarationInventoryOutcome::Rejected { .. } => {
+                        panic!("fixture contains no rejected declaration")
+                    }
+                })
+                .collect::<Vec<_>>(),
+            [DeclId(0), DeclId(1), DeclId(2)]
         );
     }
 

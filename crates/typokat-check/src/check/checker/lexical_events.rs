@@ -187,6 +187,7 @@ struct SourceAnchorReservation<Ticket: Copy = UserRecordTicket> {
 /// Stable class identities attached after binder/type reservation and before fill.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassBinding {
+    pub declaration: DeclId,
     pub class_id: ClassId,
     pub type_decl: TypeGroupId,
     pub value_decl: Option<ValueStorageId>,
@@ -3671,6 +3672,7 @@ const checkArrow = (): void => {
             .attach_class_binding(
                 class,
                 ClassBinding {
+                    declaration: DeclId(6),
                     class_id: ClassId(7),
                     type_decl: TypeGroupId(8),
                     value_decl: Some(ValueStorageId(9)),

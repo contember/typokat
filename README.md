@@ -18,11 +18,11 @@ model** faithfully; when in doubt it *over-reports* (the safe direction). Full d
 <p>
   <img alt="Rust" src="https://img.shields.io/badge/built%20with-Rust-000?logo=rust">
   <img alt="Milestones" src="https://img.shields.io/badge/milestones-M0--M33-2ea44f">
-  <img alt="Conformance inventory" src="https://img.shields.io/badge/conformance-572%20projects%20%2F%20688%20sources-blue">
+  <img alt="Conformance inventory" src="https://img.shields.io/badge/conformance-580%20projects%20%2F%20696%20sources-blue">
   <img alt="Clippy" src="https://img.shields.io/badge/clippy-clean-brightgreen">
 </p>
 
-The enabled conformance inventory contains **572 fixture projects / 688 source files**. The
+The enabled conformance inventory contains **580 fixture projects / 696 source files**. The
 inventory and ordering are frozen by
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary marker gate prints the same totals in its run receipt. `clippy -D warnings` is clean,
@@ -253,9 +253,9 @@ cargo test --test conformance conformance -- --exact --nocapture
 cargo clippy --all-targets -- -D warnings
 ```
 
-The exact conformance command checks all 572 fixture projects / 688 source files through the
-ordinary shared route and prints receipt `572/688/572/0` (projects/sources/shared/cold). A
-sprint-closure run over this inventory took 117.12 s under `cpu-lease run -n 2 --`. The unchanged
+The exact conformance command checks all 580 fixture projects / 696 source files through the
+ordinary shared route and prints receipt `580/696/580/0` (projects/sources/shared/cold). A
+sprint-closure run over this inventory took 129.32 s under `cpu-lease run -n 2 --`. The unchanged
 pull-request risk matrix is reproduced by
 `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s).
 
@@ -266,7 +266,8 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `572/688/572/572` and passed in 1,768.47 s in the sprint-closure run.
+It is expected to print receipt `580/696/580/580`. The previous 572-project sprint-closure run
+passed in 1,768.47 s.
 `.github/workflows/full-parity.yml` runs this unsharded command weekly and on manual dispatch.
 
 ## Continuous integration

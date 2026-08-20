@@ -26,11 +26,12 @@
 //!
 //! The implementation contract is one declaration-table hash index followed by dense row lookup.
 //! It must not resolve through the compilation-global scope, declaration name, `SourceUnitKey`,
-//! group order, or hash iteration. Checker cutover deletes
-//! `exact_type_fragment_at` and replaces the scan inside `visit_bound_type` with this API; the
-//! checker may retain neither a full-scan fallback nor a duplicate exact-site index. The
-//! source-compiled binder also exports the one-pass library-root projection required by the
-//! compact collision plan; that projection is not another declaration-site index.
+//! group order, or hash iteration. The checker uses this API only while joining each source
+//! manifest row into its canonical declaration inventory. Later consumers use the inventory's
+//! authenticated `DeclId` and dense declaration-table row directly; they retain neither a source
+//! walker, a name-based fallback, nor a duplicate exact-site index. The source-compiled binder also
+//! exports the one-pass library-root projection required by the compact collision plan; that
+//! projection is not another declaration-site index.
 
 use super::bind::{bind_module_with_prelude, Binder, ProjectBinderBuilder};
 use super::declaration::{

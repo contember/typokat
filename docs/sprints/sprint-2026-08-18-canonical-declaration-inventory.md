@@ -364,6 +364,31 @@ passes its closure gates.
   `None != Some(DeclId(0))` for the pure class and `None != Some(DeclId(1))` for the merged class.
   `cargo check -p typokat-check --all-targets`, `cargo clippy -p typokat-check --all-targets -- -D
   warnings`, formatting, and diff checks passed.
+- **WU3c Wave 2 — production cutover.** Type-declaration reservation now returns a source-ordered,
+  one-shot class-preservation receipt. Class-only sparse replay consumes the exact declaration,
+  frozen `ClassId`, and freshly reserved header parameters; rebuild routes keep empty receipts.
+  `ClassBinding` carries its authenticated `DeclId`, and every route attaches classes from the
+  prebuilt declaration inventory after declaration owners and before callable parameters. Trusted
+  prelude validation consumes the same source-order inventory and requires exactly `18` admitted
+  aliases plus the six intrinsic incompletes. The legacy type-declaration walker, scope mirror,
+  reservation wrapper, and parity adapter have no remaining production or test callsites and were
+  deleted. Sparse class-only attachment passed `3/3`; TypeGroup precedence passed `2/2`; inventory
+  and trusted-prelude controls passed `10/10` and `1/1`; legacy/complete/shared/sparse route receipts
+  passed `2/2` in each crate. The enabled `b84_declaration_inventory` corpus moves the frozen
+  inventory to `580/696`, whole-flat `433/433`, fingerprint `b0ab59a51447735a`. Its class/interface
+  merge diagnostics are pinned at their actual declaration spans. The ordinary conformance gate
+  passed with receipt `580/696/580/0` in `129.32 s`. `cargo check -p typokat-check --all-targets`,
+  `cargo clippy -p typokat-check --lib -- -D warnings`, formatting, and production-callsite scans
+  passed. Complete shared/cold parity and the official-suite gates remain WU5.
+- **WU3c closure review.** The architecture witness now pins the final inventory attachment path:
+  exact `DeclId` lookup in `binder.declarations`, kind/group/storage authentication, and direct
+  `ClassBinding.declaration` construction, with no source walker, name lookup, or second exact-site
+  lookup. Selected class replay narrows the canonical owner-site array with two `partition_point`
+  calls before checking exact source and declaration provenance; a multi-owner control proves that
+  unrelated owners cannot enter the range. The obsolete legacy block-delta work counter was
+  removed. Focused architecture, inventory, sparse attachment, and checker/library route receipts
+  passed `2/2`, `10/10`, `3/3`, `2/2`, and `2/2`; all-target check and clippy, formatting, and diff
+  checks passed.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

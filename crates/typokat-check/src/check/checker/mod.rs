@@ -104,7 +104,7 @@ use decls::type_decl_id;
 use decls::{
     class_binding_start, reserve_type_decls_for_combined_library_from_inventory,
     reserve_type_decls_for_combined_user_from_inventory, reserve_type_decls_from_inventory,
-    reserve_type_decls_selected_from_inventory, walk_type_decls, TopTypeDecl,
+    reserve_type_decls_selected_from_inventory, TypeDeclReservationReceipt,
 };
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
 use events_library::{library_record_ticket_key, LibraryEventLedger, LibraryRecordTicket};
@@ -374,41 +374,51 @@ const TRUSTED_PRELUDE_INTRINSICS: [&str; 6] = [
 ];
 
 #[cfg(any(test, feature = "test-utils"))]
+const TRUSTED_PRELUDE_ADMITTED_ALIASES: usize = 18;
+
+#[cfg(any(test, feature = "test-utils"))]
 fn expected_trusted_prelude_incomplete(
-    binder: &Binder,
-    program: &Program<'_>,
+    inventory: &decls::inventory::BoundTypeDeclarationInventory<'_>,
 ) -> Option<Vec<IncompleteSurface>> {
     let mut valid = true;
     let mut seen = FxHashSet::default();
     let mut expected = Vec::with_capacity(TRUSTED_PRELUDE_INTRINSICS.len());
-    walk_type_decls(
-        binder,
-        binder.prelude_module,
-        program,
-        &mut |scope, _, declaration| {
-            let TopTypeDecl::Alias(alias) = declaration else {
-                return;
-            };
-            let name = alias.id.name.as_str();
-            if !TRUSTED_PRELUDE_INTRINSICS.contains(&name) {
-                return;
-            }
-            let TSType::TSIntrinsicKeyword(keyword) = &alias.type_annotation else {
-                valid = false;
-                return;
-            };
-            if scope != binder.prelude_module || !seen.insert(name.to_string()) {
-                valid = false;
-                return;
-            }
-            expected.push(IncompleteSurface::new(
-                "annotation-lower/intrinsic-keyword/self",
-                Span::from_oxc(keyword.span),
-                "intrinsic keyword type not modeled",
-            ));
-        },
-    );
+    let mut admitted_aliases = 0usize;
+    for outcome in inventory.outcomes() {
+        let decls::inventory::TypeDeclarationInventoryOutcome::Admitted(row) = outcome else {
+            valid = false;
+            continue;
+        };
+        let crate::binder::declaration::SourceTypeFragmentPayload::TypeAlias(alias) = row.payload
+        else {
+            valid = false;
+            continue;
+        };
+        admitted_aliases = admitted_aliases.saturating_add(1);
+        if row.scope != inventory.module() {
+            valid = false;
+        }
+        let name = alias.id.name.as_str();
+        if !TRUSTED_PRELUDE_INTRINSICS.contains(&name) {
+            continue;
+        }
+        let TSType::TSIntrinsicKeyword(keyword) = &alias.type_annotation else {
+            valid = false;
+            continue;
+        };
+        if !seen.insert(name.to_string()) {
+            valid = false;
+            continue;
+        }
+        expected.push(IncompleteSurface::new(
+            "annotation-lower/intrinsic-keyword/self",
+            Span::from_oxc(keyword.span),
+            "intrinsic keyword type not modeled",
+        ));
+    }
     if valid
+        && admitted_aliases == TRUSTED_PRELUDE_ADMITTED_ALIASES
+        && inventory.receipt().admitted == TRUSTED_PRELUDE_ADMITTED_ALIASES
         && TRUSTED_PRELUDE_INTRINSICS
             .iter()
             .all(|name| seen.contains(*name))
@@ -421,11 +431,10 @@ fn expected_trusted_prelude_incomplete(
 
 #[cfg(any(test, feature = "test-utils"))]
 fn trusted_prelude_records_are_clean(
-    binder: &Binder,
-    program: &Program<'_>,
+    inventory: &decls::inventory::BoundTypeDeclarationInventory<'_>,
     records: &BTreeMap<ModuleOrdinal, (Vec<Diagnostic>, Vec<IncompleteSurface>)>,
 ) -> bool {
-    let Some(expected_incomplete) = expected_trusted_prelude_incomplete(binder, program) else {
+    let Some(expected_incomplete) = expected_trusted_prelude_incomplete(inventory) else {
         return false;
     };
     let Some((diagnostics, incomplete)) = records.get(&ModuleOrdinal::new(0)) else {
@@ -796,14 +805,12 @@ fn try_bootstrap_test_support_prelude<Error>(
         None,
     )
     .expect("trusted prelude has one canonical declaration inventory");
-    #[cfg(any(test, feature = "test-utils"))]
-    inventory.assert_legacy_walker_parity(&binder, &parsed.program, None);
     let _inventory_receipt = inventory.receipt();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
     let mut type_resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
     let mut type_decls: TypeDeclTable<'_> = Vec::new().into();
-    reserve_type_decls_from_inventory(
+    let reservation_receipt = reserve_type_decls_from_inventory(
         interner,
         &binder,
         &inventory,
@@ -821,15 +828,16 @@ fn try_bootstrap_test_support_prelude<Error>(
         &parsed.program,
         &declaration_spans,
     );
-    attach_class_bindings(
+    attach_class_bindings_from_inventory(
         &mut reporting.lexical_events,
         SourceOrdinal::User(prelude_ordinal),
         &binder,
-        binder.prelude_module,
-        &parsed.program,
+        &inventory,
         &type_decls,
+        reservation_receipt,
         None,
-    );
+    )
+    .expect("trusted prelude class attachment is inventory-authenticated");
     let mut pass = build_pass_with_reporting(
         interner,
         &binder,
@@ -861,7 +869,7 @@ fn try_bootstrap_test_support_prelude<Error>(
 
     let records = finish_event_effects(&mut pass, reporting_adapter);
     debug_assert!(
-        trusted_prelude_records_are_clean(&binder, &parsed.program, &records),
+        trusted_prelude_records_are_clean(&inventory, &records),
         "the prelude must check clean: {records:?}"
     );
 
@@ -1186,8 +1194,6 @@ where
         None,
     )
     .expect("bound user module has one canonical declaration inventory");
-    #[cfg(any(test, feature = "test-utils"))]
-    inventory.assert_legacy_walker_parity(&binder, program, None);
     let _inventory_receipt = inventory.receipt();
     let BoundUserBase {
         published_types,
@@ -1205,7 +1211,7 @@ where
     // User declarations append after prelude placeholders, preserving legacy storage indices.
     let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
     type_resolved.resize(binder.type_groups.len(), None);
-    reserve_type_decls_from_inventory(
+    let reservation_receipt = reserve_type_decls_from_inventory(
         interner,
         &binder,
         &inventory,
@@ -1222,15 +1228,16 @@ where
         program,
         &ModuleDeclarationSpans::index(&binder),
     );
-    attach_class_bindings(
+    attach_class_bindings_from_inventory(
         &mut reporting.lexical_events,
         SourceOrdinal::User(module_ordinal),
         &binder,
-        binder.module,
-        program,
+        &inventory,
         &type_decls,
+        reservation_receipt,
         None,
-    );
+    )
+    .expect("bound user class attachment is inventory-authenticated");
     reporting
         .lexical_events
         .reserve_callable_type_params(&mut next_type_param)
@@ -2710,12 +2717,6 @@ where
                     Some(&epoch.affected_owners),
                 )
                 .map_err(|_| "selected library source has no canonical declaration inventory")?;
-                #[cfg(any(test, feature = "test-utils"))]
-                inventory.assert_legacy_walker_parity(
-                    &binder,
-                    library.program,
-                    Some(&epoch.affected_owners),
-                );
                 let _inventory_receipt = inventory.receipt();
                 Ok(inventory)
             })
@@ -2738,8 +2739,6 @@ where
                 &binder, scope, source, manifest, None,
             )
             .map_err(|_| "bound project module has no canonical declaration inventory")?;
-            #[cfg(any(test, feature = "test-utils"))]
-            inventory.assert_legacy_walker_parity(&binder, _unit.program, None);
             let _inventory_receipt = inventory.receipt();
             Ok(inventory)
         })
@@ -2803,11 +2802,7 @@ where
             .iter()
             .zip(&library_declaration_inventories)
         {
-            let module = library_modules
-                .get(library.source_ordinal)
-                .copied()
-                .ok_or("scheduled private library source has no retained module")?;
-            reserve_type_decls_selected_from_inventory(
+            let reservation_receipt = reserve_type_decls_selected_from_inventory(
                 decls::TypeDeclReservationState {
                     interner: &mut interner,
                     binder: &binder,
@@ -2826,15 +2821,15 @@ where
                 &binder,
                 &epoch.owner_sites,
             )?;
-            attach_class_bindings(
+            attach_class_bindings_from_inventory(
                 &mut lexical_events,
                 SourceOrdinal::Library(LibraryFileOrdinal::new(library.source_ordinal)),
                 &binder,
-                module,
-                library.program,
+                inventory,
                 &type_decls,
-                Some(&epoch.affected_owners),
-            );
+                reservation_receipt,
+                Some(&epoch.owner_sites),
+            )?;
         }
     } else if !library_programs.is_empty() {
         return Err("private library programs require a collision epoch");
@@ -2845,7 +2840,7 @@ where
         .zip(units)
         .zip(&user_declaration_inventories)
     {
-        reserve_type_decls_from_inventory(
+        let reservation_receipt = reserve_type_decls_from_inventory(
             &mut interner,
             &binder,
             inventory,
@@ -2862,15 +2857,15 @@ where
             unit.program,
             &declaration_spans,
         );
-        attach_class_bindings(
+        attach_class_bindings_from_inventory(
             &mut lexical_events,
             SourceOrdinal::User(unit.module_ordinal),
             &binder,
-            scope,
-            unit.program,
+            inventory,
             &type_decls,
+            reservation_receipt,
             None,
-        );
+        )?;
     }
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
@@ -3333,47 +3328,27 @@ pub struct ClassAttachmentReceiptForTest {
 
 #[cfg(any(test, feature = "test-utils"))]
 pub fn class_attachment_receipt_for_test<Ticket: Copy + PartialEq>(
-    binder: &Binder,
+    _binder: &Binder,
     reservations: &LexicalReservations<Ticket>,
 ) -> ClassAttachmentReceiptForTest {
     let rows = reservations
         .classes()
         .iter()
-        .map(|reservation| {
-            let declaration = reservation.binding.as_ref().and_then(|binding| {
-                let group = binder.type_groups.get(binding.type_decl)?;
-                let candidates = group
-                    .fragments
-                    .iter()
-                    .filter(|fragment| {
-                        fragment.kind == crate::binder::declaration::TypeFragmentKind::Class
-                            && reservations
-                                .declaration_source(fragment.declaration)
-                                .is_some_and(|source| source.unit == reservation.source.unit)
-                    })
-                    .collect::<Vec<_>>();
-                candidates
-                    .iter()
-                    .find(|fragment| {
-                        reservations.declaration_source(fragment.declaration)
-                            == Some(reservation.source)
-                    })
-                    .or_else(|| (candidates.len() == 1).then_some(&candidates[0]))
-                    .map(|fragment| fragment.declaration)
-            });
-            ClassAttachmentRowForTest {
-                source: reservation.source,
-                declaration,
-                group: reservation
-                    .binding
-                    .as_ref()
-                    .map(|binding| binding.type_decl),
-                class: reservation.binding.as_ref().map(|binding| binding.class_id),
-                header_type_params: reservation
-                    .binding
-                    .as_ref()
-                    .map_or_else(Vec::new, |binding| binding.header_type_params.clone()),
-            }
+        .map(|reservation| ClassAttachmentRowForTest {
+            source: reservation.source,
+            declaration: reservation
+                .binding
+                .as_ref()
+                .map(|binding| binding.declaration),
+            group: reservation
+                .binding
+                .as_ref()
+                .map(|binding| binding.type_decl),
+            class: reservation.binding.as_ref().map(|binding| binding.class_id),
+            header_type_params: reservation
+                .binding
+                .as_ref()
+                .map_or_else(Vec::new, |binding| binding.header_type_params.clone()),
         })
         .collect();
     ClassAttachmentReceiptForTest { rows }
@@ -4226,8 +4201,6 @@ pub(crate) fn bind_library_checkpoint_project_programs(
             None,
         )
         .map_err(|error| error.to_string())?;
-        #[cfg(any(test, feature = "test-utils"))]
-        inventory.assert_legacy_walker_parity(&bound.binder, _unit.program, None);
         let _inventory_receipt = inventory.receipt();
     }
     #[cfg(any(test, feature = "test-utils"))]
@@ -4736,7 +4709,7 @@ where
         .copied()
         .zip(units)
         .zip(declaration_manifests)
-        .map(|((scope, unit), manifest)| {
+        .map(|((scope, _unit), manifest)| {
             let source = binder
                 .source_for_module(scope)
                 .ok_or("bound project module has no source identity")?;
@@ -4744,8 +4717,6 @@ where
                 &binder, scope, source, manifest, None,
             )
             .map_err(|_| "bound project module has no canonical declaration inventory")?;
-            #[cfg(any(test, feature = "test-utils"))]
-            inventory.assert_legacy_walker_parity(&binder, unit.program, None);
             let _inventory_receipt = inventory.receipt();
             Ok(inventory)
         })
@@ -4762,7 +4733,7 @@ where
         .zip(units)
         .zip(&declaration_inventories)
     {
-        reserve_type_decls_from_inventory(
+        let reservation_receipt = reserve_type_decls_from_inventory(
             interner,
             &binder,
             inventory,
@@ -4779,15 +4750,15 @@ where
             unit.program,
             &declaration_spans,
         );
-        attach_class_bindings(
+        attach_class_bindings_from_inventory(
             &mut lexical_events,
             SourceOrdinal::User(unit.module_ordinal),
             &binder,
-            scope,
-            unit.program,
+            inventory,
             &type_decls,
+            reservation_receipt,
             None,
-        );
+        )?;
     }
     lexical_events
         .reserve_callable_type_params(&mut next_type_param)
@@ -6006,79 +5977,126 @@ fn attach_selected_library_decl_owners<Ticket: Copy + PartialEq>(
     Ok(())
 }
 
-fn attach_class_bindings<Ticket: Copy + PartialEq>(
+fn collision_replay_owner_sites_for(
+    sites: &[replay_index::CollisionReplayOwnerSite],
+    owner: ReplayOwner,
+) -> &[replay_index::CollisionReplayOwnerSite] {
+    let first = sites.partition_point(|site| site.owner < owner);
+    let last = sites.partition_point(|site| site.owner <= owner);
+    &sites[first..last]
+}
+
+fn attach_class_bindings_from_inventory<Ticket: Copy + PartialEq>(
     reservations: &mut LexicalReservations<Ticket>,
     source_ordinal: SourceOrdinal,
     binder: &Binder,
-    scope: ScopeId,
-    program: &Program<'_>,
+    inventory: &decls::inventory::BoundTypeDeclarationInventory<'_>,
     declarations: &TypeDeclTable<'_>,
-    selected: Option<&BTreeSet<ReplayOwner>>,
-) {
-    let mut reserved_class_owners = BTreeMap::new();
-    walk_type_decls(binder, scope, program, &mut |_, _, declaration| {
-        let TopTypeDecl::Class(class) = declaration else {
-            return;
+    receipt: TypeDeclReservationReceipt,
+    selected_sites: Option<&[replay_index::CollisionReplayOwnerSite]>,
+) -> Result<(), &'static str> {
+    let mut preserved = receipt.preserved_classes.into_iter().peekable();
+    for outcome in inventory.outcomes() {
+        let decls::inventory::TypeDeclarationInventoryOutcome::Admitted(row) = outcome else {
+            continue;
         };
-        let Some(site) = reservations.class_at(source_ordinal, class.span.start) else {
-            return;
-        };
-        let Some(declaration) =
-            binder.exact_declaration_at(scope, class_binding_start(class), DeclarationKind::Class)
+        let crate::binder::declaration::SourceTypeFragmentPayload::Class(class) = row.payload
         else {
-            return;
+            continue;
         };
-        let Some(type_decl) = declaration.type_group else {
-            return;
-        };
-        let Some(type_declaration) = declarations.get(type_decl.index()) else {
-            return;
-        };
-        let (class_id, lexical_params) = match type_declaration {
-            TypeDecl::Class {
-                declaration: winning_declaration,
+        let exact = binder
+            .declarations
+            .get(row.declaration)
+            .ok_or("inventory class attachment lost its binder declaration")?;
+        if exact.kind != DeclarationKind::Class || exact.type_group != Some(row.group) {
+            return Err("inventory class attachment changed declaration identity");
+        }
+
+        let preserved_row = preserved
+            .peek()
+            .is_some_and(|preserved| preserved.declaration == row.declaration)
+            .then(|| preserved.next().expect("peeked preserved class exists"));
+        let (class_id, header_type_params) = if let Some(preserved_row) = preserved_row {
+            let SourceOrdinal::Library(file_ordinal) = source_ordinal else {
+                return Err("preserved class receipt belongs only to selected library replay");
+            };
+            let binder_owner = binder.namespaces.declaration_owner_for_scope(row.scope);
+            let containing_namespace = declaration_owner_namespace(binder, binder_owner);
+            let owner = ReplayOwner::Class(preserved_row.class_id);
+            let matches = collision_replay_owner_sites_for(
+                selected_sites.ok_or("preserved class receipt has no selected owner sites")?,
+                owner,
+            )
+            .iter()
+            .filter(|site| {
+                site.file_ordinal == file_ordinal
+                    && site.span == exact.site.declaration_span
+                    && matches!(
+                        site.provenance,
+                        replay_index::CollisionReplaySiteProvenance::Declaration {
+                            declaration,
+                            kind: DeclarationKind::Class,
+                            binder_owner: owner,
+                            containing_namespace: namespace,
+                        } if declaration == row.declaration
+                            && owner == binder_owner
+                            && namespace == containing_namespace
+                    )
+            })
+            .count();
+            if matches != 1 {
+                return Err("preserved class receipt has no unique exact replay owner site");
+            }
+            (preserved_row.class_id, preserved_row.header_type_params)
+        } else {
+            let Some(TypeDecl::Class {
+                declaration,
                 class_id,
                 class_params,
                 ..
-            } if *winning_declaration == declaration.id => (*class_id, class_params),
-            _ => return,
+            }) = declarations.get(row.group.index())
+            else {
+                continue;
+            };
+            if *declaration != row.declaration {
+                continue;
+            }
+            (*class_id, class_params.clone())
         };
-        if selected.is_some_and(|selected| {
-            !selected.contains(&ReplayOwner::Class(class_id))
-                && !selected.contains(&ReplayOwner::TypeGroup(type_decl))
-        }) {
-            return;
+
+        if reservations.declaration_source(row.declaration).is_none() {
+            return Err("inventory class attachment has no declaration owner");
         }
-        let previous = reserved_class_owners.insert(class_id, type_decl);
-        debug_assert!(
-            previous.is_none(),
-            "one source class owns each reserved nominal identity"
-        );
+        let site = reservations
+            .class_at(source_ordinal, class.span.start)
+            .ok_or("inventory class attachment has no lexical class site")?;
         reservations
             .attach_class_binding(
                 site,
                 ClassBinding {
+                    declaration: row.declaration,
                     class_id,
-                    type_decl,
-                    value_decl: declaration.value_storage,
-                    header_type_params: lexical_params.clone(),
+                    type_decl: row.group,
+                    value_decl: exact.value_storage,
+                    header_type_params,
                 },
             )
-            .expect("one class binding attachment per lexical class site");
+            .map_err(|_| "inventory class attachment duplicated a lexical class site")?;
         if let SourceOrdinal::Library(file_ordinal) = source_ordinal {
-            let declaration_scope = declaration.site.scope.unwrap_or(declaration.site.module);
-            let binder_owner = binder
-                .namespaces
-                .declaration_owner_for_scope(declaration_scope);
+            let binder_owner = binder.namespaces.declaration_owner_for_scope(row.scope);
             reservations.attach_collision_declaration_site(
                 ReplayOwner::Class(class_id),
                 file_ordinal,
-                declaration,
+                exact,
                 binder_owner,
                 declaration_owner_namespace(binder, binder_owner),
             );
         }
-    });
+    }
+    if preserved.next().is_some() {
+        return Err("preserved class receipt was not consumed in source order");
+    }
+    Ok(())
 }
 
 fn declaration_owner_namespace(

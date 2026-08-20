@@ -25,10 +25,10 @@ cargo test <name>                           # a single unit test by name
 cargo clippy --all-targets -- -D warnings   # must stay clean
 ```
 
-The ordinary conformance command discovers 572 fixture projects / 688 source files from the
+The ordinary conformance command discovers 580 fixture projects / 696 source files from the
 registrations in `tests/conformance.rs`, checks each once through the shared route, and prints
-receipt `572/688/572/0`. `conformance_inventory_matches_frozen_receipt` is the count and ordering
-authority. A sprint-closure run over this inventory took 117.12 s under
+receipt `580/696/580/0`. `conformance_inventory_matches_frozen_receipt` is the count and ordering
+authority. A sprint-closure run over this inventory took 129.32 s under
 `cpu-lease run -n 2 --`.
 
 The pull-request ADR-0021 risk matrix remains
@@ -40,8 +40,8 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-That exact command covers the same inventory, prints receipt `572/688/572/572`, and passed in
-1,768.47 s in the sprint-closure run.
+That exact command covers the same inventory and is expected to print receipt `580/696/580/580`.
+The previous 572-project sprint-closure run passed in 1,768.47 s.
 `.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
 
 Rough incremental costs after one edit in `check/` (median of 3, quiet machine),

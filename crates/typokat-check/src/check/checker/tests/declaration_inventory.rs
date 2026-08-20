@@ -164,7 +164,6 @@ fn multi_user_project_inventory_is_module_exact_and_ordered() {
             rejected: 0,
             exact_join_attempts: 20,
             dense_slots: 23,
-            legacy_top_level_block_deltas: 0,
         }
     );
     assert_eq!(reports.len(), 2);
@@ -477,9 +476,8 @@ fn trusted_prelude_inventory_and_terminal_oracle_is_exact_in_source_order() {
         },
     );
     assert!(checked.diagnostics.is_empty());
-    let expected_incomplete =
-        super::super::expected_trusted_prelude_incomplete(&binder, &prelude.program)
-            .expect("trusted prelude intrinsic aliases are exact");
+    let expected_incomplete = super::super::expected_trusted_prelude_incomplete(&inventory)
+        .expect("trusted prelude intrinsic aliases are exact");
     assert_eq!(expected_incomplete.len(), 6);
     assert_eq!(checked.incomplete, expected_incomplete);
 }

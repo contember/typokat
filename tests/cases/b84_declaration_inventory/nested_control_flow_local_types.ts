@@ -23,7 +23,7 @@ switch (condition) {
 }
 
 while (condition) {
-  class LoopLocal { // WU3c RED: class attachment is deliberately deferred.
+  class LoopLocal {
     value!: string;
   }
   class UnusedLoopLocal {}
@@ -34,7 +34,7 @@ while (condition) {
 try {
   throw 1;
 } catch {
-  class CatchLocal { // WU3c RED: class attachment is deliberately deferred.
+  class CatchLocal {
     value!: string;
   }
   class UnusedCatchLocal {}

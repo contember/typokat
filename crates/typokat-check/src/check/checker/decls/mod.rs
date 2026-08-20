@@ -14,7 +14,7 @@ use super::type_groups::{
     PublishedTypeGroupSurface, PublishedTypeGroupTerminal, PublishedTypeParameterDefault,
 };
 use crate::binder::declaration::{
-    DeclId, DeclarationKind as BinderDeclarationKind, TypeGroupFragment, TypeGroupId,
+    DeclId, SourceTypeFragmentPayload, TypeGroupFragment, TypeGroupId,
 };
 use crate::binder::namespace::{MergeDisposition, SourceUnitKey};
 use crate::binder::scope::ScopeId;
@@ -25,10 +25,7 @@ use crate::types::repr::{ClassId, EnumId, TypeParamId, TypeTag, Visibility};
 use crate::types::store::{Store, TypeId};
 use crate::types::Interner;
 use oxc_ast::ast::{
-    BinaryOperator, Class, ClassElement, Declaration, ExportDefaultDeclarationKind, Expression,
-    ForStatementInit, ForStatementLeft, Function, ObjectPropertyKind, Program, Statement,
-    TSEnumDeclaration, TSInterfaceDeclaration, TSInterfaceHeritage, TSModuleDeclaration,
-    TSModuleDeclarationBody, TSType, TSTypeAliasDeclaration, TSTypeName,
+    BinaryOperator, Class, Expression, TSEnumDeclaration, TSInterfaceHeritage, TSType, TSTypeName,
     TSTypeParameterDeclaration, TSTypeParameterInstantiation, UnaryOperator,
 };
 use oxc_span::GetSpan;
@@ -4614,7 +4611,7 @@ pub(in crate::check::checker) fn reserve_type_decls_from_inventory<'ast>(
     next_class_id: &mut u32,
     decls: &mut TypeDeclTable<'ast>,
     resolved: &mut TypeResolvedTable,
-) {
+) -> TypeDeclReservationReceipt {
     let state = TypeDeclReservationState {
         interner,
         binder,
@@ -4623,36 +4620,20 @@ pub(in crate::check::checker) fn reserve_type_decls_from_inventory<'ast>(
         decls,
         resolved,
     };
-    reserve_type_decls_with_policy(state, inventory, false, None, None);
+    reserve_type_decls_with_policy(state, inventory, false, None, None)
 }
 
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(in crate::check::checker) fn reserve_type_decls<'ast>(
-    interner: &mut Interner,
-    binder: &Binder,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
-    next_type_param: &mut u32,
-    next_class_id: &mut u32,
-    decls: &mut TypeDeclTable<'ast>,
-    resolved: &mut TypeResolvedTable,
-) {
-    let source = binder
-        .source_for_module(module)
-        .expect("reservation module has a source key");
-    let manifest = crate::binder::declaration::SourceDeclarationManifest::build(program);
-    let inventory = BoundTypeDeclarationInventory::build(binder, module, source, manifest, None)
-        .expect("legacy reservation wrapper builds an authenticated inventory");
-    reserve_type_decls_from_inventory(
-        interner,
-        binder,
-        &inventory,
-        next_type_param,
-        next_class_id,
-        decls,
-        resolved,
-    );
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::check::checker) struct PreservedClassReservation {
+    pub declaration: DeclId,
+    pub class_id: ClassId,
+    pub header_type_params: Vec<TypeParamId>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+#[must_use = "class attachment must consume the reservation receipt"]
+pub(in crate::check::checker) struct TypeDeclReservationReceipt {
+    pub preserved_classes: Vec<PreservedClassReservation>,
 }
 
 pub(in crate::check::checker) struct TypeDeclReservationState<'a, 'ast> {
@@ -4667,16 +4648,16 @@ pub(in crate::check::checker) struct TypeDeclReservationState<'a, 'ast> {
 pub(in crate::check::checker) fn reserve_type_decls_for_combined_library_from_inventory<'ast>(
     state: TypeDeclReservationState<'_, 'ast>,
     inventory: &BoundTypeDeclarationInventory<'ast>,
-) {
-    reserve_type_decls_with_policy(state, inventory, true, None, None);
+) -> TypeDeclReservationReceipt {
+    reserve_type_decls_with_policy(state, inventory, true, None, None)
 }
 
 pub(in crate::check::checker) fn reserve_type_decls_for_combined_user_from_inventory<'ast>(
     state: TypeDeclReservationState<'_, 'ast>,
     inventory: &BoundTypeDeclarationInventory<'ast>,
     library_declarations: &FxHashSet<DeclId>,
-) {
-    reserve_type_decls_with_policy(state, inventory, false, Some(library_declarations), None);
+) -> TypeDeclReservationReceipt {
+    reserve_type_decls_with_policy(state, inventory, false, Some(library_declarations), None)
 }
 
 pub(in crate::check::checker) fn reserve_type_decls_selected_from_inventory<'ast>(
@@ -4684,14 +4665,14 @@ pub(in crate::check::checker) fn reserve_type_decls_selected_from_inventory<'ast
     inventory: &BoundTypeDeclarationInventory<'ast>,
     selected: &BTreeSet<ReplayOwner>,
     published_types: &PublishedTypeEnvironment,
-) {
+) -> TypeDeclReservationReceipt {
     reserve_type_decls_with_policy(
         state,
         inventory,
         false,
         None,
         Some((selected, published_types)),
-    );
+    )
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -4707,7 +4688,7 @@ fn reserve_type_decls_with_policy<'ast>(
     retain_library_declarations: bool,
     preserved_library_declarations: Option<&FxHashSet<DeclId>>,
     selected: Option<(&BTreeSet<ReplayOwner>, &PublishedTypeEnvironment)>,
-) {
+) -> TypeDeclReservationReceipt {
     let TypeDeclReservationState {
         interner,
         binder,
@@ -4718,6 +4699,7 @@ fn reserve_type_decls_with_policy<'ast>(
     } = state;
     let module = inventory.module();
     let direct_scope = binder.statement_lexical_root(module);
+    let mut receipt = TypeDeclReservationReceipt::default();
     for outcome in inventory.outcomes() {
         let row = match outcome {
             TypeDeclarationInventoryOutcome::Admitted(row) => row,
@@ -4749,20 +4731,6 @@ fn reserve_type_decls_with_policy<'ast>(
             Some(row.declaration),
             "inventory fragment index remains authenticated",
         );
-        let declaration = match row.payload {
-            crate::binder::declaration::SourceTypeFragmentPayload::Enum(enumeration) => {
-                TopTypeDecl::Enum(enumeration)
-            }
-            crate::binder::declaration::SourceTypeFragmentPayload::Interface(interface) => {
-                TopTypeDecl::Interface(interface)
-            }
-            crate::binder::declaration::SourceTypeFragmentPayload::TypeAlias(alias) => {
-                TopTypeDecl::Alias(alias)
-            }
-            crate::binder::declaration::SourceTypeFragmentPayload::Class(class) => {
-                TopTypeDecl::Class(class)
-            }
-        };
         let walk_scope = row.scope;
         let selected_disposition = if let Some((selected, published_types)) = selected {
             if row.selected {
@@ -4791,16 +4759,22 @@ fn reserve_type_decls_with_policy<'ast>(
         };
         match selected_disposition {
             SelectedTypeGroupDisposition::Rebuild => {}
-            SelectedTypeGroupDisposition::PreservePublishedClass(_class) => {
-                if let TopTypeDecl::Class(class) = declaration {
+            SelectedTypeGroupDisposition::PreservePublishedClass(class_id) => {
+                if let SourceTypeFragmentPayload::Class(class) = row.payload {
                     let _ = reserve_class_id(next_class_id);
-                    let _ = alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
+                    let header_type_params =
+                        alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
+                    receipt.preserved_classes.push(PreservedClassReservation {
+                        declaration: row.declaration,
+                        class_id,
+                        header_type_params,
+                    });
                 }
                 continue;
             }
             SelectedTypeGroupDisposition::Skip => continue,
         }
-        if let TopTypeDecl::Enum(_) = declaration {
+        if let SourceTypeFragmentPayload::Enum(_) = row.payload {
             let supported_owner = matches!(
                 binder.namespaces.declaration_owner_for_scope(walk_scope),
                 crate::binder::namespace::DeclarationOwner::NamespacePublic(_)
@@ -4818,8 +4792,8 @@ fn reserve_type_decls_with_policy<'ast>(
                 continue;
             }
         }
-        match declaration {
-            TopTypeDecl::Enum(enumeration) => {
+        match row.payload {
+            SourceTypeFragmentPayload::Enum(enumeration) => {
                 let group = row.group;
                 let scope = row.scope;
                 let declaration = row.declaration;
@@ -4881,7 +4855,7 @@ fn reserve_type_decls_with_policy<'ast>(
                     None => unreachable!("type group slot was extended"),
                 }
             }
-            TopTypeDecl::Interface(iface) => {
+            SourceTypeFragmentPayload::Interface(iface) => {
                 let group = row.group;
                 let scope = row.scope;
                 let declaration = row.declaration;
@@ -5025,7 +4999,7 @@ fn reserve_type_decls_with_policy<'ast>(
                     None => unreachable!("type group slot was extended"),
                 }
             }
-            TopTypeDecl::Alias(alias) => {
+            SourceTypeFragmentPayload::TypeAlias(alias) => {
                 let group = row.group;
                 let declaration = row.declaration;
                 let scope = row.scope;
@@ -5131,7 +5105,7 @@ fn reserve_type_decls_with_policy<'ast>(
             }
             // Named classes reserve only a stable nominal identity. Their immutable
             // instance/static templates are constructed by class publication.
-            TopTypeDecl::Class(class) => {
+            SourceTypeFragmentPayload::Class(class) => {
                 // M13: a fresh stable `ClassId` for this declaration (source order),
                 // stamped onto its members during class publication.
                 let class_id = reserve_class_id(next_class_id);
@@ -5293,6 +5267,7 @@ fn reserve_type_decls_with_policy<'ast>(
             }
         }
     }
+    receipt
 }
 
 fn reserve_enum_member_shells(
@@ -5380,14 +5355,6 @@ fn sort_interface_fragments(
             .position(|candidate| candidate.declaration == fragment.declaration)
             .unwrap_or(usize::MAX)
     });
-}
-
-#[derive(Copy, Clone)]
-pub(in crate::check::checker) enum TopTypeDecl<'ast> {
-    Enum(&'ast TSEnumDeclaration<'ast>),
-    Interface(&'ast TSInterfaceDeclaration<'ast>),
-    Alias(&'ast TSTypeAliasDeclaration<'ast>),
-    Class(&'ast Class<'ast>),
 }
 
 enum EnumFold {
@@ -5645,337 +5612,6 @@ fn ecmascript_to_uint32(value: f64) -> u32 {
     normalized as u32
 }
 
-/// Visit every named type declaration with the exact lexical scope allocated by
-/// the binder. The walk mirrors binder scope entry and never creates a scope.
-pub(in crate::check::checker) fn walk_type_decls<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    let lexical_root = binder.statement_lexical_root(module);
-    walk_type_decl_statements(binder, module, lexical_root, &program.body, visit);
-}
-
-fn walk_type_decl_statements<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    scope: ScopeId,
-    statements: &'ast [Statement<'ast>],
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    for statement in statements {
-        walk_type_decl_statement(binder, module, scope, statement, visit);
-    }
-}
-
-fn walk_type_decl_statement<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    scope: ScopeId,
-    statement: &'ast Statement<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    match statement {
-        Statement::TSEnumDeclaration(enumeration) => {
-            visit_bound_type(
-                binder,
-                module,
-                scope,
-                enumeration.span.start,
-                BinderDeclarationKind::Enum,
-                enumeration.id.span.start,
-                TopTypeDecl::Enum(enumeration),
-                visit,
-            );
-        }
-        Statement::TSInterfaceDeclaration(interface) => {
-            visit_bound_type(
-                binder,
-                module,
-                scope,
-                interface.span.start,
-                BinderDeclarationKind::Interface,
-                interface.id.span.start,
-                TopTypeDecl::Interface(interface),
-                visit,
-            );
-        }
-        Statement::TSTypeAliasDeclaration(alias) => {
-            visit_bound_type(
-                binder,
-                module,
-                scope,
-                alias.span.start,
-                BinderDeclarationKind::TypeAlias,
-                alias.id.span.start,
-                TopTypeDecl::Alias(alias),
-                visit,
-            );
-        }
-        Statement::ClassDeclaration(class) => {
-            if let Some(id) = &class.id {
-                visit_bound_type(
-                    binder,
-                    module,
-                    scope,
-                    class.span.start,
-                    BinderDeclarationKind::Class,
-                    id.span.start,
-                    TopTypeDecl::Class(class),
-                    visit,
-                );
-            }
-            walk_type_decl_class(binder, module, scope, class, visit);
-        }
-        Statement::TSModuleDeclaration(namespace) => {
-            walk_type_decl_namespace(binder, module, scope, namespace, visit)
-        }
-        Statement::TSGlobalDeclaration(global) => {
-            let global_scope = binder
-                .global_augmentation_body_scope(module, global.global_span.start)
-                .unwrap_or(scope);
-            walk_type_decl_statements(binder, module, global_scope, &global.body.body, visit)
-        }
-        Statement::FunctionDeclaration(function) => {
-            walk_type_decl_function(binder, module, function, visit);
-        }
-        Statement::ExportNamedDeclaration(export) => {
-            let Some(declaration) = &export.declaration else {
-                return;
-            };
-            match declaration {
-                Declaration::TSEnumDeclaration(enumeration) => visit_bound_type(
-                    binder,
-                    module,
-                    scope,
-                    export.span.start,
-                    BinderDeclarationKind::Enum,
-                    enumeration.id.span.start,
-                    TopTypeDecl::Enum(enumeration),
-                    visit,
-                ),
-                Declaration::TSInterfaceDeclaration(interface) => visit_bound_type(
-                    binder,
-                    module,
-                    scope,
-                    export.span.start,
-                    BinderDeclarationKind::Interface,
-                    interface.id.span.start,
-                    TopTypeDecl::Interface(interface),
-                    visit,
-                ),
-                Declaration::TSTypeAliasDeclaration(alias) => {
-                    visit_bound_type(
-                        binder,
-                        module,
-                        scope,
-                        export.span.start,
-                        BinderDeclarationKind::TypeAlias,
-                        alias.id.span.start,
-                        TopTypeDecl::Alias(alias),
-                        visit,
-                    );
-                }
-                Declaration::ClassDeclaration(class) => {
-                    if let Some(id) = &class.id {
-                        visit_bound_type(
-                            binder,
-                            module,
-                            scope,
-                            export.span.start,
-                            BinderDeclarationKind::Class,
-                            id.span.start,
-                            TopTypeDecl::Class(class),
-                            visit,
-                        );
-                    }
-                    walk_type_decl_class(binder, module, scope, class, visit);
-                }
-                Declaration::TSModuleDeclaration(namespace) => {
-                    walk_type_decl_namespace(binder, module, scope, namespace, visit)
-                }
-                Declaration::TSGlobalDeclaration(global) => {
-                    let global_scope = binder
-                        .global_augmentation_body_scope(module, global.global_span.start)
-                        .unwrap_or(scope);
-                    walk_type_decl_statements(
-                        binder,
-                        module,
-                        global_scope,
-                        &global.body.body,
-                        visit,
-                    )
-                }
-                Declaration::FunctionDeclaration(function) => {
-                    walk_type_decl_function(binder, module, function, visit);
-                }
-                Declaration::VariableDeclaration(declaration) => {
-                    walk_type_decl_variable(binder, module, scope, declaration, visit);
-                }
-                _ => {}
-            }
-        }
-        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
-            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
-                if binder
-                    .exact_declaration_at(
-                        module,
-                        class_binding_start(class),
-                        BinderDeclarationKind::Class,
-                    )
-                    .is_none()
-                {
-                    return;
-                }
-                visit_bound_type(
-                    binder,
-                    module,
-                    scope,
-                    export.span.start,
-                    BinderDeclarationKind::Class,
-                    class_binding_start(class),
-                    TopTypeDecl::Class(class),
-                    visit,
-                );
-                walk_type_decl_class(binder, module, scope, class, visit);
-            }
-            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
-                if !binder
-                    .fn_decl_ids
-                    .contains_key(&(module, function.span.start))
-                {
-                    return;
-                }
-                walk_type_decl_function(binder, module, function, visit);
-            }
-            declaration => {
-                if let Some(expression) = declaration.as_expression() {
-                    if binder
-                        .default_export_value(module, export.span.start)
-                        .is_none()
-                    {
-                        return;
-                    }
-                    walk_type_decl_expression(binder, module, scope, expression, visit);
-                }
-            }
-        },
-        Statement::VariableDeclaration(declaration) => {
-            walk_type_decl_variable(binder, module, scope, declaration, visit);
-        }
-        Statement::ExpressionStatement(statement) => {
-            walk_type_decl_expression(binder, module, scope, &statement.expression, visit);
-        }
-        Statement::ReturnStatement(statement) => {
-            if let Some(argument) = &statement.argument {
-                walk_type_decl_expression(binder, module, scope, argument, visit);
-            }
-        }
-        Statement::ThrowStatement(statement) => {
-            walk_type_decl_expression(binder, module, scope, &statement.argument, visit);
-        }
-        Statement::IfStatement(statement) => {
-            walk_type_decl_expression(binder, module, scope, &statement.test, visit);
-            walk_type_decl_statement(binder, module, scope, &statement.consequent, visit);
-            if let Some(alternate) = &statement.alternate {
-                walk_type_decl_statement(binder, module, scope, alternate, visit);
-            }
-        }
-        Statement::BlockStatement(block) => {
-            walk_type_decl_block(binder, module, scope, block, visit);
-        }
-        Statement::SwitchStatement(statement) => {
-            walk_type_decl_expression(binder, module, scope, &statement.discriminant, visit);
-            let Some(&switch_scope) = binder.block_scopes.get(&(module, statement.span.start))
-            else {
-                return;
-            };
-            for case in &statement.cases {
-                if let Some(test) = &case.test {
-                    walk_type_decl_expression(binder, module, switch_scope, test, visit);
-                }
-                walk_type_decl_statements(binder, module, switch_scope, &case.consequent, visit);
-            }
-        }
-        Statement::WhileStatement(statement) => {
-            walk_type_decl_expression(binder, module, scope, &statement.test, visit);
-            walk_type_decl_statement(binder, module, scope, &statement.body, visit);
-        }
-        Statement::DoWhileStatement(statement) => {
-            walk_type_decl_statement(binder, module, scope, &statement.body, visit);
-            walk_type_decl_expression(binder, module, scope, &statement.test, visit);
-        }
-        Statement::ForStatement(statement) => {
-            let Some(&loop_scope) = binder.block_scopes.get(&(module, statement.span.start)) else {
-                return;
-            };
-            if let Some(init) = &statement.init {
-                match init {
-                    ForStatementInit::VariableDeclaration(declaration) => {
-                        walk_type_decl_variable(binder, module, loop_scope, declaration, visit);
-                    }
-                    other => {
-                        if let Some(expression) = other.as_expression() {
-                            walk_type_decl_expression(
-                                binder, module, loop_scope, expression, visit,
-                            );
-                        }
-                    }
-                }
-            }
-            if let Some(test) = &statement.test {
-                walk_type_decl_expression(binder, module, loop_scope, test, visit);
-            }
-            if let Some(update) = &statement.update {
-                walk_type_decl_expression(binder, module, loop_scope, update, visit);
-            }
-            walk_type_decl_statement(binder, module, loop_scope, &statement.body, visit);
-        }
-        Statement::ForInStatement(statement) => {
-            walk_type_decl_for_in_of(
-                binder,
-                module,
-                scope,
-                &statement.left,
-                &statement.right,
-                &statement.body,
-                statement.span.start,
-                visit,
-            );
-        }
-        Statement::ForOfStatement(statement) => {
-            walk_type_decl_for_in_of(
-                binder,
-                module,
-                scope,
-                &statement.left,
-                &statement.right,
-                &statement.body,
-                statement.span.start,
-                visit,
-            );
-        }
-        Statement::LabeledStatement(statement) => {
-            walk_type_decl_statement(binder, module, scope, &statement.body, visit);
-        }
-        Statement::TryStatement(statement) => {
-            walk_type_decl_block(binder, module, scope, &statement.block, visit);
-            if let Some(handler) = &statement.handler {
-                let Some(&catch_scope) = binder.block_scopes.get(&(module, handler.span.start))
-                else {
-                    return;
-                };
-                walk_type_decl_block(binder, module, catch_scope, &handler.body, visit);
-            }
-            if let Some(finalizer) = &statement.finalizer {
-                walk_type_decl_block(binder, module, scope, finalizer, visit);
-            }
-        }
-        _ => {}
-    }
-}
-
 pub(in crate::check::checker) fn class_binding_start(class: &Class<'_>) -> u32 {
     class
         .id
@@ -5984,211 +5620,6 @@ pub(in crate::check::checker) fn class_binding_start(class: &Class<'_>) -> u32 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn visit_bound_type<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    fallback_scope: ScopeId,
-    owner_start: u32,
-    kind: BinderDeclarationKind,
-    binding_start: u32,
-    declaration: TopTypeDecl<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    let matched = binder
-        .exact_declaration_at(module, binding_start, kind)
-        .and_then(|declaration| declaration.site.scope);
-    let scope = matched.unwrap_or(fallback_scope);
-    visit(scope, owner_start, declaration);
-}
-
-fn walk_type_decl_namespace<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    scope: ScopeId,
-    declaration: &'ast TSModuleDeclaration<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    let scope = binder
-        .namespace_fragment_private_scope(module, declaration.span.start)
-        .unwrap_or(scope);
-    match &declaration.body {
-        Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
-            walk_type_decl_statements(binder, module, scope, &block.body, visit);
-        }
-        Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
-            walk_type_decl_namespace(binder, module, scope, nested, visit);
-        }
-        None => {}
-    }
-}
-
-fn walk_type_decl_block<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    parent: ScopeId,
-    block: &'ast oxc_ast::ast::BlockStatement<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    let Some(&scope) = binder.block_scopes.get(&(module, block.span.start)) else {
-        return;
-    };
-    // A continued binder can contain the same source offset in an unrelated appended scope.
-    if binder.graph.get(scope).and_then(|scope| scope.parent) != Some(parent) {
-        return;
-    }
-    walk_type_decl_statements(binder, module, scope, &block.body, visit);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn walk_type_decl_for_in_of<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    parent: ScopeId,
-    left: &'ast ForStatementLeft<'ast>,
-    right: &'ast Expression<'ast>,
-    body: &'ast Statement<'ast>,
-    span_start: u32,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    walk_type_decl_expression(binder, module, parent, right, visit);
-    let Some(&scope) = binder.block_scopes.get(&(module, span_start)) else {
-        return;
-    };
-    if let ForStatementLeft::VariableDeclaration(declaration) = left {
-        walk_type_decl_variable(binder, module, scope, declaration, visit);
-    }
-    walk_type_decl_statement(binder, module, scope, body, visit);
-}
-
-fn walk_type_decl_variable<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    scope: ScopeId,
-    declaration: &'ast oxc_ast::ast::VariableDeclaration<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    for declarator in &declaration.declarations {
-        if let Some(initializer) = &declarator.init {
-            walk_type_decl_expression(binder, module, scope, initializer, visit);
-        }
-    }
-}
-
-fn walk_type_decl_function<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    function: &'ast Function<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    let Some(&scope) = binder.fn_scopes.get(&(module, function.span.start)) else {
-        return;
-    };
-    for parameter in &function.params.items {
-        if let Some(initializer) = &parameter.initializer {
-            walk_type_decl_expression(binder, module, scope, initializer, visit);
-        }
-    }
-    if let Some(body) = &function.body {
-        walk_type_decl_statements(binder, module, scope, &body.statements, visit);
-    }
-}
-
-fn walk_type_decl_class<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    scope: ScopeId,
-    class: &'ast Class<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    for element in &class.body.body {
-        match element {
-            ClassElement::MethodDefinition(method) => {
-                walk_type_decl_function(binder, module, &method.value, visit);
-            }
-            ClassElement::PropertyDefinition(property) => {
-                if let Some(initializer) = &property.value {
-                    walk_type_decl_expression(binder, module, scope, initializer, visit);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn walk_type_decl_expression<'ast>(
-    binder: &Binder,
-    module: ScopeId,
-    scope: ScopeId,
-    expression: &'ast Expression<'ast>,
-    visit: &mut impl FnMut(ScopeId, u32, TopTypeDecl<'ast>),
-) {
-    match expression {
-        Expression::FunctionExpression(function) => {
-            walk_type_decl_function(binder, module, function, visit);
-        }
-        Expression::ArrowFunctionExpression(arrow) => {
-            let Some(&scope) = binder.fn_scopes.get(&(module, arrow.span.start)) else {
-                return;
-            };
-            for parameter in &arrow.params.items {
-                if let Some(initializer) = &parameter.initializer {
-                    walk_type_decl_expression(binder, module, scope, initializer, visit);
-                }
-            }
-            walk_type_decl_statements(binder, module, scope, &arrow.body.statements, visit);
-        }
-        Expression::ClassExpression(class) => {
-            walk_type_decl_class(binder, module, scope, class, visit);
-        }
-        Expression::NewExpression(new_expression) => {
-            walk_type_decl_expression(binder, module, scope, &new_expression.callee, visit);
-            for argument in &new_expression.arguments {
-                if let Some(argument) = argument.as_expression() {
-                    walk_type_decl_expression(binder, module, scope, argument, visit);
-                }
-            }
-        }
-        Expression::CallExpression(call) => {
-            walk_type_decl_expression(binder, module, scope, &call.callee, visit);
-            for argument in &call.arguments {
-                if let Some(argument) = argument.as_expression() {
-                    walk_type_decl_expression(binder, module, scope, argument, visit);
-                }
-            }
-        }
-        Expression::AssignmentExpression(assignment) => {
-            walk_type_decl_expression(binder, module, scope, &assignment.right, visit);
-        }
-        Expression::StaticMemberExpression(member) => {
-            walk_type_decl_expression(binder, module, scope, &member.object, visit);
-        }
-        Expression::ObjectExpression(object) => {
-            for property in &object.properties {
-                if let ObjectPropertyKind::ObjectProperty(property) = property {
-                    walk_type_decl_expression(binder, module, scope, &property.value, visit);
-                }
-            }
-        }
-        Expression::ArrayExpression(array) => {
-            for element in &array.elements {
-                if let Some(element) = element.as_expression() {
-                    walk_type_decl_expression(binder, module, scope, element, visit);
-                }
-            }
-        }
-        Expression::ParenthesizedExpression(parenthesized) => {
-            walk_type_decl_expression(binder, module, scope, &parenthesized.expression, visit);
-        }
-        Expression::TSAsExpression(assertion) => {
-            walk_type_decl_expression(binder, module, scope, &assertion.expression, visit);
-        }
-        Expression::TSTypeAssertion(assertion) => {
-            walk_type_decl_expression(binder, module, scope, &assertion.expression, visit);
-        }
-        _ => {}
-    }
-}
-
 /// Allocate fresh type-parameter ids in source order.
 /// Names are paired later when lowering with a parameter frame in scope.
 pub(in crate::check::checker) fn alloc_type_param_ids(
@@ -6551,16 +5982,16 @@ mod topology_tests {
         let mut next_class_id = 0;
         let mut declarations: TypeDeclTable<'_> = Vec::new().into();
         let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
-        reserve_type_decls(
+        let receipt = reserve_type_decls_from_inventory(
             &mut interner,
             &binder,
-            module,
-            &parsed.program,
+            &inventory,
             &mut next_type_param,
             &mut next_class_id,
             &mut declarations,
             &mut resolved,
         );
+        assert!(receipt.preserved_classes.is_empty());
 
         let ordinary_group = binder
             .type_groups
@@ -6629,7 +6060,7 @@ mod topology_tests {
         let mut next_class_id = 0;
         let mut declarations: TypeDeclTable<'_> = Vec::new().into();
         let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
-        reserve_type_decls_from_inventory(
+        let receipt = reserve_type_decls_from_inventory(
             &mut interner,
             &binder,
             &inventory,
@@ -6638,6 +6069,7 @@ mod topology_tests {
             &mut declarations,
             &mut resolved,
         );
+        assert!(receipt.preserved_classes.is_empty());
 
         let ordinary_group = binder
             .type_groups
@@ -6693,7 +6125,7 @@ declare global {
         let mut next_class_id = 0;
         let mut declarations: TypeDeclTable<'_> = Vec::new().into();
         let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
-        reserve_type_decls_selected_from_inventory(
+        let receipt = reserve_type_decls_selected_from_inventory(
             TypeDeclReservationState {
                 interner: &mut interner,
                 binder: &binder,
@@ -6706,6 +6138,7 @@ declare global {
             &selected,
             &PublishedTypeEnvironment::empty(),
         );
+        assert!(receipt.preserved_classes.is_empty());
 
         assert_eq!(next_type_param, 0);
         assert_eq!(next_class_id, 0);
@@ -6753,16 +6186,16 @@ type Ordinary<U> = U;
         let mut next_class_id = 0;
         let mut declarations: TypeDeclTable<'_> = Vec::new().into();
         let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
-        reserve_type_decls(
+        let receipt = reserve_type_decls_from_inventory(
             &mut interner,
             &binder,
-            module,
-            &parsed.program,
+            &inventory,
             &mut next_type_param,
             &mut next_class_id,
             &mut declarations,
             &mut resolved,
         );
+        assert!(receipt.preserved_classes.is_empty());
 
         let ordinary_group = binder
             .type_groups
@@ -6786,21 +6219,33 @@ type Ordinary<U> = U;
         let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let source = binder
+            .source_for_module(binder.module)
+            .expect("fixture module source key");
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let inventory = inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            binder.module,
+            source,
+            manifest,
+            None,
+        )
+        .expect("interleaved declaration inventory");
         let mut interner = Interner::with_intrinsics();
         let mut next_type_param = 0;
         let mut next_class_id = 0;
         let mut declarations: TypeDeclTable<'_> = Vec::new().into();
         let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
-        reserve_type_decls(
+        let receipt = reserve_type_decls_from_inventory(
             &mut interner,
             &binder,
-            binder.module,
-            &parsed.program,
+            &inventory,
             &mut next_type_param,
             &mut next_class_id,
             &mut declarations,
             &mut resolved,
         );
+        assert!(receipt.preserved_classes.is_empty());
 
         let group_a = binder
             .type_groups

@@ -1032,7 +1032,6 @@ const invalid: SharedReceiptInterface = { value: 1 };
             rejected: 0,
             exact_join_attempts: 3,
             dense_slots: 3,
-            legacy_top_level_block_deltas: 0,
         }
     );
 
@@ -1088,7 +1087,6 @@ fn selected_replay_declaration_receipt_is_exact() {
             rejected: 0,
             exact_join_attempts: 2_378,
             dense_slots: 13_538,
-            legacy_top_level_block_deltas: 0,
         }
     );
 

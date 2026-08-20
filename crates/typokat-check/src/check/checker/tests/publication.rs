@@ -1,7 +1,7 @@
 use super::super::{
     check_program_with_namespace_value_inspector, check_program_with_publication_inspector,
 };
-use crate::binder::declaration::{DeclId, TypeFragmentKind};
+use crate::binder::declaration::{DeclId, SourceDeclarationManifest, TypeFragmentKind};
 use crate::check::checker::context::{CheckerEffects, DeclTypes, HeaderFragmentBinding, TypeDecl};
 use crate::check::checker::reporting_record::CheckerRecord;
 use crate::check::checker::type_groups::{
@@ -62,16 +62,28 @@ fn reserve_class_interface_headers(source: &str) -> ReservedClassInterfaceHeader
         vec![None; binder.type_groups.len()].into();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
-    crate::check::checker::decls::reserve_type_decls(
-        &mut interner,
+    let manifest = SourceDeclarationManifest::build(&user.program);
+    let source = binder
+        .source_for_module(binder.module)
+        .expect("user module source key");
+    let inventory = crate::check::checker::decls::inventory::BoundTypeDeclarationInventory::build(
         &binder,
         binder.module,
-        &user.program,
+        source,
+        manifest,
+        None,
+    )
+    .expect("publication fixture inventory");
+    let receipt = crate::check::checker::decls::reserve_type_decls_from_inventory(
+        &mut interner,
+        &binder,
+        &inventory,
         &mut next_type_param,
         &mut next_class_id,
         &mut declarations,
         &mut resolved,
     );
+    assert!(receipt.preserved_classes.is_empty());
     let TypeDecl::Class {
         declaration,
         class_id,

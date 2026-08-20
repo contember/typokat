@@ -6,7 +6,7 @@ function checkFunctionLocals(): void {
   type UnusedAlias = { unused: true };
   const invalidAlias: UsedAlias = { value: 1 }; // error[TK2322]
 
-  class UsedClass { // WU3c RED: class attachment consumes the WU3b terminal.
+  class UsedClass { // WU3c: class attachment consumes the reserved terminal.
     value!: string;
   }
   class UnusedClass {}

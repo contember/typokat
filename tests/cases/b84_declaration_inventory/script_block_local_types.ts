@@ -22,7 +22,7 @@
 }
 
 {
-  // WU3c RED: class attachment is deliberately outside WU3b.
+  // WU3c: the canonical class fragment attaches to its reserved terminal.
   class LocalClass {
     value!: string;
   }

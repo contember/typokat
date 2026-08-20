@@ -4,7 +4,7 @@
 
 use super::super::{
     check_program, check_program_with_publication_inspector, expected_trusted_prelude_incomplete,
-    trusted_prelude_records_are_clean, walk_type_decls, TEST_AMBIENT_SOURCE,
+    trusted_prelude_records_are_clean, TEST_AMBIENT_SOURCE,
 };
 use crate::binder::{bind_module_with_prelude, declaration::SourceDeclarationManifest};
 use crate::check::test_support::{check_project, check_source};
@@ -109,7 +109,6 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
             rejected: 0,
             exact_join_attempts: 18,
             dense_slots: 21,
-            legacy_top_level_block_deltas: 0,
         }
     );
 
@@ -171,14 +170,18 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
             .lexical_events
             .declaration_owner(fragment.declaration)
             .is_some()));
-    let mut walked = 0;
-    walk_type_decls(
+    let prelude_source = binder
+        .source_for_module(binder.prelude_module)
+        .expect("trusted prelude source key");
+    let inventory = super::super::decls::inventory::BoundTypeDeclarationInventory::build(
         &binder,
         binder.prelude_module,
-        &prelude.program,
-        &mut |_, _, _| walked += 1,
-    );
-    assert_eq!(walked, EXPECTED_GROUPS);
+        prelude_source,
+        manifest,
+        None,
+    )
+    .expect("trusted prelude inventory");
+    assert_eq!(inventory.receipt().admitted, EXPECTED_GROUPS);
 
     let mut interner = Interner::with_intrinsics();
     let result = check_program_with_publication_inspector(
@@ -214,7 +217,19 @@ fn trusted_prelude_cleanliness_allowlist_is_exact() {
     let user_allocator = Allocator::default();
     let user = Parser::new(&user_allocator, "", SourceType::ts()).parse();
     let binder = bind_module_with_prelude(&prelude.program, &user.program);
-    let expected = expected_trusted_prelude_incomplete(&binder, &prelude.program);
+    let manifest = SourceDeclarationManifest::build(&prelude.program);
+    let source = binder
+        .source_for_module(binder.prelude_module)
+        .expect("trusted prelude source key");
+    let inventory = super::super::decls::inventory::BoundTypeDeclarationInventory::build(
+        &binder,
+        binder.prelude_module,
+        source,
+        manifest,
+        None,
+    )
+    .expect("trusted prelude inventory");
+    let expected = expected_trusted_prelude_incomplete(&inventory);
     assert!(
         expected.is_some(),
         "the trusted intrinsic aliases must have intrinsic bodies"
@@ -225,21 +240,13 @@ fn trusted_prelude_cleanliness_allowlist_is_exact() {
     assert_eq!(expected.len(), 6);
 
     let clean = BTreeMap::from([(ModuleOrdinal::new(0), (Vec::new(), expected.clone()))]);
-    assert!(trusted_prelude_records_are_clean(
-        &binder,
-        &prelude.program,
-        &clean
-    ));
+    assert!(trusted_prelude_records_are_clean(&inventory, &clean));
 
     let mut missing = clean.clone();
     if let Some((_, incomplete)) = missing.get_mut(&ModuleOrdinal::new(0)) {
         incomplete.pop();
     }
-    assert!(!trusted_prelude_records_are_clean(
-        &binder,
-        &prelude.program,
-        &missing
-    ));
+    assert!(!trusted_prelude_records_are_clean(&inventory, &missing));
 
     let mut extra = clean.clone();
     if let Some((_, incomplete)) = extra.get_mut(&ModuleOrdinal::new(0)) {
@@ -247,11 +254,7 @@ fn trusted_prelude_cleanliness_allowlist_is_exact() {
             incomplete.push(record);
         }
     }
-    assert!(!trusted_prelude_records_are_clean(
-        &binder,
-        &prelude.program,
-        &extra
-    ));
+    assert!(!trusted_prelude_records_are_clean(&inventory, &extra));
 
     let mut wrong_id = clean.clone();
     if let Some((_, incomplete)) = wrong_id.get_mut(&ModuleOrdinal::new(0)) {
@@ -259,11 +262,7 @@ fn trusted_prelude_cleanliness_allowlist_is_exact() {
             record.id = "annotation-lower/intrinsic-keyword/other".to_string();
         }
     }
-    assert!(!trusted_prelude_records_are_clean(
-        &binder,
-        &prelude.program,
-        &wrong_id
-    ));
+    assert!(!trusted_prelude_records_are_clean(&inventory, &wrong_id));
 
     let mut wrong_span = clean.clone();
     if let Some((_, incomplete)) = wrong_span.get_mut(&ModuleOrdinal::new(0)) {
@@ -271,21 +270,13 @@ fn trusted_prelude_cleanliness_allowlist_is_exact() {
             record.span = Span::new(0, 0);
         }
     }
-    assert!(!trusted_prelude_records_are_clean(
-        &binder,
-        &prelude.program,
-        &wrong_span
-    ));
+    assert!(!trusted_prelude_records_are_clean(&inventory, &wrong_span));
 
     let mut diagnostic = clean;
     if let Some((diagnostics, _)) = diagnostic.get_mut(&ModuleOrdinal::new(0)) {
         diagnostics.push(Diagnostic::cannot_find_name(Span::new(0, 0), "Broken"));
     }
-    assert!(!trusted_prelude_records_are_clean(
-        &binder,
-        &prelude.program,
-        &diagnostic
-    ));
+    assert!(!trusted_prelude_records_are_clean(&inventory, &diagnostic));
 }
 
 /// Single-file and one-module project bootstrap must expose identical trusted surfaces.

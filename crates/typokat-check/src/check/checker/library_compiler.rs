@@ -1,7 +1,8 @@
 //! Source-backed compiler for declaration-library profiles and complete-source project routes.
 
 use super::classes::application::ClassTypeParameterDefault;
-use super::context::{CertifiedLibraryValues, CheckerRecordBatch, DeclTypes, TypeDecl};
+use super::context::{CertifiedLibraryValues, CheckerRecordBatch, DeclTypes};
+use super::decls::TypeDeclReservationReceipt;
 use super::events::{CandidateEffects, EventStore, UserRecordTicket};
 use super::events_library::{
     library_record_ticket_key, LibraryEventKey, LibraryEventLedger, LibraryEventLedgerError,
@@ -48,7 +49,7 @@ use super::type_groups::{
     PublishedTypeParameterDefault,
 };
 use super::{
-    attach_class_bindings, attach_type_decl_owners, build_pass_with_tickets,
+    attach_class_bindings_from_inventory, attach_type_decl_owners, build_pass_with_tickets,
     enqueue_ambient_context_diagnostics, enqueue_enum_merge_diagnostics,
     enqueue_local_ambient_export_alias_diagnostics, enqueue_namespace_placement_diagnostics,
     finish_semantic_effects, private_combined_record_ticket_key,
@@ -6449,8 +6450,6 @@ fn complete_source_project_frontend<'source, 'ast>(
         None,
     )
     .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-    #[cfg(any(test, feature = "test-utils"))]
-    prelude_inventory.assert_legacy_walker_parity(&binder, &prelude.program, None);
     let _prelude_inventory_receipt = prelude_inventory.receipt();
     #[cfg(any(test, feature = "test-utils"))]
     assert_eq!(
@@ -6786,8 +6785,6 @@ fn with_canonical_frontend<'source, Output>(
         None,
     )
     .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-    #[cfg(any(test, feature = "test-utils"))]
-    prelude_inventory.assert_legacy_walker_parity(&binder, &prelude.program, None);
     let _prelude_inventory_receipt = prelude_inventory.receipt();
     #[cfg(any(test, feature = "test-utils"))]
     let bind_elapsed = bind_started.elapsed();
@@ -7139,6 +7136,7 @@ trait InjectedCompileRoute {
         ledger: &mut LibraryEventLedger,
     ) -> Result<(), LibraryEventLedgerError>;
 
+    #[allow(clippy::too_many_arguments)]
     fn attach_library_owners(
         reservations: &mut LexicalReservations<Self::Ticket>,
         file_ordinal: LibraryFileOrdinal,
@@ -7147,8 +7145,11 @@ trait InjectedCompileRoute {
         program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
-    );
+        inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
+        receipt: TypeDeclReservationReceipt,
+    ) -> Result<(), InjectedProfileError>;
 
+    #[allow(clippy::too_many_arguments)]
     fn attach_user_owners(
         reservations: &mut LexicalReservations<Self::Ticket>,
         module_ordinal: ModuleOrdinal,
@@ -7157,6 +7158,8 @@ trait InjectedCompileRoute {
         program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
+        inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
+        receipt: TypeDeclReservationReceipt,
     ) -> Result<(), InjectedProfileError>;
 
     fn pending_tickets(reservations: &LexicalReservations<Self::Ticket>) -> Vec<Self::Ticket>;
@@ -7211,15 +7214,20 @@ impl InjectedCompileRoute for LegacyLibraryRoute {
         program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
-    ) {
+        inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
+        receipt: TypeDeclReservationReceipt,
+    ) -> Result<(), InjectedProfileError> {
         reservations.attach_library_declaration_owners(file_ordinal, binder, scope, program, spans);
-        reservations.attach_library_class_bindings(
-            file_ordinal,
+        attach_class_bindings_from_inventory(
+            reservations,
+            SourceOrdinal::Library(file_ordinal),
             binder,
-            scope,
-            program,
+            inventory,
             declarations,
-        );
+            receipt,
+            None,
+        )
+        .map_err(|error| InjectedProfileError::Binder(error.to_owned()))
     }
 
     fn attach_user_owners(
@@ -7230,6 +7238,8 @@ impl InjectedCompileRoute for LegacyLibraryRoute {
         _: &Program<'_>,
         _: &super::ModuleDeclarationSpans,
         _: &super::context::TypeDeclTable<'_>,
+        _: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
+        _: TypeDeclReservationReceipt,
     ) -> Result<(), InjectedProfileError> {
         Err(InjectedProfileError::CanonicalProjection(
             "library-only compiler received a user source".to_owned(),
@@ -7299,7 +7309,9 @@ impl InjectedCompileRoute for CompleteSourceRoute {
         program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
-    ) {
+        inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
+        receipt: TypeDeclReservationReceipt,
+    ) -> Result<(), InjectedProfileError> {
         reservations.attach_complete_library_declaration_owners(
             file_ordinal,
             binder,
@@ -7307,13 +7319,16 @@ impl InjectedCompileRoute for CompleteSourceRoute {
             program,
             spans,
         );
-        reservations.attach_complete_library_class_bindings(
-            file_ordinal,
+        attach_class_bindings_from_inventory(
+            reservations,
+            SourceOrdinal::Library(file_ordinal),
             binder,
-            scope,
-            program,
+            inventory,
             declarations,
-        );
+            receipt,
+            None,
+        )
+        .map_err(|error| InjectedProfileError::Binder(error.to_owned()))
     }
 
     fn attach_user_owners(
@@ -7324,6 +7339,8 @@ impl InjectedCompileRoute for CompleteSourceRoute {
         program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
+        inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
+        receipt: TypeDeclReservationReceipt,
     ) -> Result<(), InjectedProfileError> {
         attach_type_decl_owners(
             reservations,
@@ -7333,16 +7350,16 @@ impl InjectedCompileRoute for CompleteSourceRoute {
             program,
             spans,
         );
-        attach_class_bindings(
+        attach_class_bindings_from_inventory(
             reservations,
             SourceOrdinal::User(module_ordinal),
             binder,
-            scope,
-            program,
+            inventory,
             declarations,
+            receipt,
             None,
-        );
-        Ok(())
+        )
+        .map_err(|error| InjectedProfileError::Binder(error.to_owned()))
     }
 
     fn pending_tickets(reservations: &LexicalReservations<Self::Ticket>) -> Vec<Self::Ticket> {
@@ -7651,8 +7668,6 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             None,
         )
         .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-        #[cfg(any(test, feature = "test-utils"))]
-        inventory.assert_legacy_walker_parity(&binder, _program, None);
         let _inventory_receipt = inventory.receipt();
         declaration_inventories.push(inventory);
     }
@@ -7692,75 +7707,76 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         .zip(&declaration_inventories)
         .enumerate()
     {
-        if user_start.is_some() && matches!(input.origin, CompilationOrigin::Library(_)) {
-            reserve_type_decls_for_combined_library_from_inventory(
-                super::decls::TypeDeclReservationState {
-                    interner: &mut interner,
-                    binder: &binder,
-                    next_type_param: &mut next_type_param,
-                    next_class_id: &mut next_class_id,
-                    decls: &mut type_decls,
-                    resolved: &mut type_resolved,
-                },
-                inventory,
-            );
-        } else if user_start.is_some() {
-            let Some(library_declarations) = combined_library_declarations.as_ref() else {
-                return Err(InjectedProfileError::CanonicalProjection(
-                    "complete-source library declaration provenance is missing".to_owned(),
-                ));
+        let reservation_receipt =
+            if user_start.is_some() && matches!(input.origin, CompilationOrigin::Library(_)) {
+                reserve_type_decls_for_combined_library_from_inventory(
+                    super::decls::TypeDeclReservationState {
+                        interner: &mut interner,
+                        binder: &binder,
+                        next_type_param: &mut next_type_param,
+                        next_class_id: &mut next_class_id,
+                        decls: &mut type_decls,
+                        resolved: &mut type_resolved,
+                    },
+                    inventory,
+                )
+            } else if user_start.is_some() {
+                let Some(library_declarations) = combined_library_declarations.as_ref() else {
+                    return Err(InjectedProfileError::CanonicalProjection(
+                        "complete-source library declaration provenance is missing".to_owned(),
+                    ));
+                };
+                #[cfg(any(test, feature = "test-utils"))]
+                if !combined_library_provenance_checked {
+                    let legacy_library_declarations = binder
+                        .declarations
+                        .iter()
+                        .filter(|declaration| {
+                            declaration.type_group.is_some()
+                                && matches!(
+                                    declaration.kind,
+                                    DeclarationKind::TypeAlias
+                                        | DeclarationKind::Interface
+                                        | DeclarationKind::Class
+                                        | DeclarationKind::Enum
+                                )
+                                && lexical_events
+                                    .declaration_source(declaration.id)
+                                    .is_some_and(|source| {
+                                        matches!(source.unit, SourceUnit::Library { .. })
+                                    })
+                        })
+                        .map(|declaration| declaration.id)
+                        .collect::<rustc_hash::FxHashSet<_>>();
+                    assert_eq!(
+                        library_declarations, &legacy_library_declarations,
+                        "combined library inventory rows match legacy provenance",
+                    );
+                    combined_library_provenance_checked = true;
+                }
+                reserve_type_decls_for_combined_user_from_inventory(
+                    super::decls::TypeDeclReservationState {
+                        interner: &mut interner,
+                        binder: &binder,
+                        next_type_param: &mut next_type_param,
+                        next_class_id: &mut next_class_id,
+                        decls: &mut type_decls,
+                        resolved: &mut type_resolved,
+                    },
+                    inventory,
+                    library_declarations,
+                )
+            } else {
+                reserve_type_decls_from_inventory(
+                    &mut interner,
+                    &binder,
+                    inventory,
+                    &mut next_type_param,
+                    &mut next_class_id,
+                    &mut type_decls,
+                    &mut type_resolved,
+                )
             };
-            #[cfg(any(test, feature = "test-utils"))]
-            if !combined_library_provenance_checked {
-                let legacy_library_declarations = binder
-                    .declarations
-                    .iter()
-                    .filter(|declaration| {
-                        declaration.type_group.is_some()
-                            && matches!(
-                                declaration.kind,
-                                DeclarationKind::TypeAlias
-                                    | DeclarationKind::Interface
-                                    | DeclarationKind::Class
-                                    | DeclarationKind::Enum
-                            )
-                            && lexical_events
-                                .declaration_source(declaration.id)
-                                .is_some_and(|source| {
-                                    matches!(source.unit, SourceUnit::Library { .. })
-                                })
-                    })
-                    .map(|declaration| declaration.id)
-                    .collect::<rustc_hash::FxHashSet<_>>();
-                assert_eq!(
-                    library_declarations, &legacy_library_declarations,
-                    "combined library inventory rows match legacy provenance",
-                );
-                combined_library_provenance_checked = true;
-            }
-            reserve_type_decls_for_combined_user_from_inventory(
-                super::decls::TypeDeclReservationState {
-                    interner: &mut interner,
-                    binder: &binder,
-                    next_type_param: &mut next_type_param,
-                    next_class_id: &mut next_class_id,
-                    decls: &mut type_decls,
-                    resolved: &mut type_resolved,
-                },
-                inventory,
-                library_declarations,
-            );
-        } else {
-            reserve_type_decls_from_inventory(
-                &mut interner,
-                &binder,
-                inventory,
-                &mut next_type_param,
-                &mut next_class_id,
-                &mut type_decls,
-                &mut type_resolved,
-            );
-        }
         if let Some(user_index) = user_start.and_then(|start| index.checked_sub(start)) {
             let Some((module_ordinal, _)) = user_units.get(user_index).copied() else {
                 return Err(InjectedProfileError::CanonicalProjection(
@@ -7775,6 +7791,8 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                 program,
                 &declaration_spans,
                 &type_decls,
+                inventory,
+                reservation_receipt,
             )?;
         } else {
             Route::attach_library_owners(
@@ -7785,7 +7803,9 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                 program,
                 &declaration_spans,
                 &type_decls,
-            );
+                inventory,
+                reservation_receipt,
+            )?;
         }
     }
     lexical_events
@@ -7804,12 +7824,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             .iter()
             .filter_map(|reservation| {
                 let binding = reservation.binding.as_ref()?;
-                let TypeDecl::Class { declaration, .. } =
-                    type_decls.get(binding.type_decl.index())?
-                else {
-                    return None;
-                };
-                Some((binding.class_id, *declaration))
+                Some((binding.class_id, binding.declaration))
             })
             .collect::<BTreeMap<_, _>>()
     } else {
@@ -8567,8 +8582,6 @@ pub fn compile_library_binder_checkpoint(
                 None,
             )
             .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-            #[cfg(any(test, feature = "test-utils"))]
-            inventory.assert_legacy_walker_parity(&binder, _program, None);
             let _inventory_receipt = inventory.receipt();
         }
         let library_units = canonical
@@ -10345,7 +10358,6 @@ declare class SparseMergedClass<T> { classValue: T }
     }
 
     #[test]
-    #[ignore = "WU3c RED: class-only replay attachment must consume the preserved inventory row"]
     fn sparse_class_only_attachment_keeps_original_identity_and_fresh_header_params() {
         let sources = [InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
@@ -10411,7 +10423,6 @@ declare class SparseUnselectedPeer { value: number }
     }
 
     #[test]
-    #[ignore = "WU3c RED: class-only merged replay must attach exactly the class fragment"]
     fn sparse_class_only_merged_group_attaches_once_to_the_class_decl_id() {
         let sources = [InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
@@ -10558,7 +10569,6 @@ declare class SparseAttachedMerge<T> { classValue: T }
                 rejected: 0,
                 exact_join_attempts: 4,
                 dense_slots: 4,
-                legacy_top_level_block_deltas: 0,
             }
         );
         assert_eq!(run.phase_counts.parse_units, 2);
@@ -10612,7 +10622,6 @@ declare class SparseAttachedMerge<T> { classValue: T }
                 rejected: 0,
                 exact_join_attempts: 7,
                 dense_slots: 7,
-                legacy_top_level_block_deltas: 0,
             }
         );
 

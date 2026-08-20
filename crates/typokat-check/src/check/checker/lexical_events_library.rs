@@ -8,7 +8,7 @@ use super::events_library::{
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations, SourceSite};
 use super::replay_index::CollisionReplayEventPhase;
 use super::PrivateCombinedRecordTicket;
-use super::{attach_class_bindings, attach_type_decl_owners, ModuleDeclarationSpans};
+use super::{attach_type_decl_owners, ModuleDeclarationSpans};
 use crate::binder::declaration::SourceDeclarationManifest;
 use crate::binder::{scope::ScopeId, Binder};
 use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
@@ -211,25 +211,6 @@ impl LexicalReservations<LibraryRecordTicket> {
             spans,
         );
     }
-
-    pub(in crate::check::checker) fn attach_library_class_bindings(
-        &mut self,
-        file_ordinal: LibraryFileOrdinal,
-        binder: &Binder,
-        scope: ScopeId,
-        program: &Program<'_>,
-        declarations: &super::context::TypeDeclTable<'_>,
-    ) {
-        attach_class_bindings(
-            self,
-            SourceOrdinal::Library(file_ordinal),
-            binder,
-            scope,
-            program,
-            declarations,
-            None,
-        );
-    }
 }
 
 impl LexicalReservations<PrivateCombinedRecordTicket> {
@@ -335,25 +316,6 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             scope,
             program,
             spans,
-        );
-    }
-
-    pub(in crate::check::checker) fn attach_complete_library_class_bindings(
-        &mut self,
-        file_ordinal: LibraryFileOrdinal,
-        binder: &Binder,
-        scope: ScopeId,
-        program: &Program<'_>,
-        declarations: &super::context::TypeDeclTable<'_>,
-    ) {
-        attach_class_bindings(
-            self,
-            SourceOrdinal::Library(file_ordinal),
-            binder,
-            scope,
-            program,
-            declarations,
-            None,
         );
     }
 }

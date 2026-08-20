@@ -31,9 +31,9 @@ interface InterfaceFirst<T> {
 class InterfaceFirst<T> {
   classValue!: T;
 }
-const invalidInterfaceFirst: InterfaceFirst<string> = {
+const invalidInterfaceFirst: InterfaceFirst<string> = { // error[TK2322]
   interfaceValue: "ready",
-  classValue: 1, // error[TK2322]
+  classValue: 1,
 };
 
 class ClassFirst<T> {
@@ -42,7 +42,7 @@ class ClassFirst<T> {
 interface ClassFirst<T> {
   interfaceValue: T;
 }
-const invalidClassFirst: ClassFirst<string> = {
+const invalidClassFirst: ClassFirst<string> = { // error[TK2322]
   interfaceValue: "ready",
-  classValue: 1, // error[TK2322]
+  classValue: 1,
 };
