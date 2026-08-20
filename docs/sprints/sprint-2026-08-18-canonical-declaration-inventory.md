@@ -309,6 +309,39 @@ passes its closure gates.
   plus explicitly unavailable-enum control is already GREEN under the legacy consumer. Local class
   attachment is explicitly assigned to WU3c; its deferred legacy control is GREEN and remains
   disabled until that consumer moves.
+- **WU3b Wave 2 — production cutover.** All ordinary, combined library/user, and selected replay
+  reservation routes now consume their prebuilt binder-authenticated inventories through one
+  policy kernel. The kernel preserves source allocation order and both rejection side-effect
+  polarities. Complete-source library provenance is derived from admitted library inventory rows
+  and remains exactly equal to the legacy lexical provenance. Selected replay reserves and fills a
+  prefix enum replacement, leaves unselected reparsed enums frozen, and recognizes class-only
+  selection through the existing immutable published class surface without a scan or auxiliary
+  registry. The class route preserves the frozen terminal and original `ClassId` while retaining
+  the historical fresh reservation side effect; class reconstruction and attachment remain WU3c.
+  Unsupported local enum terminalization now covers every changed declaration row after the frozen
+  base installs. The three sparse Wave 1 RED tests are GREEN and enabled; the WU3c class attachment
+  control remains disabled. The `b84_declaration_inventory` corpus remains disabled until the WU3b
+  review and integration gates complete. The final leased narrow gates passed: inventory `15/15`
+  with one WU3c control ignored, each of the three sparse filters `1/1`, legacy and complete
+  declaration receipts `1/1`, `cargo check -p typokat-check --all-targets`, and `cargo clippy -p
+  typokat-check --lib -- -D warnings`.
+- **WU3b architecture-review closure.** Selected replay now computes one explicit per-group
+  disposition. A selected `TypeGroup` rebuilds and takes precedence over class-owner selection; a
+  class-only selection preserves the exact frozen `ClassId` and skips every fragment mutation in
+  the merged group while the matching class row retains the historical fresh `ClassId` and type
+  parameter reservation effects; every other group is skipped. Non-selected routes retain the
+  authenticated invalid-global/ambient alias and class allocation effects, while selected replay
+  skips rejected rows and source-only default/class-expression candidates remain allocation-free.
+  Inventory outcomes now merge a source-ordered outcome stream with the dense `DeclId` map in
+  linear time. The complete-source provenance oracle compares only admitted type declaration
+  identities and includes value/function controls outside that domain. Leased focused gates passed:
+  all six sparse disposition tests `6/6`, inventory `15/15` with one WU3c control ignored,
+  rejection polarity `3/3` plus selected rejection `1/1`, and complete/legacy declaration receipts
+  `2/2`. `cargo check -p typokat-check --all-targets`, `cargo clippy -p typokat-check --lib -- -D
+  warnings`, formatting, and diff checks passed. Independent semantic and architecture re-reviews
+  passed with no remaining blocker. The ordinary conformance gate passed with receipt
+  `576/692/576/0` in `151.83 s`; the declaration corpus remains disabled for the WU3c class
+  attachment cutover.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

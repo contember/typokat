@@ -2,12 +2,16 @@
 
 pub(in crate::check::checker) mod inventory;
 
+use self::inventory::{
+    BoundTypeDeclarationInventory, SourceTypeFragmentRejection, TypeDeclarationInventoryOutcome,
+};
 use super::classes::construction::HeritageDependency;
 use super::context::*;
 use super::lexical_events::InterfaceOccurrenceKind;
 use super::replay_index::ReplayOwner;
 use super::type_groups::{
-    InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeParameterDefault,
+    InterfaceAlternativeKind, InterfaceTypedAlternative, PublishedTypeEnvironment,
+    PublishedTypeGroupSurface, PublishedTypeGroupTerminal, PublishedTypeParameterDefault,
 };
 use crate::binder::declaration::{
     DeclId, DeclarationKind as BinderDeclarationKind, TypeGroupFragment, TypeGroupId,
@@ -1054,8 +1058,33 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
         self.fill_enum_decls_range(self.type_decls.published_len(), self.type_decls.len());
     }
 
+    pub(in crate::check::checker) fn terminalize_unavailable_type_groups(&mut self) {
+        let groups = self
+            .type_decls
+            .changed_entries()
+            .into_iter()
+            .filter(|(_, declaration)| matches!(declaration, TypeDecl::Unavailable { .. }))
+            .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
+            .collect::<Vec<_>>();
+        for group in groups {
+            self.begin_type_group_construction(group);
+            self.freeze_type_group(group);
+        }
+    }
+
     pub(in crate::check::checker) fn fill_enum_decls_range(&mut self, start: usize, end: usize) {
         let building_template = std::mem::replace(&mut self.building_template, true);
+        if start == self.type_decls.published_len() {
+            let replacements = self
+                .type_decls
+                .replacement_indices()
+                .into_iter()
+                .filter(|index| matches!(self.type_decls.get(*index), Some(TypeDecl::Enum { .. })))
+                .collect::<Vec<_>>();
+            for index in replacements {
+                self.fill_enum_descriptor(index);
+            }
+        }
         for index in start..end {
             if matches!(self.type_decls.get(index), Some(TypeDecl::Enum { .. })) {
                 self.fill_enum_descriptor(index);
@@ -1150,7 +1179,8 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                         .resolution_environment()
                         .groups()
                         .get(group)
-                        .is_some();
+                        .is_some()
+                        && !pass.type_decls.has_replacement(group.index());
                     super::record_enum_fill_for_test(
                         group,
                         family
@@ -4574,16 +4604,12 @@ fn flatten_heritage_segments<'a>(
     }
 }
 
-/// Reserve top-level type declarations by [`TypeGroupId`].
-/// Interfaces get ids before bodies resolve, enabling self/sibling references.
-/// Reserve runs per compilation unit; append order matches legacy storage order so
-/// prelude and user declarations stay index-aligned.
+/// Reserve source type declarations from the binder-authenticated inventory.
 #[allow(clippy::too_many_arguments)] // Two counters + two appended tables — irreducible reserve state.
-pub(in crate::check::checker) fn reserve_type_decls<'ast>(
+pub(in crate::check::checker) fn reserve_type_decls_from_inventory<'ast>(
     interner: &mut Interner,
     binder: &Binder,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
+    inventory: &BoundTypeDeclarationInventory<'ast>,
     next_type_param: &mut u32,
     next_class_id: &mut u32,
     decls: &mut TypeDeclTable<'ast>,
@@ -4597,7 +4623,36 @@ pub(in crate::check::checker) fn reserve_type_decls<'ast>(
         decls,
         resolved,
     };
-    reserve_type_decls_with_selection(state, module, program, None, false, None);
+    reserve_type_decls_with_policy(state, inventory, false, None, None);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+pub(in crate::check::checker) fn reserve_type_decls<'ast>(
+    interner: &mut Interner,
+    binder: &Binder,
+    module: ScopeId,
+    program: &'ast Program<'ast>,
+    next_type_param: &mut u32,
+    next_class_id: &mut u32,
+    decls: &mut TypeDeclTable<'ast>,
+    resolved: &mut TypeResolvedTable,
+) {
+    let source = binder
+        .source_for_module(module)
+        .expect("reservation module has a source key");
+    let manifest = crate::binder::declaration::SourceDeclarationManifest::build(program);
+    let inventory = BoundTypeDeclarationInventory::build(binder, module, source, manifest, None)
+        .expect("legacy reservation wrapper builds an authenticated inventory");
+    reserve_type_decls_from_inventory(
+        interner,
+        binder,
+        &inventory,
+        next_type_param,
+        next_class_id,
+        decls,
+        resolved,
+    );
 }
 
 pub(in crate::check::checker) struct TypeDeclReservationState<'a, 'ast> {
@@ -4609,46 +4664,49 @@ pub(in crate::check::checker) struct TypeDeclReservationState<'a, 'ast> {
     pub resolved: &'a mut TypeResolvedTable,
 }
 
-pub(in crate::check::checker) fn reserve_type_decls_for_combined_library<'ast>(
+pub(in crate::check::checker) fn reserve_type_decls_for_combined_library_from_inventory<'ast>(
     state: TypeDeclReservationState<'_, 'ast>,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
+    inventory: &BoundTypeDeclarationInventory<'ast>,
 ) {
-    reserve_type_decls_with_selection(state, module, program, None, true, None);
+    reserve_type_decls_with_policy(state, inventory, true, None, None);
 }
 
-pub(in crate::check::checker) fn reserve_type_decls_for_combined_user<'ast>(
+pub(in crate::check::checker) fn reserve_type_decls_for_combined_user_from_inventory<'ast>(
     state: TypeDeclReservationState<'_, 'ast>,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
+    inventory: &BoundTypeDeclarationInventory<'ast>,
     library_declarations: &FxHashSet<DeclId>,
 ) {
-    reserve_type_decls_with_selection(
+    reserve_type_decls_with_policy(state, inventory, false, Some(library_declarations), None);
+}
+
+pub(in crate::check::checker) fn reserve_type_decls_selected_from_inventory<'ast>(
+    state: TypeDeclReservationState<'_, 'ast>,
+    inventory: &BoundTypeDeclarationInventory<'ast>,
+    selected: &BTreeSet<ReplayOwner>,
+    published_types: &PublishedTypeEnvironment,
+) {
+    reserve_type_decls_with_policy(
         state,
-        module,
-        program,
-        None,
+        inventory,
         false,
-        Some(library_declarations),
+        None,
+        Some((selected, published_types)),
     );
 }
 
-pub(in crate::check::checker) fn reserve_type_decls_selected<'ast>(
-    state: TypeDeclReservationState<'_, 'ast>,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
-    selected: &BTreeSet<ReplayOwner>,
-) {
-    reserve_type_decls_with_selection(state, module, program, Some(selected), false, None);
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SelectedTypeGroupDisposition {
+    Rebuild,
+    PreservePublishedClass(ClassId),
+    Skip,
 }
 
-fn reserve_type_decls_with_selection<'ast>(
+fn reserve_type_decls_with_policy<'ast>(
     state: TypeDeclReservationState<'_, 'ast>,
-    module: ScopeId,
-    program: &'ast Program<'ast>,
-    selected: Option<&BTreeSet<ReplayOwner>>,
+    inventory: &BoundTypeDeclarationInventory<'ast>,
     retain_library_declarations: bool,
     preserved_library_declarations: Option<&FxHashSet<DeclId>>,
+    selected: Option<(&BTreeSet<ReplayOwner>, &PublishedTypeEnvironment)>,
 ) {
     let TypeDeclReservationState {
         interner,
@@ -4658,249 +4716,514 @@ fn reserve_type_decls_with_selection<'ast>(
         decls,
         resolved,
     } = state;
+    let module = inventory.module();
     let direct_scope = binder.statement_lexical_root(module);
-    // The AST walk is joined to the binder through the exact lexical declaration,
-    // never by selecting a first/last declaration from a same-name group.
-    walk_type_decls(
-        binder,
-        module,
-        program,
-        &mut |walk_scope, _, declaration| {
-            if let TopTypeDecl::Enum(enumeration) = declaration {
-                let namespace_owned = matches!(
-                    binder.namespaces.declaration_owner_for_scope(walk_scope),
-                    crate::binder::namespace::DeclarationOwner::NamespacePublic(_)
-                        | crate::binder::namespace::DeclarationOwner::NamespacePrivate(_)
-                );
-                if walk_scope != module && walk_scope != direct_scope && !namespace_owned {
-                    if let Some(exact) = binder.exact_declaration_at(
-                        module,
-                        enumeration.id.span.start,
-                        BinderDeclarationKind::Enum,
-                    ) {
-                        if let Some(group) = exact.type_group {
-                            ensure_type_group_slot(decls, group.index());
-                            decls[group.index()] = TypeDecl::Unavailable {
-                                declaration: exact.id,
-                            };
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = None;
-                            }
-                        }
-                    }
-                    return;
-                }
+    for outcome in inventory.outcomes() {
+        let row = match outcome {
+            TypeDeclarationInventoryOutcome::Admitted(row) => row,
+            TypeDeclarationInventoryOutcome::Rejected {
+                disposition: SourceTypeFragmentRejection::NotSemanticallyAdmitted,
+                payload: crate::binder::declaration::SourceTypeFragmentPayload::TypeAlias(alias),
+            } if selected.is_none() => {
+                let _ = alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
+                continue;
             }
-            if let Some(selected) = selected {
-                let (binding_start, kind) = match declaration {
-                    TopTypeDecl::Enum(enumeration) => {
-                        (enumeration.id.span.start, BinderDeclarationKind::Enum)
-                    }
-                    TopTypeDecl::Interface(interface) => {
-                        (interface.id.span.start, BinderDeclarationKind::Interface)
-                    }
-                    TopTypeDecl::Alias(alias) => {
-                        (alias.id.span.start, BinderDeclarationKind::TypeAlias)
-                    }
-                    TopTypeDecl::Class(class) => {
-                        (class_binding_start(class), BinderDeclarationKind::Class)
-                    }
-                };
-                let Some(exact) = binder.exact_declaration_at(module, binding_start, kind) else {
-                    return;
-                };
-                let group_selected = exact
-                    .type_group
-                    .is_some_and(|group| selected.contains(&ReplayOwner::TypeGroup(group)));
-                let class_selected = exact
-                    .type_group
-                    .and_then(|group| decls.get(group.index()))
-                    .and_then(|decl| match decl {
-                        TypeDecl::Class { class_id, .. } => Some(*class_id),
+            TypeDeclarationInventoryOutcome::Rejected {
+                disposition: SourceTypeFragmentRejection::NotSemanticallyAdmitted,
+                payload: crate::binder::declaration::SourceTypeFragmentPayload::Class(_),
+            } if selected.is_none() => {
+                let _ = reserve_class_id(next_class_id);
+                continue;
+            }
+            TypeDeclarationInventoryOutcome::Rejected { .. } => continue,
+        };
+        let bound = binder
+            .type_groups
+            .get(row.group)
+            .expect("inventory type group remains bound");
+        assert_eq!(
+            bound
+                .fragments
+                .get(row.fragment_index)
+                .map(|fragment| fragment.declaration),
+            Some(row.declaration),
+            "inventory fragment index remains authenticated",
+        );
+        let declaration = match row.payload {
+            crate::binder::declaration::SourceTypeFragmentPayload::Enum(enumeration) => {
+                TopTypeDecl::Enum(enumeration)
+            }
+            crate::binder::declaration::SourceTypeFragmentPayload::Interface(interface) => {
+                TopTypeDecl::Interface(interface)
+            }
+            crate::binder::declaration::SourceTypeFragmentPayload::TypeAlias(alias) => {
+                TopTypeDecl::Alias(alias)
+            }
+            crate::binder::declaration::SourceTypeFragmentPayload::Class(class) => {
+                TopTypeDecl::Class(class)
+            }
+        };
+        let walk_scope = row.scope;
+        let selected_disposition = if let Some((selected, published_types)) = selected {
+            if row.selected {
+                SelectedTypeGroupDisposition::Rebuild
+            } else {
+                let existing_class = match decls.get(row.group.index()) {
+                    Some(TypeDecl::Class { class_id, .. }) => Some(*class_id),
+                    Some(_) => None,
+                    None => match published_types.groups().get(row.group) {
+                        Some(PublishedTypeGroupTerminal::Ready(group)) => match group.surface {
+                            PublishedTypeGroupSurface::Class(class) => Some(class),
+                            _ => None,
+                        },
                         _ => None,
-                    })
-                    .is_some_and(|class| selected.contains(&ReplayOwner::Class(class)));
-                if !group_selected && !class_selected {
-                    return;
+                    },
+                };
+                match existing_class {
+                    Some(class) if selected.contains(&ReplayOwner::Class(class)) => {
+                        SelectedTypeGroupDisposition::PreservePublishedClass(class)
+                    }
+                    _ => SelectedTypeGroupDisposition::Skip,
                 }
             }
-            match declaration {
-                TopTypeDecl::Enum(enumeration) => {
-                    let Some(exact) = binder.exact_declaration_at(
-                        module,
-                        enumeration.id.span.start,
-                        BinderDeclarationKind::Enum,
-                    ) else {
-                        return;
-                    };
-                    let (Some(group), Some(scope)) = (exact.type_group, exact.site.scope) else {
-                        return;
-                    };
-                    let declaration = exact.id;
-                    ensure_type_group_slot(decls, group.index());
-                    match decls.get_mut(group.index()) {
-                        Some(TypeDecl::Resolved { .. }) => {
-                            let enum_id = interner.next_enum_id();
-                            let reserved =
-                                interner.reserve_enum(enum_id, enumeration.id.name.as_str());
-                            let mut member_shells = BTreeMap::new();
-                            reserve_enum_member_shells(
-                                interner,
-                                enum_id,
-                                enumeration.id.name.as_str(),
-                                enumeration,
-                                &mut member_shells,
-                            );
-                            super::record_enum_reservation_for_test();
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = Some(reserved);
-                            }
-                            decls[group.index()] = TypeDecl::Enum {
-                                declaration,
-                                enum_id,
-                                reserved,
-                                member_shells,
-                                fragments: vec![EnumFragment {
-                                    declaration,
-                                    scope,
-                                    enumeration,
-                                }],
-                            };
-                        }
-                        Some(TypeDecl::Enum {
+        } else {
+            SelectedTypeGroupDisposition::Rebuild
+        };
+        match selected_disposition {
+            SelectedTypeGroupDisposition::Rebuild => {}
+            SelectedTypeGroupDisposition::PreservePublishedClass(_class) => {
+                if let TopTypeDecl::Class(class) = declaration {
+                    let _ = reserve_class_id(next_class_id);
+                    let _ = alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
+                }
+                continue;
+            }
+            SelectedTypeGroupDisposition::Skip => continue,
+        }
+        if let TopTypeDecl::Enum(_) = declaration {
+            let supported_owner = matches!(
+                binder.namespaces.declaration_owner_for_scope(walk_scope),
+                crate::binder::namespace::DeclarationOwner::NamespacePublic(_)
+                    | crate::binder::namespace::DeclarationOwner::NamespacePrivate(_)
+                    | crate::binder::namespace::DeclarationOwner::CompilationGlobal
+            );
+            if walk_scope != module && walk_scope != direct_scope && !supported_owner {
+                ensure_type_group_slot(decls, row.group.index());
+                decls[row.group.index()] = TypeDecl::Unavailable {
+                    declaration: row.declaration,
+                };
+                if let Some(slot) = resolved.get_mut(row.group.index()) {
+                    *slot = None;
+                }
+                continue;
+            }
+        }
+        match declaration {
+            TopTypeDecl::Enum(enumeration) => {
+                let group = row.group;
+                let scope = row.scope;
+                let declaration = row.declaration;
+                ensure_type_group_slot(decls, group.index());
+                match decls.get_mut(group.index()) {
+                    Some(TypeDecl::Resolved { .. }) => {
+                        let enum_id = interner.next_enum_id();
+                        let reserved = interner.reserve_enum(enum_id, enumeration.id.name.as_str());
+                        let mut member_shells = BTreeMap::new();
+                        reserve_enum_member_shells(
+                            interner,
                             enum_id,
+                            enumeration.id.name.as_str(),
+                            enumeration,
+                            &mut member_shells,
+                        );
+                        super::record_enum_reservation_for_test();
+                        if let Some(slot) = resolved.get_mut(group.index()) {
+                            *slot = Some(reserved);
+                        }
+                        decls[group.index()] = TypeDecl::Enum {
+                            declaration,
+                            enum_id,
+                            reserved,
                             member_shells,
-                            fragments,
-                            ..
-                        }) => {
-                            reserve_enum_member_shells(
-                                interner,
-                                *enum_id,
-                                enumeration.id.name.as_str(),
-                                enumeration,
-                                member_shells,
-                            );
-                            fragments.push(EnumFragment {
+                            fragments: vec![EnumFragment {
                                 declaration,
                                 scope,
                                 enumeration,
-                            });
-                        }
-                        Some(_) => {
-                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
-                            decls[group.index()] = TypeDecl::Unavailable { declaration };
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = None;
-                            }
-                        }
-                        None => unreachable!("type group slot was extended"),
+                            }],
+                        };
                     }
-                }
-                TopTypeDecl::Interface(iface) => {
-                    let Some(exact) = binder.exact_declaration_at(
-                        module,
-                        iface.id.span.start,
-                        BinderDeclarationKind::Interface,
-                    ) else {
-                        return;
-                    };
-                    let (Some(group), Some(scope)) = (exact.type_group, exact.site.scope) else {
-                        return;
-                    };
-                    let declaration = exact.id;
-                    if selected.is_none()
-                        && !retain_library_declarations
-                        && binder
-                            .namespaces
-                            .merge_disposition_for_declaration(declaration)
-                            .is_some_and(|disposition| disposition != MergeDisposition::Admitted)
-                    {
-                        let _ =
-                            alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
-                        if group.index() < decls.published_len()
-                            && decls.has_replacement(group.index())
-                        {
-                            return;
-                        }
-                        ensure_type_group_slot(decls, group.index());
+                    Some(TypeDecl::Enum {
+                        enum_id,
+                        member_shells,
+                        fragments,
+                        ..
+                    }) => {
+                        reserve_enum_member_shells(
+                            interner,
+                            *enum_id,
+                            enumeration.id.name.as_str(),
+                            enumeration,
+                            member_shells,
+                        );
+                        fragments.push(EnumFragment {
+                            declaration,
+                            scope,
+                            enumeration,
+                        });
+                    }
+                    Some(_) => {
                         terminalize_displaced_type_draft(interner, &decls[group.index()]);
                         decls[group.index()] = TypeDecl::Unavailable { declaration };
                         if let Some(slot) = resolved.get_mut(group.index()) {
                             *slot = None;
                         }
-                        return;
                     }
-                    let mut fragment = InterfaceFragment {
+                    None => unreachable!("type group slot was extended"),
+                }
+            }
+            TopTypeDecl::Interface(iface) => {
+                let group = row.group;
+                let scope = row.scope;
+                let declaration = row.declaration;
+                if selected.is_none()
+                    && !retain_library_declarations
+                    && binder
+                        .namespaces
+                        .merge_disposition_for_declaration(declaration)
+                        .is_some_and(|disposition| disposition != MergeDisposition::Admitted)
+                {
+                    let _ = alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
+                    if group.index() < decls.published_len() && decls.has_replacement(group.index())
+                    {
+                        continue;
+                    }
+                    ensure_type_group_slot(decls, group.index());
+                    terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                    decls[group.index()] = TypeDecl::Unavailable { declaration };
+                    if let Some(slot) = resolved.get_mut(group.index()) {
+                        *slot = None;
+                    }
+                    continue;
+                }
+                let mut fragment = InterfaceFragment {
+                    declaration,
+                    scope,
+                    param_decl: iface.type_parameters.as_deref(),
+                    params: Vec::new(),
+                    members: &iface.body.body,
+                    extends: &iface.extends,
+                };
+                ensure_type_group_slot(decls, group.index());
+                match decls.get_mut(group.index()) {
+                    Some(TypeDecl::Interface {
+                        recovery_params,
+                        recovery_names,
+                        recovery_defaults,
+                        param_slots,
+                        fragments,
+                        ..
+                    }) => {
+                        fragment.params = recover_interface_fragment_params(
+                            param_slots,
+                            recovery_params,
+                            recovery_names,
+                            recovery_defaults,
+                            fragment.param_decl,
+                            next_type_param,
+                        );
+                        fragments.push(fragment);
+                        sort_interface_fragments(binder, group, fragments);
+                    }
+                    Some(TypeDecl::Class {
+                        params,
+                        recovery_names,
+                        recovery_defaults,
+                        param_slots,
+                        interfaces,
+                        header_fragments,
+                        ..
+                    }) => {
+                        fragment.params = recover_interface_fragment_params(
+                            param_slots,
+                            params,
+                            recovery_names,
+                            recovery_defaults,
+                            fragment.param_decl,
+                            next_type_param,
+                        );
+                        header_fragments.push(header_fragment_binding(
+                            declaration,
+                            fragment.param_decl,
+                            &fragment.params,
+                        ));
+                        sort_header_fragment_bindings(binder, group, header_fragments);
+                        interfaces.push(fragment);
+                        sort_interface_fragments(binder, group, interfaces);
+                    }
+                    Some(TypeDecl::Resolved {
+                        defaults: inherited_defaults,
+                        ..
+                    }) => {
+                        let inherited_defaults = inherited_defaults.clone();
+                        let reserved = interner.reserve_object();
+                        if let Some(slot) = resolved.get_mut(group.index()) {
+                            *slot = Some(reserved);
+                        }
+                        let params =
+                            alloc_type_param_ids(iface.type_parameters.as_deref(), next_type_param);
+                        let defaults = vec![None; params.len()];
+                        fragment.params = params.clone();
+                        let param_slots = iface
+                            .type_parameters
+                            .as_deref()
+                            .into_iter()
+                            .flat_map(|declaration| declaration.params.iter())
+                            .enumerate()
+                            .zip(params.iter().copied())
+                            .map(|((index, parameter), id)| {
+                                ((index, parameter.name.name.to_string()), id)
+                            })
+                            .collect();
+                        let recovery_names = iface
+                            .type_parameters
+                            .as_deref()
+                            .into_iter()
+                            .flat_map(|declaration| declaration.params.iter())
+                            .map(|parameter| parameter.name.name.to_string())
+                            .collect();
+                        decls[group.index()] = TypeDecl::Interface {
+                            declaration,
+                            scope,
+                            reserved,
+                            params,
+                            recovery_params: fragment.params.clone(),
+                            recovery_names,
+                            recovery_defaults: if inherited_defaults.len() == fragment.params.len()
+                            {
+                                inherited_defaults
+                            } else {
+                                vec![PublishedTypeParameterDefault::Absent; fragment.params.len()]
+                            },
+                            param_slots,
+                            conflict_alternatives: Vec::new(),
+                            defaults,
+                            parameter_descriptors: None,
+                            param_decl: iface.type_parameters.as_deref(),
+                            extends: &iface.extends,
+                            fragments: vec![fragment],
+                        };
+                    }
+                    Some(displaced @ TypeDecl::Enum { .. })
+                    | Some(displaced @ TypeDecl::Alias { .. })
+                    | Some(displaced @ TypeDecl::Unavailable { .. }) => {
+                        terminalize_displaced_type_draft(interner, displaced);
+                        *displaced = TypeDecl::Unavailable { declaration };
+                        if let Some(slot) = resolved.get_mut(group.index()) {
+                            *slot = None;
+                        }
+                    }
+                    None => unreachable!("type group slot was extended"),
+                }
+            }
+            TopTypeDecl::Alias(alias) => {
+                let group = row.group;
+                let declaration = row.declaration;
+                let scope = row.scope;
+                let params =
+                    alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
+                let defaults = vec![None; params.len()];
+                if selected.is_none()
+                    && !retain_library_declarations
+                    && binder
+                        .namespaces
+                        .merge_disposition_for_declaration(declaration)
+                        .is_some_and(|disposition| disposition != MergeDisposition::Admitted)
+                {
+                    let preserves_library_alias =
+                        preserved_library_declarations.is_some_and(|library_declarations| {
+                            matches!(
+                                decls.get(group.index()),
+                                Some(TypeDecl::Alias { declaration, .. })
+                                    if library_declarations.contains(declaration)
+                            )
+                        });
+                    if preserves_library_alias {
+                        continue;
+                    }
+                    if group.index() < decls.published_len() && decls.has_replacement(group.index())
+                    {
+                        continue;
+                    }
+                    ensure_type_group_slot(decls, group.index());
+                    terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                    decls[group.index()] = TypeDecl::Unavailable { declaration };
+                    if let Some(slot) = resolved.get_mut(group.index()) {
+                        *slot = None;
+                    }
+                    continue;
+                }
+                ensure_type_group_slot(decls, group.index());
+                if !matches!(decls.get(group.index()), Some(TypeDecl::Resolved { .. })) {
+                    terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                    decls[group.index()] = TypeDecl::Unavailable { declaration };
+                    if let Some(slot) = resolved.get_mut(group.index()) {
+                        *slot = None;
+                    }
+                } else {
+                    // A private replacement must not inherit the published alias memo.
+                    if let Some(slot) = resolved.get_mut(group.index()) {
+                        *slot = None;
+                    }
+                    // Reserve recursive templates only after the declaration wins its
+                    // group slot; rejected aliases never publish a draft identity.
+                    let conditional_template = if matches!(
+                        alias.type_annotation,
+                        oxc_ast::ast::TSType::TSConditionalType(_)
+                    ) {
+                        let reserved = interner.reserve_conditional();
+                        interner.set_template_name(reserved, alias.id.name.as_str());
+                        if let Some(slot) = resolved.get_mut(group.index()) {
+                            *slot = Some(reserved);
+                        }
+                        Some(reserved)
+                    } else {
+                        None
+                    };
+                    let mapped_template =
+                        if matches!(alias.type_annotation, oxc_ast::ast::TSType::TSMappedType(_)) {
+                            let reserved = interner.reserve_mapped();
+                            interner.set_template_name(reserved, alias.id.name.as_str());
+                            if let Some(slot) = resolved.get_mut(group.index()) {
+                                *slot = Some(reserved);
+                            }
+                            Some(reserved)
+                        } else {
+                            None
+                        };
+                    let object_template = if alias.type_parameters.is_none()
+                        && matches!(
+                            alias.type_annotation,
+                            oxc_ast::ast::TSType::TSTypeLiteral(_)
+                        ) {
+                        let reserved = interner.reserve_object();
+                        if let Some(slot) = resolved.get_mut(group.index()) {
+                            *slot = Some(reserved);
+                        }
+                        Some(reserved)
+                    } else {
+                        None
+                    };
+                    decls[group.index()] = TypeDecl::Alias {
                         declaration,
                         scope,
-                        param_decl: iface.type_parameters.as_deref(),
-                        params: Vec::new(),
-                        members: &iface.body.body,
-                        extends: &iface.extends,
+                        annotation: &alias.type_annotation,
+                        params,
+                        defaults,
+                        param_decl: alias.type_parameters.as_deref(),
+                        resolving: false,
+                        conditional_template,
+                        mapped_template,
+                        object_template,
+                        name: alias.id.name.to_string(),
+                        name_span: Span::from_oxc(alias.id.span),
                     };
+                }
+            }
+            // Named classes reserve only a stable nominal identity. Their immutable
+            // instance/static templates are constructed by class publication.
+            TopTypeDecl::Class(class) => {
+                // M13: a fresh stable `ClassId` for this declaration (source order),
+                // stamped onto its members during class publication.
+                let class_id = reserve_class_id(next_class_id);
+                {
+                    let group = row.group;
+                    let declaration = row.declaration;
+                    let scope = row.scope;
+                    let rejected_global_merge = selected.is_none()
+                        && !retain_library_declarations
+                        && binder
+                            .namespaces
+                            .merge_disposition_for_declaration(declaration)
+                            .is_some_and(|disposition| disposition != MergeDisposition::Admitted);
+                    if rejected_global_merge {
+                        let _ =
+                            alloc_type_param_ids(class.type_parameters.as_deref(), next_type_param);
+                        continue;
+                    }
                     ensure_type_group_slot(decls, group.index());
-                    match decls.get_mut(group.index()) {
+                    match decls.get(group.index()) {
                         Some(TypeDecl::Interface {
+                            reserved,
                             recovery_params,
                             recovery_names,
                             recovery_defaults,
                             param_slots,
+                            conflict_alternatives,
+                            parameter_descriptors,
                             fragments,
                             ..
                         }) => {
-                            fragment.params = recover_interface_fragment_params(
-                                param_slots,
-                                recovery_params,
-                                recovery_names,
-                                recovery_defaults,
-                                fragment.param_decl,
+                            let mut header_fragments = fragments
+                                .iter()
+                                .map(|fragment| {
+                                    header_fragment_binding(
+                                        fragment.declaration,
+                                        fragment.param_decl,
+                                        &fragment.params,
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let mut params = recovery_params.clone();
+                            let mut recovery_names = recovery_names.clone();
+                            let mut recovery_defaults = recovery_defaults.clone();
+                            let mut param_slots = param_slots.clone();
+                            let class_params = recover_interface_fragment_params(
+                                &mut param_slots,
+                                &mut params,
+                                &mut recovery_names,
+                                &mut recovery_defaults,
+                                class.type_parameters.as_deref(),
                                 next_type_param,
                             );
-                            fragments.push(fragment);
-                            sort_interface_fragments(binder, group, fragments);
-                        }
-                        Some(TypeDecl::Class {
-                            params,
-                            recovery_names,
-                            recovery_defaults,
-                            param_slots,
-                            interfaces,
-                            header_fragments,
-                            ..
-                        }) => {
-                            fragment.params = recover_interface_fragment_params(
-                                param_slots,
-                                params,
-                                recovery_names,
-                                recovery_defaults,
-                                fragment.param_decl,
-                                next_type_param,
-                            );
-                            header_fragments.push(header_fragment_binding(
+                            let class_header = header_fragment_binding(
                                 declaration,
-                                fragment.param_decl,
-                                &fragment.params,
-                            ));
-                            sort_header_fragment_bindings(binder, group, header_fragments);
-                            interfaces.push(fragment);
-                            sort_interface_fragments(binder, group, interfaces);
+                                class.type_parameters.as_deref(),
+                                &class_params,
+                            );
+                            header_fragments.push(class_header);
+                            sort_header_fragment_bindings(binder, group, &mut header_fragments);
+                            interner
+                                .abandon_reserved_object(*reserved)
+                                .expect("class merge displaces one pending interface reservation");
+                            decls[group.index()] = TypeDecl::Class {
+                                declaration,
+                                scope,
+                                class_id,
+                                params,
+                                class_params,
+                                recovery_names,
+                                recovery_defaults,
+                                param_slots,
+                                conflict_alternatives: conflict_alternatives.clone(),
+                                parameter_descriptors: parameter_descriptors.clone(),
+                                param_decl: class.type_parameters.as_deref(),
+                                class,
+                                interfaces: fragments.clone(),
+                                header_fragments,
+                            };
                         }
                         Some(TypeDecl::Resolved {
                             defaults: inherited_defaults,
                             ..
                         }) => {
                             let inherited_defaults = inherited_defaults.clone();
-                            let reserved = interner.reserve_object();
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = Some(reserved);
-                            }
+                            // M16: allocate one id per declared type parameter (in source
+                            // order), paired with names when the class body is lowered.
                             let params = alloc_type_param_ids(
-                                iface.type_parameters.as_deref(),
+                                class.type_parameters.as_deref(),
                                 next_type_param,
                             );
-                            let defaults = vec![None; params.len()];
-                            fragment.params = params.clone();
-                            let param_slots = iface
+                            let param_slots = class
                                 .type_parameters
                                 .as_deref()
                                 .into_iter()
@@ -4911,44 +5234,55 @@ fn reserve_type_decls_with_selection<'ast>(
                                     ((index, parameter.name.name.to_string()), id)
                                 })
                                 .collect();
-                            let recovery_names = iface
+                            let recovery_names = class
                                 .type_parameters
                                 .as_deref()
                                 .into_iter()
                                 .flat_map(|declaration| declaration.params.iter())
                                 .map(|parameter| parameter.name.name.to_string())
                                 .collect();
-                            decls[group.index()] = TypeDecl::Interface {
+                            decls[group.index()] = TypeDecl::Class {
                                 declaration,
                                 scope,
-                                reserved,
-                                params,
-                                recovery_params: fragment.params.clone(),
-                                recovery_names,
-                                recovery_defaults: if inherited_defaults.len()
-                                    == fragment.params.len()
-                                {
+                                class_id,
+                                class_params: params.clone(),
+                                recovery_defaults: if inherited_defaults.len() == params.len() {
                                     inherited_defaults
                                 } else {
-                                    vec![
-                                        PublishedTypeParameterDefault::Absent;
-                                        fragment.params.len()
-                                    ]
+                                    vec![PublishedTypeParameterDefault::Absent; params.len()]
                                 },
+                                recovery_names,
                                 param_slots,
                                 conflict_alternatives: Vec::new(),
-                                defaults,
                                 parameter_descriptors: None,
-                                param_decl: iface.type_parameters.as_deref(),
-                                extends: &iface.extends,
-                                fragments: vec![fragment],
+                                header_fragments: vec![header_fragment_binding(
+                                    declaration,
+                                    class.type_parameters.as_deref(),
+                                    &params,
+                                )],
+                                interfaces: Vec::new(),
+                                params,
+                                param_decl: class.type_parameters.as_deref(),
+                                class,
                             };
                         }
-                        Some(displaced @ TypeDecl::Enum { .. })
-                        | Some(displaced @ TypeDecl::Alias { .. })
-                        | Some(displaced @ TypeDecl::Unavailable { .. }) => {
-                            terminalize_displaced_type_draft(interner, displaced);
-                            *displaced = TypeDecl::Unavailable { declaration };
+                        Some(TypeDecl::Class { .. }) if group.index() < decls.published_len() => {
+                            // A private collision rebuild has already restored the
+                            // library class winner for this frozen-prefix group.
+                            let _ = alloc_type_param_ids(
+                                class.type_parameters.as_deref(),
+                                next_type_param,
+                            );
+                        }
+                        Some(_) => {
+                            // Preserve reservation monotonicity for rejected duplicate
+                            // class/type compositions even though their surface is absent.
+                            let _ = alloc_type_param_ids(
+                                class.type_parameters.as_deref(),
+                                next_type_param,
+                            );
+                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
+                            decls[group.index()] = TypeDecl::Unavailable { declaration };
                             if let Some(slot) = resolved.get_mut(group.index()) {
                                 *slot = None;
                             }
@@ -4956,320 +5290,9 @@ fn reserve_type_decls_with_selection<'ast>(
                         None => unreachable!("type group slot was extended"),
                     }
                 }
-                TopTypeDecl::Alias(alias) => {
-                    let exact = binder.exact_declaration_at(
-                        module,
-                        alias.id.span.start,
-                        BinderDeclarationKind::TypeAlias,
-                    );
-                    let (group, declaration, scope) = match exact {
-                        Some(exact) => match (exact.type_group, exact.site.scope) {
-                            (Some(group), Some(scope)) => (Some(group), Some(exact.id), scope),
-                            _ => (None, None, walk_scope),
-                        },
-                        None => (None, None, walk_scope),
-                    };
-                    let params =
-                        alloc_type_param_ids(alias.type_parameters.as_deref(), next_type_param);
-                    let defaults = vec![None; params.len()];
-                    if let (Some(group), Some(declaration)) = (group, declaration) {
-                        if selected.is_none()
-                            && !retain_library_declarations
-                            && binder
-                                .namespaces
-                                .merge_disposition_for_declaration(declaration)
-                                .is_some_and(|disposition| {
-                                    disposition != MergeDisposition::Admitted
-                                })
-                        {
-                            let preserves_library_alias = preserved_library_declarations
-                                .is_some_and(|library_declarations| {
-                                    matches!(
-                                        decls.get(group.index()),
-                                        Some(TypeDecl::Alias { declaration, .. })
-                                            if library_declarations.contains(declaration)
-                                    )
-                                });
-                            if preserves_library_alias {
-                                return;
-                            }
-                            if group.index() < decls.published_len()
-                                && decls.has_replacement(group.index())
-                            {
-                                return;
-                            }
-                            ensure_type_group_slot(decls, group.index());
-                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
-                            decls[group.index()] = TypeDecl::Unavailable { declaration };
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = None;
-                            }
-                            return;
-                        }
-                        ensure_type_group_slot(decls, group.index());
-                        if !matches!(decls.get(group.index()), Some(TypeDecl::Resolved { .. })) {
-                            terminalize_displaced_type_draft(interner, &decls[group.index()]);
-                            decls[group.index()] = TypeDecl::Unavailable { declaration };
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = None;
-                            }
-                        } else {
-                            // A private replacement must not inherit the published alias memo.
-                            if let Some(slot) = resolved.get_mut(group.index()) {
-                                *slot = None;
-                            }
-                            // Reserve recursive templates only after the declaration wins its
-                            // group slot; rejected aliases never publish a draft identity.
-                            let conditional_template = if matches!(
-                                alias.type_annotation,
-                                oxc_ast::ast::TSType::TSConditionalType(_)
-                            ) {
-                                let reserved = interner.reserve_conditional();
-                                interner.set_template_name(reserved, alias.id.name.as_str());
-                                if let Some(slot) = resolved.get_mut(group.index()) {
-                                    *slot = Some(reserved);
-                                }
-                                Some(reserved)
-                            } else {
-                                None
-                            };
-                            let mapped_template = if matches!(
-                                alias.type_annotation,
-                                oxc_ast::ast::TSType::TSMappedType(_)
-                            ) {
-                                let reserved = interner.reserve_mapped();
-                                interner.set_template_name(reserved, alias.id.name.as_str());
-                                if let Some(slot) = resolved.get_mut(group.index()) {
-                                    *slot = Some(reserved);
-                                }
-                                Some(reserved)
-                            } else {
-                                None
-                            };
-                            let object_template = if alias.type_parameters.is_none()
-                                && matches!(
-                                    alias.type_annotation,
-                                    oxc_ast::ast::TSType::TSTypeLiteral(_)
-                                ) {
-                                let reserved = interner.reserve_object();
-                                if let Some(slot) = resolved.get_mut(group.index()) {
-                                    *slot = Some(reserved);
-                                }
-                                Some(reserved)
-                            } else {
-                                None
-                            };
-                            decls[group.index()] = TypeDecl::Alias {
-                                declaration,
-                                scope,
-                                annotation: &alias.type_annotation,
-                                params,
-                                defaults,
-                                param_decl: alias.type_parameters.as_deref(),
-                                resolving: false,
-                                conditional_template,
-                                mapped_template,
-                                object_template,
-                                name: alias.id.name.to_string(),
-                                name_span: Span::from_oxc(alias.id.span),
-                            };
-                        }
-                    }
-                }
-                // Named classes reserve only a stable nominal identity. Their immutable
-                // instance/static templates are constructed by class publication.
-                TopTypeDecl::Class(class) => {
-                    // M13: a fresh stable `ClassId` for this declaration (source order),
-                    // stamped onto its members during class publication.
-                    let class_id = reserve_class_id(next_class_id);
-                    {
-                        let exact = binder.exact_declaration_at(
-                            module,
-                            class_binding_start(class),
-                            BinderDeclarationKind::Class,
-                        );
-                        let (group, declaration, scope) = match exact {
-                            Some(exact) => match (exact.type_group, exact.site.scope) {
-                                (Some(group), Some(scope)) => (Some(group), Some(exact.id), scope),
-                                _ => (None, None, walk_scope),
-                            },
-                            None => (None, None, walk_scope),
-                        };
-                        if let (Some(group), Some(declaration)) = (group, declaration) {
-                            let rejected_global_merge = selected.is_none()
-                                && !retain_library_declarations
-                                && binder
-                                    .namespaces
-                                    .merge_disposition_for_declaration(declaration)
-                                    .is_some_and(|disposition| {
-                                        disposition != MergeDisposition::Admitted
-                                    });
-                            if rejected_global_merge {
-                                let _ = alloc_type_param_ids(
-                                    class.type_parameters.as_deref(),
-                                    next_type_param,
-                                );
-                                return;
-                            }
-                            ensure_type_group_slot(decls, group.index());
-                            match decls.get(group.index()) {
-                                Some(TypeDecl::Interface {
-                                    reserved,
-                                    recovery_params,
-                                    recovery_names,
-                                    recovery_defaults,
-                                    param_slots,
-                                    conflict_alternatives,
-                                    parameter_descriptors,
-                                    fragments,
-                                    ..
-                                }) => {
-                                    let mut header_fragments = fragments
-                                        .iter()
-                                        .map(|fragment| {
-                                            header_fragment_binding(
-                                                fragment.declaration,
-                                                fragment.param_decl,
-                                                &fragment.params,
-                                            )
-                                        })
-                                        .collect::<Vec<_>>();
-                                    let mut params = recovery_params.clone();
-                                    let mut recovery_names = recovery_names.clone();
-                                    let mut recovery_defaults = recovery_defaults.clone();
-                                    let mut param_slots = param_slots.clone();
-                                    let class_params = recover_interface_fragment_params(
-                                        &mut param_slots,
-                                        &mut params,
-                                        &mut recovery_names,
-                                        &mut recovery_defaults,
-                                        class.type_parameters.as_deref(),
-                                        next_type_param,
-                                    );
-                                    let class_header = header_fragment_binding(
-                                        declaration,
-                                        class.type_parameters.as_deref(),
-                                        &class_params,
-                                    );
-                                    header_fragments.push(class_header);
-                                    sort_header_fragment_bindings(
-                                        binder,
-                                        group,
-                                        &mut header_fragments,
-                                    );
-                                    interner.abandon_reserved_object(*reserved).expect(
-                                        "class merge displaces one pending interface reservation",
-                                    );
-                                    decls[group.index()] = TypeDecl::Class {
-                                        declaration,
-                                        scope,
-                                        class_id,
-                                        params,
-                                        class_params,
-                                        recovery_names,
-                                        recovery_defaults,
-                                        param_slots,
-                                        conflict_alternatives: conflict_alternatives.clone(),
-                                        parameter_descriptors: parameter_descriptors.clone(),
-                                        param_decl: class.type_parameters.as_deref(),
-                                        class,
-                                        interfaces: fragments.clone(),
-                                        header_fragments,
-                                    };
-                                }
-                                Some(TypeDecl::Resolved {
-                                    defaults: inherited_defaults,
-                                    ..
-                                }) => {
-                                    let inherited_defaults = inherited_defaults.clone();
-                                    // M16: allocate one id per declared type parameter (in source
-                                    // order), paired with names when the class body is lowered.
-                                    let params = alloc_type_param_ids(
-                                        class.type_parameters.as_deref(),
-                                        next_type_param,
-                                    );
-                                    let param_slots = class
-                                        .type_parameters
-                                        .as_deref()
-                                        .into_iter()
-                                        .flat_map(|declaration| declaration.params.iter())
-                                        .enumerate()
-                                        .zip(params.iter().copied())
-                                        .map(|((index, parameter), id)| {
-                                            ((index, parameter.name.name.to_string()), id)
-                                        })
-                                        .collect();
-                                    let recovery_names = class
-                                        .type_parameters
-                                        .as_deref()
-                                        .into_iter()
-                                        .flat_map(|declaration| declaration.params.iter())
-                                        .map(|parameter| parameter.name.name.to_string())
-                                        .collect();
-                                    decls[group.index()] = TypeDecl::Class {
-                                        declaration,
-                                        scope,
-                                        class_id,
-                                        class_params: params.clone(),
-                                        recovery_defaults: if inherited_defaults.len()
-                                            == params.len()
-                                        {
-                                            inherited_defaults
-                                        } else {
-                                            vec![
-                                                PublishedTypeParameterDefault::Absent;
-                                                params.len()
-                                            ]
-                                        },
-                                        recovery_names,
-                                        param_slots,
-                                        conflict_alternatives: Vec::new(),
-                                        parameter_descriptors: None,
-                                        header_fragments: vec![header_fragment_binding(
-                                            declaration,
-                                            class.type_parameters.as_deref(),
-                                            &params,
-                                        )],
-                                        interfaces: Vec::new(),
-                                        params,
-                                        param_decl: class.type_parameters.as_deref(),
-                                        class,
-                                    };
-                                }
-                                Some(TypeDecl::Class { .. })
-                                    if group.index() < decls.published_len() =>
-                                {
-                                    // A private collision rebuild has already restored the
-                                    // library class winner for this frozen-prefix group.
-                                    let _ = alloc_type_param_ids(
-                                        class.type_parameters.as_deref(),
-                                        next_type_param,
-                                    );
-                                }
-                                Some(_) => {
-                                    // Preserve reservation monotonicity for rejected duplicate
-                                    // class/type compositions even though their surface is absent.
-                                    let _ = alloc_type_param_ids(
-                                        class.type_parameters.as_deref(),
-                                        next_type_param,
-                                    );
-                                    terminalize_displaced_type_draft(
-                                        interner,
-                                        &decls[group.index()],
-                                    );
-                                    decls[group.index()] = TypeDecl::Unavailable { declaration };
-                                    if let Some(slot) = resolved.get_mut(group.index()) {
-                                        *slot = None;
-                                    }
-                                }
-                                None => unreachable!("type group slot was extended"),
-                            }
-                        }
-                    }
-                }
             }
-        },
-    );
+        }
+    }
 }
 
 fn reserve_enum_member_shells(
@@ -6487,11 +6510,11 @@ mod topology_tests {
     }
 
     #[test]
-    fn rejected_default_class_preserves_the_following_class_identity_and_declaration() {
+    fn rejected_default_and_class_expression_preserve_the_following_class_identity() {
         let prelude_allocator = Allocator::default();
         let allocator = Allocator::default();
         let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
-        let source = "export default class RejectedDefault {} class OrdinaryClass {}";
+        let source = "export default class RejectedDefault {} const value = class RejectedExpression {}; class OrdinaryClass {}";
         let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
@@ -6511,11 +6534,15 @@ mod topology_tests {
             manifest.clone(),
             None,
         )
-        .expect("default-class rejection and ordinary class join are authenticated");
-        assert_eq!(inventory.rejected().len(), 1);
+        .expect("source-only class rejections and ordinary class join are authenticated");
+        assert_eq!(inventory.rejected().len(), 2);
         assert_eq!(
             inventory.rejected()[0].disposition,
             inventory::SourceTypeFragmentRejection::DefaultCandidateNotAdmitted
+        );
+        assert_eq!(
+            inventory.rejected()[1].disposition,
+            inventory::SourceTypeFragmentRejection::ClassExpression
         );
 
         reset_class_allocation_events_for_test();
@@ -6562,6 +6589,128 @@ mod topology_tests {
                 .map(|row| row.declaration),
             Some(*declaration)
         );
+    }
+
+    #[test]
+    fn rejected_invalid_global_class_consumes_identity_before_an_ordinary_class() {
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let source = "declare global { class RejectedClass {} } class OrdinaryClass {}";
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        let inventory = inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            None,
+        )
+        .expect("invalid-global class rejection and ordinary class join are authenticated");
+        assert_eq!(inventory.rejected().len(), 1);
+        assert_eq!(
+            inventory.rejected()[0].disposition,
+            inventory::SourceTypeFragmentRejection::NotSemanticallyAdmitted
+        );
+
+        reset_class_allocation_events_for_test();
+        let mut interner = Interner::with_intrinsics();
+        let mut next_type_param = 0;
+        let mut next_class_id = 0;
+        let mut declarations: TypeDeclTable<'_> = Vec::new().into();
+        let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
+        reserve_type_decls_from_inventory(
+            &mut interner,
+            &binder,
+            &inventory,
+            &mut next_type_param,
+            &mut next_class_id,
+            &mut declarations,
+            &mut resolved,
+        );
+
+        let ordinary_group = binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "OrdinaryClass")
+            .expect("ordinary class group");
+        let Some(TypeDecl::Class { class_id, .. }) = declarations.get(ordinary_group.id.index())
+        else {
+            panic!("ordinary class has one reserved draft")
+        };
+        assert_eq!(*class_id, ClassId(1));
+        assert_eq!(next_class_id, 2);
+        assert_eq!(class_allocation_events_for_test(), [ClassId(0), ClassId(1)]);
+    }
+
+    #[test]
+    fn selected_policy_skips_rejected_alias_and_class_side_effects() {
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let source = r#"
+declare global {
+    type RejectedAlias<T> = T;
+    class RejectedClass {}
+}
+"#;
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        let selected = BTreeSet::new();
+        let inventory = inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            Some(&selected),
+        )
+        .expect("invalid-global rejections are authenticated for selected replay");
+        assert_eq!(inventory.rejected().len(), 2);
+
+        reset_class_allocation_events_for_test();
+        let mut interner = Interner::with_intrinsics();
+        let mut next_type_param = 0;
+        let mut next_class_id = 0;
+        let mut declarations: TypeDeclTable<'_> = Vec::new().into();
+        let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
+        reserve_type_decls_selected_from_inventory(
+            TypeDeclReservationState {
+                interner: &mut interner,
+                binder: &binder,
+                next_type_param: &mut next_type_param,
+                next_class_id: &mut next_class_id,
+                decls: &mut declarations,
+                resolved: &mut resolved,
+            },
+            &inventory,
+            &selected,
+            &PublishedTypeEnvironment::empty(),
+        );
+
+        assert_eq!(next_type_param, 0);
+        assert_eq!(next_class_id, 0);
+        assert!(class_allocation_events_for_test().is_empty());
+        assert_eq!(declarations.replacement_indices().len(), 0);
     }
 
     #[test]

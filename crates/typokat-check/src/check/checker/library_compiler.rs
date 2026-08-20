@@ -51,8 +51,9 @@ use super::{
     attach_class_bindings, attach_type_decl_owners, build_pass_with_tickets,
     enqueue_ambient_context_diagnostics, enqueue_enum_merge_diagnostics,
     enqueue_local_ambient_export_alias_diagnostics, enqueue_namespace_placement_diagnostics,
-    finish_semantic_effects, private_combined_record_ticket_key, reserve_type_decls,
-    reserve_type_decls_for_combined_library, reserve_type_decls_for_combined_user,
+    finish_semantic_effects, private_combined_record_ticket_key,
+    reserve_type_decls_for_combined_library_from_inventory,
+    reserve_type_decls_for_combined_user_from_inventory, reserve_type_decls_from_inventory,
     FrozenCheckerRuntimeMetadata, FrozenCheckerRuntimeSnapshotParts, PassReporting,
     PassReportingPlan, PrivateCombinedRecordTicket,
 };
@@ -64,13 +65,13 @@ use crate::binder::bind::{
     ImportPlaceholder, LibraryBinderCheckpoint, LibraryBinderUnit, ProjectBinderBuilder,
 };
 #[cfg(any(test, feature = "test-utils"))]
-use crate::binder::declaration::DeclId;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::binder::declaration::TypeFragmentKind;
 use crate::binder::declaration::{
     source_global_binding_census_with_provenance, SourceBindingSlot, SourceDeclarationManifest,
     SourceGlobalContributorKind, TypeGroupId, ValueStorageId,
 };
+#[cfg(any(test, feature = "test-utils"))]
+use crate::binder::declaration::{DeclId, DeclarationKind};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::binder::namespace::MergeDeclarationKind;
 use crate::binder::namespace::{
@@ -7635,6 +7636,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         )
         .map_err(InjectedProfileError::Reporting)?;
     }
+    let mut declaration_inventories = Vec::with_capacity(canonical.len());
     for (((input, _program), module), manifest) in canonical
         .iter()
         .zip(&parsed)
@@ -7652,7 +7654,19 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         #[cfg(any(test, feature = "test-utils"))]
         inventory.assert_legacy_walker_parity(&binder, _program, None);
         let _inventory_receipt = inventory.receipt();
+        declaration_inventories.push(inventory);
     }
+
+    let combined_library_declarations = user_start.map(|_| {
+        canonical
+            .iter()
+            .zip(&declaration_inventories)
+            .filter(|(input, _)| matches!(input.origin, CompilationOrigin::Library(_)))
+            .flat_map(|(_, inventory)| inventory.declarations().iter().map(|row| row.declaration))
+            .collect::<rustc_hash::FxHashSet<_>>()
+    });
+    #[cfg(any(test, feature = "test-utils"))]
+    let mut combined_library_provenance_checked = false;
 
     let mut interner = Interner::with_intrinsics();
     let mut next_type_param = 0;
@@ -7671,15 +7685,15 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     #[cfg(any(test, feature = "test-utils"))]
     let initial_class_id = next_class_id;
     let declaration_spans = super::ModuleDeclarationSpans::index(&binder);
-    let mut combined_library_declarations = None;
-    for (index, ((input, program), scope)) in canonical
+    for (index, (((input, program), scope), inventory)) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
+        .zip(&declaration_inventories)
         .enumerate()
     {
         if user_start.is_some() && matches!(input.origin, CompilationOrigin::Library(_)) {
-            reserve_type_decls_for_combined_library(
+            reserve_type_decls_for_combined_library_from_inventory(
                 super::decls::TypeDeclReservationState {
                     interner: &mut interner,
                     binder: &binder,
@@ -7688,32 +7702,43 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                     decls: &mut type_decls,
                     resolved: &mut type_resolved,
                 },
-                scope,
-                program,
+                inventory,
             );
         } else if user_start.is_some() {
-            if combined_library_declarations.is_none() {
-                combined_library_declarations = Some(
-                    binder
-                        .declarations
-                        .iter()
-                        .filter(|declaration| {
-                            lexical_events
-                                .declaration_source(declaration.id)
-                                .is_some_and(|source| {
-                                    matches!(source.unit, SourceUnit::Library { .. })
-                                })
-                        })
-                        .map(|declaration| declaration.id)
-                        .collect::<rustc_hash::FxHashSet<_>>(),
-                );
-            }
             let Some(library_declarations) = combined_library_declarations.as_ref() else {
                 return Err(InjectedProfileError::CanonicalProjection(
                     "complete-source library declaration provenance is missing".to_owned(),
                 ));
             };
-            reserve_type_decls_for_combined_user(
+            #[cfg(any(test, feature = "test-utils"))]
+            if !combined_library_provenance_checked {
+                let legacy_library_declarations = binder
+                    .declarations
+                    .iter()
+                    .filter(|declaration| {
+                        declaration.type_group.is_some()
+                            && matches!(
+                                declaration.kind,
+                                DeclarationKind::TypeAlias
+                                    | DeclarationKind::Interface
+                                    | DeclarationKind::Class
+                                    | DeclarationKind::Enum
+                            )
+                            && lexical_events
+                                .declaration_source(declaration.id)
+                                .is_some_and(|source| {
+                                    matches!(source.unit, SourceUnit::Library { .. })
+                                })
+                    })
+                    .map(|declaration| declaration.id)
+                    .collect::<rustc_hash::FxHashSet<_>>();
+                assert_eq!(
+                    library_declarations, &legacy_library_declarations,
+                    "combined library inventory rows match legacy provenance",
+                );
+                combined_library_provenance_checked = true;
+            }
+            reserve_type_decls_for_combined_user_from_inventory(
                 super::decls::TypeDeclReservationState {
                     interner: &mut interner,
                     binder: &binder,
@@ -7722,16 +7747,14 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                     decls: &mut type_decls,
                     resolved: &mut type_resolved,
                 },
-                scope,
-                program,
+                inventory,
                 library_declarations,
             );
         } else {
-            reserve_type_decls(
+            reserve_type_decls_from_inventory(
                 &mut interner,
                 &binder,
-                scope,
-                program,
+                inventory,
                 &mut next_type_param,
                 &mut next_class_id,
                 &mut type_decls,
@@ -7849,6 +7872,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             ticket_key: Route::ticket_key(),
         },
     );
+    pass.terminalize_unavailable_type_groups();
     if user_start.is_some() {
         pass.install_early_native_array_groups(NativeArrayGroups::select_from_library_roots(
             &collision_root_provenance,
@@ -9763,8 +9787,7 @@ mod tests {
         InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
             name: "declaration-receipt-a.d.ts",
-            source:
-                "interface ReceiptMerge { first: string } type ReceiptAlias = { value: string };",
+            source: "interface ReceiptMerge { first: string } type ReceiptAlias = { value: string }; declare const ReceiptValue: string; declare function receiptFunction(): void;",
         },
         InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(1),
@@ -9888,7 +9911,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WU3b RED: selected prefix enums must reserve, fill, and freeze"]
     fn sparse_selected_prefix_enum_is_filled_while_unselected_peer_stays_frozen() {
         let sources = [InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
@@ -9974,7 +9996,6 @@ declare enum UnselectedLocalEnum { Untouched }
     }
 
     #[test]
-    #[ignore = "WU3b RED: reparsing a selected source must not replace an unselected enum"]
     fn sparse_reparsed_source_does_not_replace_an_unselected_enum_prefix() {
         let sources = [InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
@@ -10039,12 +10060,14 @@ declare enum UnselectedLocalEnum { Untouched }
     }
 
     #[test]
-    #[ignore = "WU3b RED: class-owner-only replay reserves its replacement class draft"]
-    fn sparse_class_owner_only_selection_reserves_replacement_class_draft() {
+    fn sparse_class_owner_only_selection_preserves_frozen_class_terminal() {
         let sources = [InjectedLibrarySource {
             file_ordinal: LibraryFileOrdinal::new(0),
             name: "sparse-class-selection.d.ts",
-            source: "declare class SparseSelectedClass { value: string }",
+            source: r#"
+declare class SparseSelectedClass { value: string }
+declare class SparseUnselectedClass { value: number }
+"#,
         }];
         let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
             .expect("sparse class prefix compiles");
@@ -10064,6 +10087,22 @@ declare enum UnselectedLocalEnum { Untouched }
             }
             terminal => panic!("sparse class prefix is not ready: {terminal:?}"),
         };
+        let unselected_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseUnselectedClass")
+            .expect("unselected sparse class group")
+            .id;
+        let unselected_class = match state.published_types.groups().get(unselected_group) {
+            Some(super::super::type_groups::PublishedTypeGroupTerminal::Ready(group)) => {
+                match &group.surface {
+                    super::super::type_groups::PublishedTypeGroupSurface::Class(class) => *class,
+                    surface => panic!("unselected sparse class has the wrong surface: {surface:?}"),
+                }
+            }
+            terminal => panic!("unselected sparse class prefix is not ready: {terminal:?}"),
+        };
         let base_next_class_id = state.next_class_id;
         let selected = BTreeSet::from([ReplayOwner::Class(class)]);
         let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
@@ -10077,7 +10116,10 @@ declare enum UnselectedLocalEnum { Untouched }
         let evidence = run_explicit_injected_sparse_selection_for_test(
             state,
             auxiliary,
-            vec!["SparseSelectedClass".to_owned()],
+            vec![
+                "SparseSelectedClass".to_owned(),
+                "SparseUnselectedClass".to_owned(),
+            ],
         )
         .expect("class-owner-only sparse route completes");
         let replay_trace = replay_scope
@@ -10110,6 +10152,180 @@ declare enum UnselectedLocalEnum { Untouched }
                 && row.owner_attached
                 && row.terminal == "ready"
                 && row.final_class == Some(class)));
+        assert!(evidence.selected_library_terminals.iter().all(|row| {
+            row.group != unselected_group && row.owner != ReplayOwner::Class(unselected_class)
+        }));
+    }
+
+    #[test]
+    fn sparse_type_group_only_class_selection_rebuilds_with_a_fresh_class() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-type-group-class-selection.d.ts",
+            source: "declare class SparseGroupSelectedClass { value: string }",
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("type-group-only class prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseGroupSelectedClass")
+            .expect("type-group-only class group")
+            .id;
+        let original_class = match state.published_types.groups().get(group) {
+            Some(super::super::type_groups::PublishedTypeGroupTerminal::Ready(group)) => {
+                match &group.surface {
+                    super::super::type_groups::PublishedTypeGroupSurface::Class(class) => *class,
+                    surface => panic!("type-group-only class has the wrong surface: {surface:?}"),
+                }
+            }
+            terminal => panic!("type-group-only class prefix is not ready: {terminal:?}"),
+        };
+        let base_next_class_id = state.next_class_id;
+        let selected = BTreeSet::from([ReplayOwner::TypeGroup(group)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+        super::super::decls::reset_class_allocation_events_for_test();
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec!["SparseGroupSelectedClass".to_owned()],
+        )
+        .expect("type-group-only class replay completes");
+        let rebuilt_class = ClassId(base_next_class_id);
+
+        assert_ne!(rebuilt_class, original_class);
+        assert_eq!(
+            super::super::decls::class_allocation_events_for_test(),
+            [rebuilt_class]
+        );
+        assert!(evidence.selected_library_terminals.iter().any(|row| {
+            row.owner == ReplayOwner::TypeGroup(group)
+                && row.group == group
+                && row.terminal == "ready"
+                && row.final_class == Some(rebuilt_class)
+        }));
+    }
+
+    #[test]
+    fn sparse_type_group_selection_precedes_selected_class_preservation() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-type-group-and-class-selection.d.ts",
+            source: "declare class SparseGroupAndClassSelected { value: string }",
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("type-group-and-class prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseGroupAndClassSelected")
+            .expect("type-group-and-class group")
+            .id;
+        let original_class = match state.published_types.groups().get(group) {
+            Some(super::super::type_groups::PublishedTypeGroupTerminal::Ready(group)) => {
+                match &group.surface {
+                    super::super::type_groups::PublishedTypeGroupSurface::Class(class) => *class,
+                    surface => {
+                        panic!("type-group-and-class has the wrong surface: {surface:?}")
+                    }
+                }
+            }
+            terminal => panic!("type-group-and-class prefix is not ready: {terminal:?}"),
+        };
+        let base_next_class_id = state.next_class_id;
+        let selected = BTreeSet::from([
+            ReplayOwner::TypeGroup(group),
+            ReplayOwner::Class(original_class),
+        ]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+        super::super::decls::reset_class_allocation_events_for_test();
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec!["SparseGroupAndClassSelected".to_owned()],
+        )
+        .expect("type-group-and-class replay completes");
+        let rebuilt_class = ClassId(base_next_class_id);
+
+        assert_ne!(rebuilt_class, original_class);
+        assert_eq!(
+            super::super::decls::class_allocation_events_for_test(),
+            [rebuilt_class]
+        );
+        assert!(evidence.selected_library_terminals.iter().any(|row| {
+            row.owner == ReplayOwner::TypeGroup(group)
+                && row.group == group
+                && row.terminal == "ready"
+                && row.final_class == Some(rebuilt_class)
+        }));
+    }
+
+    #[test]
+    fn sparse_class_only_merged_group_preserves_all_fragments_and_frozen_class() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-class-interface-merge-selection.d.ts",
+            source: r#"
+interface SparseMergedClass<T> { interfaceValue: T }
+declare class SparseMergedClass<T> { classValue: T }
+"#,
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("class-interface merged prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseMergedClass")
+            .expect("class-interface merged group")
+            .id;
+        let original_class = match state.published_types.groups().get(group) {
+            Some(super::super::type_groups::PublishedTypeGroupTerminal::Ready(group)) => {
+                match &group.surface {
+                    super::super::type_groups::PublishedTypeGroupSurface::Class(class) => *class,
+                    surface => panic!("merged class has the wrong surface: {surface:?}"),
+                }
+            }
+            terminal => panic!("merged class prefix is not ready: {terminal:?}"),
+        };
+        let base_next_type_param = state.next_type_param;
+        let base_next_class_id = state.next_class_id;
+        let selected = BTreeSet::from([ReplayOwner::Class(original_class)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+        super::super::decls::reset_class_allocation_events_for_test();
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec!["SparseMergedClass".to_owned()],
+        )
+        .expect("class-only merged replay completes");
+
+        assert_eq!(
+            super::super::decls::class_allocation_events_for_test(),
+            [ClassId(base_next_class_id)]
+        );
+        assert_eq!(
+            evidence.final_identity_ends[1],
+            usize::try_from(base_next_type_param).expect("type parameter identity fits usize") + 1
+        );
+        assert!(evidence.selected_library_terminals.iter().any(|row| {
+            row.owner == ReplayOwner::Class(original_class)
+                && row.group == group
+                && row.declarations.len() == 2
+                && row.terminal == "ready"
+                && row.final_class == Some(original_class)
+        }));
     }
 
     #[test]

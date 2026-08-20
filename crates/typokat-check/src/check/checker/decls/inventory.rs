@@ -99,9 +99,25 @@ pub(in crate::check::checker) enum SourceTypeFragmentRejection {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(in crate::check::checker) struct RejectedTypeDeclaration {
     pub source_index: usize,
     pub disposition: SourceTypeFragmentRejection,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SourceTypeDeclarationOutcome {
+    Admitted(DeclId),
+    Rejected(SourceTypeFragmentRejection),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(in crate::check::checker) enum TypeDeclarationInventoryOutcome<'a, 'ast> {
+    Admitted(&'a BoundTypeDeclaration<'ast>),
+    Rejected {
+        disposition: SourceTypeFragmentRejection,
+        payload: SourceTypeFragmentPayload<'ast>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -223,7 +239,7 @@ pub(in crate::check::checker) struct BoundTypeDeclarationInventory<'ast> {
     source: SourceUnitKey,
     manifest: SourceDeclarationManifest<'ast>,
     declarations: DenseDeclMap<'ast>,
-    rejected: Box<[RejectedTypeDeclaration]>,
+    outcomes: Box<[SourceTypeDeclarationOutcome]>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -263,7 +279,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 result.as_ref().map_or((0, 0, 0, 0), |inventory| {
                     (
                         inventory.declarations.iter().count(),
-                        inventory.rejected.len(),
+                        inventory.rejected_count(),
                         source_type_rows,
                         inventory.declarations.slot_len(),
                     )
@@ -312,9 +328,9 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             });
         }
         let mut rows = Vec::new();
-        let mut rejected = Vec::new();
+        let mut outcomes = Vec::with_capacity(manifest.type_fragments().len());
 
-        for (source_index, source) in manifest.type_fragments().iter().enumerate() {
+        for source in manifest.type_fragments() {
             let exact = exact_declaration_at(module, source.binding_span.start, source.kind);
             let recorded = binder.declarations.declaration_at_site(
                 module,
@@ -381,10 +397,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                         group,
                     });
                 }
-                rejected.push(RejectedTypeDeclaration {
-                    source_index,
-                    disposition,
-                });
+                outcomes.push(SourceTypeDeclarationOutcome::Rejected(disposition));
                 continue;
             }
             let Some(exact) = exact else {
@@ -475,6 +488,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     interface_occurrences: source.interface_occurrences.clone(),
                 },
             ));
+            outcomes.push(SourceTypeDeclarationOutcome::Admitted(exact.id));
         }
 
         let declarations = DenseDeclMap::from_rows(rows)?;
@@ -528,18 +542,36 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             source: source_key,
             manifest,
             declarations,
-            rejected: rejected.into_boxed_slice(),
+            outcomes: outcomes.into_boxed_slice(),
         })
     }
 
-    #[cfg(test)]
     pub fn declarations(&self) -> &DenseDeclMap<'ast> {
         &self.declarations
     }
 
     #[cfg(test)]
-    pub fn rejected(&self) -> &[RejectedTypeDeclaration] {
-        &self.rejected
+    pub fn rejected(&self) -> Vec<RejectedTypeDeclaration> {
+        self.outcomes
+            .iter()
+            .enumerate()
+            .filter_map(|(source_index, outcome)| match outcome {
+                SourceTypeDeclarationOutcome::Admitted(_) => None,
+                SourceTypeDeclarationOutcome::Rejected(disposition) => {
+                    Some(RejectedTypeDeclaration {
+                        source_index,
+                        disposition: *disposition,
+                    })
+                }
+            })
+            .collect()
+    }
+
+    fn rejected_count(&self) -> usize {
+        self.outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, SourceTypeDeclarationOutcome::Rejected(_)))
+            .count()
     }
 
     pub fn interface_occurrences(
@@ -551,6 +583,34 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             self.manifest
                 .interface_occurrences(row.interface_occurrences.clone()),
         )
+    }
+
+    pub fn module(&self) -> ScopeId {
+        self.module
+    }
+
+    /// Iterate source candidates in source order without rebuilding an AST index.
+    pub fn outcomes(&self) -> impl Iterator<Item = TypeDeclarationInventoryOutcome<'_, 'ast>> {
+        debug_assert_eq!(self.manifest.type_fragments().len(), self.outcomes.len());
+        self.manifest
+            .type_fragments()
+            .iter()
+            .zip(self.outcomes.iter())
+            .map(|(source, outcome)| match outcome {
+                SourceTypeDeclarationOutcome::Admitted(declaration) => {
+                    TypeDeclarationInventoryOutcome::Admitted(
+                        self.declarations
+                            .get(*declaration)
+                            .expect("admitted source outcome has one dense declaration row"),
+                    )
+                }
+                SourceTypeDeclarationOutcome::Rejected(disposition) => {
+                    TypeDeclarationInventoryOutcome::Rejected {
+                        disposition: *disposition,
+                        payload: source.payload,
+                    }
+                }
+            })
     }
 
     /// Read every shadow row without influencing declaration construction.
@@ -580,7 +640,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             base: self.declarations.base(),
             slots: self.declarations.slot_len(),
             admitted,
-            rejected: self.rejected.len(),
+            rejected: self.rejected_count(),
             selected,
             interface_occurrences,
         }
@@ -620,11 +680,10 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                         source.binding_span.start == binding_start && source.kind == kind
                     })
                     .expect("legacy row exists in the canonical source manifest");
-                if self
-                    .rejected
-                    .iter()
-                    .any(|rejected| rejected.source_index == source_index)
-                {
+                if matches!(
+                    self.outcomes.get(source_index),
+                    Some(SourceTypeDeclarationOutcome::Rejected(_))
+                ) {
                     return;
                 }
                 let exact = binder

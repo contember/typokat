@@ -102,9 +102,9 @@ use context::{
 #[cfg(any(test, feature = "test-utils"))]
 use decls::type_decl_id;
 use decls::{
-    class_binding_start, reserve_type_decls, reserve_type_decls_for_combined_library,
-    reserve_type_decls_for_combined_user, reserve_type_decls_selected, walk_type_decls,
-    TopTypeDecl,
+    class_binding_start, reserve_type_decls_for_combined_library_from_inventory,
+    reserve_type_decls_for_combined_user_from_inventory, reserve_type_decls_from_inventory,
+    reserve_type_decls_selected_from_inventory, walk_type_decls, TopTypeDecl,
 };
 use events::{user_record_ticket_key, CandidateEffects, EventStore, UserRecordTicket};
 use events_library::{library_record_ticket_key, LibraryEventLedger, LibraryRecordTicket};
@@ -803,11 +803,10 @@ fn try_bootstrap_test_support_prelude<Error>(
     let mut next_class_id = 0;
     let mut type_resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
     let mut type_decls: TypeDeclTable<'_> = Vec::new().into();
-    reserve_type_decls(
+    reserve_type_decls_from_inventory(
         interner,
         &binder,
-        binder.prelude_module,
-        &parsed.program,
+        &inventory,
         &mut next_type_param,
         &mut next_class_id,
         &mut type_decls,
@@ -1206,11 +1205,10 @@ where
     // User declarations append after prelude placeholders, preserving legacy storage indices.
     let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
     type_resolved.resize(binder.type_groups.len(), None);
-    reserve_type_decls(
+    reserve_type_decls_from_inventory(
         interner,
         &binder,
-        binder.module,
-        program,
+        &inventory,
         &mut next_type_param,
         &mut next_class_id,
         &mut type_decls,
@@ -1268,6 +1266,7 @@ where
         reporting,
     );
     pass.install_published_type_environment_base(published_types);
+    pass.terminalize_unavailable_type_groups();
     pass.lexical_array_alias = lexical_array_alias;
     if let Some(identities) = library_semantic_identities {
         pass.install_library_semantic_identities(identities);
@@ -2655,6 +2654,65 @@ where
             });
         }
     }
+    let library_declaration_inventories = if let Some(epoch) = private_collision_epoch.as_ref() {
+        library_programs
+            .iter()
+            .zip(library_declaration_manifests)
+            .map(|(library, manifest)| {
+                let module = library_modules
+                    .get(library.source_ordinal)
+                    .copied()
+                    .ok_or("scheduled private library source has no retained module")?;
+                #[cfg(any(test, feature = "test-utils"))]
+                {
+                    library_source_type_rows =
+                        library_source_type_rows.saturating_add(manifest.type_fragments().len());
+                }
+                let source = binder
+                    .source_for_module(module)
+                    .ok_or("scheduled private library module has no source identity")?;
+                let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+                    &binder,
+                    module,
+                    source,
+                    manifest,
+                    Some(&epoch.affected_owners),
+                )
+                .map_err(|_| "selected library source has no canonical declaration inventory")?;
+                #[cfg(any(test, feature = "test-utils"))]
+                inventory.assert_legacy_walker_parity(
+                    &binder,
+                    library.program,
+                    Some(&epoch.affected_owners),
+                );
+                let _inventory_receipt = inventory.receipt();
+                Ok(inventory)
+            })
+            .collect::<Result<Vec<_>, &'static str>>()?
+    } else if library_programs.is_empty() {
+        Vec::new()
+    } else {
+        return Err("private library programs require a collision epoch");
+    };
+    let user_declaration_inventories = module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(user_declaration_manifests)
+        .map(|((scope, _unit), manifest)| {
+            let source = binder
+                .source_for_module(scope)
+                .ok_or("bound project module has no source identity")?;
+            let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+                &binder, scope, source, manifest, None,
+            )
+            .map_err(|_| "bound project module has no canonical declaration inventory")?;
+            #[cfg(any(test, feature = "test-utils"))]
+            inventory.assert_legacy_walker_parity(&binder, _unit.program, None);
+            let _inventory_receipt = inventory.receipt();
+            Ok(inventory)
+        })
+        .collect::<Result<Vec<_>, &'static str>>()?;
     decl_types.resize(binder.decl_count);
 
     let selected_library_units = if let Some(epoch) = private_collision_epoch.as_ref() {
@@ -2710,35 +2768,15 @@ where
     let error = interner.well_known().error;
     let declaration_spans = ModuleDeclarationSpans::index(&binder);
     if let Some(epoch) = private_collision_epoch.as_ref() {
-        for (library, manifest) in library_programs.iter().zip(library_declaration_manifests) {
+        for (library, inventory) in library_programs
+            .iter()
+            .zip(&library_declaration_inventories)
+        {
             let module = library_modules
                 .get(library.source_ordinal)
                 .copied()
                 .ok_or("scheduled private library source has no retained module")?;
-            #[cfg(any(test, feature = "test-utils"))]
-            {
-                library_source_type_rows =
-                    library_source_type_rows.saturating_add(manifest.type_fragments().len());
-            }
-            let source = binder
-                .source_for_module(module)
-                .ok_or("scheduled private library module has no source identity")?;
-            let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
-                &binder,
-                module,
-                source,
-                manifest,
-                Some(&epoch.affected_owners),
-            )
-            .map_err(|_| "selected library source has no canonical declaration inventory")?;
-            #[cfg(any(test, feature = "test-utils"))]
-            inventory.assert_legacy_walker_parity(
-                &binder,
-                library.program,
-                Some(&epoch.affected_owners),
-            );
-            let _inventory_receipt = inventory.receipt();
-            reserve_type_decls_selected(
+            reserve_type_decls_selected_from_inventory(
                 decls::TypeDeclReservationState {
                     interner: &mut interner,
                     binder: &binder,
@@ -2747,9 +2785,9 @@ where
                     decls: &mut type_decls,
                     resolved: &mut type_resolved,
                 },
-                module,
-                library.program,
+                inventory,
                 &epoch.affected_owners,
+                &published_types,
             );
             attach_selected_library_decl_owners(
                 &mut lexical_events,
@@ -2770,27 +2808,16 @@ where
     } else if !library_programs.is_empty() {
         return Err("private library programs require a collision epoch");
     }
-    for ((scope, unit), manifest) in module_scopes
+    for ((scope, unit), inventory) in module_scopes
         .iter()
         .copied()
         .zip(units)
-        .zip(user_declaration_manifests)
+        .zip(&user_declaration_inventories)
     {
-        let source = binder
-            .source_for_module(scope)
-            .ok_or("bound project module has no source identity")?;
-        let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
-            &binder, scope, source, manifest, None,
-        )
-        .map_err(|_| "bound project module has no canonical declaration inventory")?;
-        #[cfg(any(test, feature = "test-utils"))]
-        inventory.assert_legacy_walker_parity(&binder, unit.program, None);
-        let _inventory_receipt = inventory.receipt();
-        reserve_type_decls(
+        reserve_type_decls_from_inventory(
             &mut interner,
             &binder,
-            scope,
-            unit.program,
+            inventory,
             &mut next_type_param,
             &mut next_class_id,
             &mut type_decls,
@@ -2850,6 +2877,7 @@ where
         },
     );
     pass.install_published_type_environment_base(published_types);
+    pass.terminalize_unavailable_type_groups();
     pass.lexical_array_alias = lexical_array_alias;
     if let Some(identities) = library_semantic_identities {
         pass.install_library_semantic_identities(identities);
@@ -4606,32 +4634,41 @@ where
     PROJECT_BINDING_ORDINARY_CONSUMERS
         .set(PROJECT_BINDING_ORDINARY_CONSUMERS.get().saturating_add(1));
 
+    let declaration_inventories = module_scopes
+        .iter()
+        .copied()
+        .zip(units)
+        .zip(declaration_manifests)
+        .map(|((scope, unit), manifest)| {
+            let source = binder
+                .source_for_module(scope)
+                .ok_or("bound project module has no source identity")?;
+            let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+                &binder, scope, source, manifest, None,
+            )
+            .map_err(|_| "bound project module has no canonical declaration inventory")?;
+            #[cfg(any(test, feature = "test-utils"))]
+            inventory.assert_legacy_walker_parity(&binder, unit.program, None);
+            let _inventory_receipt = inventory.receipt();
+            Ok(inventory)
+        })
+        .collect::<Result<Vec<_>, &'static str>>()?;
+
     let (mut type_decls, mut type_resolved) = published_types.construction_prefix();
     let user_type_start = type_decls.len();
     type_resolved.resize(binder.type_groups.len(), None);
     let error = interner.well_known().error;
     let declaration_spans = ModuleDeclarationSpans::index(&binder);
-    for ((scope, unit), manifest) in module_scopes
+    for ((scope, unit), inventory) in module_scopes
         .iter()
         .copied()
         .zip(units)
-        .zip(declaration_manifests)
+        .zip(&declaration_inventories)
     {
-        let source = binder
-            .source_for_module(scope)
-            .ok_or("bound project module has no source identity")?;
-        let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
-            &binder, scope, source, manifest, None,
-        )
-        .map_err(|_| "bound project module has no canonical declaration inventory")?;
-        #[cfg(any(test, feature = "test-utils"))]
-        inventory.assert_legacy_walker_parity(&binder, unit.program, None);
-        let _inventory_receipt = inventory.receipt();
-        reserve_type_decls(
+        reserve_type_decls_from_inventory(
             interner,
             &binder,
-            scope,
-            unit.program,
+            inventory,
             &mut next_type_param,
             &mut next_class_id,
             &mut type_decls,
@@ -4712,6 +4749,7 @@ where
         },
     );
     pass.install_published_type_environment_base(published_types);
+    pass.terminalize_unavailable_type_groups();
     pass.lexical_array_alias = lexical_array_alias;
     if let Some(identities) = library_semantic_identities {
         pass.install_library_semantic_identities(identities);
@@ -7529,7 +7567,7 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
     #[cfg(test)]
     let cycle_tainted_application_cache_capture =
         context::capture_cycle_tainted_application_cache_measure();
-    let mut pass = Pass {
+    let pass = Pass {
         interner,
         binder,
         eager_application_cache: FxHashMap::default(),
@@ -7648,18 +7686,6 @@ fn build_pass_with_tickets<'a, 'ast, Ticket: Copy + PartialEq>(
         current_super_ctor: None,
         current_in_ctor: false,
     };
-    let terminal_groups: Vec<TypeGroupId> = pass
-        .type_decls
-        .iter()
-        .enumerate()
-        .map(|(index, declaration)| (pass.type_decls.published_len() + index, declaration))
-        .filter(|(_, declaration)| matches!(declaration, TypeDecl::Unavailable { .. }))
-        .map(|(index, _)| TypeGroupId(u32::try_from(index).expect("type group index fits u32")))
-        .collect();
-    for group in terminal_groups {
-        pass.begin_type_group_construction(group);
-        pass.freeze_type_group(group);
-    }
     pass
 }
 
