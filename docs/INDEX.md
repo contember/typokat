@@ -40,8 +40,11 @@ decisions → reference → archive.
      If everything is "hot", nothing is. -->
 - **Declaration inventory blocks backlog 44** — the active
   [`declaration-inventory sprint`](sprints/sprint-2026-08-18-canonical-declaration-inventory.md)
-  replaces parallel binder/checker/interface declaration traversals with one authenticated
-  inventory and closes the reachable local-type publication panic. The archived
+  has established the authenticated inventory seam. Its remaining consumer cutover will replace
+  the parallel checker/interface traversals and close the reachable local-type publication panic.
+  [`ADR-0022`](decisions/0022-use-one-binder-authenticated-declaration-inventory.md)
+  freezes the one-pass manifest, exact binder join, module-local dense map, and AST-free frozen
+  product boundary before semantic consumers move. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
   contextual checking and records the comparison with TypeScript PR #46827. The active
   [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) is paused behind that blocker; its WIP

@@ -37,3 +37,4 @@ a commit message suffices.
 - [`0019`](0019-split-the-checker-into-layered-workspace-crates.md) — split the checker into a root facade over ten acyclic workspace layers — accepted (2026-07-28)
 - [`0020`](0020-build-source-native-sparse-collision-epochs.md) — build source-native sparse collision epochs over the frozen library base — accepted (2026-07-28)
 - [`0021`](0021-use-complete-source-compilation-for-standalone-cli-checks.md) — use complete-source compilation for standalone CLI checks — accepted (2026-08-05)
+- [`0022`](0022-use-one-binder-authenticated-declaration-inventory.md) — use one binder-authenticated declaration inventory — accepted (2026-08-20)
