@@ -498,15 +498,16 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             && self.class_static_block_depth > 0
         {
             SourceTypeFragmentPlacement::UnadmittedClassStaticBlock
-        } else if placement == SourceTypeFragmentPlacement::Ordinary
-            && self.ambient_external_module_depth > 0
-        {
-            SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
         } else if placement == SourceTypeFragmentPlacement::Ordinary {
-            self.global_augmentation_start
-                .map_or(SourceTypeFragmentPlacement::Ordinary, |global_start| {
+            match self.global_augmentation_start {
+                Some(global_start) => {
                     SourceTypeFragmentPlacement::GlobalAugmentationBody { global_start }
-                })
+                }
+                None if self.ambient_external_module_depth > 0 => {
+                    SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+                }
+                None => SourceTypeFragmentPlacement::Ordinary,
+            }
         } else {
             placement
         };
@@ -1527,7 +1528,8 @@ mod tests {
                 namespace Nested { global { interface Nearest {} } }
             }
             declare module "external" {
-                global { interface AmbientWins {} }
+                interface AmbientBody {}
+                global { interface NestedGlobal {} }
             }
         "#;
         let allocator = Allocator::default();
@@ -1552,6 +1554,14 @@ mod tests {
                 .0,
         )
         .expect("source offset fits u32");
+        let external_global = u32::try_from(
+            source
+                .match_indices("global {")
+                .nth(2)
+                .expect("external-module global")
+                .0,
+        )
+        .expect("source offset fits u32");
 
         assert_eq!(placement("Outside"), SourceTypeFragmentPlacement::Ordinary);
         assert_eq!(
@@ -1567,7 +1577,13 @@ mod tests {
             }
         );
         assert_eq!(
-            placement("AmbientWins"),
+            placement("NestedGlobal"),
+            SourceTypeFragmentPlacement::GlobalAugmentationBody {
+                global_start: external_global,
+            }
+        );
+        assert_eq!(
+            placement("AmbientBody"),
             SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
         );
     }

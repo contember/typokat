@@ -938,7 +938,10 @@ mod tests {
     use super::*;
     use crate::binder::bind::ProjectBinderBuilder;
     use crate::binder::declaration::DeclarationKind;
-    use crate::binder::namespace::{CompilationUnit, SourceUnitKey};
+    use crate::binder::namespace::{
+        CompilationUnit, ModuleBindingContext, SourceFileKind, SourceUnitKey,
+    };
+    use crate::source::{CompilationOrigin, OriginalModuleOrdinal};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
@@ -1971,5 +1974,108 @@ mod tests {
                 placement: SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule,
             }
         );
+    }
+
+    #[test]
+    fn inventory_uses_nested_global_placement_inside_string_literal_modules() {
+        for (
+            source,
+            parser_type,
+            source_kind,
+            direct_name,
+            global_name,
+            issues,
+            admitted,
+            rejected,
+        ) in [
+            (
+                r#"declare module "pkg" { interface DirectAmbient {} global { interface LegalGlobal {} } }"#,
+                SourceType::d_ts(),
+                SourceFileKind::DeclarationTs,
+                "DirectAmbient",
+                "LegalGlobal",
+                false,
+                1,
+                1,
+            ),
+            (
+                r#"export {}; declare module "pkg" { export {}; interface DirectAugmentation {} global { interface InvalidGlobal {} } }"#,
+                SourceType::d_ts(),
+                SourceFileKind::DeclarationTs,
+                "DirectAugmentation",
+                "InvalidGlobal",
+                true,
+                0,
+                2,
+            ),
+        ] {
+            let prelude_allocator = Allocator::default();
+            let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+            let allocator = Allocator::default();
+            let parsed = Parser::new(&allocator, source, parser_type).parse();
+            assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+            let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+            let manifest = SourceDeclarationManifest::build(&parsed.program);
+            let direct = manifest
+                .type_fragments()
+                .iter()
+                .find(|fragment| &source[fragment.binding_span.range()] == direct_name)
+                .expect("direct string-module fragment");
+            assert_eq!(
+                direct.placement,
+                SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+            );
+            let global = manifest
+                .type_fragments()
+                .iter()
+                .find(|fragment| &source[fragment.binding_span.range()] == global_name)
+                .expect("nested global fragment");
+            let SourceTypeFragmentPlacement::GlobalAugmentationBody { global_start } =
+                global.placement
+            else {
+                panic!("nested global must override ambient-module placement")
+            };
+            let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+                &prelude.program,
+                &prelude_manifest,
+            );
+            let unit = CompilationUnit {
+                source: SourceUnitKey::SINGLE_SOURCE,
+                origin: CompilationOrigin::User(OriginalModuleOrdinal::new(0)),
+                binding: ModuleBindingContext::for_program(&parsed.program, source_kind),
+            };
+            let (module, _) =
+                builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+            let binder = builder.finish(module);
+            assert_eq!(
+                binder.global_augmentation_has_issues(module, global_start),
+                Some(issues)
+            );
+            assert!(
+                binder
+                    .exact_declaration_at(module, direct.binding_span.start, direct.kind)
+                    .is_none(),
+                "direct string-module rows remain unadmitted"
+            );
+            let exact_global = binder
+                .exact_declaration_at(module, global.binding_span.start, global.kind)
+                .expect("the binder visits the nested global body");
+            assert!(exact_global.site.scope.is_some());
+            assert_eq!(exact_global.type_group.is_some(), !issues);
+
+            let inventory = BoundTypeDeclarationInventory::build(
+                &binder,
+                module,
+                SourceUnitKey::SINGLE_SOURCE,
+                manifest,
+                None,
+            )
+            .expect("nested global placement follows exact binder admission");
+            assert_eq!(inventory.receipt().admitted, admitted);
+            assert_eq!(inventory.rejected().len(), rejected);
+            assert!(inventory.rejected().iter().all(|row| {
+                row.disposition == SourceTypeFragmentRejection::NotSemanticallyAdmitted
+            }));
+        }
     }
 }
