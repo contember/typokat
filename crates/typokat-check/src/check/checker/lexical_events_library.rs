@@ -9,6 +9,7 @@ use super::lexical_events::{LexicalReservationAllocator, LexicalReservations, So
 use super::replay_index::CollisionReplayEventPhase;
 use super::PrivateCombinedRecordTicket;
 use super::{attach_class_bindings, attach_type_decl_owners, ModuleDeclarationSpans};
+use crate::binder::declaration::SourceDeclarationManifest;
 use crate::binder::{scope::ScopeId, Binder};
 use crate::source::{LibraryFileOrdinal, SourceOrdinal, SourceUnit};
 use oxc_ast::ast::Program;
@@ -135,17 +136,39 @@ struct PrivateCombinedLibraryReservedEvent {
 }
 
 impl LexicalReservations<LibraryRecordTicket> {
-    pub(crate) fn reserve_library_program(
+    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
+    pub(crate) fn reserve_library_program<'ast>(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        program: &'ast Program<'ast>,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError> {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_library_program_with_declaration_manifest(
+            file_ordinal,
+            program,
+            &manifest,
+            ledger,
+        )
+    }
+
+    pub(crate) fn reserve_library_program_with_declaration_manifest(
         &mut self,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         ledger: &mut LibraryEventLedger,
     ) -> Result<(), LibraryEventLedgerError> {
         let mut allocator = LibraryReservationAllocator {
             file_ordinal,
             reservations: ledger.replay_reservation_domain()?,
         };
-        self.reserve_program_with(program, &mut allocator)?;
+        LexicalReservations::reserve_program_with_declaration_manifest(
+            self,
+            program,
+            manifest,
+            &mut allocator,
+        )?;
         let source = SourceSite {
             unit: allocator.source_unit(),
             source_start: program.span.start,
@@ -210,10 +233,27 @@ impl LexicalReservations<LibraryRecordTicket> {
 }
 
 impl LexicalReservations<PrivateCombinedRecordTicket> {
-    pub(crate) fn reserve_complete_library_program(
+    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
+    pub(crate) fn reserve_complete_library_program<'ast>(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        program: &'ast Program<'ast>,
+        ledger: &mut LibraryEventLedger,
+    ) -> Result<(), LibraryEventLedgerError> {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_complete_library_program_with_declaration_manifest(
+            file_ordinal,
+            program,
+            &manifest,
+            ledger,
+        )
+    }
+
+    pub(crate) fn reserve_complete_library_program_with_declaration_manifest(
         &mut self,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         ledger: &mut LibraryEventLedger,
     ) -> Result<(), LibraryEventLedgerError> {
         let mut allocator = PrivateCombinedLibraryReservationAllocator {
@@ -221,7 +261,12 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             reservations: ledger.replay_reservation_domain()?,
             omitted_owner: None,
         };
-        self.reserve_program_with(program, &mut allocator)?;
+        LexicalReservations::reserve_program_with_declaration_manifest(
+            self,
+            program,
+            manifest,
+            &mut allocator,
+        )?;
         let source = SourceSite {
             unit: allocator.source_unit(),
             source_start: program.span.start,
@@ -236,10 +281,29 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
         Ok(())
     }
 
-    pub(crate) fn reserve_private_library_program(
+    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
+    pub(crate) fn reserve_private_library_program<'ast>(
+        &mut self,
+        file_ordinal: LibraryFileOrdinal,
+        program: &'ast Program<'ast>,
+        ledger: &mut LibraryEventLedger,
+        omitted_owner: Option<LibraryEventKey>,
+    ) -> Result<(), LibraryEventLedgerError> {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_private_library_program_with_declaration_manifest(
+            file_ordinal,
+            program,
+            &manifest,
+            ledger,
+            omitted_owner,
+        )
+    }
+
+    pub(crate) fn reserve_private_library_program_with_declaration_manifest(
         &mut self,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         ledger: &mut LibraryEventLedger,
         omitted_owner: Option<LibraryEventKey>,
     ) -> Result<(), LibraryEventLedgerError> {
@@ -248,7 +312,12 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             reservations: ledger.replay_reservation_domain()?,
             omitted_owner,
         };
-        self.reserve_program_with(program, &mut allocator)
+        LexicalReservations::reserve_program_with_declaration_manifest(
+            self,
+            program,
+            manifest,
+            &mut allocator,
+        )
     }
 
     pub(crate) fn attach_complete_library_declaration_owners(

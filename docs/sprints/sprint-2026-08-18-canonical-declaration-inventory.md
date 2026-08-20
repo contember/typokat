@@ -283,6 +283,14 @@ passes its closure gates.
 - **ADR — complete.** [`ADR-0022`](../decisions/0022-use-one-binder-authenticated-declaration-inventory.md)
   freezes the proven manifest, exact join, route ownership, sparse replay, and semantic-publication
   boundaries before any production consumer cutover.
+- **WU3a — complete.** Interface header, heritage, and member tickets now come from the route-owned
+  source declaration manifest. The original declaration-owner prepass and every type reservation,
+  fill, and publication consumer remain unchanged. Independent review found no semantic or route
+  blocker. Interface-focused tests passed `51/51`; route receipts passed for trusted prelude,
+  multi-user, legacy, complete, shared-provider, and sparse replay paths. `cargo check
+  --all-targets`, `cargo clippy --all-targets -- -D warnings`, and the ordinary conformance gate
+  passed. The enabled corpus receipt is `576/692/576/0`, whole-flat is `429/429`, fingerprint is
+  `9dae0a2b3c6e1182`, and the ordinary gate took `170.34 s` excluding its build.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

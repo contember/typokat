@@ -3702,14 +3702,15 @@ struct CanonicalInput<'source> {
 fn independent_event_owner_sites_for_oracle(
     canonical: &[CanonicalInput<'_>],
     parsed: &[&Program<'_>],
+    manifests: &[SourceDeclarationManifest<'_>],
     binder: &Binder,
 ) -> Result<Vec<CollisionReplayOwnerSite>, InjectedProfileError> {
     let mut allocator = IndependentEventOwnerSiteOracle::new();
     let mut reservations: LexicalReservations<(usize, usize)> = LexicalReservations::default();
-    for (input, program) in canonical.iter().zip(parsed) {
+    for ((input, program), manifest) in canonical.iter().zip(parsed).zip(manifests) {
         allocator.select_file(input.file_ordinal);
         reservations
-            .reserve_program_with(program, &mut allocator)
+            .reserve_program_with_declaration_manifest(program, manifest, &mut allocator)
             .map_err(|message| InjectedProfileError::Reservation(message.to_owned()))?;
         allocator.reserve_exact_site(
             Span::from_oxc(program.span),
@@ -6269,12 +6270,17 @@ fn complete_source_project_frontend<'source, 'ast>(
     let mut user_events = EventStore::default();
     let mut combined_lexical_events: LexicalReservations<PrivateCombinedRecordTicket> =
         LexicalReservations::default();
-    for unit in units {
+    let user_declaration_manifests = units
+        .iter()
+        .map(|unit| SourceDeclarationManifest::build(unit.program))
+        .collect::<Vec<_>>();
+    for (unit, manifest) in units.iter().zip(&user_declaration_manifests) {
         combined_lexical_events
-            .reserve_private_continuation_program(
+            .reserve_private_continuation_program_with_declaration_manifest(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                manifest,
                 unit.compilation_unit.binding,
                 &mut user_events,
             )
@@ -6322,10 +6328,6 @@ fn complete_source_project_frontend<'source, 'ast>(
         }
     }
     let mut external_effects = BTreeMap::new();
-    let user_declaration_manifests = units
-        .iter()
-        .map(|unit| SourceDeclarationManifest::build(unit.program))
-        .collect::<Vec<_>>();
     let bound = super::bind_authoritative_project_core_with_module_admission(
         builder,
         units,
@@ -6637,14 +6639,20 @@ fn with_canonical_frontend<'source, Output>(
         let mut user_events = EventStore::default();
         let mut reservations: LexicalReservations<PrivateCombinedRecordTicket> =
             LexicalReservations::default();
-        for (user_index, (program, unit)) in units.iter().skip(user_start).enumerate() {
+        for (user_index, ((program, unit), manifest)) in units
+            .iter()
+            .zip(&declaration_manifests)
+            .skip(user_start)
+            .enumerate()
+        {
             let module_ordinal = ModuleOrdinal::new(user_index);
             let unit_slot = UnitSlot::new(user_index);
             reservations
-                .reserve_private_continuation_program(
+                .reserve_private_continuation_program_with_declaration_manifest(
                     module_ordinal,
                     unit_slot,
                     program,
+                    manifest,
                     unit.binding,
                     &mut user_events,
                 )
@@ -7081,6 +7089,7 @@ trait InjectedCompileRoute {
         reservations: &mut LexicalReservations<Self::Ticket>,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         ledger: &mut LibraryEventLedger,
     ) -> Result<(), LibraryEventLedgerError>;
 
@@ -7137,9 +7146,15 @@ impl InjectedCompileRoute for LegacyLibraryRoute {
         reservations: &mut LexicalReservations<Self::Ticket>,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         ledger: &mut LibraryEventLedger,
     ) -> Result<(), LibraryEventLedgerError> {
-        reservations.reserve_library_program(file_ordinal, program, ledger)
+        reservations.reserve_library_program_with_declaration_manifest(
+            file_ordinal,
+            program,
+            manifest,
+            ledger,
+        )
     }
 
     fn attach_library_owners(
@@ -7219,9 +7234,15 @@ impl InjectedCompileRoute for CompleteSourceRoute {
         reservations: &mut LexicalReservations<Self::Ticket>,
         file_ordinal: LibraryFileOrdinal,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         ledger: &mut LibraryEventLedger,
     ) -> Result<(), LibraryEventLedgerError> {
-        reservations.reserve_complete_library_program(file_ordinal, program, ledger)
+        reservations.reserve_complete_library_program_with_declaration_manifest(
+            file_ordinal,
+            program,
+            manifest,
+            ledger,
+        )
     }
 
     fn attach_library_owners(
@@ -7509,24 +7530,6 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         #[cfg(any(test, feature = "test-utils"))]
         bind_elapsed,
     } = frontend;
-    for (((input, _program), module), manifest) in canonical
-        .iter()
-        .zip(&parsed)
-        .zip(module_scopes.iter().copied())
-        .zip(declaration_manifests)
-    {
-        let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
-            &binder,
-            module,
-            input.source_key,
-            manifest,
-            None,
-        )
-        .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-        #[cfg(any(test, feature = "test-utils"))]
-        inventory.assert_legacy_walker_parity(&binder, _program, None);
-        let _inventory_receipt = inventory.receipt();
-    }
     validate_complete_source_user_units(canonical.len(), user_start, &user_units)?;
     #[cfg(any(test, feature = "test-utils"))]
     let user_file_ordinals =
@@ -7549,7 +7552,12 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     let independent_event_owner_sites = if replay_index_plan == ReplayIndexPlan::None {
         Vec::new()
     } else {
-        independent_event_owner_sites_for_oracle(&canonical, &parsed, &binder)?
+        independent_event_owner_sites_for_oracle(
+            &canonical,
+            &parsed,
+            &declaration_manifests,
+            &binder,
+        )?
     };
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -7564,7 +7572,12 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         )
     };
     let mut lexical_events = Route::lexical_events(combined_lexical_events)?;
-    for (index, (input, program)) in canonical.iter().zip(&parsed).enumerate() {
+    for (index, ((input, program), manifest)) in canonical
+        .iter()
+        .zip(&parsed)
+        .zip(&declaration_manifests)
+        .enumerate()
+    {
         if user_start.is_some_and(|user_start| index >= user_start) {
             continue;
         }
@@ -7572,9 +7585,28 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
             &mut lexical_events,
             input.file_ordinal,
             program,
+            manifest,
             &mut ledger,
         )
         .map_err(InjectedProfileError::Reporting)?;
+    }
+    for (((input, _program), module), manifest) in canonical
+        .iter()
+        .zip(&parsed)
+        .zip(module_scopes.iter().copied())
+        .zip(declaration_manifests)
+    {
+        let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            input.source_key,
+            manifest,
+            None,
+        )
+        .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
+        #[cfg(any(test, feature = "test-utils"))]
+        inventory.assert_legacy_walker_parity(&binder, _program, None);
+        let _inventory_receipt = inventory.receipt();
     }
 
     let mut interner = Interner::with_intrinsics();

@@ -3,6 +3,7 @@
 use super::events::{EventStore, EventStoreError, ReservedEvent, UserRecordTicket};
 use super::lexical_events::{LexicalReservationAllocator, LexicalReservations};
 use super::PrivateCombinedRecordTicket;
+use crate::binder::declaration::SourceDeclarationManifest;
 use crate::source::{ModuleOrdinal, SourceUnit, UnitSlot};
 use oxc_ast::ast::Program;
 
@@ -77,11 +78,30 @@ struct PrivateCombinedUserReservationAllocator<'store> {
 
 impl LexicalReservations<UserRecordTicket> {
     /// Walk one user program in lexical order and reserve every record owner.
-    pub(crate) fn reserve_program(
+    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
+    pub(crate) fn reserve_program<'ast>(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+        program: &'ast Program<'ast>,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_user_program_with_declaration_manifest(
+            module_ordinal,
+            unit_slot,
+            program,
+            &manifest,
+            store,
+        )
+    }
+
+    pub(crate) fn reserve_user_program_with_declaration_manifest(
         &mut self,
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
         let mut allocator = UserReservationAllocator {
@@ -89,15 +109,41 @@ impl LexicalReservations<UserRecordTicket> {
             unit_slot,
             store,
         };
-        self.reserve_program_with(program, &mut allocator)
-            .map_err(ReservationError::from)
+        LexicalReservations::reserve_program_with_declaration_manifest(
+            self,
+            program,
+            manifest,
+            &mut allocator,
+        )
+        .map_err(ReservationError::from)
     }
 
-    pub(crate) fn reserve_continuation_program(
+    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
+    pub(crate) fn reserve_continuation_program<'ast>(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+        program: &'ast Program<'ast>,
+        context: crate::binder::namespace::ModuleBindingContext,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_user_continuation_program_with_declaration_manifest(
+            module_ordinal,
+            unit_slot,
+            program,
+            &manifest,
+            context,
+            store,
+        )
+    }
+
+    pub(crate) fn reserve_user_continuation_program_with_declaration_manifest(
         &mut self,
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         context: crate::binder::namespace::ModuleBindingContext,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
@@ -106,17 +152,44 @@ impl LexicalReservations<UserRecordTicket> {
             unit_slot,
             store,
         };
-        self.reserve_continuation_program_with(program, context, &mut allocator)
-            .map_err(ReservationError::from)
+        LexicalReservations::reserve_continuation_program_with_declaration_manifest(
+            self,
+            program,
+            manifest,
+            context,
+            &mut allocator,
+        )
+        .map_err(ReservationError::from)
     }
 }
 
 impl LexicalReservations<PrivateCombinedRecordTicket> {
-    pub(crate) fn reserve_private_continuation_program(
+    #[allow(dead_code)] // Compatibility tests may build a transient manifest.
+    pub(crate) fn reserve_private_continuation_program<'ast>(
+        &mut self,
+        module_ordinal: ModuleOrdinal,
+        unit_slot: UnitSlot,
+        program: &'ast Program<'ast>,
+        context: crate::binder::namespace::ModuleBindingContext,
+        store: &mut EventStore,
+    ) -> Result<(), ReservationError> {
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_private_continuation_program_with_declaration_manifest(
+            module_ordinal,
+            unit_slot,
+            program,
+            &manifest,
+            context,
+            store,
+        )
+    }
+
+    pub(crate) fn reserve_private_continuation_program_with_declaration_manifest(
         &mut self,
         module_ordinal: ModuleOrdinal,
         unit_slot: UnitSlot,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         context: crate::binder::namespace::ModuleBindingContext,
         store: &mut EventStore,
     ) -> Result<(), ReservationError> {
@@ -125,7 +198,13 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             unit_slot,
             store,
         };
-        self.reserve_continuation_program_with(program, context, &mut allocator)
-            .map_err(ReservationError::from)
+        LexicalReservations::reserve_continuation_program_with_declaration_manifest(
+            self,
+            program,
+            manifest,
+            context,
+            &mut allocator,
+        )
+        .map_err(ReservationError::from)
     }
 }

@@ -285,8 +285,9 @@ fn source_ordinal_from_origin(origin: CompilationOrigin) -> SourceOrdinal {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-fn reserve_internal_reporting(
+fn reserve_internal_reporting_with_declaration_manifest(
     program: &Program<'_>,
+    manifest: &SourceDeclarationManifest<'_>,
     module_ordinal: ModuleOrdinal,
     unit_slot: UnitSlot,
     context: Option<ModuleBindingContext>,
@@ -294,16 +295,22 @@ fn reserve_internal_reporting(
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
     let reservation = match context {
-        Some(context) => lexical_events.reserve_continuation_program(
+        Some(context) => lexical_events
+            .reserve_user_continuation_program_with_declaration_manifest(
+                module_ordinal,
+                unit_slot,
+                program,
+                manifest,
+                context,
+                &mut event_store,
+            ),
+        None => lexical_events.reserve_user_program_with_declaration_manifest(
             module_ordinal,
             unit_slot,
             program,
-            context,
+            manifest,
             &mut event_store,
         ),
-        None => {
-            lexical_events.reserve_program(module_ordinal, unit_slot, program, &mut event_store)
-        }
     };
     reservation.expect("lexical event reservation must reference valid events");
     (
@@ -321,6 +328,7 @@ fn reserve_internal_reporting(
 
 fn reserve_continuation_reporting(
     program: &Program<'_>,
+    manifest: &SourceDeclarationManifest<'_>,
     module_ordinal: ModuleOrdinal,
     unit_slot: UnitSlot,
     context: crate::binder::namespace::ModuleBindingContext,
@@ -330,10 +338,11 @@ fn reserve_continuation_reporting(
 > {
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
-    lexical_events.reserve_continuation_program(
+    lexical_events.reserve_user_continuation_program_with_declaration_manifest(
         module_ordinal,
         unit_slot,
         program,
+        manifest,
         context,
         &mut event_store,
     )?;
@@ -766,6 +775,16 @@ fn try_bootstrap_test_support_prelude<Error>(
 
     let manifest = SourceDeclarationManifest::build(&parsed.program);
     let binder = bind(&parsed.program, &manifest)?;
+    let prelude_ordinal = ModuleOrdinal::new(0);
+    let prelude_slot = UnitSlot::new(0);
+    // Capture into an isolated store so cleanliness is checked without leaking records.
+    let (mut reporting, reporting_adapter) = reserve_internal_reporting_with_declaration_manifest(
+        &parsed.program,
+        &manifest,
+        prelude_ordinal,
+        prelude_slot,
+        None,
+    );
     let prelude_source = binder
         .source_for_module(binder.prelude_module)
         .expect("trusted prelude has a source identity");
@@ -794,12 +813,6 @@ fn try_bootstrap_test_support_prelude<Error>(
         &mut type_decls,
         &mut type_resolved,
     );
-
-    let prelude_ordinal = ModuleOrdinal::new(0);
-    let prelude_slot = UnitSlot::new(0);
-    // Capture into an isolated store so cleanliness is checked without leaking records.
-    let (mut reporting, reporting_adapter) =
-        reserve_internal_reporting(&parsed.program, prelude_ordinal, prelude_slot, None);
     let declaration_spans = ModuleDeclarationSpans::index(&binder);
     attach_type_decl_owners(
         &mut reporting.lexical_events,
@@ -1007,8 +1020,9 @@ where
         builder.finish(module)
     });
 
-    let reporting = reserve_internal_reporting(
+    let reporting = reserve_internal_reporting_with_declaration_manifest(
         program,
+        &manifest,
         ModuleOrdinal::new(0),
         UnitSlot::new(0),
         Some(ModuleBindingContext::for_program(
@@ -1118,6 +1132,7 @@ where
     );
     let reporting = reserve_continuation_reporting(
         program,
+        &manifest,
         ModuleOrdinal::new(0),
         UnitSlot::new(0),
         continuation_binding,
@@ -2252,6 +2267,10 @@ where
         .iter()
         .map(|unit| SourceDeclarationManifest::build(unit.program))
         .collect::<Vec<_>>();
+    let library_declaration_manifests = library_programs
+        .iter()
+        .map(|library| SourceDeclarationManifest::build(library.program))
+        .collect::<Vec<_>>();
     #[cfg(any(test, feature = "test-utils"))]
     let user_source_type_rows = user_declaration_manifests
         .iter()
@@ -2265,13 +2284,14 @@ where
     let mut library_event_ledger = LibraryEventLedger::default();
     let mut lexical_events: LexicalReservations<PrivateCombinedRecordTicket> =
         LexicalReservations::default();
-    for (slot, unit) in units.iter().enumerate() {
+    for (slot, (unit, manifest)) in units.iter().zip(&user_declaration_manifests).enumerate() {
         debug_assert_eq!(unit.unit_slot.index(), slot);
         lexical_events
-            .reserve_private_continuation_program(
+            .reserve_private_continuation_program_with_declaration_manifest(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                manifest,
                 unit.compilation_unit.binding,
                 &mut event_store,
             )
@@ -2325,12 +2345,13 @@ where
             .ok_or("library source prefix omits the prelude")?;
         let mut binding_event_store = EventStore::default();
         let mut binding_lexical_events = LexicalReservations::default();
-        for unit in units {
+        for (unit, manifest) in units.iter().zip(&user_declaration_manifests) {
             binding_lexical_events
-                .reserve_program(
+                .reserve_user_program_with_declaration_manifest(
                     unit.module_ordinal,
                     unit.unit_slot,
                     unit.program,
+                    manifest,
                     &mut binding_event_store,
                 )
                 .map_err(|_| "complete-source binding reservation failed")?;
@@ -2610,11 +2631,12 @@ where
     library_compiler::record_private_replay_trace_for_test(|trace, event| {
         trace.candidate_reservation_started = event;
     });
-    for library in library_programs {
+    for (library, manifest) in library_programs.iter().zip(&library_declaration_manifests) {
         lexical_events
-            .reserve_private_library_program(
+            .reserve_private_library_program_with_declaration_manifest(
                 LibraryFileOrdinal::new(library.source_ordinal),
                 library.program,
+                manifest,
                 &mut library_event_ledger,
                 disabled_library_record_owner,
             )
@@ -2688,12 +2710,11 @@ where
     let error = interner.well_known().error;
     let declaration_spans = ModuleDeclarationSpans::index(&binder);
     if let Some(epoch) = private_collision_epoch.as_ref() {
-        for library in library_programs {
+        for (library, manifest) in library_programs.iter().zip(library_declaration_manifests) {
             let module = library_modules
                 .get(library.source_ordinal)
                 .copied()
                 .ok_or("scheduled private library source has no retained module")?;
-            let manifest = SourceDeclarationManifest::build(library.program);
             #[cfg(any(test, feature = "test-utils"))]
             {
                 library_source_type_rows =
@@ -3781,6 +3802,7 @@ pub fn check_program_with_owned_library<'ast>(
         .map_err(|_| "binder source-origin index conflict")?;
     let reporting = reserve_continuation_reporting(
         program,
+        &manifest,
         ModuleOrdinal::new(0),
         UnitSlot::new(0),
         unit.binding,
@@ -3946,13 +3968,14 @@ pub(crate) fn bind_library_checkpoint_project_programs(
     }
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
-    for (slot, unit) in units.iter().enumerate() {
+    for (slot, (unit, manifest)) in units.iter().zip(&manifests).enumerate() {
         debug_assert_eq!(unit.unit_slot.index(), slot);
         lexical_events
-            .reserve_continuation_program(
+            .reserve_user_continuation_program_with_declaration_manifest(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                manifest,
                 unit.compilation_unit.binding,
                 &mut event_store,
             )
@@ -4414,13 +4437,14 @@ where
 
     let mut event_store = EventStore::default();
     let mut lexical_events = LexicalReservations::default();
-    for (slot, unit) in units.iter().enumerate() {
+    for (slot, (unit, manifest)) in units.iter().zip(&declaration_manifests).enumerate() {
         debug_assert_eq!(unit.unit_slot.index(), slot);
         lexical_events
-            .reserve_continuation_program(
+            .reserve_user_continuation_program_with_declaration_manifest(
                 unit.module_ordinal,
                 unit.unit_slot,
                 unit.program,
+                manifest,
                 unit.compilation_unit.binding,
                 &mut event_store,
             )

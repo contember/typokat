@@ -6,7 +6,7 @@ use super::super::{
     check_program, check_program_with_publication_inspector, expected_trusted_prelude_incomplete,
     trusted_prelude_records_are_clean, walk_type_decls, TEST_AMBIENT_SOURCE,
 };
-use crate::binder::bind_module_with_prelude;
+use crate::binder::{bind_module_with_prelude, declaration::SourceDeclarationManifest};
 use crate::check::test_support::{check_project, check_source};
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
 use crate::frontend::FileInput;
@@ -148,8 +148,10 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
     );
     let prelude_ordinal = ModuleOrdinal::new(0);
     let prelude_slot = UnitSlot::new(0);
-    let (mut reporting, _) = super::super::reserve_internal_reporting(
+    let manifest = SourceDeclarationManifest::build(&prelude.program);
+    let (mut reporting, _) = super::super::reserve_internal_reporting_with_declaration_manifest(
         &prelude.program,
+        &manifest,
         prelude_ordinal,
         prelude_slot,
         None,

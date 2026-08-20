@@ -117,7 +117,7 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     ("b84_binding_pattern_owners", true),
     // Declaration-inventory sprint WU0b. WU3a enables interface-owner rows;
     // WU3b enables script-continuation publication rows.
-    ("b84_interface_occurrence_owners", false),
+    ("b84_interface_occurrence_owners", true),
     ("b84_declaration_inventory", false),
     ("b84_declaration_inventory_controls", true),
     ("b54_labeled_statements", true),
@@ -571,7 +571,7 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
-const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x1194c8aeed8cb968;
+const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x9dae0a2b3c6e1182;
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
@@ -633,9 +633,9 @@ fn conformance() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 574,
-                source_files: 690,
-                shared_executions: 574,
+                fixture_projects: 576,
+                source_files: 692,
+                shared_executions: 576,
                 cold_executions: 0,
             }
         );
@@ -652,10 +652,10 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 574,
-                source_files: 690,
-                shared_executions: 574,
-                cold_executions: 574,
+                fixture_projects: 576,
+                source_files: 692,
+                shared_executions: 576,
+                cold_executions: 576,
             }
         );
         print_run_receipt(&receipt);
@@ -665,12 +665,12 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
 #[test]
 fn conformance_inventory_matches_frozen_receipt() {
     let inventory = discover_enabled_inventory();
-    assert_eq!(inventory.projects.len(), 574);
-    assert_eq!(inventory.source_files, 690);
+    assert_eq!(inventory.projects.len(), 576);
+    assert_eq!(inventory.source_files, 692);
     assert_eq!(
         inventory.discovery,
         DiscoveryReceipt {
-            whole_flat: (427, 427),
+            whole_flat: (429, 429),
             whole_project: (74, 184),
             selected_flat: (67, 67),
             selected_project: (6, 12),

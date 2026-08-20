@@ -5,7 +5,8 @@ use super::replay_index::{
     CollisionReplayEventPhase, CollisionReplayOwnerSite, CollisionReplaySiteProvenance, ReplayOwner,
 };
 use crate::binder::declaration::{
-    source_declaration_occurrences, DeclId, DeclarationKind, TypeGroupId, ValueStorageId,
+    source_declaration_occurrences, DeclId, DeclarationKind, SourceDeclarationManifest,
+    SourceInterfaceOccurrenceKind, SourceTypeFragmentPayload, TypeGroupId, ValueStorageId,
 };
 use crate::binder::namespace::ModuleBindingContext;
 #[cfg(test)]
@@ -17,7 +18,7 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, BindingPattern, ChainElement, Class, ClassElement,
     Declaration, ExportDefaultDeclarationKind, Expression, ForStatementInit, ForStatementLeft,
     FormalParameters, Function, ObjectPropertyKind, Program, PropertyKey, Statement,
-    TSModuleDeclaration, TSModuleDeclarationBody, TSSignature, VariableDeclaration,
+    TSModuleDeclaration, TSModuleDeclarationBody, VariableDeclaration,
 };
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -369,38 +370,72 @@ impl<Ticket: Copy> Default for LexicalReservations<Ticket> {
 
 impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
     /// Walk one program in lexical order and reserve all top-level/class/callable sites.
-    pub fn reserve_program_with<Allocator>(
+    pub fn reserve_program_with<'ast, Allocator>(
         &mut self,
-        program: &Program<'_>,
+        program: &'ast Program<'ast>,
         allocator: &mut Allocator,
     ) -> Result<(), Allocator::Error>
     where
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
-        self.reserve_program_with_context(program, None, allocator)
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_program_with_declaration_manifest(program, &manifest, allocator)
     }
 
-    pub fn reserve_continuation_program_with<Allocator>(
+    pub fn reserve_program_with_declaration_manifest<Allocator>(
         &mut self,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        self.reserve_program_with_context(program, manifest, None, allocator)
+    }
+
+    pub fn reserve_continuation_program_with<'ast, Allocator>(
+        &mut self,
+        program: &'ast Program<'ast>,
         context: ModuleBindingContext,
         allocator: &mut Allocator,
     ) -> Result<(), Allocator::Error>
     where
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
-        self.reserve_program_with_context(program, Some(context), allocator)
+        let manifest = SourceDeclarationManifest::build(program);
+        self.reserve_continuation_program_with_declaration_manifest(
+            program, &manifest, context, allocator,
+        )
+    }
+
+    pub fn reserve_continuation_program_with_declaration_manifest<Allocator>(
+        &mut self,
+        program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
+        context: ModuleBindingContext,
+        allocator: &mut Allocator,
+    ) -> Result<(), Allocator::Error>
+    where
+        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
+    {
+        self.reserve_program_with_context(program, manifest, Some(context), allocator)
     }
 
     fn reserve_program_with_context<Allocator>(
         &mut self,
         program: &Program<'_>,
+        manifest: &SourceDeclarationManifest<'_>,
         global_context: Option<ModuleBindingContext>,
         allocator: &mut Allocator,
     ) -> Result<(), Allocator::Error>
     where
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
+        assert!(
+            manifest.belongs_to(program),
+            "declaration manifest must belong to the reserved program"
+        );
         let unit = allocator.source_unit();
         let ordinal = source_ordinal(unit);
         for occurrence in source_declaration_occurrences(program) {
@@ -448,7 +483,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
                 _ => {}
             }
         }
-        self.reserve_interface_occurrences_in_statements(unit, &program.body, allocator);
+        self.reserve_interface_occurrences_from_manifest(unit, manifest, allocator);
         for statement in &program.body {
             self.reserve_statement(unit, statement, true, allocator)?;
             let Some(context) = global_context else {
@@ -472,109 +507,33 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         Ok(())
     }
 
-    fn reserve_interface_occurrences_in_statements<Allocator>(
+    fn reserve_interface_occurrences_from_manifest<Allocator>(
         &mut self,
         unit: SourceUnit,
-        statements: &[Statement<'_>],
+        manifest: &SourceDeclarationManifest<'_>,
         allocator: &mut Allocator,
     ) where
         Allocator: LexicalReservationAllocator<Ticket = Ticket>,
     {
-        for statement in statements {
-            match statement {
-                Statement::TSInterfaceDeclaration(interface) => {
-                    self.reserve_interface_occurrences(unit, interface, allocator);
-                }
-                Statement::ExportNamedDeclaration(export) => match &export.declaration {
-                    Some(Declaration::TSInterfaceDeclaration(interface)) => {
-                        self.reserve_interface_occurrences(unit, interface, allocator);
-                    }
-                    Some(Declaration::TSModuleDeclaration(module)) => {
-                        self.reserve_interface_occurrences_in_module(unit, module, allocator);
-                    }
-                    Some(Declaration::TSGlobalDeclaration(global)) => {
-                        self.reserve_interface_occurrences_in_statements(
-                            unit,
-                            &global.body.body,
-                            allocator,
-                        );
-                    }
-                    _ => {}
-                },
-                Statement::TSModuleDeclaration(module) => {
-                    self.reserve_interface_occurrences_in_module(unit, module, allocator);
-                }
-                Statement::TSGlobalDeclaration(global) => {
-                    self.reserve_interface_occurrences_in_statements(
-                        unit,
-                        &global.body.body,
-                        allocator,
-                    );
-                }
-                _ => {}
+        for fragment in manifest.type_fragments() {
+            if !matches!(fragment.payload, SourceTypeFragmentPayload::Interface(_)) {
+                continue;
             }
-        }
-    }
-
-    fn reserve_interface_occurrences_in_module<Allocator>(
-        &mut self,
-        unit: SourceUnit,
-        module: &TSModuleDeclaration<'_>,
-        allocator: &mut Allocator,
-    ) where
-        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
-    {
-        match &module.body {
-            Some(TSModuleDeclarationBody::TSModuleBlock(block)) => {
-                self.reserve_interface_occurrences_in_statements(unit, &block.body, allocator)
+            for occurrence in manifest.interface_occurrences(fragment.interface_occurrences.clone())
+            {
+                let kind = match occurrence.kind {
+                    SourceInterfaceOccurrenceKind::Header => InterfaceOccurrenceKind::Header,
+                    SourceInterfaceOccurrenceKind::Heritage => InterfaceOccurrenceKind::Heritage,
+                    SourceInterfaceOccurrenceKind::Member => InterfaceOccurrenceKind::Member,
+                };
+                self.reserve_interface_occurrence(
+                    unit,
+                    fragment.binding_span.start,
+                    kind,
+                    occurrence.span,
+                    allocator,
+                );
             }
-            Some(TSModuleDeclarationBody::TSModuleDeclaration(nested)) => {
-                self.reserve_interface_occurrences_in_module(unit, nested, allocator);
-            }
-            None => {}
-        }
-    }
-
-    fn reserve_interface_occurrences<Allocator>(
-        &mut self,
-        unit: SourceUnit,
-        interface: &oxc_ast::ast::TSInterfaceDeclaration<'_>,
-        allocator: &mut Allocator,
-    ) where
-        Allocator: LexicalReservationAllocator<Ticket = Ticket>,
-    {
-        let binding_start = interface.id.span.start;
-        self.reserve_interface_occurrence(
-            unit,
-            binding_start,
-            InterfaceOccurrenceKind::Header,
-            Span::from_oxc(interface.id.span),
-            allocator,
-        );
-        for heritage in &interface.extends {
-            self.reserve_interface_occurrence(
-                unit,
-                binding_start,
-                InterfaceOccurrenceKind::Heritage,
-                Span::from_oxc(heritage.span),
-                allocator,
-            );
-        }
-        for member in &interface.body.body {
-            let span = match member {
-                TSSignature::TSPropertySignature(signature) => signature.span,
-                TSSignature::TSMethodSignature(signature) => signature.span,
-                TSSignature::TSCallSignatureDeclaration(signature) => signature.span,
-                TSSignature::TSConstructSignatureDeclaration(signature) => signature.span,
-                TSSignature::TSIndexSignature(signature) => signature.span,
-            };
-            self.reserve_interface_occurrence(
-                unit,
-                binding_start,
-                InterfaceOccurrenceKind::Member,
-                Span::from_oxc(span),
-                allocator,
-            );
         }
     }
 
@@ -3295,6 +3254,74 @@ declare global {
             == 1));
 
         for ticket in all_tickets {
+            store.complete(ticket, Vec::new()).unwrap();
+        }
+        assert!(store.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn manifest_reserves_function_arrow_and_block_local_interface_occurrences() {
+        let source = r#"
+interface TopLevel { top: string; }
+function checkFunction(): void {
+  interface FunctionLocal extends TopLevel { functionMember(): void; }
+}
+const checkArrow = (): void => {
+  interface ArrowLocal extends TopLevel { arrowMember(): void; }
+};
+{
+  interface BlockLocal extends TopLevel { blockMember(): void; }
+}
+"#;
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut store = EventStore::default();
+        let mut reservations = LexicalReservations::default();
+        reservations
+            .reserve_user_program_with_declaration_manifest(
+                ModuleOrdinal::new(0),
+                UnitSlot::new(0),
+                &parsed.program,
+                &manifest,
+                &mut store,
+            )
+            .unwrap();
+
+        let expected = [
+            (InterfaceOccurrenceKind::Header, "TopLevel"),
+            (InterfaceOccurrenceKind::Member, "top: string"),
+            (InterfaceOccurrenceKind::Header, "FunctionLocal"),
+            (InterfaceOccurrenceKind::Heritage, "TopLevel { function"),
+            (InterfaceOccurrenceKind::Member, "functionMember"),
+            (InterfaceOccurrenceKind::Header, "ArrowLocal"),
+            (InterfaceOccurrenceKind::Heritage, "TopLevel { arrow"),
+            (InterfaceOccurrenceKind::Member, "arrowMember"),
+            (InterfaceOccurrenceKind::Header, "BlockLocal"),
+            (InterfaceOccurrenceKind::Heritage, "TopLevel { block"),
+            (InterfaceOccurrenceKind::Member, "blockMember"),
+        ];
+        assert_eq!(reservations.interface_occurrences.len(), expected.len());
+        for (occurrence, (kind, needle)) in reservations.interface_occurrences.iter().zip(expected)
+        {
+            assert_eq!(occurrence.kind, kind);
+            assert_eq!(
+                occurrence.source.source_start,
+                source_span(source, needle).start
+            );
+        }
+        assert_eq!(
+            reservations
+                .interface_occurrences
+                .iter()
+                .map(|occurrence| occurrence.owner)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            expected.len()
+        );
+
+        for ticket in reservations.tickets() {
             store.complete(ticket, Vec::new()).unwrap();
         }
         assert!(store.finish().unwrap().is_empty());
