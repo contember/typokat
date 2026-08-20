@@ -6349,6 +6349,9 @@ mod enum_constant_tests {
 #[cfg(test)]
 mod topology_tests {
     use super::*;
+    use crate::binder::bind::ProjectBinderBuilder;
+    use crate::binder::declaration::SourceDeclarationManifest;
+    use crate::binder::namespace::{CompilationUnit, SourceUnitKey};
     use crate::types::repr::{IntrinsicKind, ObjectType, PropertyType, TypeFlags};
     use oxc_allocator::Allocator;
     use oxc_parser::Parser;
@@ -6481,5 +6484,216 @@ mod topology_tests {
         assert_eq!(class, ClassId(41));
         assert_eq!(next_class_id, 42);
         assert_eq!(class_allocation_events_for_test(), vec![ClassId(41)]);
+    }
+
+    #[test]
+    fn rejected_default_class_preserves_the_following_class_identity_and_declaration() {
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let source = "export default class RejectedDefault {} class OrdinaryClass {}";
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        let inventory = inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest.clone(),
+            None,
+        )
+        .expect("default-class rejection and ordinary class join are authenticated");
+        assert_eq!(inventory.rejected().len(), 1);
+        assert_eq!(
+            inventory.rejected()[0].disposition,
+            inventory::SourceTypeFragmentRejection::DefaultCandidateNotAdmitted
+        );
+
+        reset_class_allocation_events_for_test();
+        let mut interner = Interner::with_intrinsics();
+        let mut next_type_param = 0;
+        let mut next_class_id = 0;
+        let mut declarations: TypeDeclTable<'_> = Vec::new().into();
+        let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
+        reserve_type_decls(
+            &mut interner,
+            &binder,
+            module,
+            &parsed.program,
+            &mut next_type_param,
+            &mut next_class_id,
+            &mut declarations,
+            &mut resolved,
+        );
+
+        let ordinary_group = binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "OrdinaryClass")
+            .expect("ordinary class group");
+        let [ordinary_fragment] = ordinary_group.fragments.as_slice() else {
+            panic!("ordinary class has one canonical fragment")
+        };
+        let Some(TypeDecl::Class {
+            declaration,
+            class_id,
+            ..
+        }) = declarations.get(ordinary_group.id.index())
+        else {
+            panic!("ordinary class has one reserved draft")
+        };
+        assert_eq!(*declaration, ordinary_fragment.declaration);
+        assert_eq!(*class_id, ClassId(0));
+        assert_eq!(next_class_id, 1);
+        assert_eq!(class_allocation_events_for_test(), [ClassId(0)]);
+        assert_eq!(
+            inventory
+                .declarations()
+                .get(ordinary_fragment.declaration)
+                .map(|row| row.declaration),
+            Some(*declaration)
+        );
+    }
+
+    #[test]
+    fn rejected_invalid_global_generic_alias_preserves_the_following_type_parameter_identity() {
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let source = r#"
+declare global { type Rejected<T> = T; }
+type Ordinary<U> = U;
+"#;
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        let inventory = inventory::BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            None,
+        )
+        .expect("invalid-global rejection and ordinary alias join are authenticated");
+        assert_eq!(inventory.rejected().len(), 1);
+        assert_eq!(
+            inventory.rejected()[0].disposition,
+            inventory::SourceTypeFragmentRejection::NotSemanticallyAdmitted
+        );
+
+        let mut interner = Interner::with_intrinsics();
+        let mut next_type_param = 0;
+        let mut next_class_id = 0;
+        let mut declarations: TypeDeclTable<'_> = Vec::new().into();
+        let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
+        reserve_type_decls(
+            &mut interner,
+            &binder,
+            module,
+            &parsed.program,
+            &mut next_type_param,
+            &mut next_class_id,
+            &mut declarations,
+            &mut resolved,
+        );
+
+        let ordinary_group = binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "Ordinary")
+            .expect("ordinary alias group");
+        let Some(TypeDecl::Alias { params, .. }) = declarations.get(ordinary_group.id.index())
+        else {
+            panic!("ordinary alias has one reserved draft")
+        };
+        assert_eq!(params, &[TypeParamId(1)]);
+        assert_eq!(next_type_param, 2);
+    }
+
+    #[test]
+    fn interleaved_merged_fragments_keep_decl_id_and_global_parameter_allocation_order() {
+        let prelude_allocator = Allocator::default();
+        let allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let source = "interface A<T> {} interface B<U> {} interface A<V> {}";
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let binder = crate::binder::bind_module_with_prelude(&prelude.program, &parsed.program);
+        let mut interner = Interner::with_intrinsics();
+        let mut next_type_param = 0;
+        let mut next_class_id = 0;
+        let mut declarations: TypeDeclTable<'_> = Vec::new().into();
+        let mut resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
+        reserve_type_decls(
+            &mut interner,
+            &binder,
+            binder.module,
+            &parsed.program,
+            &mut next_type_param,
+            &mut next_class_id,
+            &mut declarations,
+            &mut resolved,
+        );
+
+        let group_a = binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "A")
+            .expect("merged A group");
+        let group_b = binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "B")
+            .expect("B group");
+        assert_eq!(
+            group_a
+                .fragments
+                .iter()
+                .chain(&group_b.fragments)
+                .map(|fragment| fragment.declaration.0)
+                .collect::<Vec<_>>(),
+            [0, 2, 1]
+        );
+        let Some(TypeDecl::Interface { fragments, .. }) = declarations.get(group_a.id.index())
+        else {
+            panic!("A has an interface draft")
+        };
+        assert_eq!(
+            fragments
+                .iter()
+                .map(|fragment| (fragment.declaration.0, fragment.params.clone()))
+                .collect::<Vec<_>>(),
+            [(0, vec![TypeParamId(0)]), (2, vec![TypeParamId(2)])]
+        );
+        let Some(TypeDecl::Interface { fragments, .. }) = declarations.get(group_b.id.index())
+        else {
+            panic!("B has an interface draft")
+        };
+        assert_eq!(
+            fragments
+                .iter()
+                .map(|fragment| (fragment.declaration.0, fragment.params.clone()))
+                .collect::<Vec<_>>(),
+            [(1, vec![TypeParamId(1)])]
+        );
+        assert_eq!(next_type_param, 3);
     }
 }

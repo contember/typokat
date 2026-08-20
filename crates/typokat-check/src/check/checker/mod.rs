@@ -3257,6 +3257,17 @@ pub struct DeclarationParityReceiptForTest {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectedLibraryTerminalEvidenceForTest {
+    pub owner: ReplayOwner,
+    pub group: TypeGroupId,
+    pub declarations: Vec<DeclId>,
+    pub owner_attached: bool,
+    pub terminal: &'static str,
+    pub final_class: Option<ClassId>,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 fn declaration_parity_receipt_for_test<Ticket: Copy + PartialEq>(
     pass: &Pass<'_, '_, Ticket>,
 ) -> DeclarationParityReceiptForTest {
@@ -3308,6 +3319,84 @@ fn declaration_parity_receipt_for_test<Ticket: Copy + PartialEq>(
         user_type_start,
         rows,
     }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn selected_library_terminal_evidence_for_test<Ticket: Copy + PartialEq>(
+    pass: &Pass<'_, '_, Ticket>,
+) -> Vec<SelectedLibraryTerminalEvidenceForTest> {
+    let published = pass.type_environment.published();
+    let selected = pass
+        .private_collision_affected
+        .iter()
+        .filter_map(|owner| match owner {
+            ReplayOwner::TypeGroup(group) => Some((*owner, *group)),
+            ReplayOwner::Class(class) => pass.binder.type_groups.iter().find_map(|row| {
+                let Some(type_groups::PublishedTypeGroupTerminal::Ready(group)) =
+                    published.groups().get(row.id)
+                else {
+                    return None;
+                };
+                matches!(
+                    group.surface,
+                    type_groups::PublishedTypeGroupSurface::Class(candidate_class)
+                        if candidate_class == *class
+                )
+                .then_some((*owner, row.id))
+            }),
+            ReplayOwner::GlobalObject
+            | ReplayOwner::Statement(_)
+            | ReplayOwner::Namespace(_)
+            | ReplayOwner::Value(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+    selected
+        .into_iter()
+        .map(|(owner, group)| {
+            let declarations = pass
+                .binder
+                .type_groups
+                .get(group)
+                .into_iter()
+                .flat_map(|group| &group.fragments)
+                .filter(|fragment| {
+                    matches!(
+                        pass.binder
+                            .namespaces
+                            .compilation_origin_for_source(fragment.source),
+                        Some(crate::source::CompilationOrigin::Library(_))
+                    )
+                })
+                .map(|fragment| fragment.declaration)
+                .collect::<Vec<_>>();
+            SelectedLibraryTerminalEvidenceForTest {
+                owner,
+                group,
+                owner_attached: !declarations.is_empty()
+                    && declarations.iter().all(|declaration| {
+                        pass.lexical_events
+                            .declaration_owner(*declaration)
+                            .is_some()
+                    }),
+                declarations,
+                terminal: match published.groups().get(group) {
+                    Some(type_groups::PublishedTypeGroupTerminal::Ready(_)) => "ready",
+                    Some(type_groups::PublishedTypeGroupTerminal::Unavailable(_)) => "unavailable",
+                    None => "missing",
+                },
+                final_class: match published.groups().get(group) {
+                    Some(type_groups::PublishedTypeGroupTerminal::Ready(group)) => {
+                        match group.surface {
+                            type_groups::PublishedTypeGroupSurface::Class(class) => Some(class),
+                            type_groups::PublishedTypeGroupSurface::Template(_)
+                            | type_groups::PublishedTypeGroupSurface::Enum(_) => None,
+                        }
+                    }
+                    Some(type_groups::PublishedTypeGroupTerminal::Unavailable(_)) | None => None,
+                },
+            }
+        })
+        .collect()
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -3383,6 +3472,7 @@ pub struct PrivateProjectRootSlotsForTest {
 pub struct PrivateProjectSemanticEvidenceForTest {
     pub results: Vec<CheckResult>,
     pub declaration_receipt: DeclarationParityReceiptForTest,
+    pub selected_library_terminals: Vec<SelectedLibraryTerminalEvidenceForTest>,
     pub normalized_records: Vec<(ModuleOrdinal, String)>,
     pub root_slots: BTreeMap<String, PrivateProjectRootSlotsForTest>,
     pub final_identity_ends: [usize; 9],
@@ -3616,6 +3706,7 @@ fn private_project_semantic_evidence_for_test(
     PrivateProjectSemanticEvidenceForTest {
         results: Vec::new(),
         declaration_receipt: declaration_parity_receipt_for_test(pass),
+        selected_library_terminals: selected_library_terminal_evidence_for_test(pass),
         normalized_records: Vec::new(),
         root_slots,
         final_identity_ends: [

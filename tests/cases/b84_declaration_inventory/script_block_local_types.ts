@@ -1,4 +1,5 @@
-// WU3b acceptance: script-continuation block groups become terminal before checking.
+// WU3b acceptance: script-continuation interface/alias groups become terminal before checking.
+// WU3c acceptance: local classes attach to the WU3b terminal and check to completion.
 
 {
   interface LocalInterface {
@@ -21,6 +22,7 @@
 }
 
 {
+  // WU3c RED: class attachment is deliberately outside WU3b.
   class LocalClass {
     value!: string;
   }

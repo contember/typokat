@@ -147,9 +147,11 @@ passes its closure gates.
   `Unavailable`; an unselected frozen-prefix group retains its existing terminal. Missing payload
   for an authenticated selected owner is a route/schedule failure, not `Unavailable`; syntax the
   binder rejected creates no group terminal.
-- **Acceptance / witness.** Script-continuation local interface/alias/class controls check to
+- **Acceptance / witness.** Script-continuation local interface and alias controls check to
   completion and mismatches report `TK2322`; unsupported local enum policy is explicit and
-  non-panicking. Complete/private routes and selected replay preserve exact terminal and owner sets.
+  non-panicking. Local classes preserve their exact terminal and `ClassId`, but attachment and
+  checks-to-completion remain WU3c. Complete/private routes and selected replay preserve exact
+  terminal and owner sets.
 - **Touch points.** `checker/decls/mod.rs`, reservation call sites in `checker/mod.rs` and
   `checker/library_compiler.rs`, and focused route/replay tests.
 
@@ -161,9 +163,10 @@ passes its closure gates.
 - **Scope.** Move class binding attachment and trusted-prelude checks to the inventory. Remove
   `walk_type_decls`, its scope mirror, parent-root filter, and the test-only parity adapter only
   after `rg` proves no consumer remains.
-- **Acceptance / witness.** Named/anonymous default class controls and named class-expression
-  negative controls remain exact; trusted prelude and class allocation order are unchanged; the
-  published-registry assertion remains and no reachable test trips it.
+- **Acceptance / witness.** Local class attachment consumes the WU3b terminal and local class
+  mismatches check to completion. Named/anonymous default class controls and named
+  class-expression negative controls remain exact; trusted prelude and class allocation order are
+  unchanged; the published-registry assertion remains and no reachable test trips it.
 - **Touch points.** Final consumers in `checker/mod.rs`, declaration walker removal in
   `checker/decls/mod.rs`, route plumbing, and focused tests.
 
@@ -291,6 +294,21 @@ passes its closure gates.
   --all-targets`, `cargo clippy --all-targets -- -D warnings`, and the ordinary conformance gate
   passed. The enabled corpus receipt is `576/692/576/0`, whole-flat is `429/429`, fingerprint is
   `9dae0a2b3c6e1182`, and the ordinary gate took `170.34 s` excluding its build.
+- **WU3b Wave 1 — SPEC/RED.** Test-only parity oracles pin declaration/global allocation order and
+  both rejection side-effect polarities. A rejected named default class consumes no `ClassId`, so
+  the following ordinary class remains `ClassId(0)`. An authenticated rejected generic alias in
+  an invalid script-global body does consume `TypeParamId(0)`, so the following ordinary alias gets
+  `TypeParamId(1)`. This falsifies the original assumption that both rejection forms consume an
+  identity; their legacy behavior differs and WU3b must preserve that difference. Disabled RED
+  witnesses cover selected prefix enum fill/freeze, unselected peer stability, and class-only
+  sparse selection. The real sparse route observed no replacement class-draft allocation for the
+  exact class-only schedule, no enum reservation for the exact selected-enum schedule, and no
+  frozen-prefix witness for an unselected enum in a reparsed source. Selected-library evidence
+  separately pins the exact selected owner/group, terminal, attachment, and original frozen
+  `ClassId`; the existing declaration receipt remains user-only. The local interface/alias-ready
+  plus explicitly unavailable-enum control is already GREEN under the legacy consumer. Local class
+  attachment is explicitly assigned to WU3c; its deferred legacy control is GREEN and remains
+  disabled until that consumer moves.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

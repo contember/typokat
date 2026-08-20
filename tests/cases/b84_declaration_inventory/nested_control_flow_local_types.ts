@@ -1,4 +1,5 @@
-// WU3b acceptance: control-flow-local groups use binder fragment order.
+// WU3b acceptance: control-flow-local alias/enum groups use binder fragment order.
+// WU3c acceptance: control-flow-local classes attach to their WU3b terminals.
 
 declare const condition: boolean;
 
@@ -18,7 +19,7 @@ switch (condition) {
 }
 
 while (condition) {
-  class LoopLocal {
+  class LoopLocal { // WU3c RED: class attachment is deliberately deferred.
     value!: string;
   }
   class UnusedLoopLocal {}
@@ -29,7 +30,7 @@ while (condition) {
 try {
   throw 1;
 } catch {
-  class CatchLocal {
+  class CatchLocal { // WU3c RED: class attachment is deliberately deferred.
     value!: string;
   }
   class UnusedCatchLocal {}

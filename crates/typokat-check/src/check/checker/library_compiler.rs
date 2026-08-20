@@ -712,6 +712,14 @@ impl PrivateCollisionEpoch {
         self.library_record_baselines = Self::baselines_for(&self.plan, &affected);
         self.owner_sites = owner_sites;
         self.affected_owners = affected;
+        #[cfg(test)]
+        if let Some(selected) = explicit_sparse_selection_for_test() {
+            self.value_winners
+                .retain(|_, value| selected.contains(&ReplayOwner::Value(*value)));
+            self.library_record_baselines = Self::baselines_for(&self.plan, &selected);
+            self.owner_sites = Self::owner_sites_for(&self.plan, &selected);
+            self.affected_owners = selected;
+        }
         Ok(())
     }
 }
@@ -783,6 +791,43 @@ struct PrivateReplayScaleControlForTest {
 thread_local! {
     static PRIVATE_REPLAY_SCALE_CONTROL: std::cell::RefCell<Option<PrivateReplayScaleControlForTest>> =
         const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXPLICIT_SPARSE_SELECTION_FOR_TEST:
+        std::cell::RefCell<Option<BTreeSet<ReplayOwner>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn explicit_sparse_selection_for_test() -> Option<BTreeSet<ReplayOwner>> {
+    EXPLICIT_SPARSE_SELECTION_FOR_TEST.with_borrow(Clone::clone)
+}
+
+#[cfg(test)]
+struct ExplicitSparseSelectionScopeForTest;
+
+#[cfg(test)]
+impl ExplicitSparseSelectionScopeForTest {
+    fn start(selected: BTreeSet<ReplayOwner>) -> Self {
+        EXPLICIT_SPARSE_SELECTION_FOR_TEST.with_borrow_mut(|active| {
+            assert!(
+                active.is_none(),
+                "explicit sparse selection scopes do not nest"
+            );
+            *active = Some(selected);
+        });
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for ExplicitSparseSelectionScopeForTest {
+    fn drop(&mut self) {
+        EXPLICIT_SPARSE_SELECTION_FOR_TEST.with_borrow_mut(|active| {
+            active.take();
+        });
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -9729,6 +9774,343 @@ mod tests {
     ];
 
     fn assert_owned_terminal<T: Send + Sync + 'static>() {}
+
+    fn install_explicit_injected_sparse_selection_for_test(
+        mut state: OwnedLibraryRuntimeState,
+        plan: std::sync::Arc<CollisionReplayPlan>,
+        selected: BTreeSet<ReplayOwner>,
+        sources: &[InjectedLibrarySource<'_>],
+    ) -> (
+        OwnedLibraryRuntimeState,
+        Vec<crate::frontend::AuxiliarySourceInput>,
+    ) {
+        state
+            .freeze_as_library_base()
+            .expect("injected sparse fixture freezes");
+        let permit = acquire_private_collision_replay_permit().expect("sparse fixture permit");
+        let mut state = state
+            .fork_sparse_collision_epoch()
+            .expect("sparse fixture forks")
+            .install_complete_source_replay_plan_with_permit(plan.clone(), &[], permit)
+            .expect("sparse fixture installs its retained plan");
+        let epoch = state
+            .private_collision_epoch
+            .as_mut()
+            .expect("sparse fixture has an installed epoch");
+        epoch.affected_owners = selected;
+        epoch.mutation_owners.clear();
+        epoch.value_winners.clear();
+        epoch.owner_sites = PrivateCollisionEpoch::owner_sites_for(&plan, &epoch.affected_owners);
+        epoch.library_record_baselines =
+            PrivateCollisionEpoch::baselines_for(&plan, &epoch.affected_owners);
+        epoch.complete_source_replay = false;
+
+        let selected_ordinals = state
+            .private_collision_source_ordinals()
+            .expect("explicit sparse selection has source sites");
+        let auxiliary = selected_ordinals
+            .into_iter()
+            .map(|ordinal| {
+                let source = sources
+                    .iter()
+                    .find(|source| source.file_ordinal == ordinal)
+                    .expect("selected ordinal belongs to the injected profile");
+                crate::frontend::AuxiliarySourceInput {
+                    source_ordinal: ordinal.index(),
+                    name: source.name.to_owned(),
+                    source: source.source.to_owned(),
+                }
+            })
+            .collect();
+        (state, auxiliary)
+    }
+
+    fn run_explicit_injected_sparse_selection_for_test(
+        state: OwnedLibraryRuntimeState,
+        auxiliary: Vec<crate::frontend::AuxiliarySourceInput>,
+        root_names: Vec<String>,
+    ) -> Result<super::super::PrivateProjectSemanticEvidenceForTest, &'static str> {
+        let run = crate::frontend::run_project_frontend_with_auxiliary(
+            vec![crate::frontend::FileInput {
+                name: "/project/sparse-selection.ts".to_owned(),
+                source: "export {}; const sparseSelectionControl = 1;".to_owned(),
+            }],
+            auxiliary,
+            move |_, library_programs, units| {
+                super::super::check_private_project_programs_with_library_evidence(
+                    state,
+                    library_programs,
+                    units,
+                    &root_names,
+                )
+            },
+        );
+        assert!(run.parse_errors.iter().all(Vec::is_empty));
+        run.product
+    }
+
+    #[test]
+    fn selected_library_terminal_evidence_is_exact_for_a_ready_interface() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "selected-library-terminal-evidence.d.ts",
+            source: "interface SelectedEvidenceInterface { value: string }",
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("selected-library evidence prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SelectedEvidenceInterface")
+            .expect("selected-library evidence group")
+            .id;
+        let selected = BTreeSet::from([ReplayOwner::TypeGroup(group)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec!["SelectedEvidenceInterface".to_owned()],
+        )
+        .expect("selected-library evidence route completes");
+        let [row] = evidence.selected_library_terminals.as_slice() else {
+            panic!("one exact selected-library terminal row")
+        };
+        assert_eq!(row.owner, ReplayOwner::TypeGroup(group));
+        assert_eq!(row.group, group);
+        assert_eq!(row.declarations.len(), 1);
+        assert!(row.owner_attached);
+        assert_eq!(row.terminal, "ready");
+        assert_eq!(row.final_class, None);
+    }
+
+    #[test]
+    #[ignore = "WU3b RED: selected prefix enums must reserve, fill, and freeze"]
+    fn sparse_selected_prefix_enum_is_filled_while_unselected_peer_stays_frozen() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-enum-selection.d.ts",
+            source: r#"
+declare enum SelectedPrefixEnum { First, Second }
+declare enum UnselectedLocalEnum { Untouched }
+"#,
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("sparse enum prefix compiles");
+        let selected_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SelectedPrefixEnum")
+            .expect("selected enum group")
+            .id;
+        let unselected_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "UnselectedLocalEnum")
+            .expect("unselected enum group")
+            .id;
+        assert_ne!(selected_group, unselected_group);
+        let selected = BTreeSet::from([ReplayOwner::TypeGroup(selected_group)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+
+        let replay_scope =
+            PrivateReplayProductionScopeForTest::start(PrivateReplayProductionFaultForTest::None)
+                .expect("sparse enum route trace starts");
+        super::super::start_enum_publication_trace_for_test();
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec![
+                "SelectedPrefixEnum".to_owned(),
+                "UnselectedLocalEnum".to_owned(),
+            ],
+        )
+        .expect("selected enum sparse route completes");
+        let trace = super::super::finish_enum_publication_trace_for_test();
+        let replay_trace = replay_scope
+            .finish()
+            .expect("sparse enum route trace finishes");
+
+        assert!(replay_trace
+            .scheduled_owners
+            .contains(&ReplayOwner::TypeGroup(selected_group)));
+        assert_eq!(trace.reservations, 1);
+        assert_eq!(trace.fills, 1);
+        assert_eq!(
+            trace.enum_group,
+            Some(ReplayOwner::TypeGroup(selected_group))
+        );
+        assert_eq!(trace.ordered_member_names, ["First", "Second"]);
+        assert!(trace.readonly_value_properties);
+        assert!(!trace.terminal_visible_before_freeze);
+        assert!(evidence
+            .results
+            .iter()
+            .all(|result| { result.diagnostics.is_empty() && result.incomplete.is_empty() }));
+        assert!(evidence
+            .affected_terminals_from_frozen_prefix
+            .contains("type:UnselectedLocalEnum"));
+        assert!(!evidence
+            .affected_terminals_unavailable
+            .contains("type:UnselectedLocalEnum"));
+        assert!(evidence
+            .selected_library_terminals
+            .iter()
+            .any(|row| row.owner == ReplayOwner::TypeGroup(selected_group)
+                && row.group == selected_group
+                && row.owner_attached
+                && row.terminal == "ready"));
+        assert!(evidence
+            .selected_library_terminals
+            .iter()
+            .all(|row| row.group != unselected_group));
+    }
+
+    #[test]
+    #[ignore = "WU3b RED: reparsing a selected source must not replace an unselected enum"]
+    fn sparse_reparsed_source_does_not_replace_an_unselected_enum_prefix() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-unselected-enum.d.ts",
+            source: r#"
+interface SelectedInterface { value: string }
+declare enum UnselectedLocalEnum { Untouched }
+"#,
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("sparse unselected enum prefix compiles");
+        let selected_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SelectedInterface")
+            .expect("selected interface group")
+            .id;
+        let unselected_group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "UnselectedLocalEnum")
+            .expect("unselected enum group")
+            .id;
+        let selected = BTreeSet::from([ReplayOwner::TypeGroup(selected_group)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+
+        super::super::start_enum_publication_trace_for_test();
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec![
+                "SelectedInterface".to_owned(),
+                "UnselectedLocalEnum".to_owned(),
+            ],
+        )
+        .expect("unselected enum sparse control completes");
+        let trace = super::super::finish_enum_publication_trace_for_test();
+
+        assert_eq!(trace.reservations, 0);
+        assert_eq!(trace.fills, 0);
+        assert!(evidence
+            .affected_terminals_from_frozen_prefix
+            .contains("type:UnselectedLocalEnum"));
+        assert!(!evidence
+            .affected_terminals_unavailable
+            .contains("type:UnselectedLocalEnum"));
+        assert!(evidence
+            .selected_library_terminals
+            .iter()
+            .any(|row| row.owner == ReplayOwner::TypeGroup(selected_group)
+                && row.group == selected_group
+                && row.owner_attached
+                && row.terminal == "ready"));
+        assert!(evidence
+            .selected_library_terminals
+            .iter()
+            .all(|row| row.group != unselected_group));
+    }
+
+    #[test]
+    #[ignore = "WU3b RED: class-owner-only replay reserves its replacement class draft"]
+    fn sparse_class_owner_only_selection_reserves_replacement_class_draft() {
+        let sources = [InjectedLibrarySource {
+            file_ordinal: LibraryFileOrdinal::new(0),
+            name: "sparse-class-selection.d.ts",
+            source: "declare class SparseSelectedClass { value: string }",
+        }];
+        let (_, state, plan) = compile_owned_injected_base_profile_with_plan(&sources)
+            .expect("sparse class prefix compiles");
+        let group = state
+            .binder
+            .type_groups
+            .iter()
+            .find(|group| group.name == "SparseSelectedClass")
+            .expect("sparse class group")
+            .id;
+        let class = match state.published_types.groups().get(group) {
+            Some(super::super::type_groups::PublishedTypeGroupTerminal::Ready(group)) => {
+                match &group.surface {
+                    super::super::type_groups::PublishedTypeGroupSurface::Class(class) => *class,
+                    surface => panic!("sparse class has the wrong surface: {surface:?}"),
+                }
+            }
+            terminal => panic!("sparse class prefix is not ready: {terminal:?}"),
+        };
+        let base_next_class_id = state.next_class_id;
+        let selected = BTreeSet::from([ReplayOwner::Class(class)]);
+        let _selection_scope = ExplicitSparseSelectionScopeForTest::start(selected.clone());
+        let (state, auxiliary) =
+            install_explicit_injected_sparse_selection_for_test(state, plan, selected, &sources);
+        let replay_scope =
+            PrivateReplayProductionScopeForTest::start(PrivateReplayProductionFaultForTest::None)
+                .expect("class-only sparse route trace starts");
+        super::super::decls::reset_class_allocation_events_for_test();
+
+        let evidence = run_explicit_injected_sparse_selection_for_test(
+            state,
+            auxiliary,
+            vec!["SparseSelectedClass".to_owned()],
+        )
+        .expect("class-owner-only sparse route completes");
+        let replay_trace = replay_scope
+            .finish()
+            .expect("class-only route trace finishes");
+        let selected_type_owners = replay_trace
+            .scheduled_owners
+            .iter()
+            .filter(|owner| matches!(owner, ReplayOwner::Class(_) | ReplayOwner::TypeGroup(_)))
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            selected_type_owners,
+            BTreeSet::from([ReplayOwner::Class(class)])
+        );
+        assert_eq!(
+            super::super::decls::class_allocation_events_for_test(),
+            [ClassId(base_next_class_id)]
+        );
+        assert_eq!(
+            evidence.final_identity_ends[2],
+            usize::try_from(base_next_class_id).expect("class identity fits usize") + 1
+        );
+        assert!(evidence
+            .selected_library_terminals
+            .iter()
+            .any(|row| row.owner == ReplayOwner::Class(class)
+                && row.group == group
+                && row.owner_attached
+                && row.terminal == "ready"
+                && row.final_class == Some(class)));
+    }
 
     #[test]
     fn frozen_base_receipt_tracks_the_successful_central_freeze() {
