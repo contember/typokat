@@ -213,6 +213,17 @@ impl<'ast> SourceDeclarationManifest<'ast> {
     pub fn belongs_to(&self, program: &Program<'_>) -> bool {
         std::ptr::eq(self.program, program)
     }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn remove_type_fragment_for_inventory_test(&mut self, binding_start: u32) {
+        self.type_fragments = self
+            .type_fragments
+            .iter()
+            .filter(|fragment| fragment.binding_span.start != binding_start)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+    }
 }
 
 /// Global binding projection from the exhaustive visitor shared with semantic binding.

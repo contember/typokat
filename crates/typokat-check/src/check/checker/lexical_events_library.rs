@@ -199,7 +199,6 @@ impl LexicalReservations<LibraryRecordTicket> {
         file_ordinal: LibraryFileOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &ModuleDeclarationSpans,
     ) {
         attach_type_decl_owners(
@@ -207,7 +206,6 @@ impl LexicalReservations<LibraryRecordTicket> {
             SourceOrdinal::Library(file_ordinal),
             binder,
             scope,
-            program,
             spans,
         );
     }
@@ -306,7 +304,6 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
         file_ordinal: LibraryFileOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &ModuleDeclarationSpans,
     ) {
         attach_type_decl_owners(
@@ -314,7 +311,6 @@ impl LexicalReservations<PrivateCombinedRecordTicket> {
             SourceOrdinal::Library(file_ordinal),
             binder,
             scope,
-            program,
             spans,
         );
     }

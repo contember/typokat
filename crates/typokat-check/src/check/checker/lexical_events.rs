@@ -5,8 +5,8 @@ use super::replay_index::{
     CollisionReplayEventPhase, CollisionReplayOwnerSite, CollisionReplaySiteProvenance, ReplayOwner,
 };
 use crate::binder::declaration::{
-    source_declaration_occurrences, DeclId, DeclarationKind, SourceDeclarationManifest,
-    SourceInterfaceOccurrenceKind, SourceTypeFragmentPayload, TypeGroupId, ValueStorageId,
+    DeclId, DeclarationKind, SourceDeclarationManifest, SourceInterfaceOccurrenceKind,
+    SourceTypeFragmentPayload, TypeGroupId, ValueStorageId,
 };
 use crate::binder::namespace::ModuleBindingContext;
 #[cfg(test)]
@@ -439,7 +439,7 @@ impl<Ticket: Copy + PartialEq> LexicalReservations<Ticket> {
         );
         let unit = allocator.source_unit();
         let ordinal = source_ordinal(unit);
-        for occurrence in source_declaration_occurrences(program) {
+        for occurrence in manifest.declarations() {
             let (_, owner) = allocator.reserve_event(occurrence.binding_span.start);
             allocator.record_owner_site(
                 owner,
@@ -3077,7 +3077,6 @@ interface Combined extends First, Second {
             SourceOrdinal::User(ModuleOrdinal::new(0)),
             &binder,
             binder.module,
-            &parsed.program,
             &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
@@ -3182,7 +3181,6 @@ declare global {
             SourceOrdinal::User(module),
             &binder,
             binder.module,
-            &parsed.program,
             &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
@@ -3402,7 +3400,6 @@ const checkArrow = (): void => {
             SourceOrdinal::User(module),
             &binder,
             binder.module,
-            &parsed.program,
             &super::super::ModuleDeclarationSpans::index(&binder),
         );
         let group = binder
@@ -3446,7 +3443,6 @@ const checkArrow = (): void => {
             SourceOrdinal::User(module),
             &binder,
             binder.module,
-            &parsed.program,
             &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
@@ -3529,7 +3525,6 @@ const checkArrow = (): void => {
             SourceOrdinal::User(module),
             &binder,
             binder.module,
-            &parsed.program,
             &super::super::ModuleDeclarationSpans::index(&binder),
         );
 
@@ -3585,7 +3580,6 @@ const checkArrow = (): void => {
             SourceOrdinal::User(module),
             &binder,
             binder.module,
-            &parsed.program,
             &super::super::ModuleDeclarationSpans::index(&binder),
         );
         let declaration = binder

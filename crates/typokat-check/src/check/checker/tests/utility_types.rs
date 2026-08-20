@@ -108,6 +108,9 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
             admitted: 18,
             rejected: 0,
             exact_join_attempts: 18,
+            raw_probe_attempts: 0,
+            fragment_checks: 18,
+            completeness_checks: 0,
             dense_slots: 21,
         }
     );
@@ -160,7 +163,6 @@ fn trusted_prelude_declaration_inventory_receipt_is_exact() {
         SourceOrdinal::User(prelude_ordinal),
         &binder,
         binder.prelude_module,
-        &prelude.program,
         &super::super::ModuleDeclarationSpans::index(&binder),
     );
     assert!(prefix_groups

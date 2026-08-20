@@ -22,7 +22,7 @@ fn class_attachment_observations(
     let observations = std::cell::RefCell::new(None);
     let reports = check_project_with_checker(inputs, |interner, units| {
         check_project_programs_with_binding_inspector(interner, units, |binder, reservations, _| {
-            let rows = class_attachment_receipt_for_test(binder, reservations)
+            let rows = class_attachment_receipt_for_test(reservations)
                 .rows
                 .into_iter()
                 .map(|row| {
@@ -163,6 +163,9 @@ fn multi_user_project_inventory_is_module_exact_and_ordered() {
             admitted: 20,
             rejected: 0,
             exact_join_attempts: 20,
+            raw_probe_attempts: 0,
+            fragment_checks: 20,
+            completeness_checks: 0,
             dense_slots: 23,
         }
     );
@@ -245,7 +248,7 @@ fn script_block_local_interface_and_alias_are_ready_while_enum_is_explicitly_una
 }
 
 #[test]
-fn legacy_class_attachment_covers_nested_declarations_and_rejects_expressions() {
+fn inventory_class_attachment_covers_nested_declarations_and_rejects_expressions() {
     let source = r#"
 export {};
 declare const condition: boolean;
@@ -304,7 +307,7 @@ const AnonymousExpression = class {};
 }
 
 #[test]
-fn legacy_class_attachment_merges_interface_and_class_in_both_orders_once() {
+fn inventory_class_attachment_merges_interface_and_class_in_both_orders_once() {
     let observations = class_attachment_observations(vec![FileInput {
         name: "/project/class-interface-orders.ts".to_owned(),
         source: r#"
@@ -451,7 +454,6 @@ fn trusted_prelude_inventory_and_terminal_oracle_is_exact_in_source_order() {
         SourceOrdinal::User(prelude_ordinal),
         &binder,
         binder.prelude_module,
-        &prelude.program,
         &super::super::ModuleDeclarationSpans::index(&binder),
     );
     assert!(inventory.declarations().iter().all(|row| reporting
@@ -483,7 +485,7 @@ fn trusted_prelude_inventory_and_terminal_oracle_is_exact_in_source_order() {
 }
 
 #[test]
-fn script_continuation_block_class_legacy_attachment_is_exact() {
+fn script_continuation_block_class_inventory_attachment_is_exact() {
     let observations = class_attachment_observations(vec![FileInput {
         name: "/project/script-block-class.ts".to_owned(),
         source: "{ class ScriptBlockLocal<T> { value!: T } }".to_owned(),
@@ -498,7 +500,7 @@ fn script_continuation_block_class_legacy_attachment_is_exact() {
 }
 
 #[test]
-fn arrow_local_class_attachment_legacy_control_checks_to_completion() {
+fn arrow_local_class_inventory_attachment_checks_to_completion() {
     let reports = check_project_with_checker(
         vec![FileInput {
             name: "/project/script-local-class.ts".to_owned(),

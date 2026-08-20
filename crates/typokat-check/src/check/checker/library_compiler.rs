@@ -6442,7 +6442,7 @@ fn complete_source_project_frontend<'source, 'ast>(
         .ok_or_else(|| {
             InjectedProfileError::Binder("prelude module has no source identity".to_owned())
         })?;
-    let prelude_inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+    let _prelude_inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
         &binder,
         binder.prelude_module,
         prelude_source,
@@ -6450,7 +6450,6 @@ fn complete_source_project_frontend<'source, 'ast>(
         None,
     )
     .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-    let _prelude_inventory_receipt = prelude_inventory.receipt();
     #[cfg(any(test, feature = "test-utils"))]
     assert_eq!(
         manifest_build_scope.finish(),
@@ -6777,7 +6776,7 @@ fn with_canonical_frontend<'source, Output>(
         .ok_or_else(|| {
             InjectedProfileError::Binder("prelude module has no source identity".to_owned())
         })?;
-    let prelude_inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+    let _prelude_inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
         &binder,
         binder.prelude_module,
         prelude_source,
@@ -6785,7 +6784,6 @@ fn with_canonical_frontend<'source, Output>(
         None,
     )
     .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-    let _prelude_inventory_receipt = prelude_inventory.receipt();
     #[cfg(any(test, feature = "test-utils"))]
     let bind_elapsed = bind_started.elapsed();
     #[cfg(any(test, feature = "test-utils"))]
@@ -7142,7 +7140,6 @@ trait InjectedCompileRoute {
         file_ordinal: LibraryFileOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
         inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
@@ -7155,7 +7152,6 @@ trait InjectedCompileRoute {
         module_ordinal: ModuleOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
         inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
@@ -7211,13 +7207,12 @@ impl InjectedCompileRoute for LegacyLibraryRoute {
         file_ordinal: LibraryFileOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
         inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
         receipt: TypeDeclReservationReceipt,
     ) -> Result<(), InjectedProfileError> {
-        reservations.attach_library_declaration_owners(file_ordinal, binder, scope, program, spans);
+        reservations.attach_library_declaration_owners(file_ordinal, binder, scope, spans);
         attach_class_bindings_from_inventory(
             reservations,
             SourceOrdinal::Library(file_ordinal),
@@ -7235,7 +7230,6 @@ impl InjectedCompileRoute for LegacyLibraryRoute {
         _: ModuleOrdinal,
         _: &Binder,
         _: ScopeId,
-        _: &Program<'_>,
         _: &super::ModuleDeclarationSpans,
         _: &super::context::TypeDeclTable<'_>,
         _: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
@@ -7306,19 +7300,12 @@ impl InjectedCompileRoute for CompleteSourceRoute {
         file_ordinal: LibraryFileOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
         inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
         receipt: TypeDeclReservationReceipt,
     ) -> Result<(), InjectedProfileError> {
-        reservations.attach_complete_library_declaration_owners(
-            file_ordinal,
-            binder,
-            scope,
-            program,
-            spans,
-        );
+        reservations.attach_complete_library_declaration_owners(file_ordinal, binder, scope, spans);
         attach_class_bindings_from_inventory(
             reservations,
             SourceOrdinal::Library(file_ordinal),
@@ -7336,7 +7323,6 @@ impl InjectedCompileRoute for CompleteSourceRoute {
         module_ordinal: ModuleOrdinal,
         binder: &Binder,
         scope: ScopeId,
-        program: &Program<'_>,
         spans: &super::ModuleDeclarationSpans,
         declarations: &super::context::TypeDeclTable<'_>,
         inventory: &super::decls::inventory::BoundTypeDeclarationInventory<'_>,
@@ -7347,7 +7333,6 @@ impl InjectedCompileRoute for CompleteSourceRoute {
             SourceOrdinal::User(module_ordinal),
             binder,
             scope,
-            program,
             spans,
         );
         attach_class_bindings_from_inventory(
@@ -7654,21 +7639,23 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
         .map_err(InjectedProfileError::Reporting)?;
     }
     let mut declaration_inventories = Vec::with_capacity(canonical.len());
+    let mut declaration_fragment_batch =
+        super::decls::inventory::CanonicalFragmentAuthenticationBatch::default();
     for (((input, _program), module), manifest) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
         .zip(declaration_manifests)
     {
-        let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
+        let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
             &binder,
             module,
             input.source_key,
             manifest,
             None,
+            &mut declaration_fragment_batch,
         )
         .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-        let _inventory_receipt = inventory.receipt();
         declaration_inventories.push(inventory);
     }
 
@@ -7700,7 +7687,7 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     #[cfg(any(test, feature = "test-utils"))]
     let initial_class_id = next_class_id;
     let declaration_spans = super::ModuleDeclarationSpans::index(&binder);
-    for (index, (((input, program), scope), inventory)) in canonical
+    for (index, (((input, _program), scope), inventory)) in canonical
         .iter()
         .zip(&parsed)
         .zip(module_scopes.iter().copied())
@@ -7788,7 +7775,6 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                 module_ordinal,
                 &binder,
                 scope,
-                program,
                 &declaration_spans,
                 &type_decls,
                 inventory,
@@ -7800,7 +7786,6 @@ fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
                 input.file_ordinal,
                 &binder,
                 scope,
-                program,
                 &declaration_spans,
                 &type_decls,
                 inventory,
@@ -8568,21 +8553,24 @@ pub fn compile_library_binder_checkpoint(
             module_scopes,
             ..
         } = frontend;
+        let mut declaration_fragment_batch =
+            super::decls::inventory::CanonicalFragmentAuthenticationBatch::default();
         for (((input, _program), module), manifest) in canonical
             .iter()
             .zip(&parsed)
             .zip(module_scopes.iter().copied())
             .zip(declaration_manifests)
         {
-            let inventory = super::decls::inventory::BoundTypeDeclarationInventory::build(
-                &binder,
-                module,
-                input.source_key,
-                manifest,
-                None,
-            )
-            .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
-            let _inventory_receipt = inventory.receipt();
+            let _inventory =
+                super::decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
+                    &binder,
+                    module,
+                    input.source_key,
+                    manifest,
+                    None,
+                    &mut declaration_fragment_batch,
+                )
+                .map_err(|error| InjectedProfileError::Binder(error.to_string()))?;
         }
         let library_units = canonical
             .iter()
@@ -10568,6 +10556,9 @@ declare class SparseAttachedMerge<T> { classValue: T }
                 admitted: 4,
                 rejected: 0,
                 exact_join_attempts: 4,
+                raw_probe_attempts: 0,
+                fragment_checks: 4,
+                completeness_checks: 0,
                 dense_slots: 4,
             }
         );
@@ -10621,6 +10612,9 @@ declare class SparseAttachedMerge<T> { classValue: T }
                 admitted: 7,
                 rejected: 0,
                 exact_join_attempts: 7,
+                raw_probe_attempts: 0,
+                fragment_checks: 7,
+                completeness_checks: 0,
                 dense_slots: 7,
             }
         );

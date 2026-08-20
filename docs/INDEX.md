@@ -40,8 +40,9 @@ decisions → reference → archive.
      If everything is "hot", nothing is. -->
 - **Declaration inventory blocks backlog 44** — the active
   [`declaration-inventory sprint`](sprints/sprint-2026-08-18-canonical-declaration-inventory.md)
-  has established the authenticated inventory seam. Its remaining consumer cutover will replace
-  the parallel checker/interface traversals and close the reachable local-type publication panic.
+  has cut declaration reservation, publication, and class attachment over to the authenticated
+  inventory. WU4 closed the residual duplicate work and proved linear selected-replay coverage;
+  WU5 lifecycle gates and archival are next.
   [`ADR-0022`](decisions/0022-use-one-binder-authenticated-declaration-inventory.md)
   freezes the one-pass manifest, exact binder join, module-local dense map, and AST-free frozen
   product boundary before semantic consumers move. The archived

@@ -805,7 +805,6 @@ fn try_bootstrap_test_support_prelude<Error>(
         None,
     )
     .expect("trusted prelude has one canonical declaration inventory");
-    let _inventory_receipt = inventory.receipt();
     let mut next_type_param = 0;
     let mut next_class_id = 0;
     let mut type_resolved: TypeResolvedTable = vec![None; binder.type_groups.len()].into();
@@ -825,7 +824,6 @@ fn try_bootstrap_test_support_prelude<Error>(
         SourceOrdinal::User(prelude_ordinal),
         &binder,
         binder.prelude_module,
-        &parsed.program,
         &declaration_spans,
     );
     attach_class_bindings_from_inventory(
@@ -1194,7 +1192,6 @@ where
         None,
     )
     .expect("bound user module has one canonical declaration inventory");
-    let _inventory_receipt = inventory.receipt();
     let BoundUserBase {
         published_types,
         library_semantic_identities,
@@ -1225,7 +1222,6 @@ where
         SourceOrdinal::User(module_ordinal),
         &binder,
         binder.module,
-        program,
         &ModuleDeclarationSpans::index(&binder),
     );
     attach_class_bindings_from_inventory(
@@ -2185,11 +2181,8 @@ fn check_project_programs_with_default_candidates_and_class_attachment_receipt<'
         units,
         None,
         Some(&plan),
-        |binder, reservations, _| {
-            receipt.replace(Some(class_attachment_receipt_for_test(
-                binder,
-                reservations,
-            )));
+        |_, reservations, _| {
+            receipt.replace(Some(class_attachment_receipt_for_test(reservations)));
         },
         |_, _, _, _, _, _, _| {},
         |_| {},
@@ -2692,6 +2685,8 @@ where
             });
         }
     }
+    let mut declaration_fragment_batch =
+        decls::inventory::CanonicalFragmentAuthenticationBatch::default();
     let library_declaration_inventories = if let Some(epoch) = private_collision_epoch.as_ref() {
         library_programs
             .iter()
@@ -2709,15 +2704,15 @@ where
                 let source = binder
                     .source_for_module(module)
                     .ok_or("scheduled private library module has no source identity")?;
-                let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+                let inventory = decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
                     &binder,
                     module,
                     source,
                     manifest,
                     Some(&epoch.affected_owners),
+                    &mut declaration_fragment_batch,
                 )
                 .map_err(|_| "selected library source has no canonical declaration inventory")?;
-                let _inventory_receipt = inventory.receipt();
                 Ok(inventory)
             })
             .collect::<Result<Vec<_>, &'static str>>()?
@@ -2735,14 +2730,30 @@ where
             let source = binder
                 .source_for_module(scope)
                 .ok_or("bound project module has no source identity")?;
-            let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
-                &binder, scope, source, manifest, None,
+            let inventory = decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
+                &binder,
+                scope,
+                source,
+                manifest,
+                None,
+                &mut declaration_fragment_batch,
             )
             .map_err(|_| "bound project module has no canonical declaration inventory")?;
-            let _inventory_receipt = inventory.receipt();
             Ok(inventory)
         })
         .collect::<Result<Vec<_>, &'static str>>()?;
+    if let Some(epoch) = private_collision_epoch.as_ref() {
+        decls::inventory::validate_selected_inventory_batch(
+            &binder,
+            library_declaration_inventories
+                .iter()
+                .chain(&user_declaration_inventories),
+            &epoch.affected_owners,
+            &published_types,
+            &epoch.owner_sites,
+        )
+        .map_err(|_| "selected declaration batch is not inventory-complete")?;
+    }
     decl_types.resize(binder.decl_count);
 
     let selected_library_units = if let Some(epoch) = private_collision_epoch.as_ref() {
@@ -2854,7 +2865,6 @@ where
             SourceOrdinal::User(unit.module_ordinal),
             &binder,
             scope,
-            unit.program,
             &declaration_spans,
         );
         attach_class_bindings_from_inventory(
@@ -3328,7 +3338,6 @@ pub struct ClassAttachmentReceiptForTest {
 
 #[cfg(any(test, feature = "test-utils"))]
 pub fn class_attachment_receipt_for_test<Ticket: Copy + PartialEq>(
-    _binder: &Binder,
     reservations: &LexicalReservations<Ticket>,
 ) -> ClassAttachmentReceiptForTest {
     let rows = reservations
@@ -3805,7 +3814,7 @@ fn private_project_semantic_evidence_for_test(
     PrivateProjectSemanticEvidenceForTest {
         results: Vec::new(),
         declaration_receipt: declaration_parity_receipt_for_test(pass),
-        class_attachments: class_attachment_receipt_for_test(pass.binder, &pass.lexical_events),
+        class_attachments: class_attachment_receipt_for_test(&pass.lexical_events),
         selected_library_terminals: selected_library_terminal_evidence_for_test(pass),
         normalized_records: Vec::new(),
         root_slots,
@@ -4182,6 +4191,8 @@ pub(crate) fn bind_library_checkpoint_project_programs(
         &mut external_effects,
         AuthoritativeProjectBinderFinish::Continuation,
     )?;
+    let mut declaration_fragment_batch =
+        decls::inventory::CanonicalFragmentAuthenticationBatch::default();
     for ((module, _unit), manifest) in bound
         .module_scopes
         .iter()
@@ -4193,15 +4204,15 @@ pub(crate) fn bind_library_checkpoint_project_programs(
             .binder
             .source_for_module(module)
             .ok_or_else(|| "bound project module has no source identity".to_owned())?;
-        let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
+        let _inventory = decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
             &bound.binder,
             module,
             source,
             manifest,
             None,
+            &mut declaration_fragment_batch,
         )
         .map_err(|error| error.to_string())?;
-        let _inventory_receipt = inventory.receipt();
     }
     #[cfg(any(test, feature = "test-utils"))]
     {
@@ -4704,6 +4715,8 @@ where
     PROJECT_BINDING_ORDINARY_CONSUMERS
         .set(PROJECT_BINDING_ORDINARY_CONSUMERS.get().saturating_add(1));
 
+    let mut declaration_fragment_batch =
+        decls::inventory::CanonicalFragmentAuthenticationBatch::default();
     let declaration_inventories = module_scopes
         .iter()
         .copied()
@@ -4713,11 +4726,15 @@ where
             let source = binder
                 .source_for_module(scope)
                 .ok_or("bound project module has no source identity")?;
-            let inventory = decls::inventory::BoundTypeDeclarationInventory::build(
-                &binder, scope, source, manifest, None,
+            let inventory = decls::inventory::BoundTypeDeclarationInventory::build_in_batch(
+                &binder,
+                scope,
+                source,
+                manifest,
+                None,
+                &mut declaration_fragment_batch,
             )
             .map_err(|_| "bound project module has no canonical declaration inventory")?;
-            let _inventory_receipt = inventory.receipt();
             Ok(inventory)
         })
         .collect::<Result<Vec<_>, &'static str>>()?;
@@ -4747,7 +4764,6 @@ where
             SourceOrdinal::User(unit.module_ordinal),
             &binder,
             scope,
-            unit.program,
             &declaration_spans,
         );
         attach_class_bindings_from_inventory(
@@ -5882,7 +5898,6 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
     source_ordinal: SourceOrdinal,
     binder: &Binder,
     scope: ScopeId,
-    program: &Program<'_>,
     spans: &ModuleDeclarationSpans,
 ) {
     let span = spans.module(scope);
@@ -5934,8 +5949,6 @@ fn attach_type_decl_owners<Ticket: Copy + PartialEq>(
             );
         }
     }
-
-    let _ = program;
 }
 
 fn attach_selected_library_decl_owners<Ticket: Copy + PartialEq>(

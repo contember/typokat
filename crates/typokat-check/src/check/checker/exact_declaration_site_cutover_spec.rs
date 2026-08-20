@@ -65,7 +65,7 @@ fn class_attachment_consumes_inventory_identity_without_a_second_source_lookup()
     );
     assert!(exact_join.contains("exact.kind!=source.kind"));
     assert!(exact_join.contains("exact.site.module!=module"));
-    assert!(exact_join.contains("fragment.declaration==exact.id"));
+    assert!(exact_join.contains("fragment.declaration!=exact.id"));
     assert!(exact_join.contains("declaration:exact.id"));
     for forbidden_join in [
         "walk_type_decls",
@@ -79,6 +79,42 @@ fn class_attachment_consumes_inventory_identity_without_a_second_source_lookup()
             "inventory join uses a forbidden fallback through {forbidden_join}"
         );
     }
+
+    let lexical_source = include_str!("lexical_events.rs");
+    let reservation = lexical_source
+        .split_once("fn reserve_program_with_context<")
+        .and_then(|(_, rest)| {
+            rest.split_once("\n    fn reserve_interface_occurrences_from_manifest")
+        })
+        .map(|(body, _)| body)
+        .expect("manifest-aware lexical reservation kernel");
+    assert!(reservation.contains("manifest.declarations()"));
+    assert!(!reservation.contains("source_declaration_occurrences"));
+    assert!(!lexical_source.contains("source_declaration_occurrences"));
+
+    assert!(!exact_join.contains("partition_point"));
+    assert!(exact_join.contains("bound.fragments.get(fragment_index)"));
+    assert!(!exact_join.contains(".enumerate().filter("));
+    assert!(!exact_join.contains("ifletSome(selected)=selected"));
+    let fragment_batch = inventory_source
+        .split_once("impl CanonicalFragmentAuthenticationBatch")
+        .and_then(|(_, rest)| {
+            rest.split_once("\npub(in crate::check::checker) fn validate_selected_inventory_batch")
+        })
+        .map(|(body, _)| body)
+        .expect("canonical fragment batch dispatcher");
+    assert!(fragment_batch.contains("bound.fragments.iter().enumerate()"));
+    assert!(fragment_batch.contains("fragment.declaration"));
+    assert!(!fragment_batch.contains("partition_point"));
+
+    let selected_batch = inventory_source
+        .split_once("fn validate_selected_inventory_batch")
+        .and_then(|(_, rest)| rest.split_once("\n#[derive(Copy, Clone"))
+        .map(|(body, _)| body)
+        .expect("selected inventory batch validator");
+    assert!(selected_batch.contains("group_seen"));
+    assert!(selected_batch.contains("row.fragment_index"));
+    assert!(selected_batch.contains("record_completeness_checks_for_test"));
 }
 
 #[test]

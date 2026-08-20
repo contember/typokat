@@ -389,6 +389,24 @@ passes its closure gates.
   removed. Focused architecture, inventory, sparse attachment, and checker/library route receipts
   passed `2/2`, `10/10`, `3/3`, `2/2`, and `2/2`; all-target check and clippy, formatting, and diff
   checks passed.
+- **WU4 closure review.** Lexical declaration reservation now consumes
+  `SourceDeclarationManifest::declarations`; only the transient compatibility projection and its
+  tests retain `source_declaration_occurrences`. Inventory joins use a transient route-batch
+  dispatch built by reading each relevant `TypeGroup::fragments` sequence once; the sequence stays
+  the sole fragment-index and ordering authority. Sparse replay validates its complete selected
+  source batch once before mutation. The exact selected-route work receipt is
+  `62` inventory builds, `2,378` exact joins, `2,385` canonical fragment checks, zero raw probes,
+  and `1,279` selected completeness checks. The seven extra fragment checks are rows in relevant
+  groups outside the selected payload batch, not repeated scans. An eight-fragment merged group
+  pins `8` exact joins and `8` fragment checks, while ordinary and multi-source selected controls
+  reject authenticated binder fragments whose payload is absent. Selected completeness uses a
+  route-local bitmap indexed by each authenticated canonical fragment index, so reversed source
+  order remains valid while duplicate or missing payloads fail closed. Raw probes remain confined
+  to explicit invalid ambient/global rejection placement. Independent semantic and architecture
+  re-reviews passed. Inventory tests passed `12/12`; the reversed-source-order, architecture,
+  selected replay, and route receipt gates passed; workspace `cargo clippy --all-targets -- -D
+  warnings` passed. The final ordinary conformance gate passed with receipt `580/696/580/0` in
+  `129.44 s`.
 
 <!-- Append as work proceeds: discoveries, deviations, blockers. Graduate each entry:
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;

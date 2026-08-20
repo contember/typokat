@@ -1,14 +1,23 @@
 //! Binder-authenticated source type-declaration inventory.
 
-use super::super::replay_index::ReplayOwner;
+use super::super::replay_index::{
+    CollisionReplayOwnerSite, CollisionReplaySiteProvenance, ReplayOwner,
+};
+use super::super::type_groups::{
+    PublishedTypeEnvironment, PublishedTypeGroupSurface, PublishedTypeGroupTerminal,
+};
+#[cfg(any(test, feature = "test-utils"))]
+use crate::binder::declaration::SourceInterfaceOccurrence;
 use crate::binder::declaration::{
     DeclId, DeclarationKind, LexicalDeclaration, SourceDeclarationManifest,
-    SourceInterfaceOccurrence, SourceTypeFragmentPayload, SourceTypeFragmentPlacement, TypeGroupId,
+    SourceTypeFragmentPayload, SourceTypeFragmentPlacement, TypeGroupId,
 };
 use crate::binder::namespace::SourceUnitKey;
 use crate::binder::scope::ScopeId;
 use crate::binder::Binder;
-use std::collections::BTreeSet;
+use crate::types::repr::ClassId;
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(any(test, feature = "test-utils"))]
 use std::ops::Range;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -25,6 +34,9 @@ pub struct DeclarationInventoryWorkForTest {
     pub admitted: u64,
     pub rejected: u64,
     pub exact_join_attempts: u64,
+    pub raw_probe_attempts: u64,
+    pub fragment_checks: u64,
+    pub completeness_checks: u64,
     pub dense_slots: u64,
 }
 
@@ -36,6 +48,9 @@ impl DeclarationInventoryWorkForTest {
         admitted: 0,
         rejected: 0,
         exact_join_attempts: 0,
+        raw_probe_attempts: 0,
+        fragment_checks: 0,
+        completeness_checks: 0,
         dense_slots: 0,
     };
 
@@ -48,9 +63,57 @@ impl DeclarationInventoryWorkForTest {
             exact_join_attempts: self
                 .exact_join_attempts
                 .saturating_sub(start.exact_join_attempts),
+            raw_probe_attempts: self
+                .raw_probe_attempts
+                .saturating_sub(start.raw_probe_attempts),
+            fragment_checks: self.fragment_checks.saturating_sub(start.fragment_checks),
+            completeness_checks: self
+                .completeness_checks
+                .saturating_sub(start.completeness_checks),
             dense_slots: self.dense_slots.saturating_sub(start.dense_slots),
         }
     }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn update_inventory_work_for_test(update: impl FnOnce(&mut DeclarationInventoryWorkForTest)) {
+    DECLARATION_INVENTORY_WORK_FOR_TEST.with(|cell| {
+        let mut work = cell.get();
+        update(&mut work);
+        cell.set(work);
+    });
+}
+
+fn record_exact_join_attempt_for_test() {
+    #[cfg(any(test, feature = "test-utils"))]
+    update_inventory_work_for_test(|work| {
+        work.exact_join_attempts = work.exact_join_attempts.saturating_add(1);
+    });
+}
+
+fn record_raw_probe_attempt_for_test() {
+    #[cfg(any(test, feature = "test-utils"))]
+    update_inventory_work_for_test(|work| {
+        work.raw_probe_attempts = work.raw_probe_attempts.saturating_add(1);
+    });
+}
+
+fn record_fragment_check_for_test() {
+    #[cfg(any(test, feature = "test-utils"))]
+    update_inventory_work_for_test(|work| {
+        work.fragment_checks = work.fragment_checks.saturating_add(1);
+    });
+}
+
+fn record_completeness_checks_for_test(count: usize) {
+    #[cfg(any(test, feature = "test-utils"))]
+    update_inventory_work_for_test(|work| {
+        work.completeness_checks = work
+            .completeness_checks
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    });
+    #[cfg(not(any(test, feature = "test-utils")))]
+    let _ = count;
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -74,10 +137,12 @@ pub(in crate::check::checker) struct BoundTypeDeclaration<'ast> {
     pub declaration: DeclId,
     pub scope: ScopeId,
     pub group: TypeGroupId,
+    #[cfg(any(test, feature = "test-utils"))]
     pub source: SourceUnitKey,
     pub fragment_index: usize,
     pub selected: bool,
     pub payload: SourceTypeFragmentPayload<'ast>,
+    #[cfg(any(test, feature = "test-utils"))]
     pub interface_occurrences: Range<usize>,
 }
 
@@ -152,6 +217,7 @@ pub(in crate::check::checker) enum InventoryBuildError {
         declaration: DeclId,
         group: TypeGroupId,
     },
+    SelectedOwnerMissingPayload(ReplayOwner),
 }
 
 impl std::fmt::Display for InventoryBuildError {
@@ -209,10 +275,12 @@ impl<'ast> DenseDeclMap<'ast> {
             .and_then(Option::as_ref)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn base(&self) -> Option<DeclId> {
         self.base
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn slot_len(&self) -> usize {
         self.slots.len()
     }
@@ -226,13 +294,212 @@ impl<'ast> DenseDeclMap<'ast> {
 #[derive(Debug)]
 pub(in crate::check::checker) struct BoundTypeDeclarationInventory<'ast> {
     module: ScopeId,
+    #[cfg(any(test, feature = "test-utils"))]
     source: SourceUnitKey,
     manifest: SourceDeclarationManifest<'ast>,
     declarations: DenseDeclMap<'ast>,
     outcomes: Box<[SourceTypeDeclarationOutcome]>,
 }
 
+/// Transient declaration dispatch shared by every inventory build in one route batch.
+#[derive(Default)]
+pub(in crate::check::checker) struct CanonicalFragmentAuthenticationBatch {
+    by_group: BTreeMap<TypeGroupId, BTreeMap<u32, usize>>,
+}
+
+impl CanonicalFragmentAuthenticationBatch {
+    fn fragment_index(
+        &mut self,
+        binder: &Binder,
+        group: TypeGroupId,
+        declaration: DeclId,
+    ) -> Result<usize, InventoryBuildError> {
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.by_group.entry(group) {
+            let bound = binder
+                .type_groups
+                .get(group)
+                .ok_or(InventoryBuildError::MissingGroup(group))?;
+            let mut dispatch = BTreeMap::new();
+            for (fragment_index, fragment) in bound.fragments.iter().enumerate() {
+                record_fragment_check_for_test();
+                if dispatch
+                    .insert(fragment.declaration.0, fragment_index)
+                    .is_some()
+                {
+                    return Err(InventoryBuildError::FragmentMultiplicity {
+                        declaration: fragment.declaration,
+                        group,
+                        matches: 2,
+                    });
+                }
+            }
+            entry.insert(dispatch);
+        }
+        self.by_group
+            .get(&group)
+            .and_then(|dispatch| dispatch.get(&declaration.0))
+            .copied()
+            .ok_or(InventoryBuildError::FragmentMultiplicity {
+                declaration,
+                group,
+                matches: 0,
+            })
+    }
+}
+
+pub(in crate::check::checker) fn validate_selected_inventory_batch<'a, 'ast: 'a>(
+    binder: &Binder,
+    inventories: impl IntoIterator<Item = &'a BoundTypeDeclarationInventory<'ast>>,
+    selected: &BTreeSet<ReplayOwner>,
+    published_types: &PublishedTypeEnvironment,
+    owner_sites: &[CollisionReplayOwnerSite],
+) -> Result<(), InventoryBuildError> {
+    let mut group_seen = BTreeMap::<TypeGroupId, Box<[bool]>>::new();
+    let mut class_counts = BTreeMap::<ClassId, usize>::new();
+    for owner in selected {
+        match *owner {
+            ReplayOwner::TypeGroup(group) => {
+                let bound = binder
+                    .type_groups
+                    .get(group)
+                    .ok_or(InventoryBuildError::MissingGroup(group))?;
+                group_seen.insert(group, vec![false; bound.fragments.len()].into_boxed_slice());
+            }
+            ReplayOwner::Class(class) => {
+                class_counts.insert(class, 0);
+            }
+            _ => {}
+        }
+    }
+
+    for inventory in inventories {
+        for outcome in inventory.outcomes() {
+            let TypeDeclarationInventoryOutcome::Admitted(row) = outcome else {
+                continue;
+            };
+            if let Some(seen) = group_seen.get_mut(&row.group) {
+                let group = binder
+                    .type_groups
+                    .get(row.group)
+                    .ok_or(InventoryBuildError::MissingGroup(row.group))?;
+                let Some(expected) = group.fragments.get(row.fragment_index) else {
+                    return Err(InventoryBuildError::FragmentIdentityMismatch {
+                        declaration: row.declaration,
+                        group: row.group,
+                    });
+                };
+                if expected.declaration != row.declaration {
+                    return Err(InventoryBuildError::FragmentIdentityMismatch {
+                        declaration: row.declaration,
+                        group: row.group,
+                    });
+                }
+                let Some(slot) = seen.get_mut(row.fragment_index) else {
+                    return Err(InventoryBuildError::FragmentIdentityMismatch {
+                        declaration: row.declaration,
+                        group: row.group,
+                    });
+                };
+                if std::mem::replace(slot, true) {
+                    return Err(InventoryBuildError::DuplicatePayload(row.declaration));
+                }
+                record_completeness_checks_for_test(1);
+                continue;
+            }
+            let SourceTypeFragmentPayload::Class(_) = row.payload else {
+                continue;
+            };
+            let class = match published_types.groups().get(row.group) {
+                Some(PublishedTypeGroupTerminal::Ready(group)) => match group.surface {
+                    PublishedTypeGroupSurface::Class(class) => class,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            let Some(count) = class_counts.get_mut(&class) else {
+                continue;
+            };
+            let owner = ReplayOwner::Class(class);
+            let first = owner_sites.partition_point(|site| site.owner < owner);
+            let last = owner_sites.partition_point(|site| site.owner <= owner);
+            let exact_sites = owner_sites[first..last]
+                .iter()
+                .filter(|site| {
+                    matches!(
+                        site.provenance,
+                        CollisionReplaySiteProvenance::Declaration {
+                            declaration,
+                            kind: DeclarationKind::Class,
+                            ..
+                        } if declaration == row.declaration
+                    )
+                })
+                .count();
+            if exact_sites != 1 {
+                return Err(InventoryBuildError::AuthenticatedFragmentMissingPayload {
+                    declaration: row.declaration,
+                    group: row.group,
+                });
+            }
+            *count = count.saturating_add(1);
+            record_completeness_checks_for_test(1);
+        }
+    }
+
+    for (group, seen) in group_seen {
+        let bound = binder
+            .type_groups
+            .get(group)
+            .ok_or(InventoryBuildError::MissingGroup(group))?;
+        if let Some(missing_index) = seen.iter().position(|seen| !seen) {
+            let missing = &bound.fragments[missing_index];
+            return Err(InventoryBuildError::AuthenticatedFragmentMissingPayload {
+                declaration: missing.declaration,
+                group,
+            });
+        }
+    }
+    for (class, actual) in class_counts {
+        let owner = ReplayOwner::Class(class);
+        let first = owner_sites.partition_point(|site| site.owner < owner);
+        let last = owner_sites.partition_point(|site| site.owner <= owner);
+        let mut expected = 0usize;
+        let mut first_expected = None;
+        for site in &owner_sites[first..last] {
+            let CollisionReplaySiteProvenance::Declaration {
+                declaration,
+                kind: DeclarationKind::Class,
+                ..
+            } = site.provenance
+            else {
+                continue;
+            };
+            let Some(exact) = binder.declarations.get(declaration) else {
+                continue;
+            };
+            let Some(group) = exact.type_group else {
+                continue;
+            };
+            if selected.contains(&ReplayOwner::TypeGroup(group)) {
+                continue;
+            }
+            expected = expected.saturating_add(1);
+            first_expected.get_or_insert((declaration, group));
+        }
+        if actual != expected {
+            let (declaration, group) =
+                first_expected.ok_or(InventoryBuildError::SelectedOwnerMissingPayload(owner))?;
+            return Err(InventoryBuildError::AuthenticatedFragmentMissingPayload {
+                declaration,
+                group,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(in crate::check::checker) struct DeclarationInventoryReceipt {
     pub module: ScopeId,
     pub source: SourceUnitKey,
@@ -252,6 +519,25 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
         manifest: SourceDeclarationManifest<'ast>,
         selected: Option<&BTreeSet<ReplayOwner>>,
     ) -> Result<Self, InventoryBuildError> {
+        let mut fragment_batch = CanonicalFragmentAuthenticationBatch::default();
+        Self::build_in_batch(
+            binder,
+            module,
+            source_key,
+            manifest,
+            selected,
+            &mut fragment_batch,
+        )
+    }
+
+    pub(in crate::check::checker) fn build_in_batch(
+        binder: &Binder,
+        module: ScopeId,
+        source_key: SourceUnitKey,
+        manifest: SourceDeclarationManifest<'ast>,
+        selected: Option<&BTreeSet<ReplayOwner>>,
+        fragment_batch: &mut CanonicalFragmentAuthenticationBatch,
+    ) -> Result<Self, InventoryBuildError> {
         #[cfg(any(test, feature = "test-utils"))]
         let source_type_rows = manifest.type_fragments().len();
         let result = Self::build_with_exact_lookup(
@@ -260,17 +546,17 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             source_key,
             manifest,
             selected,
+            fragment_batch,
             |module, binding_start, kind| binder.exact_declaration_at(module, binding_start, kind),
         );
         #[cfg(any(test, feature = "test-utils"))]
         DECLARATION_INVENTORY_WORK_FOR_TEST.with(|cell| {
             let work = cell.get();
-            let (admitted, rejected, exact_join_attempts, dense_slots) =
-                result.as_ref().map_or((0, 0, 0, 0), |inventory| {
+            let (admitted, rejected, dense_slots) =
+                result.as_ref().map_or((0, 0, 0), |inventory| {
                     (
                         inventory.declarations.iter().count(),
                         inventory.rejected_count(),
-                        source_type_rows,
                         inventory.declarations.slot_len(),
                     )
                 });
@@ -285,9 +571,10 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 rejected: work
                     .rejected
                     .saturating_add(u64::try_from(rejected).unwrap_or(u64::MAX)),
-                exact_join_attempts: work
-                    .exact_join_attempts
-                    .saturating_add(u64::try_from(exact_join_attempts).unwrap_or(u64::MAX)),
+                exact_join_attempts: work.exact_join_attempts,
+                raw_probe_attempts: work.raw_probe_attempts,
+                fragment_checks: work.fragment_checks,
+                completeness_checks: work.completeness_checks,
                 dense_slots: work
                     .dense_slots
                     .saturating_add(u64::try_from(dense_slots).unwrap_or(u64::MAX)),
@@ -302,6 +589,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
         source_key: SourceUnitKey,
         manifest: SourceDeclarationManifest<'ast>,
         selected: Option<&BTreeSet<ReplayOwner>>,
+        fragment_batch: &mut CanonicalFragmentAuthenticationBatch,
         mut exact_declaration_at: impl FnMut(
             ScopeId,
             u32,
@@ -320,12 +608,8 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
         let mut outcomes = Vec::with_capacity(manifest.type_fragments().len());
 
         for source in manifest.type_fragments() {
+            record_exact_join_attempt_for_test();
             let exact = exact_declaration_at(module, source.binding_span.start, source.kind);
-            let recorded = binder.declarations.declaration_at_site(
-                module,
-                source.binding_span.start,
-                source.kind,
-            );
             let matches_source = |declaration: &LexicalDeclaration| {
                 declaration.kind == source.kind
                     && declaration.site.module == module
@@ -348,15 +632,17 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     Some(SourceTypeFragmentRejection::DefaultCandidateNotAdmitted)
                 }
                 SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
-                    if exact.is_none()
-                        && recorded.is_some_and(|declaration| {
-                            declaration.site.scope.is_none()
-                                && declaration.type_group.is_none()
-                                && declaration.kind == source.kind
-                                && declaration.site.module == module
-                                && declaration.site.declaration_span == source.declaration_span
-                                && declaration.site.binding_span == source.binding_span
-                        }) =>
+                    if exact.is_none() && {
+                        record_raw_probe_attempt_for_test();
+                        binder
+                            .declarations
+                            .declaration_at_site(module, source.binding_span.start, source.kind)
+                            .is_some_and(|declaration| {
+                                declaration.site.scope.is_none()
+                                    && declaration.type_group.is_none()
+                                    && matches_source(declaration)
+                            })
+                    } =>
                 {
                     Some(SourceTypeFragmentRejection::NotSemanticallyAdmitted)
                 }
@@ -366,11 +652,21 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                             Some(declaration) => {
                                 matches_source(declaration) && declaration.type_group.is_none()
                             }
-                            None => recorded.is_some_and(|declaration| {
-                                matches_source(declaration)
-                                    && declaration.site.scope.is_none()
-                                    && declaration.type_group.is_none()
-                            }),
+                            None => {
+                                record_raw_probe_attempt_for_test();
+                                binder
+                                    .declarations
+                                    .declaration_at_site(
+                                        module,
+                                        source.binding_span.start,
+                                        source.kind,
+                                    )
+                                    .is_some_and(|declaration| {
+                                        matches_source(declaration)
+                                            && declaration.site.scope.is_none()
+                                            && declaration.type_group.is_none()
+                                    })
+                            }
                         } =>
                 {
                     Some(SourceTypeFragmentRejection::NotSemanticallyAdmitted)
@@ -427,23 +723,19 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 .type_groups
                 .get(group)
                 .ok_or(InventoryBuildError::MissingGroup(group))?;
-            let mut matches = bound
-                .fragments
-                .iter()
-                .enumerate()
-                .filter(|(_, fragment)| fragment.declaration == exact.id);
-            let Some((fragment_index, fragment)) = matches.next() else {
+            let fragment_index = fragment_batch.fragment_index(binder, group, exact.id)?;
+            let Some(fragment) = bound.fragments.get(fragment_index) else {
                 return Err(InventoryBuildError::FragmentMultiplicity {
                     declaration: exact.id,
                     group,
                     matches: 0,
                 });
             };
-            if matches.next().is_some() {
+            if fragment.declaration != exact.id {
                 return Err(InventoryBuildError::FragmentMultiplicity {
                     declaration: exact.id,
                     group,
-                    matches: 2,
+                    matches: 0,
                 });
             }
             let scope = exact
@@ -469,11 +761,13 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     declaration: exact.id,
                     scope,
                     group,
+                    #[cfg(any(test, feature = "test-utils"))]
                     source: fragment.source,
                     fragment_index,
                     selected: selected
                         .is_none_or(|owners| owners.contains(&ReplayOwner::TypeGroup(group))),
                     payload: source.payload,
+                    #[cfg(any(test, feature = "test-utils"))]
                     interface_occurrences: source.interface_occurrences.clone(),
                 },
             ));
@@ -481,6 +775,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
         }
 
         let declarations = DenseDeclMap::from_rows(rows)?;
+        let mut type_fragments = manifest.type_fragments().iter().peekable();
         for occurrence in manifest.declarations().iter().filter(|occurrence| {
             matches!(
                 occurrence.kind,
@@ -490,6 +785,20 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     | DeclarationKind::Enum
             )
         }) {
+            while type_fragments.peek().is_some_and(|fragment| {
+                fragment.declaration_span.start < occurrence.declaration_span.start
+            }) {
+                type_fragments.next();
+            }
+            if type_fragments.peek().is_some_and(|fragment| {
+                fragment.kind == occurrence.kind
+                    && fragment.declaration_span == occurrence.declaration_span
+                    && fragment.binding_span == occurrence.binding_span
+            }) {
+                type_fragments.next();
+                continue;
+            }
+            record_exact_join_attempt_for_test();
             let Some(exact) =
                 exact_declaration_at(module, occurrence.binding_span.start, occurrence.kind)
             else {
@@ -505,29 +814,9 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 });
             }
         }
-        if let Some(selected) = selected {
-            for owner in selected {
-                let ReplayOwner::TypeGroup(group) = owner else {
-                    continue;
-                };
-                let Some(bound) = binder.type_groups.get(*group) else {
-                    return Err(InventoryBuildError::MissingGroup(*group));
-                };
-                for fragment in &bound.fragments {
-                    if fragment.site.module == module
-                        && declarations.get(fragment.declaration).is_none()
-                    {
-                        return Err(InventoryBuildError::AuthenticatedFragmentMissingPayload {
-                            declaration: fragment.declaration,
-                            group: *group,
-                        });
-                    }
-                }
-            }
-        }
-
         Ok(Self {
             module,
+            #[cfg(any(test, feature = "test-utils"))]
             source: source_key,
             manifest,
             declarations,
@@ -556,6 +845,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             .collect()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     fn rejected_count(&self) -> usize {
         self.outcomes
             .iter()
@@ -563,6 +853,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
             .count()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn interface_occurrences(
         &self,
         declaration: DeclId,
@@ -603,6 +894,7 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
     }
 
     /// Read every shadow row without influencing declaration construction.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn receipt(&self) -> DeclarationInventoryReceipt {
         let mut admitted = 0usize;
         let mut selected = 0usize;
@@ -709,6 +1001,331 @@ mod tests {
     }
 
     #[test]
+    fn merged_fragment_authentication_work_is_linear() {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocator = Allocator::default();
+        let source = (0..8)
+            .map(|index| format!("interface Merged {{ field{index}: string }}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = Parser::new(&allocator, &source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+
+        let work = DeclarationInventoryWorkScopeForTest::start();
+        let inventory = BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            None,
+        )
+        .expect("all merged fragments have authenticated payloads");
+        assert_eq!(
+            work.finish(),
+            DeclarationInventoryWorkForTest {
+                builds: 1,
+                source_type_rows: 8,
+                admitted: 8,
+                rejected: 0,
+                exact_join_attempts: 8,
+                raw_probe_attempts: 0,
+                fragment_checks: 8,
+                completeness_checks: 0,
+                dense_slots: 8,
+            }
+        );
+        assert_eq!(
+            inventory
+                .declarations()
+                .iter()
+                .map(|row| row.fragment_index)
+                .collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn batch_authenticates_canonical_fragment_order_when_decl_ids_are_reversed() {
+        let prelude_allocator = Allocator::default();
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let source_11 = Parser::new(
+            &first_allocator,
+            "export {}; declare global { interface ReverseOrder { from11: string } }",
+            SourceType::ts(),
+        )
+        .parse();
+        let source_10 = Parser::new(
+            &second_allocator,
+            "export {}; declare global { interface ReverseOrder { from10: number } }",
+            SourceType::ts(),
+        )
+        .parse();
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest_11 = SourceDeclarationManifest::build(&source_11.program);
+        let manifest_10 = SourceDeclarationManifest::build(&source_10.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit_11 = CompilationUnit::implementation(SourceUnitKey(11), &source_11.program);
+        let unit_10 = CompilationUnit::implementation(SourceUnitKey(10), &source_10.program);
+        let (module_11, _) = builder.add_module_with_declaration_manifest(
+            &source_11.program,
+            &manifest_11,
+            &[],
+            unit_11,
+        );
+        let (module_10, _) = builder.add_module_with_declaration_manifest(
+            &source_10.program,
+            &manifest_10,
+            &[],
+            unit_10,
+        );
+        let binder = builder.finish(module_10);
+        let declaration_11 = binder
+            .exact_declaration_at(
+                module_11,
+                manifest_11.type_fragments()[0].binding_span.start,
+                DeclarationKind::Interface,
+            )
+            .expect("source 11 declaration");
+        let declaration_10 = binder
+            .exact_declaration_at(
+                module_10,
+                manifest_10.type_fragments()[0].binding_span.start,
+                DeclarationKind::Interface,
+            )
+            .expect("source 10 declaration");
+        assert!(declaration_11.id.0 < declaration_10.id.0);
+        assert_eq!(declaration_11.type_group, declaration_10.type_group);
+
+        let work = DeclarationInventoryWorkScopeForTest::start();
+        let mut fragment_batch = CanonicalFragmentAuthenticationBatch::default();
+        let inventory_11 = BoundTypeDeclarationInventory::build_in_batch(
+            &binder,
+            module_11,
+            SourceUnitKey(11),
+            manifest_11,
+            None,
+            &mut fragment_batch,
+        )
+        .expect("source 11 authenticates against canonical fragments");
+        let inventory_10 = BoundTypeDeclarationInventory::build_in_batch(
+            &binder,
+            module_10,
+            SourceUnitKey(10),
+            manifest_10,
+            None,
+            &mut fragment_batch,
+        )
+        .expect("source 10 authenticates against canonical fragments");
+        let row_11 = inventory_11.declarations().iter().next().expect("row 11");
+        let row_10 = inventory_10.declarations().iter().next().expect("row 10");
+        assert_eq!((row_11.fragment_index, row_10.fragment_index), (1, 0));
+        assert_eq!(
+            (row_11.source, row_10.source),
+            (SourceUnitKey(11), SourceUnitKey(10))
+        );
+        assert_eq!(
+            work.finish(),
+            DeclarationInventoryWorkForTest {
+                builds: 2,
+                source_type_rows: 2,
+                admitted: 2,
+                rejected: 0,
+                exact_join_attempts: 2,
+                raw_probe_attempts: 0,
+                fragment_checks: 2,
+                completeness_checks: 0,
+                dense_slots: 2,
+            }
+        );
+
+        let group = declaration_11.type_group.expect("merged group");
+        let selected = BTreeSet::from([ReplayOwner::TypeGroup(group)]);
+        let work = DeclarationInventoryWorkScopeForTest::start();
+        validate_selected_inventory_batch(
+            &binder,
+            [&inventory_11, &inventory_10],
+            &selected,
+            &PublishedTypeEnvironment::empty(),
+            &[],
+        )
+        .expect("selected validation accepts non-canonical route order");
+        assert_eq!(work.finish().completeness_checks, 2);
+
+        let work = DeclarationInventoryWorkScopeForTest::start();
+        let error = validate_selected_inventory_batch(
+            &binder,
+            [&inventory_11],
+            &selected,
+            &PublishedTypeEnvironment::empty(),
+            &[],
+        )
+        .expect_err("selected validation rejects the missing canonical index zero");
+        assert_eq!(
+            error,
+            InventoryBuildError::AuthenticatedFragmentMissingPayload {
+                declaration: declaration_10.id,
+                group,
+            }
+        );
+        assert_eq!(work.finish().completeness_checks, 1);
+    }
+
+    #[test]
+    fn ordinary_authenticated_fragment_without_manifest_payload_is_hard() {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocator = Allocator::default();
+        let source = "type MissingPayload = string;";
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        let binding_start = u32::try_from(source.find("MissingPayload").expect("binding offset"))
+            .expect("source offset fits u32");
+        let declaration = binder
+            .exact_declaration_at(module, binding_start, DeclarationKind::TypeAlias)
+            .expect("binder authenticated the alias");
+        let group = declaration.type_group.expect("alias has a type group");
+        let mut incomplete_manifest = manifest;
+        incomplete_manifest.remove_type_fragment_for_inventory_test(binding_start);
+
+        let error = BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            incomplete_manifest,
+            None,
+        )
+        .expect_err("an authenticated declaration cannot lose its source payload");
+        assert_eq!(
+            error,
+            InventoryBuildError::AuthenticatedFragmentMissingPayload {
+                declaration: declaration.id,
+                group,
+            }
+        );
+    }
+
+    #[test]
+    fn selected_batch_rejects_an_authenticated_fragment_missing_from_the_source_batch() {
+        let prelude_allocator = Allocator::default();
+        let first_allocator = Allocator::default();
+        let second_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let first = Parser::new(
+            &first_allocator,
+            "export {}; declare global { interface SelectedMerged { first: string } }",
+            SourceType::ts(),
+        )
+        .parse();
+        let second = Parser::new(
+            &second_allocator,
+            "export {}; declare global { interface SelectedMerged { second: number } }",
+            SourceType::ts(),
+        )
+        .parse();
+        assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+        assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let first_manifest = SourceDeclarationManifest::build(&first.program);
+        let second_manifest = SourceDeclarationManifest::build(&second.program);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let first_source = SourceUnitKey(10);
+        let second_source = SourceUnitKey(11);
+        let first_unit = CompilationUnit::implementation(first_source, &first.program);
+        let second_unit = CompilationUnit::implementation(second_source, &second.program);
+        builder.reserve_script_namespace_roots([
+            (&first.program, first_unit),
+            (&second.program, second_unit),
+        ]);
+        let (first_module, _) = builder.add_module_with_declaration_manifest(
+            &first.program,
+            &first_manifest,
+            &[],
+            first_unit,
+        );
+        let (second_module, _) = builder.add_module_with_declaration_manifest(
+            &second.program,
+            &second_manifest,
+            &[],
+            second_unit,
+        );
+        let binder = builder.finish(second_module);
+        let first_declaration = binder
+            .exact_declaration_at(
+                first_module,
+                first_manifest.type_fragments()[0].binding_span.start,
+                DeclarationKind::Interface,
+            )
+            .expect("first interface declaration");
+        let second_declaration = binder
+            .exact_declaration_at(
+                second_module,
+                second_manifest.type_fragments()[0].binding_span.start,
+                DeclarationKind::Interface,
+            )
+            .expect("second interface declaration");
+        let group = first_declaration
+            .type_group
+            .expect("merged interface group");
+        assert_eq!(second_declaration.type_group, Some(group));
+        let selected = BTreeSet::from([ReplayOwner::TypeGroup(group)]);
+        let first_inventory = BoundTypeDeclarationInventory::build(
+            &binder,
+            first_module,
+            first_source,
+            first_manifest,
+            Some(&selected),
+        )
+        .expect("first source inventory is complete by itself");
+
+        let work = DeclarationInventoryWorkScopeForTest::start();
+        let error = validate_selected_inventory_batch(
+            &binder,
+            std::iter::once(&first_inventory),
+            &selected,
+            &PublishedTypeEnvironment::empty(),
+            &[],
+        )
+        .expect_err("the selected batch omits the second authenticated fragment");
+        assert_eq!(
+            error,
+            InventoryBuildError::AuthenticatedFragmentMissingPayload {
+                declaration: second_declaration.id,
+                group,
+            }
+        );
+        assert_eq!(work.finish().completeness_checks, 1);
+    }
+
+    #[test]
     fn inventory_rejects_unadmitted_class_expression_and_default_candidates() {
         for (source, expected) in [
             (
@@ -774,12 +1391,14 @@ mod tests {
         let mut binder = builder.finish(module);
 
         let missing_manifest = SourceDeclarationManifest::build(&parsed.program);
+        let mut fragment_batch = CanonicalFragmentAuthenticationBatch::default();
         let missing = BoundTypeDeclarationInventory::build_with_exact_lookup(
             &binder,
             module,
             SourceUnitKey::SINGLE_SOURCE,
             missing_manifest,
             None,
+            &mut fragment_batch,
             |_, _, _| None,
         )
         .expect_err("an ordinary source fragment without an exact declaration is a hard error");
@@ -861,12 +1480,14 @@ mod tests {
             .exact_declaration_at(module, second_start, DeclarationKind::TypeAlias)
             .expect("Second alias declaration");
 
+        let mut fragment_batch = CanonicalFragmentAuthenticationBatch::default();
         let error = BoundTypeDeclarationInventory::build_with_exact_lookup(
             &binder,
             module,
             SourceUnitKey::SINGLE_SOURCE,
             manifest,
             None,
+            &mut fragment_batch,
             |lookup_module, binding_start, kind| {
                 if binding_start == first_start && kind == DeclarationKind::TypeAlias {
                     Some(second)
@@ -939,6 +1560,7 @@ mod tests {
                     .declarations
                     .clear_semantic_attachment_for_inventory_test(declaration);
             }
+            let work = DeclarationInventoryWorkScopeForTest::start();
             let inventory = BoundTypeDeclarationInventory::build(
                 &binder,
                 module,
@@ -952,6 +1574,20 @@ mod tests {
             assert_eq!(
                 inventory.rejected()[0].disposition,
                 SourceTypeFragmentRejection::NotSemanticallyAdmitted
+            );
+            assert_eq!(
+                work.finish(),
+                DeclarationInventoryWorkForTest {
+                    builds: 1,
+                    source_type_rows: 1,
+                    admitted: 0,
+                    rejected: 1,
+                    exact_join_attempts: 1,
+                    raw_probe_attempts: u64::from(clear_attachment),
+                    fragment_checks: 0,
+                    completeness_checks: 0,
+                    dense_slots: 0,
+                }
             );
         }
 
@@ -1148,12 +1784,14 @@ mod tests {
         attached.site.declaration_span = ambient_declaration_span;
         attached.site.binding_span = ambient_binding_span;
 
+        let mut fragment_batch = CanonicalFragmentAuthenticationBatch::default();
         let error = BoundTypeDeclarationInventory::build_with_exact_lookup(
             &binder,
             module,
             SourceUnitKey::SINGLE_SOURCE,
             manifest,
             None,
+            &mut fragment_batch,
             |lookup_module, binding_start, kind| {
                 if lookup_module == module
                     && binding_start == ambient_binding_start
