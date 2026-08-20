@@ -90,6 +90,60 @@ fn official_batch_cases_share_the_worker_process_but_not_user_state() {
 }
 
 #[test]
+fn official_batch_reports_unchecked_class_static_blocks_without_inventory_failure() {
+    let request = serde_json::json!({
+        "schema": 1,
+        "case_id": "auto-accessor-static-block",
+        "name": "autoAccessor10.ts",
+        "source": r#"
+            class C1 { accessor a1 = 1; }
+            class C3 {
+                static #a2_accessor_storage = 1;
+                static {
+                    class C3_Inner {
+                        accessor a2 = 2;
+                        static { #a2_accessor_storage in C3; }
+                    }
+                }
+            }
+        "#
+    });
+    let (_, output) = run_official_batch(&(request.to_string() + "\n"));
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "batch stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty(), "{output:#?}");
+    let responses = String::from_utf8(output.stdout)
+        .expect("batch output is UTF-8")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("batch response is JSONL"))
+        .collect::<Vec<_>>();
+    let [response] = responses.as_slice() else {
+        panic!("one response per official-suite case: {responses:#?}");
+    };
+    assert_eq!(response["case_id"], "auto-accessor-static-block");
+    assert_eq!(response["exit_code"], 3);
+    assert_eq!(response["provider_route"], "production-default-library");
+    let stderr = response["stderr"].as_str().expect("case stderr is text");
+    assert!(
+        stderr.contains("incomplete[class/static-block/self]"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("incomplete[class/accessor-property/self]"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("bound project module has no canonical declaration inventory"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn official_batch_rejects_malformed_requests_without_partial_case_output() {
     let malformed = [
         "not json".to_owned(),

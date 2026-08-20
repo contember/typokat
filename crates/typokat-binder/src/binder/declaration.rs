@@ -6,7 +6,7 @@ use crate::span::Span;
 use crate::types::layered::{LayeredMap, LayeredVec};
 use oxc_ast::ast::{
     Class, ClassType, Declaration, ExportDefaultDeclaration, ExportDefaultDeclarationKind,
-    ImportOrExportKind, ModuleDeclaration, Program, Statement, TSEnumDeclaration,
+    ImportOrExportKind, ModuleDeclaration, Program, Statement, StaticBlock, TSEnumDeclaration,
     TSGlobalDeclaration, TSInterfaceDeclaration, TSModuleDeclaration, TSModuleDeclarationName,
     TSSignature, TSTypeAliasDeclaration, VariableDeclarationKind,
 };
@@ -115,6 +115,7 @@ pub enum SourceTypeFragmentPlacement {
     Ordinary,
     ClassExpression,
     DefaultClass,
+    UnadmittedClassStaticBlock,
     UnadmittedAmbientExternalModule,
     GlobalAugmentationBody { global_start: u32 },
 }
@@ -327,6 +328,7 @@ struct SourceDeclarationVisitor<'ast> {
     interface_occurrences: Vec<SourceInterfaceOccurrence>,
     global_census: Option<SourceGlobalCensusProjection>,
     direct_default_class_start: Option<u32>,
+    class_static_block_depth: u32,
     ambient_external_module_depth: u32,
     global_augmentation_start: Option<u32>,
 }
@@ -360,6 +362,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             interface_occurrences: Vec::new(),
             global_census: None,
             direct_default_class_start: None,
+            class_static_block_depth: 0,
             ambient_external_module_depth: 0,
             global_augmentation_start: None,
         }
@@ -372,6 +375,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             interface_occurrences: Vec::new(),
             global_census: None,
             direct_default_class_start: None,
+            class_static_block_depth: 0,
             ambient_external_module_depth: 0,
             global_augmentation_start: None,
         }
@@ -396,6 +400,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
                 explicit_global_this_sites: None,
             }),
             direct_default_class_start: None,
+            class_static_block_depth: 0,
             ambient_external_module_depth: 0,
             global_augmentation_start: None,
         }
@@ -490,6 +495,10 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
         }
         let interface_end = self.interface_occurrences.len();
         let placement = if placement == SourceTypeFragmentPlacement::Ordinary
+            && self.class_static_block_depth > 0
+        {
+            SourceTypeFragmentPlacement::UnadmittedClassStaticBlock
+        } else if placement == SourceTypeFragmentPlacement::Ordinary
             && self.ambient_external_module_depth > 0
         {
             SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
@@ -674,6 +683,12 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
         }
         walk::walk_export_default_declaration(self, declaration);
         self.direct_default_class_start = previous;
+    }
+
+    fn visit_static_block(&mut self, block: &StaticBlock<'ast>) {
+        self.class_static_block_depth = self.class_static_block_depth.saturating_add(1);
+        walk::walk_static_block(self, block);
+        self.class_static_block_depth = self.class_static_block_depth.saturating_sub(1);
     }
 
     fn visit_statement(&mut self, statement: &Statement<'ast>) {
@@ -1152,6 +1167,13 @@ impl DeclarationTable {
         declaration.type_group = None;
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn corrupt_declaration_span_for_inventory_test(&mut self, id: DeclId) {
+        let declaration = self.get_mut(id).expect("inventory test declaration exists");
+        declaration.site.declaration_span.start =
+            declaration.site.declaration_span.start.saturating_add(1);
+    }
+
     pub fn len(&self) -> usize {
         self.declarations.len()
     }
@@ -1546,6 +1568,66 @@ mod tests {
         );
         assert_eq!(
             placement("AmbientWins"),
+            SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+        );
+    }
+
+    #[test]
+    fn manifest_marks_type_fragments_inside_unadmitted_class_static_blocks() {
+        let source = r#"
+            class Container {
+                static {
+                    type StaticAlias = string;
+                    interface StaticInterface {}
+                    class StaticClass {}
+                    enum StaticEnum { Value }
+                    const expression = class StaticExpression {};
+                }
+                method() { class MethodLocal {} }
+            }
+            declare module "external" {
+                class AmbientOuter {
+                    static { class StaticAmbient {} }
+                }
+                class AmbientOutside {}
+            }
+        "#;
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let placement = |name: &str| {
+            manifest
+                .type_fragments()
+                .iter()
+                .find(|fragment| &source[fragment.binding_span.range()] == name)
+                .map(|fragment| fragment.placement)
+                .expect("named source type fragment")
+        };
+
+        for name in [
+            "StaticAlias",
+            "StaticInterface",
+            "StaticClass",
+            "StaticEnum",
+            "StaticAmbient",
+        ] {
+            assert_eq!(
+                placement(name),
+                SourceTypeFragmentPlacement::UnadmittedClassStaticBlock,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            placement("StaticExpression"),
+            SourceTypeFragmentPlacement::ClassExpression
+        );
+        assert_eq!(
+            placement("MethodLocal"),
+            SourceTypeFragmentPlacement::Ordinary
+        );
+        assert_eq!(
+            placement("AmbientOutside"),
             SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
         );
     }

@@ -631,7 +631,8 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                 {
                     Some(SourceTypeFragmentRejection::DefaultCandidateNotAdmitted)
                 }
-                SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+                SourceTypeFragmentPlacement::UnadmittedClassStaticBlock
+                | SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
                     if exact.is_none() && {
                         record_raw_probe_attempt_for_test();
                         binder
@@ -708,7 +709,11 @@ impl<'ast> BoundTypeDeclarationInventory<'ast> {
                     actual_binding_span: exact.site.binding_span,
                 });
             }
-            if source.placement == SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule {
+            if matches!(
+                source.placement,
+                SourceTypeFragmentPlacement::UnadmittedClassStaticBlock
+                    | SourceTypeFragmentPlacement::UnadmittedAmbientExternalModule
+            ) {
                 return Err(InventoryBuildError::UnexpectedSemanticAdmission {
                     declaration: exact.id,
                     placement: source.placement,
@@ -1704,6 +1709,161 @@ mod tests {
                 .expect("invalid continuation global body is rejected explicitly");
         assert!(inventory.declarations().iter().next().is_none());
         assert_eq!(inventory.rejected().len(), 1);
+    }
+
+    #[test]
+    fn inventory_rejects_authenticated_type_fragments_inside_class_static_blocks() {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocator = Allocator::default();
+        let source = r#"
+            class Container {
+                static {
+                    type StaticAlias = string;
+                    interface StaticInterface {}
+                    class StaticClass {}
+                    enum StaticEnum { Value }
+                }
+                method() { class MethodLocal {} }
+            }
+        "#;
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let static_fragments = manifest
+            .type_fragments()
+            .iter()
+            .filter(|fragment| {
+                fragment.placement == SourceTypeFragmentPlacement::UnadmittedClassStaticBlock
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(static_fragments.len(), 4);
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let binder = builder.finish(module);
+        for fragment in &static_fragments {
+            assert!(
+                binder
+                    .exact_declaration_at(module, fragment.binding_span.start, fragment.kind)
+                    .is_none(),
+                "static-block declarations remain semantically unattached"
+            );
+            let raw = binder
+                .declarations
+                .declaration_at_site(module, fragment.binding_span.start, fragment.kind)
+                .expect("manifest preseeded the raw declaration identity");
+            assert_eq!(raw.site.scope, None);
+            assert_eq!(raw.type_group, None);
+        }
+
+        let inventory = BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            None,
+        )
+        .expect("unsupported static-block declarations are explicit rejections");
+        assert_eq!(inventory.receipt().admitted, 2);
+        assert_eq!(inventory.rejected().len(), 4);
+        assert!(inventory.rejected().iter().all(|rejected| {
+            rejected.disposition == SourceTypeFragmentRejection::NotSemanticallyAdmitted
+        }));
+    }
+
+    #[test]
+    fn static_block_rejection_requires_raw_identity_and_forbids_semantic_admission() {
+        let prelude_allocator = Allocator::default();
+        let prelude = Parser::new(&prelude_allocator, "", SourceType::ts()).parse();
+        let allocator = Allocator::default();
+        let source = "type Attached = string; class Container { static { type Static = number; } }";
+        let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let prelude_manifest = SourceDeclarationManifest::build(&prelude.program);
+        let manifest = SourceDeclarationManifest::build(&parsed.program);
+        let static_fragment = manifest
+            .type_fragments()
+            .iter()
+            .find(|fragment| {
+                fragment.placement == SourceTypeFragmentPlacement::UnadmittedClassStaticBlock
+            })
+            .expect("static-block type fragment");
+        let static_start = static_fragment.binding_span.start;
+        let static_kind = static_fragment.kind;
+        let static_declaration_span = static_fragment.declaration_span;
+        let static_binding_span = static_fragment.binding_span;
+        let mut builder = ProjectBinderBuilder::new_with_declaration_manifest(
+            &prelude.program,
+            &prelude_manifest,
+        );
+        let unit = CompilationUnit::implementation(SourceUnitKey::SINGLE_SOURCE, &parsed.program);
+        let (module, _) =
+            builder.add_module_with_declaration_manifest(&parsed.program, &manifest, &[], unit);
+        let mut binder = builder.finish(module);
+        let attached_start = u32::try_from(source.find("Attached").expect("attached alias"))
+            .expect("source offset fits u32");
+        let mut attached = binder
+            .exact_declaration_at(module, attached_start, DeclarationKind::TypeAlias)
+            .expect("ordinary alias is attached")
+            .clone();
+        attached.kind = static_kind;
+        attached.site.declaration_span = static_declaration_span;
+        attached.site.binding_span = static_binding_span;
+
+        let mut fragment_batch = CanonicalFragmentAuthenticationBatch::default();
+        let admission = BoundTypeDeclarationInventory::build_with_exact_lookup(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            manifest,
+            None,
+            &mut fragment_batch,
+            |lookup_module, binding_start, kind| {
+                if lookup_module == module && binding_start == static_start && kind == static_kind {
+                    Some(&attached)
+                } else {
+                    binder.exact_declaration_at(lookup_module, binding_start, kind)
+                }
+            },
+        )
+        .expect_err("semantic admission of a static-block source-only row is a hard error");
+        assert_eq!(
+            admission,
+            InventoryBuildError::UnexpectedSemanticAdmission {
+                declaration: attached.id,
+                placement: SourceTypeFragmentPlacement::UnadmittedClassStaticBlock,
+            }
+        );
+
+        let raw = binder
+            .declarations
+            .declaration_at_site(module, static_start, static_kind)
+            .expect("raw static-block declaration")
+            .id;
+        binder
+            .declarations
+            .corrupt_declaration_span_for_inventory_test(raw);
+        let missing = BoundTypeDeclarationInventory::build(
+            &binder,
+            module,
+            SourceUnitKey::SINGLE_SOURCE,
+            SourceDeclarationManifest::build(&parsed.program),
+            None,
+        )
+        .expect_err("a mismatched raw row cannot authenticate an explicit rejection");
+        assert_eq!(
+            missing,
+            InventoryBuildError::MissingSourceDeclaration {
+                kind: DeclarationKind::TypeAlias,
+                binding_start: static_start,
+            }
+        );
     }
 
     #[test]
