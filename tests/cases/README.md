@@ -13,7 +13,7 @@ cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --noc
 
 It discovers 580 fixture projects / 696 source files, checks each project once through the shared
 route, and prints receipt `580/696/580/0` (projects/sources/shared/cold). A sprint-closure run over
-this inventory took 129.32 s under `cpu-lease run -n 2 --`. The inventory and ordering authority is
+this inventory took 128.04 s under `cpu-lease run -n 2 --`. The inventory and ordering authority is
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary command's printed receipt repeats the aggregate totals.
 
@@ -26,7 +26,8 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `580/696/580/580`; the previous 572-project sprint-closure run passed in 1,768.47 s. The separate
+It prints receipt `580/696/580/580`; the sprint-closure run passed in 1,164.50 s
+(1,165.11 s wall). The separate
 `.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
 
 This file is **test tooling**: how to write and read these fixtures. The substantive record of

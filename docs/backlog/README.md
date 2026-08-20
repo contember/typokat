@@ -33,7 +33,9 @@ contextual `ThisType<T>`, and receiver utilities, sprint-2026-07-12), and `13` (
 profiling gate, strict DEFER/no-VM, WU5 of
 [`sprint-2026-07-12-pre-lib-hardening.md`](../archive/sprint-2026-07-12-pre-lib-hardening.md),
 closed 2026-07-13), `43` (namespace/declaration-space completion,
-[`sprint-2026-07-15-namespaces-declaration-merging.md`](../archive/sprint-2026-07-15-namespaces-declaration-merging.md)). The earlier shipped items are in
+[`sprint-2026-07-15-namespaces-declaration-merging.md`](../archive/sprint-2026-07-15-namespaces-declaration-merging.md)),
+and `84` (canonical declaration owners and publication completeness,
+[`sprint-2026-08-18-canonical-declaration-inventory.md`](../archive/sprint-2026-08-18-canonical-declaration-inventory.md)). The earlier shipped items are in
 [`../archive/`](../archive/README.md), including the completed WU6 official-suite ratchet.
 The implementation for `102` (visible frozen-prefix writes) and `103` (source-native sparse
 collision epochs and routing) shipped through the archived backlog-`14` closure sprint; both shipped
@@ -74,7 +76,7 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **49 remaining items**. The release classification comes from
+The roadmap has **48 remaining items**. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -83,7 +85,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 2 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 29 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
+| **C — soundness/parity tail** | 28 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
 
 Effort is a **relative planning estimate**, not a time promise:
@@ -165,7 +167,6 @@ FP / tsc-parity tail (safe direction, scheduled by opportunity):
 
 Reporting + robustness:
 
-- **S** · [`84`](84-function-local-interface-panic.md) — a function-local interface panics the checker.
 - **M** · [`90`](90-assignability-span-precision.md) — assignability diagnostics anchor on the declarator instead of the expression.
 - **M** · [`91`](91-missing-property-presence-pass.md) — missing required properties should be reported before value mismatches.
 - **S** · [`112`](112-cli-report-rendering-transaction.md) — centralize the duplicated four-channel

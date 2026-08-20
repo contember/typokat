@@ -38,6 +38,17 @@ the build method that protects them is in [`dev-method.md`](./dev-method.md).
   `is_accessor`, index signatures — is folded into the structural hash + `object_props_eq`, but the
   **relation engine ignores `readonly`/`is_accessor`** for assignability (they only gate access /
   assignment targets). `substitute` must carry **all** `PropertyType` fields through.
+- **Canonical declaration admission** (`crates/typokat-binder/src/binder/declaration.rs`,
+  `crates/typokat-check/src/check/checker/decls/inventory.rs`): each parsed source builds one
+  exhaustive `SourceDeclarationManifest`; binder seeding and checker declaration consumers share
+  that exact manifest. The checker must authenticate every admitted row by exact module, kind,
+  declaration span, binding span, scope, group, and canonical `TypeGroup::fragments` position
+  before semantic mutation. A source-only rejection requires a named placement and matching binder
+  evidence; an ordinary missing/mismatched row is construction failure, never a permissive
+  fallback. Source-ordered inventory outcomes drive declaration-owner and identity allocation;
+  admitted merged groups use only each row's authenticated canonical `TypeGroup::fragments`
+  position. Do not add a second semantic declaration AST walk, name lookup, alternate fragment
+  order, frozen-prefix scan, or retained replay registry.
 - **Immutable class publication and lexical effects** (`crates/typokat-types/src/class_semantics.rs`,
   `crates/typokat-check/src/check/checker/classes/`, `crates/typokat-check/src/check/checker/events.rs`): every class application is an
   immutable `ClassInstance` with a syntactically valid, semantically available, complete ordered

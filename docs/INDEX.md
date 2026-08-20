@@ -24,12 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-18-canonical-declaration-inventory.md`](sprints/sprint-2026-08-18-canonical-declaration-inventory.md) —
-  binder-authenticated declaration inventory, publication completeness, and backlog-84 closure;
-  blocks the saved B44 `as const` WIP.
-- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — ordered second;
+- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
-  paused with WIP preserved at `996eb5a`.
+  unblocked with WIP preserved at `996eb5a`.
 - [`sprint-2026-08-15-library-compiler-decomposition.md`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) —
   active move-only decomposition of the largest remaining Rust source hotspot, with a frozen
   full-token/path manifest, one implementation writer, and complete library lifecycle gates.
@@ -38,18 +35,17 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Declaration inventory blocks backlog 44** — the active
-  [`declaration-inventory sprint`](sprints/sprint-2026-08-18-canonical-declaration-inventory.md)
-  has cut declaration reservation, publication, and class attachment over to the authenticated
-  inventory. WU4 closed the residual duplicate work and proved linear selected-replay coverage;
-  WU5 lifecycle gates and archival are next.
+- **Declaration inventory shipped; B44 unblocked** — the archived
+  [`declaration-inventory sprint`](archive/sprint-2026-08-18-canonical-declaration-inventory.md)
+  cut declaration reservation, publication, and class attachment over to the authenticated
+  inventory, removed the parallel declaration walkers, and closed backlog 84.
   [`ADR-0022`](decisions/0022-use-one-binder-authenticated-declaration-inventory.md)
   freezes the one-pass manifest, exact binder join, module-local dense map, and AST-free frozen
-  product boundary before semantic consumers move. The archived
+  product boundary. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
   contextual checking and records the comparison with TypeScript PR #46827. The active
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) is paused behind that blocker; its WIP
-  is preserved at `996eb5a`.
+  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) may now resume from its WIP at
+  `996eb5a`.
 - **Library compiler decomposition active 2026-08-15** — the
   [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
   12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,

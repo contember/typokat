@@ -255,7 +255,7 @@ cargo clippy --all-targets -- -D warnings
 
 The exact conformance command checks all 580 fixture projects / 696 source files through the
 ordinary shared route and prints receipt `580/696/580/0` (projects/sources/shared/cold). A
-sprint-closure run over this inventory took 129.32 s under `cpu-lease run -n 2 --`. The unchanged
+sprint-closure run over this inventory took 128.04 s under `cpu-lease run -n 2 --`. The unchanged
 pull-request risk matrix is reproduced by
 `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s).
 
@@ -266,8 +266,8 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-It is expected to print receipt `580/696/580/580`. The previous 572-project sprint-closure run
-passed in 1,768.47 s.
+It prints receipt `580/696/580/580`; the sprint-closure run passed in 1,164.50 s
+(1,165.11 s wall).
 `.github/workflows/full-parity.yml` runs this unsharded command weekly and on manual dispatch.
 
 ## Continuous integration

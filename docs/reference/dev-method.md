@@ -91,11 +91,11 @@ spec, review, differential, or final gate above.
       conformance_full_shared_cold_parity -- --ignored --exact --nocapture
     ```
 
-    It uses the same frozen inventory and is expected to print receipt `580/696/580/580`. The
-    previous 572-project sprint-closure run passed in 1,768.47 s.
+    It uses the same frozen inventory and prints receipt `580/696/580/580`. The sprint-closure run
+    passed in 1,164.50 s (1,165.11 s wall).
     `.github/workflows/full-parity.yml` also runs this unsharded gate weekly and on manual dispatch.
 
-The expanded ordinary exact gate took 129.32 s in its sprint-closure two-vCPU run.
+The expanded ordinary exact gate took 128.04 s in its sprint-closure two-vCPU run.
 `conformance_inventory_matches_frozen_receipt` is the count and ordering authority; the printed
 receipt repeats aggregate totals. Do not maintain a second hand-counted inventory.
 

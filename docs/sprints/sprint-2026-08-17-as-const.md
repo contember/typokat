@@ -197,5 +197,8 @@ outcome must state the difference instead of presenting an apples-to-apples feat
 - 2026-08-18 — WU1–WU3 implementation and review state is preserved on local branch
   `wip/b44-as-const` at `996eb5a`. Removing the official syntax gate exposed a pre-existing
   binder/publication split for block-local type declarations. This sprint pauses until the
-  [`canonical declaration inventory sprint`](sprint-2026-08-18-canonical-declaration-inventory.md)
+  [`canonical declaration inventory sprint`](../archive/sprint-2026-08-18-canonical-declaration-inventory.md)
   ships; the saved B44 diff must then be reapplied and all integration gates rerun.
+- 2026-08-21 — The canonical declaration inventory sprint shipped and its final workspace,
+  official-suite, and shared/cold parity gates passed. B44 is unblocked; resume from the preserved
+  `996eb5a` WIP only after the post-sprint shared Cargo cache setup.

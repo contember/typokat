@@ -1,3 +1,25 @@
+> **OUTCOME — shipped 2026-08-21.** One exhaustive `SourceDeclarationManifest` now feeds binder
+> seeding and one binder-authenticated `BoundTypeDeclarationInventory`; declaration-owner
+> reservation, type reservation/fill/publication, and exact-`DeclId` class attachment consume that
+> inventory on every fresh, shared, complete-source, and sparse replay route. The parallel checker
+> declaration walker, shallow interface census, scope mirror, and parity adapter are gone. Sparse
+> replay preserves TypeGroup/Class owner semantics and canonical fragment order without scanning
+> the frozen prefix. Named source-only placements keep unsupported ambient, invalid-global, and
+> class-static-block declarations fail-closed. Backlog 84 is closed.
+>
+> Commit map: plan/spec → `a3b0dcc`, `75da932`, `433f333`, `1cc6681`, `f234d52`; binding-pattern
+> owners → `df1f755`; inventory/ADR → `ce2b416`, `f67daae`, `9301803`; interface owner cutover →
+> `678e493`; reservation cutover → `84a6204`, `1019a4f`; class attachment cutover → `7052ea3`,
+> `d812ed9`; linear-work closure → `ed76e84`; lifecycle fixes/audit → `06f4b1c`, `6fb368f`,
+> `69b1884`.
+>
+> Final verification: `cargo test` PASS in 29:56.14 wall; ordinary conformance
+> `580/696/580/0` in 128.04 s; shared/cold parity `580/696/580/580` in 1,164.50 s
+> (1,165.11 s wall); official TypeScript suite 874 corpus / 379 in-scope with zero regressions,
+> zero progress, and complete scoreboard coverage in 1:35.48 wall; workspace all-target clippy with
+> `-D warnings`, formatting, and diff checks PASS. The saved B44 `as const` work remains on
+> `wip/b44-as-const` at `996eb5a` and may now resume.
+
 # Sprint — Canonical declaration inventory (2026-08-18)
 
 **Goal.** Make one binder-authenticated inventory drive type-declaration reservation, lexical
@@ -11,7 +33,7 @@ reachable panic, not merely missing TypeScript breadth. This sprint removes the 
 authorities while preserving `DeclId`, `TypeGroupId`, immutable publication, replay order, and the
 single published type environment.
 
-This sprint blocks the active [`as const` sprint](sprint-2026-08-17-as-const.md). Its current WIP is
+This sprint blocks the active [`as const` sprint](../sprints/sprint-2026-08-17-as-const.md). Its current WIP is
 preserved on local branch `wip/b44-as-const` at commit `996eb5a`; resume it only after this sprint
 passes its closure gates.
 
@@ -37,7 +59,7 @@ passes its closure gates.
   global blocks but not ordinary blocks or function bodies.
 - ✔ The published-registry assertion is a soundness guard and must remain —
   `crates/typokat-check/src/check/checker/decls/resolve.rs:834-845`.
-- ⚠ Backlog [`84`](../backlog/84-function-local-interface-panic.md) records the missing
+- ⚠ Backlog 84 records the missing
   function-local interface owners, but the newly minimized script-continuation block repro affects
   interface, alias, class, and enum declarations before publication.
 
@@ -422,3 +444,10 @@ passes its closure gates.
   behavior-neutral, divided the consumer cutover into interface-owner/reservation/final-consumer
   commits, narrowed terminality to selected local/delta groups, expanded the route/syntax matrix,
   and moved the ADR before semantic cutover.
+- 2026-08-21 — WU5 full-suite verification exposed two fail-closed placement omissions after the
+  semantic cutover. Declarations inside unchecked class static blocks now carry an authenticated
+  source-only placement instead of failing inventory construction. A nested `global {}` inside a
+  string-literal module now takes the existing global placement before the ambient-module
+  placement, so clean globals admit and issue-bearing module augmentations reject through their
+  exact binder global record. The official suite, full workspace test, and final shared/cold parity
+  then passed on the same snapshot.

@@ -247,7 +247,17 @@ requires `&mut Interner` while the relation engine borrows the store immutably:
    order. User value/type declarations retain ordinary slot-aware shadowing and merge rules on
    both routes. The small `test_support_prelude.ts` universe exists only behind the checker crate's
    test-support feature.
-2. **Reservation and class publication.** The checker reserves class, alias, and interface
+2. **Canonical declaration inventory.** Each parsed `Program` produces one exhaustive,
+   source-ordered `SourceDeclarationManifest`. The binder consumes that manifest while assigning
+   exact `DeclId`, scope, and `TypeGroupId` identities; the checker then joins the same manifest to
+   those binder records and owns the resulting `BoundTypeDeclarationInventory`. Declaration
+   owner reservation, type reservation/fill, publication, and class attachment consume that
+   authenticated inventory. Unsupported source-only placements are named and authenticated;
+   missing or inconsistent ordinary binder rows fail closed. Sparse replay validates the complete
+   selected inventory batch before semantic mutation and retains `TypeGroup::fragments` as the
+   only canonical fragment-order authority. No semantic consumer performs a second declaration
+   AST walk or reconstructs declarations by name.
+3. **Reservation and class publication.** The checker reserves class, alias, and interface
    identities, persistent binders, raw syntax slots, and lexical event tickets compilation-wide
    before lowering a class surface. `ClassSurfaceLowerer` has only narrow construction
    capabilities: it can resolve syntax and intern complete immutable nodes, but cannot evaluate,
@@ -258,9 +268,9 @@ requires `&mut Interner` while the relation engine borrows the store immutably:
    `ClassInstance { class, args }` with a complete real argument vector. Alias and interface
    templates retain their ordinary reserve/fill rules; conditional/mapped/intrinsic templates stay
    lazy until a post-publication query demands them.
-3. **Flow graph.** A pre-pass builds flow nodes for module and function bodies before checking, so
+4. **Flow graph.** A pre-pass builds flow nodes for module and function bodies before checking, so
    loop back edges are complete when identifier reads ask for narrowed types.
-4. **Statement walk and event replay.** The checker lowers annotations, infers expressions, checks
+5. **Statement walk and event replay.** The checker lowers annotations, infers expressions, checks
    bodies, and records obligations. Class callable rows retain their complete binders,
    constraints/defaults, receiver, parameter/return types, overload position, and parameter-property
    ownership from the single surface-lowering pass; body checking reuses them rather than lowering
@@ -270,7 +280,7 @@ requires `&mut Interner` while the relation engine borrows the store immutably:
    and cache order are unobservable. Speculative overload candidates write only to local
    `CandidateEffects`, and selection commits exactly one winning/final-failure set. There is no
    record deduplication, span deletion, truncation, or post-hoc suppression.
-5. **Semantic query phase.** `SemanticQueryCoordinator` is the sole production boundary for
+6. **Semantic query phase.** `SemanticQueryCoordinator` is the sole production boundary for
    class-reachable demand, evaluation, inference, and relation. Each operation uses fresh
    query-local projection/evaluation overlays and pending writes; `Relater` runs read-only behind the
    coordinator, after applying already-planned overlay mappings and before any durable promotion.

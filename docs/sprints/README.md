@@ -20,12 +20,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-18-canonical-declaration-inventory.md`](sprint-2026-08-18-canonical-declaration-inventory.md) —
-  blocks B44; replace parallel declaration/publication traversals with one binder-authenticated
-  inventory and close the local-interface panic.
-- [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — ordered second; resolve the
+- [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — next/resuming; resolve the
   approved bounded parity slice, implement AST-directed const contexts, and compare with PR #29510;
-  paused behind the declaration-inventory sprint with WIP preserved at `996eb5a`.
+  unblocked after the declaration-inventory sprint, with WIP preserved at `996eb5a`.
 - [`sprint-2026-08-15-library-compiler-decomposition.md`](sprint-2026-08-15-library-compiler-decomposition.md) —
   active move-only decomposition of the `checker::library_compiler` hotspot behind its stable
   facade, with a frozen full-token manifest and lifecycle closure gates.
