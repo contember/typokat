@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::io::{self, Write};
-use typokat::driver::{DriverError, FileReport};
+use typokat::driver::{CheckOutput, DriverError, FileReport};
 use typokat::frontend::FileInput;
 
 type ProductionProjectResult = Result<Vec<FileReport>, DriverError>;
@@ -166,5 +166,58 @@ fn production_main_uses_the_same_io_core_as_the_unit_contract() {
     assert!(
         !main_source.contains("match run(&args)"),
         "main must not retain a second dispatch/render path"
+    );
+}
+
+#[test]
+fn bounded_output_accepts_the_exact_cap_and_rejects_the_next_byte_atomically() {
+    let mut output = super::BoundedOutput::new();
+    let exact = vec![b'x'; super::OFFICIAL_BATCH_MAX_OUTPUT_BYTES];
+
+    output.write_all(&exact).expect("exact output cap");
+    assert_eq!(output.bytes, exact);
+
+    let error = output
+        .write_all(b"!")
+        .expect_err("one byte beyond the output cap must fail");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "official-batch case output exceeds {} bytes",
+            super::OFFICIAL_BATCH_MAX_OUTPUT_BYTES
+        )
+    );
+    assert_eq!(
+        output.bytes.len(),
+        super::OFFICIAL_BATCH_MAX_OUTPUT_BYTES,
+        "the rejected write must not append a partial buffer"
+    );
+}
+
+#[test]
+fn official_batch_report_overflow_returns_only_the_wrapped_error() {
+    let report = FileReport {
+        name: "overflow.ts".to_owned(),
+        source: String::new(),
+        output: CheckOutput {
+            diagnostics: Vec::new(),
+            parse_errors: Vec::new(),
+            incomplete: Vec::new(),
+            project_notices: vec!["x".repeat(super::OFFICIAL_BATCH_MAX_OUTPUT_BYTES)],
+        },
+    };
+
+    let error = match super::render_official_batch_reports(&[report]) {
+        Ok((_status, partial_output)) => {
+            panic!("overflow returned successful partial output: {partial_output:?}")
+        }
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        format!(
+            "failed to render project notice: official-batch case output exceeds {} bytes",
+            super::OFFICIAL_BATCH_MAX_OUTPUT_BYTES
+        )
     );
 }

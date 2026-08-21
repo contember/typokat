@@ -6586,6 +6586,38 @@ mod module_accounting_scan_contract_tests {
     }
 
     #[test]
+    fn module_accounting_rejects_partial_program_coverage() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let inputs = vec![
+            FileInput {
+                name: "first.ts".to_owned(),
+                source: "export const first = 1;\n".to_owned(),
+            },
+            FileInput {
+                name: "second.ts".to_owned(),
+                source: "export const second = 2;\n".to_owned(),
+            },
+        ];
+        let allocator = Allocator::default();
+        let parsed = Parser::new(&allocator, &inputs[0].source, SourceType::ts()).parse();
+        let programs = [&parsed.program];
+        let result = account_project_modules(
+            &inputs,
+            &programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            SourceReexportAccounting::FrozenUnsupported,
+            DefaultCandidateAccounting::FrozenUnsupported,
+        );
+        if result.is_ok() {
+            return Err(std::io::Error::other(
+                "module accounting accepted partial program coverage",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn scan_receipt_rejects_statement_revisit() -> Result<(), Box<dyn std::error::Error>> {
         let mut receipt = receipt_with_statement_counts(&[2]);
         receipt.start_owner()?;
