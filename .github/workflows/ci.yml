@@ -67,6 +67,20 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
+      - name: Authenticate release binary
+        run: |
+          sha256sum target/release/typokat > target/release/typokat.sha256
+          printf '%s\n' '${{ github.sha }}' > target/release/typokat.commit
+      - name: Upload release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: typokat-release-${{ github.sha }}
+          path: |
+            target/release/typokat
+            target/release/typokat.sha256
+            target/release/typokat.commit
+          retention-days: 3
+          overwrite: true
 
   # Rebuild the source-backed library package in clean roots and verify its
   # complete pinned asset inventory and extracted crates.
@@ -100,17 +114,15 @@ jobs:
         working-directory: tooling/official-suite
         run: python3 -m unittest test_tsofficial
 
-  # Official-suite regression ratchet: build the release binary, fetch the corpus at
+  # Official-suite regression ratchet: use the authenticated release binary, fetch the corpus at
   # the pinned TypeScript SHA, and reject any diagnostic-identity regression against
   # the committed scoreboard. A real gate (no continue-on-error).
   official-suite:
     name: official-suite (run --check)
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install pinned toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -123,8 +135,16 @@ jobs:
             tooling/official-suite/corpus
             tooling/official-suite/.tools/typescript.git
           key: ts-official-full-v2-${{ hashFiles('tooling/official-suite/tsofficial.py') }}
-      - name: Build release binary
-        run: cargo build --release
+      - name: Download release binary
+        uses: actions/download-artifact@v4
+        with:
+          name: typokat-release-${{ github.sha }}
+          path: target/release
+      - name: Verify release binary
+        run: |
+          test "$(cat target/release/typokat.commit)" = "${{ github.sha }}"
+          sha256sum --check target/release/typokat.sha256
+          chmod +x target/release/typokat
       - name: Fetch corpus (pinned TS SHA)
         working-directory: tooling/official-suite
         env:
@@ -144,27 +164,33 @@ jobs:
   #                                     crash / parse error / inconsistent exit code is
   #                                     a hard failure. ~10 s, hard-capped at 120 s by
   #                                     --time-budget.
-  # Total after the (cached) release build: ~2.5 minutes worst case.
+  # Total after downloading the release artifact: ~2.5 minutes worst case.
   #
   # Reference-binary mode — the one that reproduces 412f321 — is deliberately NOT here:
   # building a second binary per PR is not a bounded cost, and a PR that intends to
   # change diagnostics would fail it by design. It is a dev-method §1 gate instead.
   differential:
     name: differential (repro ratchet + bounded fuzz sweep)
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install pinned toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Download release binary
+        uses: actions/download-artifact@v4
+        with:
+          name: typokat-release-${{ github.sha }}
+          path: target/release
+      - name: Verify release binary
+        run: |
+          test "$(cat target/release/typokat.commit)" = "${{ github.sha }}"
+          sha256sum --check target/release/typokat.sha256
+          chmod +x target/release/typokat
       - name: python3 -m unittest test_differential
         working-directory: tooling/differential
         run: python3 -m unittest test_differential
-      - name: Build release binary
-        run: cargo build --release
       - name: repros --check (identity ratchet vs committed scoreboard)
         working-directory: tooling/differential
         run: python3 differential.py repros --check

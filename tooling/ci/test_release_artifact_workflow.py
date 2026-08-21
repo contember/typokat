@@ -108,6 +108,7 @@ class ReleaseArtifactWorkflowContract(unittest.TestCase):
         retention = int(_with_scalar(upload, "retention-days"))
         self.assertGreaterEqual(retention, 1)
         self.assertLessEqual(retention, 7, "release artifact retention must stay short")
+        self.assertEqual(_with_scalar(upload, "overwrite"), "true")
 
     def test_pr_consumers_use_the_authenticated_build_artifact(self) -> None:
         for job_name in ("official-suite", "differential"):
