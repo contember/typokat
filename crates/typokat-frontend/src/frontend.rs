@@ -1956,6 +1956,999 @@ fn structured_parse_error_identities(
     sorted_identities(identities)
 }
 
+struct ModuleAccounting {
+    paths: Vec<PathBuf>,
+    configured_roots: BTreeMap<PathBuf, usize>,
+    canonical_project: Option<PathBuf>,
+    explicit_path_to_index: BTreeMap<PathBuf, usize>,
+    resolver: Resolver,
+    mode: ProjectResolutionMode,
+    source_reexport_accounting: SourceReexportAccounting,
+    default_candidate_accounting: DefaultCandidateAccounting,
+    raw_imports: Vec<Vec<RawImport>>,
+    cycle_path_to_index: BTreeMap<PathBuf, usize>,
+    cycle_edges: Vec<BTreeSet<usize>>,
+    reexport_edges: Vec<BTreeSet<usize>>,
+    raw_source_reexports: Vec<RawSourceReexportDeclaration>,
+    resolution_identities: Vec<LocatedIdentity>,
+    notice_identities: Vec<LocatedIdentity>,
+    missing_module_locations: Vec<ProjectMissingModuleLocation>,
+    default_source_keys: Option<Vec<SourceUnitKey>>,
+    default_module_authority: Option<DefaultModuleAuthority>,
+    module_syntax_evidence: Vec<ModuleSyntaxEvidence>,
+}
+
+struct ScannedModuleAccounting {
+    accounting: ModuleAccounting,
+}
+
+#[derive(Default)]
+struct ModuleSyntaxEvidence {
+    default_imports: Vec<RawDefaultImportCandidate>,
+    accounting_tasks: Vec<ModuleAccountingTask>,
+    default_local_names: BTreeMap<String, NamespaceProvenance>,
+    default_export_occurrences: Vec<DefaultExportOccurrence>,
+    source_local_names: BTreeMap<String, NamespaceProvenance>,
+    source_exports: Vec<SourceNamespaceExportEvidence>,
+    source_globally_open: bool,
+}
+
+struct ImportAccountingTask {
+    start: u32,
+    source_span_start: u32,
+    specifier: String,
+    phase: bool,
+    with_clause: bool,
+    form: &'static str,
+    outer_type_only: bool,
+    specifiers: Vec<NamedImportAccountingSpecifier>,
+}
+
+struct NamedImportAccountingSpecifier {
+    imported: Option<String>,
+    local: String,
+    type_only: bool,
+    local_span: Span,
+    span: Span,
+}
+
+struct SourceReexportAccountingTask {
+    start: u32,
+    declaration_span: Span,
+    source_span: Span,
+    specifier: String,
+    with_clause: bool,
+    outer_type_only: bool,
+    members: Vec<SourceReexportAccountingMember>,
+}
+
+struct SourceReexportAccountingMember {
+    imported: Option<String>,
+    exported: Option<String>,
+    span: Span,
+    type_only: bool,
+}
+
+enum ModuleAccountingTask {
+    Import(ImportAccountingTask),
+    SourceReexport(SourceReexportAccountingTask),
+    ExportAll {
+        start: u32,
+        specifier: String,
+        form: &'static str,
+        with_clause: bool,
+    },
+    DefaultExport {
+        start: u32,
+    },
+    ImportEquals {
+        start: u32,
+        specifier: Option<String>,
+    },
+    ExportAssignment {
+        start: u32,
+    },
+    NamespaceExport {
+        start: u32,
+    },
+}
+
+enum SourceNamespaceExportEvidence {
+    Declaration {
+        names: Vec<String>,
+        enumerable: bool,
+    },
+    LocalMembers(Vec<Option<(String, String)>>),
+    SourceMembers {
+        owner_start: u32,
+    },
+    Incomplete,
+}
+
+fn collect_module_accounting_task(statement: &Statement<'_>) -> Option<ModuleAccountingTask> {
+    match statement {
+        Statement::ImportDeclaration(import) => {
+            let form = match &import.specifiers {
+                None => "side-effect-import",
+                Some(specifiers) if specifiers.is_empty() => "empty-named-import",
+                Some(specifiers)
+                    if specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
+                        )
+                    }) =>
+                {
+                    "default-import"
+                }
+                Some(specifiers)
+                    if specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)
+                        )
+                    }) =>
+                {
+                    "namespace-import"
+                }
+                Some(_) => "named-import",
+            };
+            let specifiers = import
+                .specifiers
+                .iter()
+                .flatten()
+                .filter_map(|specifier| {
+                    let ImportDeclarationSpecifier::ImportSpecifier(named) = specifier else {
+                        return None;
+                    };
+                    Some(NamedImportAccountingSpecifier {
+                        imported: module_export_name(&named.imported).map(str::to_owned),
+                        local: named.local.name.to_string(),
+                        type_only: named.import_kind == ImportOrExportKind::Type,
+                        local_span: Span::from_oxc(named.local.span),
+                        span: Span::from_oxc(named.span),
+                    })
+                })
+                .collect();
+            Some(ModuleAccountingTask::Import(ImportAccountingTask {
+                start: import.span.start,
+                source_span_start: import.source.span.start,
+                specifier: import.source.value.to_string(),
+                phase: import.phase.is_some(),
+                with_clause: import.with_clause.is_some(),
+                form,
+                outer_type_only: import.import_kind == ImportOrExportKind::Type,
+                specifiers,
+            }))
+        }
+        Statement::ExportNamedDeclaration(export) if export.source.is_some() => {
+            let source = export.source.as_ref()?;
+            let members = export
+                .specifiers
+                .iter()
+                .map(|member| SourceReexportAccountingMember {
+                    imported: module_export_name(&member.local).map(str::to_owned),
+                    exported: module_export_name(&member.exported).map(str::to_owned),
+                    span: Span::from_oxc(member.span),
+                    type_only: member.export_kind == ImportOrExportKind::Type,
+                })
+                .collect();
+            Some(ModuleAccountingTask::SourceReexport(
+                SourceReexportAccountingTask {
+                    start: export.span.start,
+                    declaration_span: Span::from_oxc(export.span),
+                    source_span: Span::from_oxc(source.span),
+                    specifier: source.value.to_string(),
+                    with_clause: export.with_clause.is_some(),
+                    outer_type_only: export.export_kind == ImportOrExportKind::Type,
+                    members,
+                },
+            ))
+        }
+        Statement::ExportAllDeclaration(export) => Some(ModuleAccountingTask::ExportAll {
+            start: export.span.start,
+            specifier: export.source.value.to_string(),
+            form: if export.exported.is_some() {
+                "namespace-reexport"
+            } else {
+                "star-reexport"
+            },
+            with_clause: export.with_clause.is_some(),
+        }),
+        Statement::ExportDefaultDeclaration(export) => Some(ModuleAccountingTask::DefaultExport {
+            start: export.span.start,
+        }),
+        Statement::TSImportEqualsDeclaration(import) => {
+            let specifier = match &import.module_reference {
+                TSModuleReference::ExternalModuleReference(reference) => {
+                    Some(reference.expression.value.to_string())
+                }
+                TSModuleReference::IdentifierReference(_) | TSModuleReference::QualifiedName(_) => {
+                    None
+                }
+            };
+            Some(ModuleAccountingTask::ImportEquals {
+                start: import.span.start,
+                specifier,
+            })
+        }
+        Statement::TSExportAssignment(export) => Some(ModuleAccountingTask::ExportAssignment {
+            start: export.span.start,
+        }),
+        Statement::TSNamespaceExportDeclaration(export) => {
+            Some(ModuleAccountingTask::NamespaceExport {
+                start: export.span.start,
+            })
+        }
+        _ => None,
+    }
+}
+
+struct ModuleAccountingTaskContext<'a> {
+    owner_module: usize,
+    inputs: &'a [FileInput],
+    input: &'a FileInput,
+    line_index: &'a crate::span::LineIndex,
+    resolution: DefaultCandidateResolution<'a>,
+    source_reexport_accounting: SourceReexportAccounting,
+    default_candidate_accounting: DefaultCandidateAccounting,
+    cycle_path_to_index: &'a BTreeMap<PathBuf, usize>,
+    raw_imports: &'a mut Vec<RawImport>,
+    cycle_edges: &'a mut BTreeSet<usize>,
+    reexport_edges: &'a mut BTreeSet<usize>,
+    raw_source_reexports: &'a mut Vec<RawSourceReexportDeclaration>,
+    resolution_identities: &'a mut Vec<LocatedIdentity>,
+    notice_identities: &'a mut Vec<LocatedIdentity>,
+    missing_module_locations: &'a mut Vec<ProjectMissingModuleLocation>,
+}
+
+impl ModuleAccountingTaskContext<'_> {
+    fn account_default_import(
+        &mut self,
+        candidate: RawDefaultImportCandidate,
+        authority: &mut DefaultModuleAuthority,
+    ) -> Result<(), ProjectInventoryError> {
+        let candidate = resolve_default_import_candidate(candidate, &self.resolution)?;
+        if candidate.disposition == DefaultImportCandidateDisposition::Admitted {
+            if let RawDefaultImportCandidateSource::Resolved(target) = &candidate.source {
+                let edges = authority
+                    .admitted_default_edges
+                    .get_mut(self.owner_module)
+                    .ok_or_else(|| {
+                        ProjectInventoryError::new("default import owner escaped authority graph")
+                    })?;
+                edges.insert(*target);
+            }
+        }
+        authority.imports.push(candidate);
+        Ok(())
+    }
+
+    fn account_task(&mut self, task: ModuleAccountingTask) -> Result<(), ProjectInventoryError> {
+        match task {
+            ModuleAccountingTask::Import(import) => self.account_import(import),
+            ModuleAccountingTask::SourceReexport(export) => self.account_source_reexport(export),
+            ModuleAccountingTask::ExportAll {
+                start,
+                specifier,
+                form,
+                with_clause,
+            } => {
+                if with_clause {
+                    return Err(ProjectInventoryError::new(format!(
+                        "unfrozen export attribute surface at {}",
+                        source_location(self.input, self.line_index, start)
+                    )));
+                }
+                record_unsupported_module_form(
+                    self.input,
+                    self.line_index,
+                    start,
+                    form,
+                    Some(&specifier),
+                    self.resolution_identities,
+                    self.notice_identities,
+                );
+                Ok(())
+            }
+            ModuleAccountingTask::DefaultExport { start } => {
+                if matches!(
+                    self.default_candidate_accounting,
+                    DefaultCandidateAccounting::FrozenUnsupported
+                ) {
+                    record_unsupported_module_form(
+                        self.input,
+                        self.line_index,
+                        start,
+                        "default-export",
+                        None,
+                        self.resolution_identities,
+                        self.notice_identities,
+                    );
+                }
+                Ok(())
+            }
+            ModuleAccountingTask::ImportEquals { start, specifier } => {
+                record_unsupported_module_form(
+                    self.input,
+                    self.line_index,
+                    start,
+                    "import-equals",
+                    specifier.as_deref(),
+                    self.resolution_identities,
+                    self.notice_identities,
+                );
+                Ok(())
+            }
+            ModuleAccountingTask::ExportAssignment { start } => {
+                record_unsupported_module_form(
+                    self.input,
+                    self.line_index,
+                    start,
+                    "export-assignment",
+                    None,
+                    self.resolution_identities,
+                    self.notice_identities,
+                );
+                Ok(())
+            }
+            ModuleAccountingTask::NamespaceExport { start } => {
+                record_unsupported_module_form(
+                    self.input,
+                    self.line_index,
+                    start,
+                    "export-as-namespace",
+                    None,
+                    self.resolution_identities,
+                    self.notice_identities,
+                );
+                Ok(())
+            }
+        }
+    }
+
+    fn account_import(
+        &mut self,
+        import: ImportAccountingTask,
+    ) -> Result<(), ProjectInventoryError> {
+        if import.phase {
+            return Err(ProjectInventoryError::new(format!(
+                "unfrozen import phase surface at {}",
+                source_location(self.input, self.line_index, import.start)
+            )));
+        }
+        if import.with_clause {
+            record_unsupported_module_form(
+                self.input,
+                self.line_index,
+                import.start,
+                "import-attributes",
+                Some(&import.specifier),
+                self.resolution_identities,
+                self.notice_identities,
+            );
+            return Ok(());
+        }
+        if import.form != "named-import" {
+            record_unsupported_module_form(
+                self.input,
+                self.line_index,
+                import.start,
+                import.form,
+                Some(&import.specifier),
+                self.resolution_identities,
+                self.notice_identities,
+            );
+            return Ok(());
+        }
+        if import
+            .specifiers
+            .iter()
+            .any(|specifier| specifier.imported.is_none())
+        {
+            record_unsupported_module_form(
+                self.input,
+                self.line_index,
+                import.start,
+                "string-literal-import-name",
+                Some(&import.specifier),
+                self.resolution_identities,
+                self.notice_identities,
+            );
+            return Ok(());
+        }
+        if is_local_relative(&import.specifier) {
+            let unsupported_reason = if import.specifier.contains(['?', '#']) {
+                Some("query-or-fragment")
+            } else if import.specifier.ends_with(".ts") {
+                Some("explicit-ts-extension")
+            } else {
+                None
+            };
+            if let Some(reason) = unsupported_reason {
+                record_unsupported_module_specifier(
+                    self.input,
+                    self.line_index,
+                    import.start,
+                    &import.specifier,
+                    reason,
+                    self.resolution_identities,
+                    self.notice_identities,
+                );
+                return Ok(());
+            }
+        }
+        if !is_local_relative(&import.specifier) {
+            let reason = if import.specifier.starts_with('#') {
+                "package-import"
+            } else if import.specifier.contains("://") {
+                "uri"
+            } else if Path::new(&import.specifier).is_absolute() {
+                "absolute"
+            } else {
+                "bare"
+            };
+            record_unsupported_module_specifier(
+                self.input,
+                self.line_index,
+                import.start,
+                &import.specifier,
+                reason,
+                self.resolution_identities,
+                self.notice_identities,
+            );
+            return Ok(());
+        }
+        let source = match resolve_named_import(
+            self.resolution.mode,
+            self.resolution.resolver,
+            self.resolution.importer_path,
+            &import.specifier,
+            self.resolution.explicit_path_to_index,
+            self.resolution.configured_roots,
+            self.resolution.canonical_project,
+        )? {
+            NamedImportOutcome::Source(source) => source,
+            NamedImportOutcome::UnsupportedTarget(target) => {
+                self.resolution_identities.push(located_identity(
+                    self.input,
+                    self.line_index,
+                    import.start,
+                    format!("named-import {} -> unsupported", import.specifier),
+                ));
+                self.notice_identities.push(LocatedIdentity {
+                    path: normalized_display_name(&self.input.name),
+                    start: import.start,
+                    identity: format!(
+                        "unsupported-module-target unconfigured {} {} -> {}",
+                        source_location(self.input, self.line_index, import.start),
+                        import.specifier,
+                        target.as_deref().unwrap_or("outside-project")
+                    ),
+                });
+                return Ok(());
+            }
+        };
+        let cycle_source = match (self.resolution.mode, source) {
+            (ProjectResolutionMode::ExplicitFileList, RawImportSource::Missing) => self
+                .resolution
+                .resolver
+                .resolve_dts(self.resolution.importer_path, &import.specifier)
+                .ok()
+                .and_then(|resolution| fs::canonicalize(resolution.path()).ok())
+                .and_then(|path| self.cycle_path_to_index.get(&path).copied())
+                .map_or(RawImportSource::Missing, RawImportSource::Resolved),
+            _ => source,
+        };
+        if let RawImportSource::Resolved(target) = cycle_source {
+            self.cycle_edges.insert(target);
+        }
+        let outcome = match source {
+            RawImportSource::Resolved(target) => normalized_display_name(
+                self.inputs
+                    .get(target)
+                    .map_or("<invalid-root>", |target| target.name.as_str()),
+            ),
+            RawImportSource::Missing => "unresolved".to_owned(),
+        };
+        self.resolution_identities.push(located_identity(
+            self.input,
+            self.line_index,
+            import.start,
+            format!("named-import {} -> {outcome}", import.specifier),
+        ));
+        for specifier in import.specifiers {
+            let imported = specifier.imported.ok_or_else(|| {
+                ProjectInventoryError::new(
+                    "string-literal import escaped its inventory classification",
+                )
+            })?;
+            if matches!(source, RawImportSource::Missing) {
+                self.missing_module_locations
+                    .push(ProjectMissingModuleLocation {
+                        file: normalized_display_name(&self.input.name),
+                        diagnostic_span: specifier.local_span,
+                        summary_start: import.source_span_start,
+                    });
+            }
+            self.raw_imports.push(RawImport {
+                local: specifier.local,
+                imported,
+                specifier: import.specifier.clone(),
+                source,
+                type_only: import.outer_type_only || specifier.type_only,
+                local_span: specifier.local_span,
+                span: specifier.span,
+                owner_start: import.start,
+            });
+        }
+        Ok(())
+    }
+
+    fn account_source_reexport(
+        &mut self,
+        export: SourceReexportAccountingTask,
+    ) -> Result<(), ProjectInventoryError> {
+        if export.with_clause {
+            return Err(ProjectInventoryError::new(format!(
+                "unfrozen export attribute surface at {}",
+                source_location(self.input, self.line_index, export.start)
+            )));
+        }
+        if export.members.is_empty() {
+            if self.source_reexport_accounting.collects_evidence() {
+                return Ok(());
+            }
+            record_unsupported_module_form(
+                self.input,
+                self.line_index,
+                export.start,
+                "source-reexport",
+                Some(&export.specifier),
+                self.resolution_identities,
+                self.notice_identities,
+            );
+            return Ok(());
+        }
+        if self.source_reexport_accounting.collects_evidence()
+            && is_admitted_source_reexport_specifier(&export.specifier)
+            && export
+                .members
+                .iter()
+                .all(|member| member.imported.is_some() && member.exported.is_some())
+        {
+            let resolution = resolve_named_import(
+                self.resolution.mode,
+                self.resolution.resolver,
+                self.resolution.importer_path,
+                &export.specifier,
+                self.resolution.explicit_path_to_index,
+                self.resolution.configured_roots,
+                self.resolution.canonical_project,
+            )?;
+            if let NamedImportOutcome::Source(source) = resolution {
+                if let RawImportSource::Resolved(target) = source {
+                    self.reexport_edges.insert(target);
+                }
+                let members = export
+                    .members
+                    .into_iter()
+                    .map(|member| {
+                        Ok(RawSourceReexportMember {
+                            imported: member.imported.ok_or_else(|| {
+                                ProjectInventoryError::new(
+                                    "classified source re-export lost its local name",
+                                )
+                            })?,
+                            exported: member.exported.ok_or_else(|| {
+                                ProjectInventoryError::new(
+                                    "classified source re-export lost its exported name",
+                                )
+                            })?,
+                            span: member.span,
+                            type_only: export.outer_type_only || member.type_only,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ProjectInventoryError>>()?;
+                self.raw_source_reexports
+                    .push(RawSourceReexportDeclaration {
+                        owner_module: self.owner_module,
+                        source,
+                        module_specifier: export.specifier.clone(),
+                        declaration_span: export.declaration_span,
+                        source_span: export.source_span,
+                        owner_start: export.start,
+                        members,
+                    });
+                if self.source_reexport_accounting.admits_product() {
+                    return Ok(());
+                }
+            }
+        }
+        record_unsupported_module_form(
+            self.input,
+            self.line_index,
+            export.start,
+            "source-reexport",
+            Some(&export.specifier),
+            self.resolution_identities,
+            self.notice_identities,
+        );
+        Ok(())
+    }
+}
+
+impl ModuleAccounting {
+    fn new(
+        inputs: &[FileInput],
+        mode: &ProjectResolutionMode,
+        source_reexport_accounting: SourceReexportAccounting,
+        default_candidate_accounting: DefaultCandidateAccounting,
+    ) -> Result<Self, ProjectInventoryError> {
+        let ResolutionPaths {
+            paths,
+            configured_roots,
+            canonical_project,
+        } = resolution_paths(inputs, mode)?;
+        let explicit_path_to_index = paths
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, path)| (path, index))
+            .collect::<BTreeMap<_, _>>();
+        let cycle_path_to_index = paths
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| fs::canonicalize(path).ok().map(|path| (path, index)))
+            .collect::<BTreeMap<_, _>>();
+        let default_source_keys = matches!(
+            default_candidate_accounting,
+            DefaultCandidateAccounting::CollectCandidate
+        )
+        .then(|| stable_source_keys(&paths));
+        let default_module_authority = matches!(
+            default_candidate_accounting,
+            DefaultCandidateAccounting::CollectCandidate
+        )
+        .then(|| DefaultModuleAuthority {
+            imports: Vec::new(),
+            exports: Vec::new(),
+            admitted_default_edges: vec![BTreeSet::new(); inputs.len()],
+        });
+        Ok(Self {
+            paths,
+            configured_roots,
+            canonical_project,
+            explicit_path_to_index,
+            resolver: Resolver::default(),
+            mode: mode.clone(),
+            source_reexport_accounting,
+            default_candidate_accounting,
+            raw_imports: vec![Vec::new(); inputs.len()],
+            cycle_path_to_index,
+            cycle_edges: vec![BTreeSet::new(); inputs.len()],
+            reexport_edges: vec![BTreeSet::new(); inputs.len()],
+            raw_source_reexports: Vec::new(),
+            resolution_identities: Vec::new(),
+            notice_identities: Vec::new(),
+            missing_module_locations: Vec::new(),
+            default_source_keys,
+            default_module_authority,
+            module_syntax_evidence: (0..inputs.len())
+                .map(|_| ModuleSyntaxEvidence::default())
+                .collect(),
+        })
+    }
+
+    fn scan(
+        mut self,
+        inputs: &[FileInput],
+        programs: &[&Program<'_>],
+    ) -> Result<ScannedModuleAccounting, ProjectInventoryError> {
+        if inputs.len() != programs.len() || inputs.len() != self.paths.len() {
+            return Err(ProjectInventoryError::new(
+                "module accounting input, program, and path coverage changed before scan",
+            ));
+        }
+        #[cfg(test)]
+        record_module_accounting_owner_started()?;
+        let Self {
+            paths,
+            configured_roots,
+            canonical_project,
+            explicit_path_to_index,
+            resolver,
+            mode,
+            source_reexport_accounting,
+            default_candidate_accounting,
+            raw_imports,
+            cycle_path_to_index,
+            cycle_edges,
+            reexport_edges,
+            raw_source_reexports,
+            resolution_identities,
+            notice_identities,
+            missing_module_locations,
+            default_source_keys,
+            default_module_authority,
+            module_syntax_evidence,
+        } = &mut self;
+        for (index, ((input, program), importer_path)) in
+            inputs.iter().zip(programs).zip(paths.iter()).enumerate()
+        {
+            #[cfg(test)]
+            record_module_accounting_program_visit(index, program.body.len())?;
+            let line_index = crate::span::LineIndex::new(&input.source);
+            let default_owner_source_key = default_module_authority
+                .as_ref()
+                .map(|_| {
+                    default_source_keys
+                        .as_ref()
+                        .and_then(|keys| keys.get(index))
+                        .copied()
+                        .ok_or_else(|| {
+                            ProjectInventoryError::new(
+                                "default export owner lost its stable source identity",
+                            )
+                        })
+                })
+                .transpose()?;
+            let normalized_owner_path = normalized_display_name(&input.name);
+            let collects_default_candidates = default_module_authority.is_some();
+            let (default_import_tasks, accounting_tasks) = {
+                let syntax_evidence = module_syntax_evidence.get_mut(index).ok_or_else(|| {
+                    ProjectInventoryError::new("module accounting syntax evidence lost its owner")
+                })?;
+                #[cfg(test)]
+                let mut statement_indices = 0..program.body.len();
+                for statement in &program.body {
+                    #[cfg(test)]
+                    {
+                        let statement_index = statement_indices.next().ok_or_else(|| {
+                            ProjectInventoryError::new(
+                                "module accounting statement receipt index was exhausted",
+                            )
+                        })?;
+                        record_module_accounting_statement_visit(index, statement_index)?;
+                    }
+                    collect_source_namespace_evidence(statement, syntax_evidence);
+                    collect_default_local_namespace_evidence(
+                        statement,
+                        &mut syntax_evidence.default_local_names,
+                    );
+                    if let Some(owner_source_key) = default_owner_source_key {
+                        collect_default_export_evidence(
+                            owner_source_key,
+                            &normalized_owner_path,
+                            statement,
+                            &mut syntax_evidence.default_export_occurrences,
+                        );
+                    }
+                    let is_default_candidate = if collects_default_candidates {
+                        match statement {
+                            Statement::ImportDeclaration(import) => {
+                                if let Some(candidate) =
+                                    collect_default_import_syntax_candidate(index, import)
+                                {
+                                    syntax_evidence.default_imports.push(candidate);
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            _ => false,
+                        }
+                    } else {
+                        false
+                    };
+                    if !is_default_candidate {
+                        if let Some(task) = collect_module_accounting_task(statement) {
+                            syntax_evidence.accounting_tasks.push(task);
+                        }
+                    }
+                }
+                (
+                    std::mem::take(&mut syntax_evidence.default_imports),
+                    std::mem::take(&mut syntax_evidence.accounting_tasks),
+                )
+            };
+            let owner_raw_imports = raw_imports.get_mut(index).ok_or_else(|| {
+                ProjectInventoryError::new("module accounting import evidence lost its owner")
+            })?;
+            let owner_cycle_edges = cycle_edges.get_mut(index).ok_or_else(|| {
+                ProjectInventoryError::new("module accounting cycle evidence lost its owner")
+            })?;
+            let owner_reexport_edges = reexport_edges.get_mut(index).ok_or_else(|| {
+                ProjectInventoryError::new("module accounting re-export evidence lost its owner")
+            })?;
+            let mut context = ModuleAccountingTaskContext {
+                owner_module: index,
+                inputs,
+                input,
+                line_index: &line_index,
+                resolution: DefaultCandidateResolution {
+                    mode,
+                    resolver,
+                    importer_path,
+                    explicit_path_to_index,
+                    configured_roots,
+                    canonical_project: canonical_project.as_deref(),
+                },
+                source_reexport_accounting: *source_reexport_accounting,
+                default_candidate_accounting: *default_candidate_accounting,
+                cycle_path_to_index,
+                raw_imports: owner_raw_imports,
+                cycle_edges: owner_cycle_edges,
+                reexport_edges: owner_reexport_edges,
+                raw_source_reexports,
+                resolution_identities,
+                notice_identities,
+                missing_module_locations,
+            };
+            if let Some(authority) = default_module_authority.as_mut() {
+                for candidate in default_import_tasks {
+                    context.account_default_import(candidate, authority)?;
+                }
+            }
+            for task in accounting_tasks {
+                context.account_task(task)?;
+            }
+        }
+
+        Ok(ScannedModuleAccounting { accounting: self })
+    }
+}
+
+impl ScannedModuleAccounting {
+    fn finalize(self, inputs: &[FileInput]) -> Result<AccountedModulePlan, ProjectInventoryError> {
+        let ModuleAccounting {
+            paths,
+            configured_roots: _,
+            canonical_project: _,
+            explicit_path_to_index: _,
+            resolver: _,
+            mode: _,
+            source_reexport_accounting,
+            default_candidate_accounting: _,
+            raw_imports,
+            cycle_path_to_index: _,
+            cycle_edges,
+            reexport_edges,
+            raw_source_reexports,
+            mut resolution_identities,
+            mut notice_identities,
+            missing_module_locations,
+            default_source_keys,
+            mut default_module_authority,
+            mut module_syntax_evidence,
+        } = self.accounting;
+
+        if inputs.len() != paths.len() || inputs.len() != module_syntax_evidence.len() {
+            return Err(ProjectInventoryError::new(
+                "module accounting finalization coverage changed after scan",
+            ));
+        }
+        if let Some(authority) = default_module_authority.as_mut() {
+            let source_keys = default_source_keys.as_ref().ok_or_else(|| {
+                ProjectInventoryError::new("default export owner lost its stable source identities")
+            })?;
+            if source_keys.len() != module_syntax_evidence.len() {
+                return Err(ProjectInventoryError::new(
+                    "default export source identity coverage changed after scan",
+                ));
+            }
+            for (owner_module, evidence) in module_syntax_evidence.iter_mut().enumerate() {
+                let exports = finalize_default_export_evidence(
+                    owner_module,
+                    &evidence.default_local_names,
+                    std::mem::take(&mut evidence.default_export_occurrences),
+                );
+                if !exports.occurrences.is_empty() {
+                    authority.exports.push(exports);
+                }
+            }
+        }
+
+        let import_cycle = first_module_cycle(inputs, &cycle_edges);
+        if let Some(cycle) = &import_cycle {
+            notice_identities.push(LocatedIdentity {
+                path: cycle.first().cloned().unwrap_or_default(),
+                start: 0,
+                identity: format!("unsupported-module-cycle {}", cycle.join(" -> ")),
+            });
+        }
+
+        let source_reexports = if source_reexport_accounting.collects_evidence() {
+            let mut combined_edges = raw_imports
+                .iter()
+                .map(|imports| {
+                    imports
+                        .iter()
+                        .filter_map(|import| match import.source {
+                            RawImportSource::Resolved(target) => Some(target),
+                            RawImportSource::Missing => None,
+                        })
+                        .collect::<BTreeSet<_>>()
+                })
+                .collect::<Vec<_>>();
+            for (edges, reexports) in combined_edges.iter_mut().zip(&reexport_edges) {
+                edges.extend(reexports);
+            }
+            let first_cycle = first_module_cycle(inputs, &combined_edges);
+            let namespace_provenance = source_reexport_namespace_provenance(
+                &module_syntax_evidence,
+                &raw_imports,
+                &raw_source_reexports,
+                &reexport_edges,
+                first_cycle.is_some(),
+            );
+            PendingSourceReexports {
+                declarations: raw_source_reexports,
+                dependency_edges: reexport_edges,
+                namespace_provenance,
+                first_cycle,
+            }
+        } else {
+            PendingSourceReexports {
+                declarations: Vec::new(),
+                dependency_edges: vec![BTreeSet::new(); inputs.len()],
+                namespace_provenance: BTreeMap::new(),
+                first_cycle: None,
+            }
+        };
+        source_reexports.validate(inputs.len())?;
+
+        let admitted_source_reexports = if source_reexport_accounting.admits_product() {
+            let finalized = finalize_admitted_source_reexports(
+                inputs,
+                &paths,
+                &raw_imports,
+                &source_reexports,
+            )?;
+            let FinalizedSourceReexports {
+                admitted,
+                order,
+                resolutions,
+                blocked_notices,
+                first_cycle,
+            } = finalized;
+            resolution_identities.extend(resolutions);
+            notice_identities.extend(blocked_notices);
+            if import_cycle.is_none() {
+                if let Some(cycle) = &first_cycle {
+                    notice_identities.push(LocatedIdentity {
+                        path: cycle.first().cloned().unwrap_or_default(),
+                        start: 0,
+                        identity: format!("unsupported-module-cycle {}", cycle.join(" -> ")),
+                    });
+                }
+            }
+            Some(AdmittedSourceReexportProduct {
+                declarations: admitted,
+                dependency_order: order,
+            })
+        } else {
+            None
+        };
+
+        #[cfg(test)]
+        record_module_accounting_finalization()?;
+        Ok(AccountedModulePlan {
+            inventory: ProjectModuleInventory {
+                resolutions: sorted_identities(resolution_identities),
+                notices: sorted_identities(notice_identities),
+                parse_errors: Vec::new(),
+                missing_module_locations,
+            },
+            paths,
+            raw_imports,
+            source_reexports,
+            admitted_source_reexports,
+            default_module_authority,
+        })
+    }
+}
+
 fn account_project_modules(
     inputs: &[FileInput],
     programs: &[&Program<'_>],
@@ -1963,571 +2956,14 @@ fn account_project_modules(
     source_reexport_accounting: SourceReexportAccounting,
     default_candidate_accounting: DefaultCandidateAccounting,
 ) -> Result<AccountedModulePlan, ProjectInventoryError> {
-    let ResolutionPaths {
-        paths,
-        configured_roots,
-        canonical_project,
-    } = resolution_paths(inputs, mode)?;
-    let explicit_path_to_index = paths
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(index, path)| (path, index))
-        .collect::<BTreeMap<_, _>>();
-    let resolver = Resolver::default();
-    let mut raw_imports = vec![Vec::new(); inputs.len()];
-    let cycle_path_to_index = paths
-        .iter()
-        .enumerate()
-        .filter_map(|(index, path)| fs::canonicalize(path).ok().map(|path| (path, index)))
-        .collect::<BTreeMap<_, _>>();
-    let mut cycle_edges = vec![BTreeSet::new(); inputs.len()];
-    let mut reexport_edges = vec![BTreeSet::new(); inputs.len()];
-    let mut raw_source_reexports = Vec::new();
-    let mut resolution_identities = Vec::new();
-    let mut notice_identities = Vec::new();
-    let mut missing_module_locations = Vec::new();
-    let default_source_keys = matches!(
+    let accounting = ModuleAccounting::new(
+        inputs,
+        mode,
+        source_reexport_accounting,
         default_candidate_accounting,
-        DefaultCandidateAccounting::CollectCandidate
-    )
-    .then(|| stable_source_keys(&paths));
-    let mut default_module_authority = matches!(
-        default_candidate_accounting,
-        DefaultCandidateAccounting::CollectCandidate
-    )
-    .then(|| DefaultModuleAuthority {
-        imports: Vec::new(),
-        exports: Vec::new(),
-        admitted_default_edges: vec![BTreeSet::new(); inputs.len()],
-    });
-
-    for (index, ((input, program), importer_path)) in
-        inputs.iter().zip(programs).zip(&paths).enumerate()
-    {
-        let line_index = crate::span::LineIndex::new(&input.source);
-        let mut default_candidate_owner_starts = BTreeSet::new();
-        if let Some(authority) = &mut default_module_authority {
-            let imports = scan_default_import_candidates(
-                index,
-                program,
-                &DefaultCandidateResolution {
-                    mode,
-                    resolver: &resolver,
-                    importer_path,
-                    explicit_path_to_index: &explicit_path_to_index,
-                    configured_roots: &configured_roots,
-                    canonical_project: canonical_project.as_deref(),
-                },
-            )?;
-            validate_raw_default_imports(program, &imports)?;
-            for import in &imports {
-                default_candidate_owner_starts.insert(import.owner_start);
-                if import.disposition == DefaultImportCandidateDisposition::Admitted {
-                    if let RawDefaultImportCandidateSource::Resolved(target) = &import.source {
-                        let edges =
-                            authority
-                                .admitted_default_edges
-                                .get_mut(index)
-                                .ok_or_else(|| {
-                                    ProjectInventoryError::new(
-                                        "default import owner escaped authority graph",
-                                    )
-                                })?;
-                        edges.insert(*target);
-                    }
-                }
-            }
-            authority.imports.extend(imports);
-
-            let owner_source_key = default_source_keys
-                .as_ref()
-                .and_then(|keys| keys.get(index))
-                .copied()
-                .ok_or_else(|| {
-                    ProjectInventoryError::new(
-                        "default export owner lost its stable source identity",
-                    )
-                })?;
-            let normalized_owner_path = normalized_display_name(&input.name);
-            let exports = scan_default_export_candidates(
-                index,
-                owner_source_key,
-                &normalized_owner_path,
-                program,
-            );
-            validate_raw_default_exports(
-                program,
-                owner_source_key,
-                &normalized_owner_path,
-                &exports,
-            )?;
-            if !exports.occurrences.is_empty() {
-                authority.exports.push(exports);
-            }
-        }
-        for statement in &program.body {
-            match statement {
-                Statement::ImportDeclaration(import) => {
-                    if default_candidate_owner_starts.contains(&import.span.start) {
-                        continue;
-                    }
-                    if import.phase.is_some() {
-                        return Err(ProjectInventoryError::new(format!(
-                            "unfrozen import phase surface at {}",
-                            source_location(input, &line_index, import.span.start)
-                        )));
-                    }
-                    let specifier = import.source.value.as_str();
-                    if import.with_clause.is_some() {
-                        record_unsupported_module_form(
-                            input,
-                            &line_index,
-                            import.span.start,
-                            "import-attributes",
-                            Some(specifier),
-                            &mut resolution_identities,
-                            &mut notice_identities,
-                        );
-                        continue;
-                    }
-                    let form = classify_import_declaration(import)?;
-                    if form != "named-import" {
-                        record_unsupported_module_form(
-                            input,
-                            &line_index,
-                            import.span.start,
-                            form,
-                            Some(specifier),
-                            &mut resolution_identities,
-                            &mut notice_identities,
-                        );
-                        continue;
-                    }
-                    if import.specifiers.as_ref().is_some_and(|specifiers| {
-                        specifiers.iter().any(|item| {
-                            matches!(
-                                item,
-                                ImportDeclarationSpecifier::ImportSpecifier(named)
-                                    if matches!(named.imported, ModuleExportName::StringLiteral(_))
-                            )
-                        })
-                    }) {
-                        record_unsupported_module_form(
-                            input,
-                            &line_index,
-                            import.span.start,
-                            "string-literal-import-name",
-                            Some(specifier),
-                            &mut resolution_identities,
-                            &mut notice_identities,
-                        );
-                        continue;
-                    }
-                    if is_local_relative(specifier) {
-                        let unsupported_reason = if specifier.contains(['?', '#']) {
-                            Some("query-or-fragment")
-                        } else if specifier.ends_with(".ts") {
-                            Some("explicit-ts-extension")
-                        } else {
-                            None
-                        };
-                        if let Some(reason) = unsupported_reason {
-                            record_unsupported_module_specifier(
-                                input,
-                                &line_index,
-                                import.span.start,
-                                specifier,
-                                reason,
-                                &mut resolution_identities,
-                                &mut notice_identities,
-                            );
-                            continue;
-                        }
-                    }
-                    if !is_local_relative(specifier) {
-                        let reason = if specifier.starts_with('#') {
-                            "package-import"
-                        } else if specifier.contains("://") {
-                            "uri"
-                        } else if Path::new(specifier).is_absolute() {
-                            "absolute"
-                        } else {
-                            "bare"
-                        };
-                        record_unsupported_module_specifier(
-                            input,
-                            &line_index,
-                            import.span.start,
-                            specifier,
-                            reason,
-                            &mut resolution_identities,
-                            &mut notice_identities,
-                        );
-                        continue;
-                    }
-                    let resolution = resolve_named_import(
-                        mode,
-                        &resolver,
-                        importer_path,
-                        specifier,
-                        &explicit_path_to_index,
-                        &configured_roots,
-                        canonical_project.as_deref(),
-                    )?;
-                    let source = match resolution {
-                        NamedImportOutcome::Source(source) => source,
-                        NamedImportOutcome::UnsupportedTarget(target) => {
-                            resolution_identities.push(located_identity(
-                                input,
-                                &line_index,
-                                import.span.start,
-                                format!("named-import {specifier} -> unsupported"),
-                            ));
-                            notice_identities.push(LocatedIdentity {
-                                path: normalized_display_name(&input.name),
-                                start: import.span.start,
-                                identity: format!(
-                                    "unsupported-module-target unconfigured {} {specifier} -> {}",
-                                    source_location(input, &line_index, import.span.start),
-                                    target.as_deref().unwrap_or("outside-project")
-                                ),
-                            });
-                            continue;
-                        }
-                    };
-                    let cycle_source = match (mode, source) {
-                        (ProjectResolutionMode::ExplicitFileList, RawImportSource::Missing) => {
-                            resolver
-                                .resolve_dts(importer_path, specifier)
-                                .ok()
-                                .and_then(|resolution| fs::canonicalize(resolution.path()).ok())
-                                .and_then(|path| cycle_path_to_index.get(&path).copied())
-                                .map_or(RawImportSource::Missing, RawImportSource::Resolved)
-                        }
-                        _ => source,
-                    };
-                    if let RawImportSource::Resolved(target) = cycle_source {
-                        cycle_edges[index].insert(target);
-                    }
-                    let outcome = match source {
-                        RawImportSource::Resolved(target) => normalized_display_name(
-                            inputs
-                                .get(target)
-                                .map_or("<invalid-root>", |target| target.name.as_str()),
-                        ),
-                        RawImportSource::Missing => "unresolved".to_owned(),
-                    };
-                    resolution_identities.push(located_identity(
-                        input,
-                        &line_index,
-                        import.span.start,
-                        format!("named-import {specifier} -> {outcome}"),
-                    ));
-                    let outer_type_only = import.import_kind == ImportOrExportKind::Type;
-                    let specifiers = import.specifiers.as_ref().ok_or_else(|| {
-                        ProjectInventoryError::new("named import lost its specifier list")
-                    })?;
-                    for item in specifiers {
-                        let ImportDeclarationSpecifier::ImportSpecifier(named) = item else {
-                            return Err(ProjectInventoryError::new(
-                                "named import classification changed during inventory",
-                            ));
-                        };
-                        let Some(imported) = module_export_name(&named.imported) else {
-                            return Err(ProjectInventoryError::new(
-                                "string-literal import escaped its inventory classification",
-                            ));
-                        };
-                        if matches!(source, RawImportSource::Missing) {
-                            missing_module_locations.push(ProjectMissingModuleLocation {
-                                file: normalized_display_name(&input.name),
-                                diagnostic_span: Span::from_oxc(named.local.span),
-                                summary_start: import.source.span.start,
-                            });
-                        }
-                        raw_imports[index].push(RawImport {
-                            local: named.local.name.to_string(),
-                            imported: imported.to_owned(),
-                            specifier: specifier.to_owned(),
-                            source,
-                            type_only: outer_type_only
-                                || named.import_kind == ImportOrExportKind::Type,
-                            local_span: Span::from_oxc(named.local.span),
-                            span: Span::from_oxc(named.span),
-                            owner_start: import.span.start,
-                        });
-                    }
-                }
-                Statement::ExportNamedDeclaration(export) if export.source.is_some() => {
-                    if export.with_clause.is_some() {
-                        return Err(ProjectInventoryError::new(format!(
-                            "unfrozen export attribute surface at {}",
-                            source_location(input, &line_index, export.span.start)
-                        )));
-                    }
-                    let source_literal = export.source.as_ref().ok_or_else(|| {
-                        ProjectInventoryError::new("source re-export lost source")
-                    })?;
-                    let specifier = source_literal.value.as_str();
-                    if export.specifiers.is_empty() {
-                        if source_reexport_accounting.collects_evidence() {
-                            continue;
-                        }
-                        record_unsupported_module_form(
-                            input,
-                            &line_index,
-                            export.span.start,
-                            "source-reexport",
-                            Some(specifier),
-                            &mut resolution_identities,
-                            &mut notice_identities,
-                        );
-                        continue;
-                    }
-                    if source_reexport_accounting.collects_evidence()
-                        && is_admitted_source_reexport_specifier(specifier)
-                        && export.specifiers.iter().all(|member| {
-                            module_export_name(&member.local).is_some()
-                                && module_export_name(&member.exported).is_some()
-                        })
-                    {
-                        let resolution = resolve_named_import(
-                            mode,
-                            &resolver,
-                            importer_path,
-                            specifier,
-                            &explicit_path_to_index,
-                            &configured_roots,
-                            canonical_project.as_deref(),
-                        )?;
-                        if let NamedImportOutcome::Source(source) = resolution {
-                            if let RawImportSource::Resolved(target) = source {
-                                reexport_edges[index].insert(target);
-                            }
-                            let outer_type_only = export.export_kind == ImportOrExportKind::Type;
-                            let members = export
-                                .specifiers
-                                .iter()
-                                .map(|member| {
-                                    let imported = module_export_name(&member.local).ok_or_else(|| {
-                                        ProjectInventoryError::new(
-                                            "classified source re-export lost its local name",
-                                        )
-                                    })?;
-                                    let exported =
-                                        module_export_name(&member.exported).ok_or_else(|| {
-                                            ProjectInventoryError::new(
-                                                "classified source re-export lost its exported name",
-                                            )
-                                        })?;
-                                    Ok(RawSourceReexportMember {
-                                        imported: imported.to_owned(),
-                                        exported: exported.to_owned(),
-                                        span: Span::from_oxc(member.span),
-                                        type_only: outer_type_only
-                                            || member.export_kind == ImportOrExportKind::Type,
-                                    })
-                                })
-                                .collect::<Result<Vec<_>, ProjectInventoryError>>()?;
-                            raw_source_reexports.push(RawSourceReexportDeclaration {
-                                owner_module: index,
-                                source,
-                                module_specifier: specifier.to_owned(),
-                                declaration_span: Span::from_oxc(export.span),
-                                source_span: Span::from_oxc(source_literal.span),
-                                owner_start: export.span.start,
-                                members,
-                            });
-                            if source_reexport_accounting.admits_product() {
-                                continue;
-                            }
-                        }
-                    }
-                    record_unsupported_module_form(
-                        input,
-                        &line_index,
-                        export.span.start,
-                        "source-reexport",
-                        Some(specifier),
-                        &mut resolution_identities,
-                        &mut notice_identities,
-                    );
-                }
-                Statement::ExportAllDeclaration(export) => {
-                    if export.with_clause.is_some() {
-                        return Err(ProjectInventoryError::new(format!(
-                            "unfrozen export attribute surface at {}",
-                            source_location(input, &line_index, export.span.start)
-                        )));
-                    }
-                    let form = if export.exported.is_some() {
-                        "namespace-reexport"
-                    } else {
-                        "star-reexport"
-                    };
-                    record_unsupported_module_form(
-                        input,
-                        &line_index,
-                        export.span.start,
-                        form,
-                        Some(export.source.value.as_str()),
-                        &mut resolution_identities,
-                        &mut notice_identities,
-                    );
-                }
-                Statement::ExportDefaultDeclaration(export) => {
-                    if matches!(
-                        default_candidate_accounting,
-                        DefaultCandidateAccounting::FrozenUnsupported
-                    ) {
-                        record_unsupported_module_form(
-                            input,
-                            &line_index,
-                            export.span.start,
-                            "default-export",
-                            None,
-                            &mut resolution_identities,
-                            &mut notice_identities,
-                        );
-                    }
-                }
-                Statement::TSImportEqualsDeclaration(import) => {
-                    let specifier = match &import.module_reference {
-                        TSModuleReference::ExternalModuleReference(reference) => {
-                            Some(reference.expression.value.as_str())
-                        }
-                        TSModuleReference::IdentifierReference(_)
-                        | TSModuleReference::QualifiedName(_) => None,
-                    };
-                    record_unsupported_module_form(
-                        input,
-                        &line_index,
-                        import.span.start,
-                        "import-equals",
-                        specifier,
-                        &mut resolution_identities,
-                        &mut notice_identities,
-                    );
-                }
-                Statement::TSExportAssignment(export) => {
-                    record_unsupported_module_form(
-                        input,
-                        &line_index,
-                        export.span.start,
-                        "export-assignment",
-                        None,
-                        &mut resolution_identities,
-                        &mut notice_identities,
-                    );
-                }
-                Statement::TSNamespaceExportDeclaration(export) => {
-                    record_unsupported_module_form(
-                        input,
-                        &line_index,
-                        export.span.start,
-                        "export-as-namespace",
-                        None,
-                        &mut resolution_identities,
-                        &mut notice_identities,
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let import_cycle = first_module_cycle(inputs, &cycle_edges);
-    if let Some(cycle) = &import_cycle {
-        notice_identities.push(LocatedIdentity {
-            path: cycle.first().cloned().unwrap_or_default(),
-            start: 0,
-            identity: format!("unsupported-module-cycle {}", cycle.join(" -> ")),
-        });
-    }
-
-    let source_reexports = if source_reexport_accounting.collects_evidence() {
-        let mut combined_edges = raw_imports
-            .iter()
-            .map(|imports| {
-                imports
-                    .iter()
-                    .filter_map(|import| match import.source {
-                        RawImportSource::Resolved(target) => Some(target),
-                        RawImportSource::Missing => None,
-                    })
-                    .collect::<BTreeSet<_>>()
-            })
-            .collect::<Vec<_>>();
-        for (edges, reexports) in combined_edges.iter_mut().zip(&reexport_edges) {
-            edges.extend(reexports);
-        }
-        let first_cycle = first_module_cycle(inputs, &combined_edges);
-        let namespace_provenance = source_reexport_namespace_provenance(
-            programs,
-            &raw_imports,
-            &raw_source_reexports,
-            &reexport_edges,
-            first_cycle.is_some(),
-        );
-        PendingSourceReexports {
-            declarations: raw_source_reexports,
-            dependency_edges: reexport_edges,
-            namespace_provenance,
-            first_cycle,
-        }
-    } else {
-        PendingSourceReexports {
-            declarations: Vec::new(),
-            dependency_edges: vec![BTreeSet::new(); inputs.len()],
-            namespace_provenance: BTreeMap::new(),
-            first_cycle: None,
-        }
-    };
-    source_reexports.validate(inputs.len())?;
-
-    let admitted_source_reexports = if source_reexport_accounting.admits_product() {
-        let finalized =
-            finalize_admitted_source_reexports(inputs, &paths, &raw_imports, &source_reexports)?;
-        let FinalizedSourceReexports {
-            admitted,
-            order,
-            resolutions,
-            blocked_notices,
-            first_cycle,
-        } = finalized;
-        resolution_identities.extend(resolutions);
-        notice_identities.extend(blocked_notices);
-        if import_cycle.is_none() {
-            if let Some(cycle) = &first_cycle {
-                notice_identities.push(LocatedIdentity {
-                    path: cycle.first().cloned().unwrap_or_default(),
-                    start: 0,
-                    identity: format!("unsupported-module-cycle {}", cycle.join(" -> ")),
-                });
-            }
-        }
-        Some(AdmittedSourceReexportProduct {
-            declarations: admitted,
-            dependency_order: order,
-        })
-    } else {
-        None
-    };
-
-    Ok(AccountedModulePlan {
-        inventory: ProjectModuleInventory {
-            resolutions: sorted_identities(resolution_identities),
-            notices: sorted_identities(notice_identities),
-            parse_errors: Vec::new(),
-            missing_module_locations,
-        },
-        paths,
-        raw_imports,
-        source_reexports,
-        admitted_source_reexports,
-        default_module_authority,
-    })
+    )?;
+    let accounting = accounting.scan(inputs, programs)?;
+    accounting.finalize(inputs)
 }
 
 /// Collect WU2 evidence without changing any production project route.
@@ -3216,6 +3652,7 @@ fn activate_default_module_inventory(
     Ok(())
 }
 
+#[cfg(test)]
 fn scan_default_import_candidates(
     owner_module: usize,
     program: &Program<'_>,
@@ -3226,73 +3663,98 @@ fn scan_default_import_candidates(
         let Statement::ImportDeclaration(import) = statement else {
             continue;
         };
-        if import.phase.is_some() || import.with_clause.is_some() {
-            continue;
-        }
-        let Some(_) = &import.specifiers else {
-            continue;
-        };
-        let DefaultImportShape {
-            specifiers,
-            direct_default_count,
-            named_default_count,
-            named_count,
-            namespace_count,
-        } = default_import_shape(import);
-        if direct_default_count == 0 && named_default_count == 0 {
-            continue;
-        }
-        let disposition = if direct_default_count == 1
-            && named_default_count == 0
-            && named_count == 0
-            && namespace_count == 0
-            && specifiers.len() == 1
+        if let Some(candidate) = collect_default_import_candidate(owner_module, import, resolution)?
         {
-            DefaultImportCandidateDisposition::Admitted
-        } else if direct_default_count > 0 && namespace_count > 0 {
-            DefaultImportCandidateDisposition::MixedDefaultNamespace
-        } else if direct_default_count > 0 {
-            DefaultImportCandidateDisposition::MixedDefaultNamed
-        } else {
-            DefaultImportCandidateDisposition::NamedDefaultSyntax
-        };
-        let module_specifier = import.source.value.as_str();
-        let source = if is_admitted_source_reexport_specifier(module_specifier) {
-            match resolve_named_import(
-                resolution.mode,
-                resolution.resolver,
-                resolution.importer_path,
-                module_specifier,
-                resolution.explicit_path_to_index,
-                resolution.configured_roots,
-                resolution.canonical_project,
-            )? {
-                NamedImportOutcome::Source(RawImportSource::Resolved(target)) => {
-                    RawDefaultImportCandidateSource::Resolved(target)
-                }
-                NamedImportOutcome::Source(RawImportSource::Missing) => {
-                    RawDefaultImportCandidateSource::Missing
-                }
-                NamedImportOutcome::UnsupportedTarget(target) => {
-                    RawDefaultImportCandidateSource::UnsupportedTarget(target)
-                }
-            }
-        } else {
-            RawDefaultImportCandidateSource::UnsupportedTarget(None)
-        };
-        imports.push(RawDefaultImportCandidate {
-            owner_module,
-            source,
-            module_specifier: module_specifier.to_owned(),
-            declaration_span: Span::from_oxc(import.span),
-            source_span: Span::from_oxc(import.source.span),
-            owner_start: import.span.start,
-            declaration_type_only: import.import_kind == ImportOrExportKind::Type,
-            disposition,
-            specifiers,
-        });
+            imports.push(candidate);
+        }
     }
     Ok(imports)
+}
+
+#[cfg(test)]
+fn collect_default_import_candidate(
+    owner_module: usize,
+    import: &oxc_ast::ast::ImportDeclaration<'_>,
+    resolution: &DefaultCandidateResolution<'_>,
+) -> Result<Option<RawDefaultImportCandidate>, ProjectInventoryError> {
+    let Some(candidate) = collect_default_import_syntax_candidate(owner_module, import) else {
+        return Ok(None);
+    };
+    resolve_default_import_candidate(candidate, resolution).map(Some)
+}
+
+fn collect_default_import_syntax_candidate(
+    owner_module: usize,
+    import: &oxc_ast::ast::ImportDeclaration<'_>,
+) -> Option<RawDefaultImportCandidate> {
+    if import.phase.is_some() || import.with_clause.is_some() || import.specifiers.is_none() {
+        return None;
+    }
+    let DefaultImportShape {
+        specifiers,
+        direct_default_count,
+        named_default_count,
+        named_count,
+        namespace_count,
+    } = default_import_shape(import);
+    if direct_default_count == 0 && named_default_count == 0 {
+        return None;
+    }
+    let disposition = if direct_default_count == 1
+        && named_default_count == 0
+        && named_count == 0
+        && namespace_count == 0
+        && specifiers.len() == 1
+    {
+        DefaultImportCandidateDisposition::Admitted
+    } else if direct_default_count > 0 && namespace_count > 0 {
+        DefaultImportCandidateDisposition::MixedDefaultNamespace
+    } else if direct_default_count > 0 {
+        DefaultImportCandidateDisposition::MixedDefaultNamed
+    } else {
+        DefaultImportCandidateDisposition::NamedDefaultSyntax
+    };
+    Some(RawDefaultImportCandidate {
+        owner_module,
+        source: RawDefaultImportCandidateSource::UnsupportedTarget(None),
+        module_specifier: import.source.value.to_string(),
+        declaration_span: Span::from_oxc(import.span),
+        source_span: Span::from_oxc(import.source.span),
+        owner_start: import.span.start,
+        declaration_type_only: import.import_kind == ImportOrExportKind::Type,
+        disposition,
+        specifiers,
+    })
+}
+
+fn resolve_default_import_candidate(
+    mut candidate: RawDefaultImportCandidate,
+    resolution: &DefaultCandidateResolution<'_>,
+) -> Result<RawDefaultImportCandidate, ProjectInventoryError> {
+    candidate.source = if is_admitted_source_reexport_specifier(&candidate.module_specifier) {
+        match resolve_named_import(
+            resolution.mode,
+            resolution.resolver,
+            resolution.importer_path,
+            &candidate.module_specifier,
+            resolution.explicit_path_to_index,
+            resolution.configured_roots,
+            resolution.canonical_project,
+        )? {
+            NamedImportOutcome::Source(RawImportSource::Resolved(target)) => {
+                RawDefaultImportCandidateSource::Resolved(target)
+            }
+            NamedImportOutcome::Source(RawImportSource::Missing) => {
+                RawDefaultImportCandidateSource::Missing
+            }
+            NamedImportOutcome::UnsupportedTarget(target) => {
+                RawDefaultImportCandidateSource::UnsupportedTarget(target)
+            }
+        }
+    } else {
+        RawDefaultImportCandidateSource::UnsupportedTarget(None)
+    };
+    Ok(candidate)
 }
 
 fn default_import_shape(import: &oxc_ast::ast::ImportDeclaration<'_>) -> DefaultImportShape {
@@ -3373,6 +3835,7 @@ fn default_import_shape(import: &oxc_ast::ast::ImportDeclaration<'_>) -> Default
     }
 }
 
+#[cfg(test)]
 fn scan_default_export_candidates(
     owner_module: usize,
     owner_source_key: SourceUnitKey,
@@ -3558,6 +4021,181 @@ fn scan_default_export_candidates(
     }
 }
 
+fn collect_default_export_evidence(
+    owner_source_key: SourceUnitKey,
+    normalized_owner_path: &str,
+    statement: &Statement<'_>,
+    occurrences: &mut Vec<DefaultExportOccurrence>,
+) {
+    match statement {
+        Statement::ExportDefaultDeclaration(export) => {
+            let declaration_span = Span::from_oxc(export.span);
+            let id = default_export_occurrence_id(
+                owner_source_key,
+                normalized_owner_path,
+                declaration_span.start,
+                occurrences.len(),
+            );
+            let occurrence = match &export.declaration {
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => DefaultExportOccurrence {
+                    id,
+                    kind: DefaultExportOccurrenceKind::DirectClass,
+                    declaration_span,
+                    subject_span: Span::from_oxc(class.span),
+                    lexical_name: class.id.as_ref().map(|id| id.name.to_string()),
+                    lexical_name_span: class.id.as_ref().map(|id| Span::from_oxc(id.span)),
+                    declaration_anonymous: Some(class.id.is_none()),
+                    type_only: false,
+                    identifier_namespace_provenance: None,
+                    imported: None,
+                    exported: ModuleMemberIdentity::Default,
+                    produces_default: true,
+                },
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    DefaultExportOccurrence {
+                        id,
+                        kind: DefaultExportOccurrenceKind::DirectFunction,
+                        declaration_span,
+                        subject_span: Span::from_oxc(function.span),
+                        lexical_name: function.id.as_ref().map(|id| id.name.to_string()),
+                        lexical_name_span: function.id.as_ref().map(|id| Span::from_oxc(id.span)),
+                        declaration_anonymous: Some(function.id.is_none()),
+                        type_only: false,
+                        identifier_namespace_provenance: None,
+                        imported: None,
+                        exported: ModuleMemberIdentity::Default,
+                        produces_default: true,
+                    }
+                }
+                ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
+                    DefaultExportOccurrence {
+                        id,
+                        kind: DefaultExportOccurrenceKind::DefaultInterface,
+                        declaration_span,
+                        subject_span: Span::from_oxc(interface.span),
+                        lexical_name: Some(interface.id.name.to_string()),
+                        lexical_name_span: Some(Span::from_oxc(interface.id.span)),
+                        declaration_anonymous: Some(false),
+                        type_only: true,
+                        identifier_namespace_provenance: Some(NamespaceProvenance::ProvenAbsent),
+                        imported: None,
+                        exported: ModuleMemberIdentity::Default,
+                        produces_default: true,
+                    }
+                }
+                expression => {
+                    let (lexical_name, lexical_name_span) = match expression.as_expression() {
+                        Some(oxc_ast::ast::Expression::Identifier(identifier)) => (
+                            Some(identifier.name.to_string()),
+                            Some(Span::from_oxc(identifier.span)),
+                        ),
+                        _ => (None, None),
+                    };
+                    DefaultExportOccurrence {
+                        id,
+                        kind: DefaultExportOccurrenceKind::DefaultExpression,
+                        declaration_span,
+                        subject_span: Span::from_oxc(expression.span()),
+                        lexical_name,
+                        lexical_name_span,
+                        declaration_anonymous: None,
+                        type_only: false,
+                        identifier_namespace_provenance: None,
+                        imported: None,
+                        exported: ModuleMemberIdentity::Default,
+                        produces_default: true,
+                    }
+                }
+            };
+            occurrences.push(occurrence);
+        }
+        Statement::ExportNamedDeclaration(export) => {
+            for specifier in &export.specifiers {
+                let imported = member_identity(&specifier.local);
+                let exported = member_identity(&specifier.exported);
+                if imported != ModuleMemberIdentity::Default
+                    && exported != ModuleMemberIdentity::Default
+                {
+                    continue;
+                }
+                let type_only = export.export_kind == ImportOrExportKind::Type
+                    || specifier.export_kind == ImportOrExportKind::Type;
+                let lexical_name = if export.source.is_none() {
+                    member_identity_name(&imported).map(str::to_owned)
+                } else {
+                    None
+                };
+                let kind = if export.source.is_none() {
+                    DefaultExportOccurrenceKind::LocalExportListDefault
+                } else if exported == ModuleMemberIdentity::Default {
+                    DefaultExportOccurrenceKind::SourceExportToDefault
+                } else {
+                    DefaultExportOccurrenceKind::SourceDefaultReexport
+                };
+                occurrences.push(DefaultExportOccurrence {
+                    id: default_export_occurrence_id(
+                        owner_source_key,
+                        normalized_owner_path,
+                        export.span.start,
+                        occurrences.len(),
+                    ),
+                    kind,
+                    declaration_span: Span::from_oxc(export.span),
+                    subject_span: Span::from_oxc(specifier.span),
+                    lexical_name,
+                    lexical_name_span: if export.source.is_none() {
+                        Some(Span::from_oxc(specifier.local.span()))
+                    } else {
+                        None
+                    },
+                    declaration_anonymous: None,
+                    type_only,
+                    identifier_namespace_provenance: None,
+                    imported: Some(imported),
+                    produces_default: exported == ModuleMemberIdentity::Default,
+                    exported,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn finalize_default_export_evidence(
+    owner_module: usize,
+    local_names: &BTreeMap<String, NamespaceProvenance>,
+    mut occurrences: Vec<DefaultExportOccurrence>,
+) -> RawDefaultExportCandidateModule {
+    for occurrence in &mut occurrences {
+        if matches!(
+            occurrence.kind,
+            DefaultExportOccurrenceKind::DirectClass
+                | DefaultExportOccurrenceKind::DirectFunction
+                | DefaultExportOccurrenceKind::DefaultExpression
+        ) {
+            if let Some(name) = &occurrence.lexical_name {
+                occurrence.identifier_namespace_provenance = Some(
+                    local_names
+                        .get(name)
+                        .copied()
+                        .unwrap_or(NamespaceProvenance::PresentOrUnknown),
+                );
+            }
+        }
+    }
+    let producer_count = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.produces_default)
+        .count();
+    let blocks = default_export_blocks(&occurrences, producer_count);
+    RawDefaultExportCandidateModule {
+        owner_module,
+        producer_count,
+        occurrences,
+        blocks,
+    }
+}
+
 fn default_export_occurrence_id(
     owner_source_key: SourceUnitKey,
     normalized_owner_path: &str,
@@ -3618,77 +4256,72 @@ fn default_export_blocks(
     blocks
 }
 
+#[cfg(test)]
 fn default_candidate_local_namespace_provenance(
     program: &Program<'_>,
 ) -> BTreeMap<String, NamespaceProvenance> {
     let mut names = BTreeMap::new();
     for statement in &program.body {
-        if let Some(declaration) = statement.as_declaration() {
-            default_candidate_declaration_namespace_names(declaration, |name, provenance| {
-                join_namespace(&mut names, name, provenance);
-            });
-        }
-        match statement {
-            Statement::ImportDeclaration(import) => {
-                for specifier in import.specifiers.iter().flatten() {
-                    let local = match specifier {
-                        ImportDeclarationSpecifier::ImportSpecifier(named) => &named.local,
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => {
-                            &default.local
-                        }
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
-                            &namespace.local
-                        }
-                    };
-                    join_namespace(
-                        &mut names,
-                        local.name.as_str(),
-                        NamespaceProvenance::PresentOrUnknown,
-                    );
-                }
-            }
-            Statement::ExportNamedDeclaration(export) => {
-                if let Some(declaration) = &export.declaration {
-                    default_candidate_declaration_namespace_names(
-                        declaration,
-                        |name, provenance| {
-                            join_namespace(&mut names, name, provenance);
-                        },
-                    );
-                }
-            }
-            Statement::ExportDefaultDeclaration(export) => match &export.declaration {
-                ExportDefaultDeclarationKind::ClassDeclaration(class) => {
-                    if let Some(id) = &class.id {
-                        join_namespace(
-                            &mut names,
-                            id.name.as_str(),
-                            NamespaceProvenance::ProvenAbsent,
-                        );
-                    }
-                }
-                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
-                    if let Some(id) = &function.id {
-                        join_namespace(
-                            &mut names,
-                            id.name.as_str(),
-                            NamespaceProvenance::ProvenAbsent,
-                        );
-                    }
-                }
-                ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
-                    join_namespace(
-                        &mut names,
-                        interface.id.name.as_str(),
-                        NamespaceProvenance::ProvenAbsent,
-                    );
-                }
-                _ => {}
-            },
-            _ => {}
-        }
+        collect_default_local_namespace_evidence(statement, &mut names);
     }
     names
+}
+
+fn collect_default_local_namespace_evidence(
+    statement: &Statement<'_>,
+    names: &mut BTreeMap<String, NamespaceProvenance>,
+) {
+    if let Some(declaration) = statement.as_declaration() {
+        default_candidate_declaration_namespace_names(declaration, |name, provenance| {
+            join_namespace(names, name, provenance);
+        });
+    }
+    match statement {
+        Statement::ImportDeclaration(import) => {
+            for specifier in import.specifiers.iter().flatten() {
+                let local = match specifier {
+                    ImportDeclarationSpecifier::ImportSpecifier(named) => &named.local,
+                    ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => &default.local,
+                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(namespace) => {
+                        &namespace.local
+                    }
+                };
+                join_namespace(
+                    names,
+                    local.name.as_str(),
+                    NamespaceProvenance::PresentOrUnknown,
+                );
+            }
+        }
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(declaration) = &export.declaration {
+                default_candidate_declaration_namespace_names(declaration, |name, provenance| {
+                    join_namespace(names, name, provenance);
+                });
+            }
+        }
+        Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+            ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                if let Some(id) = &class.id {
+                    join_namespace(names, id.name.as_str(), NamespaceProvenance::ProvenAbsent);
+                }
+            }
+            ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                if let Some(id) = &function.id {
+                    join_namespace(names, id.name.as_str(), NamespaceProvenance::ProvenAbsent);
+                }
+            }
+            ExportDefaultDeclarationKind::TSInterfaceDeclaration(interface) => {
+                join_namespace(
+                    names,
+                    interface.id.name.as_str(),
+                    NamespaceProvenance::ProvenAbsent,
+                );
+            }
+            _ => {}
+        },
+        _ => {}
+    }
 }
 
 fn member_identity(name: &ModuleExportName<'_>) -> ModuleMemberIdentity {
@@ -3706,6 +4339,7 @@ fn member_identity_name(identity: &ModuleMemberIdentity) -> Option<&str> {
     }
 }
 
+#[cfg(test)]
 fn validate_raw_default_imports(
     program: &Program<'_>,
     imports: &[RawDefaultImportCandidate],
@@ -3719,46 +4353,7 @@ fn validate_raw_default_imports(
         }) else {
             return false;
         };
-        let expected = default_import_shape(import).specifiers;
-        candidate.owner_start == candidate.declaration_span.start
-            && candidate.declaration_span == Span::from_oxc(import.span)
-            && candidate.source_span == Span::from_oxc(import.source.span)
-            && candidate.module_specifier == import.source.value.as_str()
-            && candidate.declaration_type_only == (import.import_kind == ImportOrExportKind::Type)
-            && candidate.specifiers == expected
-            && candidate.source_span.start >= candidate.declaration_span.start
-            && candidate.source_span.end <= candidate.declaration_span.end
-            && !candidate.module_specifier.is_empty()
-            && !candidate.specifiers.is_empty()
-            && candidate.specifiers.iter().all(|specifier| {
-                !specifier.local.is_empty()
-                    && specifier.local_span.start >= specifier.span.start
-                    && specifier.local_span.end <= specifier.span.end
-                    && specifier.span.start >= candidate.declaration_span.start
-                    && specifier.span.end <= candidate.declaration_span.end
-                    && !matches!(
-                        &specifier.identity,
-                        ModuleMemberIdentity::Named(name) if name == "default"
-                    )
-                    && matches!(
-                        (&specifier.identity, specifier.syntax),
-                        (
-                            ModuleMemberIdentity::Default,
-                            DefaultImportSpecifierSyntax::DirectDefault
-                                | DefaultImportSpecifierSyntax::NamedDefault
-                        ) | (
-                            ModuleMemberIdentity::Named(_),
-                            DefaultImportSpecifierSyntax::Named
-                        ) | (
-                            ModuleMemberIdentity::Namespace,
-                            DefaultImportSpecifierSyntax::Namespace
-                        )
-                    )
-                    && specifier.type_only
-                        == (candidate.declaration_type_only || specifier.inline_type_only)
-                    && (!specifier.inline_type_only
-                        || specifier.syntax == DefaultImportSpecifierSyntax::Named)
-            })
+        validate_raw_default_import(import, candidate).is_ok()
     });
     if !valid {
         return Err(ProjectInventoryError::new(
@@ -3768,6 +4363,60 @@ fn validate_raw_default_imports(
     Ok(())
 }
 
+#[cfg(test)]
+fn validate_raw_default_import(
+    import: &oxc_ast::ast::ImportDeclaration<'_>,
+    candidate: &RawDefaultImportCandidate,
+) -> Result<(), ProjectInventoryError> {
+    let expected = default_import_shape(import).specifiers;
+    let valid = candidate.owner_start == candidate.declaration_span.start
+        && candidate.declaration_span == Span::from_oxc(import.span)
+        && candidate.source_span == Span::from_oxc(import.source.span)
+        && candidate.module_specifier == import.source.value.as_str()
+        && candidate.declaration_type_only == (import.import_kind == ImportOrExportKind::Type)
+        && candidate.specifiers == expected
+        && candidate.source_span.start >= candidate.declaration_span.start
+        && candidate.source_span.end <= candidate.declaration_span.end
+        && !candidate.module_specifier.is_empty()
+        && !candidate.specifiers.is_empty()
+        && candidate.specifiers.iter().all(|specifier| {
+            !specifier.local.is_empty()
+                && specifier.local_span.start >= specifier.span.start
+                && specifier.local_span.end <= specifier.span.end
+                && specifier.span.start >= candidate.declaration_span.start
+                && specifier.span.end <= candidate.declaration_span.end
+                && !matches!(
+                    &specifier.identity,
+                    ModuleMemberIdentity::Named(name) if name == "default"
+                )
+                && matches!(
+                    (&specifier.identity, specifier.syntax),
+                    (
+                        ModuleMemberIdentity::Default,
+                        DefaultImportSpecifierSyntax::DirectDefault
+                            | DefaultImportSpecifierSyntax::NamedDefault
+                    ) | (
+                        ModuleMemberIdentity::Named(_),
+                        DefaultImportSpecifierSyntax::Named
+                    ) | (
+                        ModuleMemberIdentity::Namespace,
+                        DefaultImportSpecifierSyntax::Namespace
+                    )
+                )
+                && specifier.type_only
+                    == (candidate.declaration_type_only || specifier.inline_type_only)
+                && (!specifier.inline_type_only
+                    || specifier.syntax == DefaultImportSpecifierSyntax::Named)
+        });
+    if !valid {
+        return Err(ProjectInventoryError::new(
+            "default import AST evidence changed during collection",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn validate_raw_default_exports(
     program: &Program<'_>,
     owner_source_key: SourceUnitKey,
@@ -4117,8 +4766,73 @@ fn is_admitted_source_reexport_specifier(specifier: &str) -> bool {
     is_local_relative(specifier) && !specifier.contains(['?', '#']) && !specifier.ends_with(".ts")
 }
 
+fn collect_source_namespace_evidence(
+    statement: &Statement<'_>,
+    evidence: &mut ModuleSyntaxEvidence,
+) {
+    if let Some(declaration) = statement.as_declaration() {
+        declaration_namespace_names(declaration, |name, provenance| {
+            join_namespace(&mut evidence.source_local_names, name, provenance);
+        });
+    }
+    evidence.source_globally_open |= matches!(
+        statement,
+        Statement::TSModuleDeclaration(declaration)
+            if matches!(declaration.id, TSModuleDeclarationName::StringLiteral(_))
+    ) || matches!(
+        statement,
+        Statement::ExportNamedDeclaration(export)
+            if matches!(
+                export.declaration,
+                Some(Declaration::TSModuleDeclaration(ref declaration))
+                    if matches!(declaration.id, TSModuleDeclarationName::StringLiteral(_))
+            )
+    );
+    match statement {
+        Statement::ExportNamedDeclaration(export) => {
+            if let Some(declaration) = &export.declaration {
+                let mut names = Vec::new();
+                let enumerable = declaration_namespace_names(declaration, |name, provenance| {
+                    join_namespace(&mut evidence.source_local_names, name, provenance);
+                    names.push(name.to_owned());
+                });
+                evidence
+                    .source_exports
+                    .push(SourceNamespaceExportEvidence::Declaration { names, enumerable });
+            } else if export.source.is_none() {
+                let members = export
+                    .specifiers
+                    .iter()
+                    .map(|specifier| {
+                        module_export_name(&specifier.local).and_then(|local| {
+                            module_export_name(&specifier.exported)
+                                .map(|exported| (local.to_owned(), exported.to_owned()))
+                        })
+                    })
+                    .collect();
+                evidence
+                    .source_exports
+                    .push(SourceNamespaceExportEvidence::LocalMembers(members));
+            } else if !export.specifiers.is_empty() {
+                evidence
+                    .source_exports
+                    .push(SourceNamespaceExportEvidence::SourceMembers {
+                        owner_start: export.span.start,
+                    });
+            }
+        }
+        Statement::ExportAllDeclaration(_)
+        | Statement::ExportDefaultDeclaration(_)
+        | Statement::TSExportAssignment(_)
+        | Statement::TSNamespaceExportDeclaration(_) => evidence
+            .source_exports
+            .push(SourceNamespaceExportEvidence::Incomplete),
+        _ => {}
+    }
+}
+
 fn source_reexport_namespace_provenance(
-    programs: &[&Program<'_>],
+    module_evidence: &[ModuleSyntaxEvidence],
     raw_imports: &[Vec<RawImport>],
     source_reexports: &[RawSourceReexportDeclaration],
     reexport_edges: &[BTreeSet<usize>],
@@ -4136,26 +4850,9 @@ fn source_reexport_namespace_provenance(
         })
         .collect::<Vec<_>>();
     let globally_open = has_cycle
-        || programs.iter().any(|program| {
-            program.body.iter().any(|statement| {
-                matches!(
-                    statement,
-                    Statement::TSModuleDeclaration(declaration)
-                        if matches!(declaration.id, TSModuleDeclarationName::StringLiteral(_))
-                ) || matches!(
-                    statement,
-                    Statement::ExportNamedDeclaration(export)
-                        if matches!(
-                            export.declaration,
-                            Some(Declaration::TSModuleDeclaration(ref declaration))
-                                if matches!(
-                                    declaration.id,
-                                    TSModuleDeclarationName::StringLiteral(_)
-                                )
-                        )
-                )
-            })
-        });
+        || module_evidence
+            .iter()
+            .any(|evidence| evidence.source_globally_open);
     if globally_open {
         return requested
             .into_iter()
@@ -4164,13 +4861,14 @@ fn source_reexport_namespace_provenance(
     }
 
     let order = dependency_order_with_reexports(raw_imports, reexport_edges);
-    let mut module_exports = vec![BTreeMap::<String, NamespaceProvenance>::new(); programs.len()];
-    let mut module_complete = vec![true; programs.len()];
+    let mut module_exports =
+        vec![BTreeMap::<String, NamespaceProvenance>::new(); module_evidence.len()];
+    let mut module_complete = vec![true; module_evidence.len()];
     for module in order {
-        let Some(program) = programs.get(module) else {
+        let Some(evidence) = module_evidence.get(module) else {
             continue;
         };
-        let mut locals = BTreeMap::new();
+        let mut locals = evidence.source_local_names.clone();
         for import in raw_imports.get(module).into_iter().flatten() {
             let provenance = namespace_from_dependency(
                 import.source,
@@ -4180,65 +4878,43 @@ fn source_reexport_namespace_provenance(
             );
             join_namespace(&mut locals, &import.local, provenance);
         }
-        for statement in &program.body {
-            if let Some(declaration) = statement.as_declaration() {
-                declaration_namespace_names(declaration, |name, provenance| {
-                    join_namespace(&mut locals, name, provenance);
-                });
-            }
-            if let Statement::ExportNamedDeclaration(export) = statement {
-                if let Some(declaration) = &export.declaration {
-                    declaration_namespace_names(declaration, |name, provenance| {
-                        join_namespace(&mut locals, name, provenance);
-                    });
-                }
-            }
-        }
-
         let mut exports = BTreeMap::new();
-        for statement in &program.body {
-            match statement {
-                Statement::ExportNamedDeclaration(export) => {
-                    if let Some(declaration) = &export.declaration {
-                        let enumerable = declaration_namespace_names(declaration, |name, _| {
-                            let provenance = locals
-                                .get(name)
-                                .copied()
-                                .unwrap_or(NamespaceProvenance::PresentOrUnknown);
-                            join_namespace(&mut exports, name, provenance);
-                        });
-                        module_complete[module] &= enumerable;
-                    } else if export.source.is_none() {
-                        for specifier in &export.specifiers {
-                            let (Some(local), Some(exported)) = (
-                                module_export_name(&specifier.local),
-                                module_export_name(&specifier.exported),
-                            ) else {
-                                module_complete[module] = false;
-                                continue;
-                            };
+        for export in &evidence.source_exports {
+            match export {
+                SourceNamespaceExportEvidence::Declaration { names, enumerable } => {
+                    for name in names {
+                        let provenance = locals
+                            .get(name)
+                            .copied()
+                            .unwrap_or(NamespaceProvenance::PresentOrUnknown);
+                        join_namespace(&mut exports, name, provenance);
+                    }
+                    module_complete[module] &= *enumerable;
+                }
+                SourceNamespaceExportEvidence::LocalMembers(members) => {
+                    for member in members {
+                        if let Some((local, exported)) = member {
                             let provenance = locals
                                 .get(local)
                                 .copied()
                                 .unwrap_or(NamespaceProvenance::PresentOrUnknown);
                             join_namespace(&mut exports, exported, provenance);
+                        } else {
+                            module_complete[module] = false;
                         }
-                    } else if !export.specifiers.is_empty()
-                        && !source_reexports.iter().any(|declaration| {
-                            declaration.owner_module == module
-                                && declaration.owner_start == export.span.start
-                        })
-                    {
+                    }
+                }
+                SourceNamespaceExportEvidence::SourceMembers { owner_start } => {
+                    if !source_reexports.iter().any(|declaration| {
+                        declaration.owner_module == module
+                            && declaration.owner_start == *owner_start
+                    }) {
                         module_complete[module] = false;
                     }
                 }
-                Statement::ExportAllDeclaration(_)
-                | Statement::ExportDefaultDeclaration(_)
-                | Statement::TSExportAssignment(_)
-                | Statement::TSNamespaceExportDeclaration(_) => {
+                SourceNamespaceExportEvidence::Incomplete => {
                     module_complete[module] = false;
                 }
-                _ => {}
             }
         }
         for declaration in source_reexports
@@ -4385,42 +5061,6 @@ fn default_candidate_declaration_namespace_names(
     record: impl FnMut(&str, NamespaceProvenance),
 ) -> bool {
     declaration_namespace_names(declaration, record)
-}
-
-fn classify_import_declaration(
-    import: &oxc_ast::ast::ImportDeclaration<'_>,
-) -> Result<&'static str, ProjectInventoryError> {
-    let Some(specifiers) = &import.specifiers else {
-        return Ok("side-effect-import");
-    };
-    if specifiers.is_empty() {
-        return Ok("empty-named-import");
-    }
-    if specifiers.iter().any(|specifier| {
-        matches!(
-            specifier,
-            ImportDeclarationSpecifier::ImportDefaultSpecifier(_)
-        )
-    }) {
-        return Ok("default-import");
-    }
-    if specifiers.iter().any(|specifier| {
-        matches!(
-            specifier,
-            ImportDeclarationSpecifier::ImportNamespaceSpecifier(_)
-        )
-    }) {
-        return Ok("namespace-import");
-    }
-    if specifiers
-        .iter()
-        .all(|specifier| matches!(specifier, ImportDeclarationSpecifier::ImportSpecifier(_)))
-    {
-        return Ok("named-import");
-    }
-    Err(ProjectInventoryError::new(
-        "import declaration has an unclassified specifier shape",
-    ))
 }
 
 fn resolution_paths(
