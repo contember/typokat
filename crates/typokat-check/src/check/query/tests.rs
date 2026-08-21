@@ -35,6 +35,7 @@ enum ClassLookupEvent {
 struct ObservedPublishedClasses {
     published: PublishedClasses,
     events: std::cell::RefCell<Vec<ClassLookupEvent>>,
+    outer_observation_enabled: bool,
 }
 
 impl ObservedPublishedClasses {
@@ -78,7 +79,26 @@ impl ObservedPublishedClasses {
         Self {
             published,
             events: std::cell::RefCell::new(Vec::new()),
+            outer_observation_enabled: true,
         }
+    }
+
+    fn terminal_only_pair(
+        source: ClassId,
+        source_template: TypeId,
+        target: ClassId,
+        target_template: TypeId,
+        static_template: TypeId,
+    ) -> Self {
+        let mut published = Self::pair(
+            source,
+            source_template,
+            target,
+            target_template,
+            static_template,
+        );
+        published.outer_observation_enabled = false;
+        published
     }
 
     fn take_events(&self) -> Vec<ClassLookupEvent> {
@@ -109,7 +129,7 @@ impl PublishedClassLookup for ObservedPublishedClasses {
     }
 
     fn class_demand_observation_enabled(&self) -> bool {
-        true
+        self.outer_observation_enabled
     }
 }
 
@@ -2550,6 +2570,41 @@ fn completed_enum_lifecycle_skips_pending_enum_graph_scans() {
         "a completed enum lifecycle must make the pending-enum guard O(1)"
     );
     drop(guard);
+}
+
+#[test]
+fn inactive_enum_frontier_preserves_nested_class_lookup_observation() {
+    let mut interner = Interner::with_intrinsics();
+    let wk = interner.well_known();
+    let nested_class = ClassId(80_403);
+    let unused_class = ClassId(80_404);
+    let nested_template = interner.intern_object(ObjectType::default());
+    let unused_template = interner.intern_object(ObjectType::default());
+    let nested_instance = interner.intern_class_instance(nested_class, Vec::new());
+    let root = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("nested", nested_instance)],
+        ..Default::default()
+    });
+    let published = ObservedPublishedClasses::terminal_only_pair(
+        nested_class,
+        nested_template,
+        unused_class,
+        unused_template,
+        wk.error,
+    );
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .demand(root),
+        DemandOutcome::Ready(_)
+    ));
+    assert_eq!(
+        published.take_events(),
+        vec![ClassLookupEvent::Publish(nested_class)],
+        "nested class dependencies remain observable without enum reservations"
+    );
 }
 
 #[test]
