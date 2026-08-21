@@ -1,15 +1,15 @@
 ---
 id: 76
-title: Lazy declaration and value-type resolution
+title: Lazy source declaration and value-type resolution
 blocked-by: [./46-return-path-analysis.md, ./48-no-implicit-any.md]
 ---
 
-# 76 — Lazy declaration and value-type resolution
+# 76 — Lazy source declaration and value-type resolution
 
-**Summary.** Replace the conservative `unknown` return used by an unannotated
-forward function call with a demand-driven declaration-type query that resolves
-function returns and referenced value declarations exactly, including cycle
-diagnostics, without changing source-order checking or leaking provisional types.
+**Summary.** Replace the conservative `unknown` return used by an unannotated forward function call
+with a demand-driven **source-declaration** query that resolves function returns and referenced
+value declarations exactly, including cycle diagnostics, without changing source-order checking or
+leaking provisional types.
 
 ## Problem
 
@@ -42,6 +42,24 @@ signature return on demand, tracks `Unresolved → Resolving → Resolved/Errore
 reports the implicit-any cycle family (TS7022/TS7023) before using a recovery type.
 typokat needs the equivalent model before it can claim exact inferred-return hoisting.
 
+## Boundary from default-library laziness
+
+This item is limited to semantic demand for source/project declarations: inferred function and
+value types, accessors, static members, nested owner payloads, and the cycles between them. Its query
+is keyed by the project's authenticated declaration identity and publishes terminal project-local
+types.
+
+It does **not** own lazy loading or materialization of the pinned default library. That separate
+architecture experiment is backlog [`114`](114-lazy-default-library-index-spike.md), which would
+need a store-independent symbolic library index, a project-local binder/store, declaration-group
+dependency edges, and atomic SCC publication. The current `DeclaredTypeRecipe` and this item's
+planned `DeclId` query are not assumed to provide that product.
+
+The two items may converge on shared state vocabulary and invariants—cycle guards, terminal-only
+publication, no provisional cache entries, and demand-order-independent effects—but implementation
+reuse must be proved after both boundaries are explicit. Neither item is a semantic prerequisite
+for the other.
+
 Class accessors and static methods are the same declaration-type demand, not a separate callability
 bug. The official-suite witnesses are exact: the static getters in
 `classPropertyAsPrivate.ts`, `classPropertyAsProtected.ts`, and
@@ -64,9 +82,9 @@ publishing a partial or permissive value.
 
 ## Approach / acceptance
 
-Add a declaration-plan layer keyed by `DeclId` for function declarations and the value
-declarations their return expressions can demand. Reserve stable generic ids,
-constraints, parameters, and explicit returns once; resolve inferred declaration types
+Add a source declaration-plan layer keyed by the authenticated project `DeclId` for function
+declarations and the value declarations their return expressions can demand. Reserve stable generic
+ids, constraints, parameters, and explicit returns once; resolve inferred declaration types
 through a cycle-guarded query; publish only terminal function `TypeId`s and overload
 objects. A provisional result must never enter relation/flow caches or phase-2
 obligations.

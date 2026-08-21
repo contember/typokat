@@ -76,7 +76,8 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **48 remaining items**. The release classification comes from
+The roadmap has **58 remaining items**: 50 release/consumer items in the existing four-track view
+and 8 non-blocking engineering-maintenance items. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -85,8 +86,9 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 |---|---:|---|---|
 | **A — model completeness** | 2 | L–XL | Eliminate the remaining silently-permissive model gaps; namespace/declaration merging is shipped. |
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
-| **C — soundness/parity tail** | 28 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
+| **C — soundness/parity tail** | 30 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
+| **Maintenance — non-blocking** | 8 | S–XL | Measured library-lifecycle simplification, safe checker seams, and faster development feedback. |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -97,8 +99,8 @@ Effort is a **relative planning estimate**, not a time promise:
 
 Re-check the estimate against HEAD when scheduling the item; the mandatory spec → implementation →
 independent-review loop still applies at every size. Unless noted otherwise, every item below blocks
-checker 1.0. The FP/tsc-parity subsection and D's consumer-surface subsection are the two
-non-blocking groups.
+checker 1.0. The FP/tsc-parity subsection, D's consumer-surface subsection, and the maintenance
+section are non-blocking groups.
 
 ## Items
 
@@ -213,6 +215,29 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
   diagnostics) · blocked by `79`. **Low priority**: an optimization, not a capability;
   profiling-gated, drop it if the relation engine does not dominate.
 
+**Engineering maintenance — non-blocking.** These items reduce standing architecture and feedback
+cost. They do not change the checker 1.0 completeness manifest and must not weaken soundness or
+parity gates merely to improve layout or speed.
+
+- **L** · [`113`](113-measure-sparse-collision-lifecycle.md) — measure whether sparse collision
+  replay still earns its cross-cutting provider complexity; delete it vertically if complete-source
+  collision fallback meets declared repeated-batch thresholds.
+- **XL** · [`114`](114-lazy-default-library-index-spike.md) — evaluate an immutable symbolic library
+  index with project-local demand publication; blocked by `113`, `115`, and explicit kill criteria.
+- **L** · [`115`](115-prepared-project-single-parse.md) — parse provider inputs once into a
+  frontend-owned prepared product used for both routing and checking.
+- **L** · [`116`](116-library-session-lifecycle-boundary.md) — after the lifecycle decisions,
+  replace public low-level route/runtime states and compiler mode combinations with one session
+  boundary; blocked by `113`, `114`.
+- **S** · [`117`](117-focused-conformance-selection.md) — exact case/corpus selection through the
+  existing marker-aware inventory, with the full gate retained as closure authority.
+- **M** · [`118`](118-module-accounting-accumulator.md) — express project module accounting as one
+  owned one-scan accumulator and typed finalization product.
+- **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
+  preserving one visible atomic publication facade.
+- **M** · [`120`](120-deduplicate-verification-work.md) — deduplicate provably subsumed same-tree
+  gates and reuse one pinned release artifact across PR consumers.
+
 ## Recommended order
 
 1. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
@@ -243,6 +268,10 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
    Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
    may be dropped on the profile.
+5. **Schedule maintenance by evidence and overlap.** `115`, `117`, and `120` are independent
+   feedback improvements. Run `113` before `114` or `116`; `114` is a killable architecture spike,
+   not a presumed frozen-base migration. Re-check `118` and `119` after active feature/layout work
+   touching the same owners, and retain only the owned-data seams pinned by their acceptance tests.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
