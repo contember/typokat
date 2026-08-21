@@ -303,44 +303,52 @@ impl Write for BoundedOutput {
 
 fn render_official_batch_reports(reports: &[FileReport]) -> Result<(CheckStatus, String), String> {
     let mut output = BoundedOutput::new();
+    let status = render_report_transaction(reports, DiagnosticFormat::Rich, &mut output)?;
+    Ok((status, output.into_string()?))
+}
+
+fn render_report_transaction(
+    reports: &[FileReport],
+    format: DiagnosticFormat,
+    writer: &mut impl Write,
+) -> Result<CheckStatus, String> {
     let mut had_errors = false;
     let mut had_incomplete = false;
     for report in reports {
         for notice in &report.output.project_notices {
-            writeln!(output, "project: {notice}")
+            writeln!(writer, "project: {notice}")
                 .map_err(|error| format!("failed to render project notice: {error}"))?;
         }
         for parse_error in &report.output.parse_errors {
-            writeln!(output, "error: {parse_error}")
+            writeln!(writer, "error: {parse_error}")
                 .map_err(|error| format!("failed to render parse error: {error}"))?;
         }
         diagnostics::render_to_writer_with_format(
-            &mut output,
+            &mut *writer,
             &report.name,
             &report.source,
             &report.output.diagnostics,
-            DiagnosticFormat::Rich,
+            format,
         )
         .map_err(|error| format!("failed to render diagnostics: {error}"))?;
         diagnostics::render_incomplete_to_writer_with_format(
-            &mut output,
+            &mut *writer,
             &report.name,
             &report.source,
             &report.output.incomplete,
-            DiagnosticFormat::Rich,
+            format,
         )
         .map_err(|error| format!("failed to render incomplete surfaces: {error}"))?;
         had_errors |= report.output.has_errors();
         had_incomplete |= report.output.is_incomplete();
     }
-    let status = if had_incomplete {
+    Ok(if had_incomplete {
         CheckStatus::Incomplete
     } else if had_errors {
         CheckStatus::Diagnostics
     } else {
         CheckStatus::Clean
-    };
-    Ok((status, output.into_string()?))
+    })
 }
 
 fn official_batch_exit_code(status: CheckStatus) -> u8 {
@@ -652,49 +660,14 @@ fn render_project_reports(
     stderr: &mut impl Write,
 ) -> Result<CheckStatus, String> {
     let mut rendered = Vec::new();
-    let mut had_errors = false;
-    let mut had_incomplete = false;
-    for report in reports {
-        for notice in &report.output.project_notices {
-            writeln!(rendered, "project: {notice}")
-                .map_err(|error| format!("failed to render project notice: {error}"))?;
-        }
-        for parse_error in &report.output.parse_errors {
-            writeln!(rendered, "error: {parse_error}")
-                .map_err(|error| format!("failed to render parse error: {error}"))?;
-        }
-        diagnostics::render_to_writer_with_format(
-            &mut rendered,
-            &report.name,
-            &report.source,
-            &report.output.diagnostics,
-            format,
-        )
-        .map_err(|error| format!("failed to render diagnostics: {error}"))?;
-        diagnostics::render_incomplete_to_writer_with_format(
-            &mut rendered,
-            &report.name,
-            &report.source,
-            &report.output.incomplete,
-            format,
-        )
-        .map_err(|error| format!("failed to render incomplete surfaces: {error}"))?;
-        had_errors |= report.output.has_errors();
-        had_incomplete |= report.output.is_incomplete();
-    }
+    let status = render_report_transaction(reports, format, &mut rendered)?;
     stderr
         .write_all(&rendered)
         .map_err(|error| format!("failed to write diagnostics: {error}"))?;
     stderr
         .flush()
         .map_err(|error| format!("failed to flush diagnostics: {error}"))?;
-    Ok(if had_incomplete {
-        CheckStatus::Incomplete
-    } else if had_errors {
-        CheckStatus::Diagnostics
-    } else {
-        CheckStatus::Clean
-    })
+    Ok(status)
 }
 
 fn write_project_summary(
@@ -830,43 +803,7 @@ where
 
     let reports = project_check(inputs).map_err(format_project_error)?;
     let mut rendered = Vec::new();
-
-    let mut had_errors = false;
-    let mut had_incomplete = false;
-    for report in &reports {
-        for notice in &report.output.project_notices {
-            writeln!(rendered, "project: {notice}")
-                .map_err(|error| format!("failed to render project notice: {error}"))?;
-        }
-        for parse_error in &report.output.parse_errors {
-            // Parser errors come pre-formatted from oxc; surface them plainly.
-            writeln!(rendered, "error: {parse_error}")
-                .map_err(|error| format!("failed to render parse error: {error}"))?;
-        }
-
-        diagnostics::render_to_writer_with_format(
-            &mut rendered,
-            &report.name,
-            &report.source,
-            &report.output.diagnostics,
-            format,
-        )
-        .map_err(|e| format!("failed to render diagnostics: {e}"))?;
-
-        // The incomplete channel renders separately (no TK code); still shown even
-        // when the same file also has diagnostics.
-        diagnostics::render_incomplete_to_writer_with_format(
-            &mut rendered,
-            &report.name,
-            &report.source,
-            &report.output.incomplete,
-            format,
-        )
-        .map_err(|e| format!("failed to render incomplete surfaces: {e}"))?;
-
-        had_errors |= report.output.has_errors();
-        had_incomplete |= report.output.is_incomplete();
-    }
+    let status = render_report_transaction(&reports, format, &mut rendered)?;
 
     stderr
         .write_all(&rendered)
@@ -874,15 +811,7 @@ where
     stderr
         .flush()
         .map_err(|e| format!("failed to flush diagnostics: {e}"))?;
-
-    // Precedence: incomplete outranks diagnostics.
-    Ok(if had_incomplete {
-        CheckStatus::Incomplete
-    } else if had_errors {
-        CheckStatus::Diagnostics
-    } else {
-        CheckStatus::Clean
-    })
+    Ok(status)
 }
 
 #[cfg(test)]
