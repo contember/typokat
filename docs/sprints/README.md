@@ -20,6 +20,9 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
+- [`sprint-2026-08-21-development-feedback-loop.md`](sprint-2026-08-21-development-feedback-loop.md) —
+  exact marker-aware focused conformance, transparent same-tree gate deduplication, and authenticated
+  release-artifact reuse across pull-request CI consumers.
 - [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — next/resuming; resolve the
   approved bounded parity slice, implement AST-directed const contexts, and compare with PR #29510;
   unblocked after the declaration-inventory sprint, with WIP preserved at `996eb5a`.

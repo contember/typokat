@@ -24,6 +24,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-21-development-feedback-loop.md`](sprints/sprint-2026-08-21-development-feedback-loop.md) —
+  running backlogs 117 and 120 as one tooling sprint: focused marker-aware conformance, explicit
+  same-tree gate deduplication, and authenticated CI release-artifact fanout.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
   unblocked with WIP preserved at `996eb5a`.
