@@ -25,6 +25,9 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-21-cli-frontend-owned-seams.md`](sprints/sprint-2026-08-21-cli-frontend-owned-seams.md) —
+  prepared behavior-preserving cleanup for backlogs 112 and 118: centralized CLI report rendering
+  plus an owned single-scan frontend module-accounting seam.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
   unblocked with WIP preserved at `996eb5a`.
