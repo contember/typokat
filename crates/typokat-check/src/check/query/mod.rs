@@ -655,6 +655,10 @@ pub trait PublishedClassLookup {
     fn published_class(&self, class: ClassId) -> DemandOutcome<&PublishedClassSurface>;
     fn require_class(&self, class: ClassId) -> DemandOutcome<()>;
     fn publication_identity(&self) -> &Arc<()>;
+    /// Whether terminal lookup records dependencies or other observable work.
+    fn published_class_lookup_is_observational(&self) -> bool {
+        true
+    }
     fn observe_class_demand(&self, _class: ClassId) {}
     fn class_demand_observation_enabled(&self) -> bool {
         false
@@ -717,6 +721,10 @@ impl PublishedClassLookup for PublishedClasses {
 
     fn publication_identity(&self) -> &Arc<()> {
         self.identity()
+    }
+
+    fn published_class_lookup_is_observational(&self) -> bool {
+        false
     }
 }
 
@@ -3340,7 +3348,9 @@ fn pending_enum_exhaustion<L: PublishedClassLookup + ?Sized>(
     roots: &[TypeId],
     published: &L,
 ) -> Option<Exhaustion> {
-    if !interner.has_reserved_enum_semantic_frontier() {
+    if !interner.has_reserved_enum_semantic_frontier()
+        && !published.published_class_lookup_is_observational()
+    {
         return None;
     }
     let store = interner.store();

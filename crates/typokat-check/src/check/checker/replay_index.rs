@@ -2913,6 +2913,10 @@ impl PublishedClassLookup for ConstructionReplayClassLookup<'_> {
         self.staged.identity()
     }
 
+    fn published_class_lookup_is_observational(&self) -> bool {
+        self.trace.is_some()
+    }
+
     fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
         self.observe_class_demand(class);
         match self.staged.require(class) {
@@ -2964,6 +2968,10 @@ impl PublishedClassLookup for ReplayClassLookup<'_> {
 
     fn publication_identity(&self) -> &Arc<()> {
         self.published.identity()
+    }
+
+    fn published_class_lookup_is_observational(&self) -> bool {
+        self.trace.is_some()
     }
 
     fn require_class(&self, class: ClassId) -> DemandOutcome<()> {
@@ -3595,6 +3603,22 @@ impl ManifestBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_class_terminal_lookup_capability_tracks_trace_presence() {
+        let published = PublishedClasses::empty();
+        let trace = ReplayDependencyTrace::default();
+
+        assert!(!ReplayClassLookup::new(&published, None).published_class_lookup_is_observational());
+        assert!(ReplayClassLookup::new(&published, Some(trace.clone()))
+            .published_class_lookup_is_observational());
+        assert!(!ConstructionReplayClassLookup::new(&published, None, None)
+            .published_class_lookup_is_observational());
+        assert!(
+            ConstructionReplayClassLookup::new(&published, None, Some(trace))
+                .published_class_lookup_is_observational()
+        );
+    }
 
     fn key(file: usize, start: u32) -> LibraryEventKey {
         LibraryEventKey {
