@@ -17,6 +17,22 @@ this inventory took 128.04 s under `cpu-lease run -n 2 --`. The inventory and or
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary command's printed receipt repeats the aggregate totals.
 
+For a marker-aware edit loop, run one exact logical case through the separate ignored focused
+entry point:
+
+```sh
+TYPOKAT_CONFORMANCE_CASE=m0_assign_primitives/intrinsics.ts \
+  cpu-lease run -n 2 -- cargo test --test conformance \
+  conformance_focused -- --ignored --exact --nocapture
+```
+
+A project-shaped case uses its project id, for example
+`TYPOKAT_CONFORMANCE_CASE=m29_modules/basic_named`; all source files in that project stay grouped.
+To run one whole enabled corpus, replace the case variable with
+`TYPOKAT_CONFORMANCE_CORPUS=m0_assign_primitives`. Set exactly one selector. Disabled, mixed, and
+unknown selections fail before checking. The focused route uses the ordinary shared marker path
+but prints `closure=false`; it is not closure evidence and does not replace the ordinary gate.
+
 The unchanged pull-request route matrix is
 `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli` (15/15 in 265.84 s). Exact
 shared/cold parity uses the same inventory:

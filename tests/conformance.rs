@@ -616,13 +616,94 @@ struct Inventory {
     discovery: DiscoveryReceipt,
 }
 
-// WU1 RED signatures. The implementation replaces these deterministic stubs.
 #[cfg(test)]
 fn select_focused_inventory(
-    _case_env: Option<&str>,
-    _corpus_env: Option<&str>,
+    case_env: Option<&str>,
+    corpus_env: Option<&str>,
 ) -> Result<Inventory, String> {
-    Err("focused conformance selection is not implemented".to_string())
+    match (case_env, corpus_env) {
+        (Some(_), Some(_)) | (None, None) => Err(
+            "focused conformance requires exactly one of TYPOKAT_CONFORMANCE_CASE or \
+             TYPOKAT_CONFORMANCE_CORPUS"
+                .to_string(),
+        ),
+        (Some(logical_id), None) => select_focused_case(logical_id),
+        (None, Some(corpus)) => select_focused_corpus(corpus),
+    }
+}
+
+#[cfg(test)]
+fn select_focused_case(logical_id: &str) -> Result<Inventory, String> {
+    let mut inventory = discover_enabled_inventory();
+    let Some(index) = inventory
+        .projects
+        .iter()
+        .position(|project| project.logical_id == logical_id)
+    else {
+        return if registered_case_exists(logical_id) {
+            Err(format!("disabled case: {logical_id}"))
+        } else {
+            Err(format!("unknown case: {logical_id}"))
+        };
+    };
+
+    let project = inventory.projects.remove(index);
+    inventory.source_files = project.fixtures.len();
+    inventory.projects = vec![project];
+    Ok(inventory)
+}
+
+#[cfg(test)]
+fn select_focused_corpus(corpus: &str) -> Result<Inventory, String> {
+    let Some((_, enabled)) = MILESTONE_DIRS
+        .iter()
+        .find(|(registered, _)| *registered == corpus)
+    else {
+        return Err(format!("unknown corpus: {corpus}"));
+    };
+    if !enabled {
+        return Err(format!("disabled corpus: {corpus}"));
+    }
+
+    let mut inventory = discover_enabled_inventory();
+    inventory
+        .projects
+        .retain(|project| project_corpus(&project.logical_id) == Some(corpus));
+    if inventory.projects.is_empty() {
+        return Err(format!("enabled corpus has no fixture projects: {corpus}"));
+    }
+    inventory.source_files = inventory
+        .projects
+        .iter()
+        .map(|project| project.fixtures.len())
+        .sum();
+    Ok(inventory)
+}
+
+#[cfg(test)]
+fn project_corpus(logical_id: &str) -> Option<&str> {
+    logical_id.split_once('/').map(|(corpus, _)| corpus)
+}
+
+#[cfg(test)]
+fn registered_case_exists(logical_id: &str) -> bool {
+    let Some(corpus) = project_corpus(logical_id) else {
+        return false;
+    };
+    if !MILESTONE_DIRS
+        .iter()
+        .any(|(registered, _)| *registered == corpus)
+    {
+        return false;
+    }
+
+    let corpus_root = cases_root().join(corpus);
+    discover_ts_files(&corpus_root)
+        .into_iter()
+        .any(|fixture| display_path(&fixture) == logical_id)
+        || discover_project_dirs(&corpus_root)
+            .into_iter()
+            .any(|project| display_path(&project) == logical_id)
 }
 
 #[cfg(test)]
@@ -641,22 +722,60 @@ struct RunReceipt {
     cold_executions: usize,
 }
 
-// WU1 RED signature. The implementation replaces this deterministic stub.
 #[cfg(test)]
-fn format_focused_run_receipt(_receipt: &RunReceipt) -> String {
-    "focused conformance receipt is not implemented".to_string()
+fn format_focused_run_receipt(receipt: &RunReceipt) -> String {
+    format!(
+        "focused conformance receipt: closure=false fixture_projects={} source_files={} shared_executions={} cold_executions={}",
+        receipt.fixture_projects,
+        receipt.source_files,
+        receipt.shared_executions,
+        receipt.cold_executions
+    )
 }
 
 // Shared by the helper and its process-global restoration witness.
 #[cfg(test)]
 static PANIC_HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-// WU1 RED signature. The implementation must suppress, serialize, and restore the hook.
+#[cfg(test)]
+type PanicHook =
+    Box<dyn for<'panic> Fn(&std::panic::PanicHookInfo<'panic>) + Send + Sync + 'static>;
+
+#[cfg(test)]
+struct SilentPanicHookGuard {
+    previous: Option<PanicHook>,
+}
+
+#[cfg(test)]
+impl SilentPanicHookGuard {
+    fn install() -> Self {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        Self {
+            previous: Some(previous),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for SilentPanicHookGuard {
+    fn drop(&mut self) {
+        let _silent = std::panic::take_hook();
+        let previous = self
+            .previous
+            .take()
+            .expect("the silent panic hook guard restores exactly once");
+        std::panic::set_hook(previous);
+    }
+}
+
 #[cfg(test)]
 fn catch_unwind_silently<F, T>(f: F) -> Result<T, ()>
 where
     F: FnOnce() -> T + std::panic::UnwindSafe,
 {
+    let _hook_lock = PANIC_HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _hook_guard = SilentPanicHookGuard::install();
     std::panic::catch_unwind(f).map_err(|_| ())
 }
 
@@ -677,6 +796,30 @@ fn conformance() -> Result<(), String> {
         );
         print_run_receipt(&receipt);
     })
+}
+
+#[test]
+#[ignore = "explicit non-closure focused conformance route"]
+fn conformance_focused() -> Result<(), String> {
+    let case = read_focused_selector("TYPOKAT_CONFORMANCE_CASE")?;
+    let corpus = read_focused_selector("TYPOKAT_CONFORMANCE_CORPUS")?;
+    let inventory = select_focused_inventory(case.as_deref(), corpus.as_deref())?;
+
+    on_raw_check_worker(move || {
+        let receipt = run_inventory(&inventory, RouteMode::SharedMarkers);
+        println!("{}", format_focused_run_receipt(&receipt));
+    })
+}
+
+#[cfg(test)]
+fn read_focused_selector(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "focused conformance selector {name} is not Unicode"
+        )),
+    }
 }
 
 #[test]
@@ -1863,11 +2006,7 @@ fn display_path(path: &Path) -> String {
 /// deliberately-malformed witness doesn't spam the test log.
 #[cfg(test)]
 fn parse_markers_catch(src: &str) -> Result<BTreeMap<u32, Vec<ExpectedMarker>>, ()> {
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = std::panic::catch_unwind(|| parse_markers("witness.ts", src)).map_err(|_| ());
-    std::panic::set_hook(prev);
-    result
+    catch_unwind_silently(|| parse_markers("witness.ts", src))
 }
 
 /// Well-formed markers parse: bare code, code + substring, multiple ` | `-joined
@@ -2012,12 +2151,7 @@ fn parse_markers_accepts_entire_corpus_on_worker() {
 
 #[cfg(test)]
 fn parse_incomplete_catch(src: &str) -> Result<BTreeMap<u32, Vec<ExpectedIncomplete>>, ()> {
-    let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let result =
-        std::panic::catch_unwind(|| parse_incomplete_markers("witness.ts", src)).map_err(|_| ());
-    std::panic::set_hook(prev);
-    result
+    catch_unwind_silently(|| parse_incomplete_markers("witness.ts", src))
 }
 
 /// Well-formed incomplete markers parse: bare id, id + substring, ` | `-joined pair;
