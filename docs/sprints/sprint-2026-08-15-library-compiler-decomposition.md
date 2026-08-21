@@ -12,36 +12,36 @@ cleanup, semantic refactoring, or another oversized-file split.
 
 Success means a facade of at most 250 physical lines, no production child above 1,500 physical
 lines, the same fully qualified reachable item paths and visibility, a complete-token partition of
-the original source with only manifest-approved module/source-path adjustments, all 82 inline tests
+the original source with only manifest-approved module/source-path adjustments, all 93 inline tests
 retained as whole items, exact shared/cold parity, and zero official-suite scoreboard movement.
 
-## Refs re-verified at HEAD (2026-08-15, `e149b4a`)
+## Refs re-verified at HEAD (2026-08-21, `b0dbc96`)
 
 `✔` = confirmed live · `⚠` = constraint or nuance caught by the audit.
 
-- ✔ `library_compiler.rs` is **12,939 physical lines**, the largest tracked Rust source file. Its
-  trailing `#[cfg(test)] mod tests` begins at `library_compiler.rs:9536`; the pre-test region is
-  9,535 lines and the trailing test module is 3,404 lines with 82 `#[test]` entries.
-- ✔ The pre-test region contains 251 top-level declarations under the audit's lexical item matcher
-  and 114 declarations beginning with `pub`, `pub(crate)`, `pub(super)`, or another restricted
-  `pub(...)` form. These are audit inputs, not permission to widen visibility.
-- ✔ `checker/mod.rs:81` exposes `pub mod library_compiler`; **25** tracked Rust consumer files refer
-  to `library_compiler` paths, including `examples/one_pass_probe.rs`. A facade can preserve those
+- ✔ `library_compiler.rs` is **14,009 physical lines**, still the largest tracked Rust source file.
+  Its trailing `#[cfg(test)] mod tests` begins at `library_compiler.rs:9782`; the pre-test region is
+  9,781 lines and the trailing test module is 4,228 lines with 93 `#[test]` entries.
+- ⚠ The old 251-item lexical census is stale after canonical declaration inventory work added new
+  test-only sparse-selection ownership and changed compile-route bodies. The 114 declarations
+  beginning with `pub`, `pub(crate)`, `pub(super)`, or another restricted `pub(...)` form are
+  unchanged. WU0 must regenerate the complete item census rather than translating the old one.
+- ✔ `checker/mod.rs:83` exposes `pub mod library_compiler`; the same **25** tracked Rust consumer
+  files refer to `library_compiler` paths, including `examples/one_pass_probe.rs`. A facade can preserve those
   paths, but an internal-only module split is not allowed to leak into consumers.
-- ✔ The next deferred candidates are materially smaller before their trailing inline test modules:
-  `checker/mod.rs` is 8,342 lines / 7,167 before its trailing test modules,
-  `checker/decls/mod.rs` is 6,473 / 6,260, and `frontend.rs` is 6,245 / 4,706. They are not part of
-  this sprint.
+- ✔ The next deferred candidates are materially smaller: `checker/mod.rs` is 9,032 lines,
+  `frontend.rs` is 7,331, and `checker/decls/mod.rs` is 6,293. They are not part of this sprint.
 - ✔ The completed namespace split provides a current local control for the facade shape:
   `binder/namespace.rs` is 36 lines and its production children are 303–1,313 lines. This is a
   layout precedent only; namespace ownership is not reopened here.
-- ⚠ `forbidden_projection_callsite_audit_for_test` at `library_compiler.rs:380` reads the complete
+- ⚠ `forbidden_projection_callsite_audit_for_test` at `library_compiler.rs:382` reads the complete
   monolith through `include_str!("library_compiler.rs")` and asserts exact token counts across
   compiler and replay-index source. A split must replace the compiler input with an exhaustive,
   explicit `concat!(include_str!(...))` covering the facade, every production child, and
   `tests.rs`, each exactly once. It must retain the same token counts; omitting the facade or tests,
   duplicating a child, narrowing, or sampling the source set would weaken the oracle.
-- ⚠ `run_library_release_probe` at `library_compiler.rs:9468` embeds the release workload through a
+- ⚠ `run_library_release_probe` at `library_compiler.rs:9615` embeds the release workload at
+  `:9714` through a
   path relative to the current file. Moving that body requires one manifest-approved relative-path
   adjustment. The embedded workload and probe body otherwise stay unchanged.
 - ⚠ `OwnedLibraryRuntimeState` is declared near `library_compiler.rs:500`, while its large inherent
@@ -53,9 +53,13 @@ retained as whole items, exact shared/cold parity, and zero official-suite score
   rationale; `collision_replay_index_spec.rs:1196-1240` proves the binder checkpoint constructor and
   continuation provenance from checker source; `collision_preflight_spec.rs:837-843` proves the
   sealed capability has exactly one lower-checker owner and issuer; and
-  `replay_index.rs:4263,4669` freezes the production replay source set and the two allowed snapshot
+  `replay_index.rs:4264,4669` freezes the production replay source set and the two allowed snapshot
   structural-validation accesses. WU0 must name each new destination/path, ordinal/count, and
   unchanged reason. No assertion may be deleted or broadened to make the move pass.
+- ⚠ Four live backlog documents name the monolith or an old line directly: backlog 85
+  (`terminal_expression_owners`), 94 (an exact source line), 98 (`canonical_library_evidence`), and
+  113 (the lifecycle seam). Their path-only references must follow the moved owner; their scope and
+  decisions remain unchanged.
 - ✔ The proposed body regions have natural ownership boundaries: collision/replay coordination,
   owned runtime model and operations, continuation witnesses, source-profile evidence, canonical
   serialization, terminal validation, collision-plan construction, complete-source admission,
@@ -73,20 +77,20 @@ manifest before any production edit.
 
 | Destination | Current body region / ownership | Approximate moved body lines |
 |---|---|---:|
-| `library_compiler/replay_control.rs` | lines 122–1194, excluding the owned runtime model | 1,073 |
+| `library_compiler/replay_control.rs` | lines 122–1241, excluding the owned runtime model | at most 1,120 before exact partition |
 | `library_compiler/runtime_model.rs` | `OwnedLibraryRuntimeState`, product model, freeze and validation | 478 |
-| `library_compiler/runtime_state.rs` | lines 1658–2517, owned-state operations | 860 |
-| `library_compiler/runtime_witness.rs` | lines 2518–3326 | 809 |
-| `library_compiler/profile.rs` | lines 3327–4072 | 746 |
-| `library_compiler/canonical_bytes.rs` | lines 4073–4693 | 621 |
-| `library_compiler/terminal_validation.rs` | lines 4694–5392 | 699 |
-| `library_compiler/collision_plan.rs` | lines 5393–6035 | 643 |
-| `library_compiler/complete_source.rs` | lines 6036–6696 | 661 |
-| `library_compiler/compile_api.rs` | lines 6697–7383 | 687 |
-| `library_compiler/compile_engine.rs` | lines 7384–8315 | 932 |
-| `library_compiler/continuation.rs` | lines 8316–8874 | 559 |
-| `library_compiler/probes.rs` | lines 8875–9535 | 661 |
-| `library_compiler/tests.rs` | lines 9536–12939 | 3,404; excluded from production cap |
+| `library_compiler/runtime_state.rs` | lines 1705–2566, owned-state operations | 862 |
+| `library_compiler/runtime_witness.rs` | lines 2567–3374 | 808 |
+| `library_compiler/profile.rs` | lines 3375–4121 | 747 |
+| `library_compiler/canonical_bytes.rs` | lines 4122–4742 | 621 |
+| `library_compiler/terminal_validation.rs` | lines 4743–5441 | 699 |
+| `library_compiler/collision_plan.rs` | lines 5442–6084 | 643 |
+| `library_compiler/complete_source.rs` | lines 6085–6836 | 752 |
+| `library_compiler/compile_api.rs` | lines 6837–7543 | 707 |
+| `library_compiler/compile_engine.rs` | lines 7544–8537 | 994 |
+| `library_compiler/continuation.rs` | lines 8538–9120 | 583 |
+| `library_compiler/probes.rs` | lines 9121–9781 | 661 |
+| `library_compiler/tests.rs` | lines 9782–14009 | 4,228; excluded from production cap |
 
 Imports and exact symbol ownership can change these estimates. The frozen manifest must recalculate
 every destination with its real imports and reject a production child projected above 1,500 lines.
@@ -109,14 +113,14 @@ ordinals. WU1 may then make only these external-oracle changes:
   `CollisionFreeUserDeltaCapability`; retain counts one for the constructor declaration and one for
   `pub fn issue() -> Self`. The reason remains that the sealed capability has one lower-checker
   owner while `collision_preflight.rs` is its sole issuer.
-- `crates/typokat-check/src/check/checker/replay_index.rs:4263`: replace the single monolith entry in
+- `crates/typokat-check/src/check/checker/replay_index.rs:4264`: replace the single monolith entry in
   `EXPECTED_PRODUCTION_REPLAY_SOURCE_PATHS` with the facade and every production child exactly once;
   register `library_compiler/tests.rs` once in `TEST_ONLY_REPLAY_SOURCE_PATHS`, because it contains
   only the original trailing `#[cfg(test)]` module. At `:4669`, move the allowance for
   `parts.runtime.class_parents.iter()` to its exact child path while retaining count two and reason
   `snapshot structural validation`.
 
-The internal `library_compiler.rs:381` concat and release-workload path at `:9468` remain separately
+The internal `library_compiler.rs:383` concat and release-workload path at `:9714` remain separately
 authorized seams because their edits land inside the decomposed root rather than these four
 external guards.
 
@@ -125,10 +129,10 @@ external guards.
 ### WU0 — freeze the move manifest and equivalence contract (effort M)
 
 - **Problem.** Physical line ranges are insufficient authority for a public, lifecycle-sensitive
-  module with 251 pre-test items, restricted visibility, sibling-module references, and source-text
+  module with hundreds of pre-test items, restricted visibility, sibling-module references, and source-text
   oracles. Starting the move from ranges alone would make omissions and accidental API widening
   difficult to detect.
-- **Verify first.** On the unchanged `e149b4a` tree, where the census was revalidated:
+- **Verify first.** On the refreshed sprint baseline tree, where the census is revalidated:
   1. lex the complete file and partition its full Rust token stream in source order, including the
      module docs/imports, every item's attached docs/attributes/visibility/signature/body, impl
      items, macros, constants/statics, and every whole test item—not only bodies, names, or asserts;
@@ -140,13 +144,15 @@ external guards.
   4. record each item's exact fully qualified pre-move path, visibility, signature, cfg reachability,
      and whether it is private implementation, restricted-public, or externally reachable;
   5. enumerate all `super::`, `include_str!`, `include_bytes!`, and other file-relative expressions;
-  6. freeze the five path-sensitive source-oracle sites at `library_compiler.rs:381`,
+  6. freeze the five path-sensitive source-oracle sites at `library_compiler.rs:383`,
      `tests/type_tag_exhaustiveness.rs:337`, `collision_replay_index_spec.rs:1196`,
-     `collision_preflight_spec.rs:837-843`, and `replay_index.rs:4263,4669`, including their exact
+     `collision_preflight_spec.rs:837-843`, and `replay_index.rs:4264,4669`, including their exact
      token counts/ordinals and reasons;
   7. calculate destination sizes from the complete partition, including imports and facade
      re-exports, with physical `wc -l` receipts; and
-  8. record the existing exact counts used by `forbidden_projection_callsite_audit_for_test`.
+  8. record the existing exact counts used by `forbidden_projection_callsite_audit_for_test`; and
+  9. enumerate the four live backlog path references that must follow moved symbol owners without
+     changing backlog scope.
 - **Scope.** Append an item-by-item source-to-destination manifest to this sprint. For every item,
   state its destination, exact post-move fully qualified path, cfg reachability, and whether it
   stays private, is re-exported at the facade, or needs the minimum `pub(super)` visibility for a
@@ -164,7 +170,7 @@ external guards.
   manifest/spec separately.
 - **Acceptance / witness.** Exactly one destination exists for every token-bearing source unit and
   attached attribute; the partition digest and counts prove no missing, duplicated, or unowned
-  token; all 82 complete test items appear once; all 25 consumers and every pre-move fully qualified
+  token; all 93 complete test items appear once; all 25 consumers and every pre-move fully qualified
   reachable path/visibility/cfg mode have an exact post-move witness; all five source-oracle sites
   have one approved update with their reasons intact; no production child is projected above 1,500
   honest physical lines; the facade is projected at or below 250; and the independent reviewer
@@ -173,7 +179,7 @@ external guards.
 
 ### WU1 — perform the single-writer move-only split (effort L)
 
-- **Problem.** `library_compiler.rs` mixes fourteen source-layout owners in one 12,939-line file.
+- **Problem.** `library_compiler.rs` mixes fourteen source-layout owners in one 14,009-line file.
   They cannot be extracted safely by multiple concurrent writers because every extraction edits
   the same source/facade seam and shared imports.
 - **Verify first.** Re-run WU0's manifest and fingerprints immediately before editing. Confirm the
@@ -198,7 +204,7 @@ external guards.
   into the cap-exempt test file.
 - **Acceptance / witness.** WU0's after-scan reconstructs the same complete item/attribute token
   streams after removing only the exact approved seam tokens; it reports one copy of every item,
-  all 82 whole test items, and no missing, duplicate, or unowned token. Every pre-move fully
+  all 93 whole test items, and no missing, duplicate, or unowned token. Every pre-move fully
   qualified reachable path, visibility, and cfg mode resolves unchanged through private children
   and facade re-exports. The source-text oracle covers facade plus every child including `tests.rs`
   exactly once and retains its frozen counts. Every external source guard retains its assertion,
@@ -216,7 +222,8 @@ external guards.
   `tests/type_tag_exhaustiveness.rs`,
   `crates/typokat-library/src/collision_replay_index_spec.rs`,
   `crates/typokat-library/src/collision_preflight_spec.rs`, and
-  `crates/typokat-check/src/check/checker/replay_index.rs`.
+  `crates/typokat-check/src/check/checker/replay_index.rs`, plus path-only updates in backlogs 85,
+  94, 98, and 113.
 
 ### WU2 — independently review bodies, visibility, and lifecycle seams (effort M)
 
@@ -265,21 +272,22 @@ external guards.
   4. `cpu-lease run -n 2 -- cargo clippy --all-targets -- -D warnings`;
   5. `cpu-lease run -n 2 -- cargo test`;
   6. `cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture`,
-     expecting receipt `567/683/567/0`;
+     expecting receipt `580/696/580/0`;
   7. `cpu-lease run -n 2 -- cargo test --test wu6_complete_source_cli`, expecting 15/15;
   8. `cpu-lease run -n 2 -- cargo test --test conformance \
      conformance_full_shared_cold_parity -- --ignored --exact --nocapture`, expecting receipt
-     `567/683/567/567`;
-  9. `cpu-lease run -n 2 -- cargo build --release`; and
-  10. `(cd tooling/official-suite && \
+     `580/696/580/580`;
+  9. `cpu-lease run -n 2 -- cargo test --test manifest`, expecting 11/11;
+  10. `cpu-lease run -n 2 -- cargo build --release`; and
+  11. `(cd tooling/official-suite && \
       cpu-lease run -n 2 -- python3 tsofficial.py run --check)`, using that current release binary
-      and the complete pinned corpus, followed by
+      and the complete pinned corpus, expecting 874 tests / 379 in scope, followed by
       `git diff --exit-code -- tooling/official-suite/scoreboard.txt` from the repository root.
   Record command, exit status, test/receipt counts, leased wall time for the long gates, scoreboard
-  state, and final file sizes in the run log. Update no reference document because behavior and
-  architecture remain unchanged. If implementation crossed inference/contextual typing despite
-  scope, stop and rescope before claiming closure; do not silently add a differential run to bless
-  an expanded change.
+  state, and final file sizes in the run log. Update only moved-symbol path references because
+  behavior and architecture remain unchanged. If implementation crossed inference/contextual
+  typing despite scope, stop and rescope before claiming closure; do not silently add a differential
+  run to bless an expanded change.
 - **Acceptance / witness.** Every command passes, both conformance receipts are exact, WU6 is 15/15,
   the official ratchet reports zero regressions and zero scoreboard movement, no semantic fixture
   or API consumer changed, all external source-guard changes match their WU0 authorization, and the
