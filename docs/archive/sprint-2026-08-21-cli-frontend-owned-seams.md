@@ -1,3 +1,27 @@
+> **OUTCOME — shipped 2026-08-21.** The CLI now has one private writer-level report transaction
+> that renders project notices, parse errors, diagnostics, and incomplete records in order and
+> owns the single `incomplete > diagnostics > clean` status decision. Official-batch, project,
+> and path wrappers retain their distinct output cap, buffering, conversion, write, flush, and
+> error policies. The frontend now uses one private, consuming `ModuleAccounting` owner: one
+> reachable statement dispatch records owned syntax evidence and resolution tasks, resolution
+> replay preserves the previous default-first/ordinary ordering, and finalization consumes complete
+> owned state into the existing plan without retaining AST or checker borrows. Backlogs 112 and 118
+> are closed.
+>
+> Commit map: sprint plan → `b0c45ca`; initial contracts → `0b04386`; adversarially strengthened
+> ownership contracts → `0dc0121`; CLI transaction → `6bba6bb`; frontend accounting owner →
+> `f2671aa`.
+>
+> Final verification: both independent WU reviews PASS with no unresolved HIGH/MEDIUM finding;
+> CLI ownership 8/8, module-accounting structure 4/4, scan receipts 7/7, frontend 32/32,
+> incomplete 7/7, official batch 4/4, parse routing 7/7, B72 project routes 6/6 and 12/12,
+> source re-exports 7/7, and default slots 8/8 with one pinned-oracle test ignored. Ordinary
+> conformance printed `580/696/580/0`; full workspace tests, all-target Clippy with `-D warnings`,
+> and formatting passed. A fresh release official-suite run covered 874 tests / 379 in-scope with
+> zero regressions, zero progress, and complete scoreboard coverage. Full shared/cold parity and
+> randomized differential were not run because neither WU changed checker semantics, module
+> breadth, or contextual inference.
+
 # Sprint — CLI and frontend owned seams (2026-08-21)
 
 **Goal.** Close backlogs 112 and 118 as one behavior-preserving cleanup sprint: centralize the CLI
@@ -179,3 +203,20 @@ implementations can run in parallel after independently authored acceptance cont
 
 - 2026-08-21: sprint prepared from current-HEAD backlogs 112 and 118. No implementation or
   acceptance-test mutation started.
+- 2026-08-21: baseline route gates passed before implementation. WU0 initially proved the missing
+  CLI owner and scan receipts, but adversarial review found that both structural contracts could be
+  satisfied without the intended authority. The contracts were strengthened with lexical
+  sanitization, reachable-call analysis, omission/reordering/revisit/partial-coverage controls, and
+  exact/overflow output-cap controls before either production WU landed.
+- 2026-08-21: WU1 centralized all four report channels and status precedence. Its final independent
+  review passed with no HIGH/MEDIUM finding; route-specific buffering, output cap, write, flush,
+  and error wrapping stayed in the wrappers.
+- 2026-08-21: WU2's first review found hidden helper AST walks and a reusable/partial scan surface.
+  The implementation moved namespace/default evidence into the owned dispatch and made scan
+  consuming. Final review then caught a physical-resolution ordering drift; owned tasks were
+  replayed default-first and then ordinary in their original source order. Re-review passed with no
+  unresolved HIGH/MEDIUM finding.
+- 2026-08-21: the same-tree verifier passed the full closure matrix at `f2671aa`. Ordinary
+  conformance printed `580/696/580/0`; full workspace tests and all-target Clippy passed; the fresh
+  release official-suite ratchet reported 874 corpus / 379 in-scope, zero regressions, zero
+  progress, and complete corpus/scoreboard coverage.

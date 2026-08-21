@@ -578,7 +578,10 @@ Stage the shared substrate so each step keeps as much parallelism as possible:
   retain their paired slots and namespace payload. There is no named/default fallback. Acyclic local named
   source re-exports use frontend-certified dependency/provenance evidence and directly project
   namespace-free target value/type slots without a barrel-local binding. Typokat inventories every
-  module declaration before filtering and returns a deterministic summary of roots, checked/skipped
+  module declaration before filtering through one private, consuming frontend accounting owner.
+  That owner dispatches each parsed statement once, retains only owned evidence and resolution
+  tasks, and consumes complete state into the module plan without retaining AST borrows. The route
+  returns a deterministic summary of roots, checked/skipped
   files, resolutions, project notices, parse errors, incompletes, and diagnostics. Unsupported
   configs, specifiers, and forms are explicit non-clean outcomes. General packages, namespace
   imports, default bridges/re-exports, mixed forms, star/namespace re-exports,

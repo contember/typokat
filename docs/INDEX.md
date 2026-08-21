@@ -25,9 +25,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-21-cli-frontend-owned-seams.md`](sprints/sprint-2026-08-21-cli-frontend-owned-seams.md) —
-  prepared behavior-preserving cleanup for backlogs 112 and 118: centralized CLI report rendering
-  plus an owned single-scan frontend module-accounting seam.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
   unblocked with WIP preserved at `996eb5a`.
@@ -54,6 +51,10 @@ decisions → reference → archive.
   [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
   12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,
   path, visibility, consumer, and source-oracle manifest before the single-writer move begins.
+- **CLI and frontend ownership cleanup shipped 2026-08-21** — the
+  [`archived sprint`](archive/sprint-2026-08-21-cli-frontend-owned-seams.md) centralized the four
+  CLI report channels and status decision behind one private transaction, and made frontend module
+  accounting one consuming, owned, single-dispatch authority. Backlogs 112 and 118 are closed.
 - **Development feedback sprint shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-21-development-feedback-loop.md) added exact
   marker-aware case/corpus selection, a bounded same-tree gate verifier, and authenticated reuse of

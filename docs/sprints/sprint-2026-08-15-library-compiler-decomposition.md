@@ -292,9 +292,9 @@ external guards.
 
 - Any behavior, performance, allocation, replay-policy, collision-plan, compilation-order, cache,
   diagnostic, incomplete-surface, or route change. This is source layout only.
-- Any duplication cleanup, including the `src/main.rs` work tracked in
-  [`backlog 112`](../backlog/112-cli-report-rendering-transaction.md). Duplication and decomposition
-  require different evidence and rollback boundaries.
+- Any duplication cleanup, including the `src/main.rs` work shipped separately in the archived
+  [`CLI/frontend ownership sprint`](../archive/sprint-2026-08-21-cli-frontend-owned-seams.md).
+  Duplication and decomposition require different evidence and rollback boundaries.
 - Decomposition or cleanup of `checker/mod.rs`, `checker/decls/mod.rs`, `frontend.rs`,
   `binder/bind.rs`, `checker/calls.rs`, `library/base.rs`, `checker/replay_index.rs`, or any other
   oversized root.
