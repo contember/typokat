@@ -1,5 +1,15 @@
 # Sprint — library compiler decomposition (2026-08-15)
 
+> **OUTCOME — SHIPPED 2026-08-21.** Commits `e3789a6`, `2baba08`, and `57b58fd`
+> refreshed the plan, froze the complete move contract, and split the monolith behind its stable
+> facade. The final tree has a 176-line facade, thirteen production children of 493–1,107 lines,
+> and a 4,224-line test child. Four independent reviews returned PASS. Format, workspace check,
+> package tests, clippy, the complete workspace suite, conformance `580/696/580/0`, WU6 15/15,
+> full shared/cold parity `580/696/580/580`, manifest 11/11, release build, and the 874/379
+> official-suite ratchet all passed with zero scoreboard movement. No behavior, public path,
+> semantic fixture, or lifecycle decision changed. The separately prepared sparse-collision
+> lifecycle sprint may now revalidate its paths against the decomposed owners.
+
 **Goal.** Decompose `checker::library_compiler` behind its stable facade without changing behavior,
 public paths, library lifecycle semantics, or test coverage.
 
@@ -392,6 +402,16 @@ external guards.
   MEDIUM finding against module-level formatter skips was fixed and re-reviewed. Final frozen
   implementation digest `c2eb63b91007d11911ffcca1105a1f592b8f4b07903e962b1beb108561fcf3d9`
   has no unresolved HIGH, MEDIUM, or LOW finding. Post-review format, diff, and workspace check pass.
+- **2026-08-21 — WU3 closure PASS.** The reviewed implementation commit is `57b58fd`; no TypeScript
+  fixture or scoreboard changed. Serialized two-vCPU gates passed: format/diff; workspace
+  all-target/all-feature check; `typokat-check` 1,110/0/6; `typokat-library` 109/0/5 plus eight
+  doctests (1,118.64 s in the package gate); `typokat-driver` 56/0; clippy with `-D warnings`; and
+  the complete workspace suite. Exact conformance reported `580/696/580/0` in 152.97 s, WU6
+  reported 15/15 in 353.50 s, and full parity reported `580/696/580/580` in 1,385.74 s. Manifest
+  reported 11/11; the release build completed in 2m 08s. The pinned official suite reported 874
+  tests / 379 in scope, zero regressions, zero progress, complete corpus/scoreboard membership,
+  and no scoreboard diff. Final sizes remain facade 176, production children 493–1,107, tests
+  4,224; the complete-token, path, visibility, cfg, consumer, and oracle receipts remain frozen.
 
 ## WU0 frozen move manifest
 
