@@ -616,12 +616,48 @@ struct Inventory {
     discovery: DiscoveryReceipt,
 }
 
+// WU1 RED signatures. The implementation replaces these deterministic stubs.
+#[cfg(test)]
+fn select_focused_inventory(
+    _case_env: Option<&str>,
+    _corpus_env: Option<&str>,
+) -> Result<Inventory, String> {
+    Err("focused conformance selection is not implemented".to_string())
+}
+
+#[cfg(test)]
+fn focused_selection_error(result: Result<Inventory, String>, context: &str) -> String {
+    match result {
+        Ok(_) => panic!("{context}"),
+        Err(error) => error,
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct RunReceipt {
     fixture_projects: usize,
     source_files: usize,
     shared_executions: usize,
     cold_executions: usize,
+}
+
+// WU1 RED signature. The implementation replaces this deterministic stub.
+#[cfg(test)]
+fn format_focused_run_receipt(_receipt: &RunReceipt) -> String {
+    "focused conformance receipt is not implemented".to_string()
+}
+
+// Shared by the helper and its process-global restoration witness.
+#[cfg(test)]
+static PANIC_HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// WU1 RED signature. The implementation must suppress, serialize, and restore the hook.
+#[cfg(test)]
+fn catch_unwind_silently<F, T>(f: F) -> Result<T, ()>
+where
+    F: FnOnce() -> T + std::panic::UnwindSafe,
+{
+    std::panic::catch_unwind(f).map_err(|_| ())
 }
 
 /// The ordinary marker gate. Full shared/cold parity has its own ignored entry point.
@@ -725,6 +761,202 @@ fn conformance_inventory_matches_frozen_receipt() {
         inventory.discovery.selected_flat.1,
         inventory.discovery.selected_project.0,
         inventory.discovery.selected_project.1,
+    );
+}
+
+#[test]
+fn focused_selector_requires_exactly_one_environment_value() {
+    let missing = focused_selection_error(
+        select_focused_inventory(None, None),
+        "missing selector must fail",
+    );
+    assert!(
+        missing.contains("exactly one"),
+        "missing-selector error must name the exactly-one rule: {missing}"
+    );
+
+    let conflicting = focused_selection_error(
+        select_focused_inventory(
+            Some("m0_assign_primitives/intrinsics.ts"),
+            Some("m0_assign_primitives"),
+        ),
+        "conflicting selectors must fail",
+    );
+    assert!(
+        conflicting.contains("exactly one"),
+        "conflict error must name the exactly-one rule: {conflicting}"
+    );
+}
+
+#[test]
+fn focused_selector_selects_one_enabled_flat_case_exactly() {
+    let inventory = select_focused_inventory(Some("m0_assign_primitives/intrinsics.ts"), None)
+        .expect("enabled flat case must be selectable");
+
+    assert_eq!(inventory.projects.len(), 1);
+    assert_eq!(inventory.source_files, 1);
+    assert_eq!(
+        inventory.projects[0].logical_id,
+        "m0_assign_primitives/intrinsics.ts"
+    );
+    assert_eq!(inventory.projects[0].fixtures.len(), 1);
+}
+
+#[test]
+fn focused_selector_keeps_an_enabled_multifile_project_intact() {
+    let inventory = select_focused_inventory(Some("m29_modules/basic_named"), None)
+        .expect("enabled project case must be selectable");
+
+    assert_eq!(inventory.projects.len(), 1);
+    assert_eq!(inventory.source_files, 2);
+    assert_eq!(inventory.projects[0].logical_id, "m29_modules/basic_named");
+    assert_eq!(inventory.projects[0].fixtures.len(), 2);
+}
+
+#[test]
+fn focused_selector_selects_one_whole_enabled_corpus() {
+    let inventory = select_focused_inventory(None, Some("m0_assign_primitives"))
+        .expect("enabled whole corpus must be selectable");
+
+    assert_eq!(inventory.projects.len(), 3);
+    assert_eq!(inventory.source_files, 3);
+    assert!(inventory
+        .projects
+        .iter()
+        .all(|project| project.logical_id.starts_with("m0_assign_primitives/")));
+}
+
+#[test]
+fn focused_selector_rejects_disabled_and_unknown_inputs() {
+    let disabled_corpus = focused_selection_error(
+        select_focused_inventory(None, Some("b44_as_const")),
+        "disabled corpus must fail",
+    );
+    assert!(
+        disabled_corpus.contains("disabled corpus"),
+        "disabled-corpus error must be explicit: {disabled_corpus}"
+    );
+
+    let mixed_corpus = focused_selection_error(
+        select_focused_inventory(None, Some("b43_namespaces_declaration_merging")),
+        "mixed disabled corpus must fail instead of selecting its enabled subset",
+    );
+    assert!(
+        mixed_corpus.contains("disabled corpus"),
+        "mixed corpus must be rejected as a whole: {mixed_corpus}"
+    );
+
+    let disabled_case = focused_selection_error(
+        select_focused_inventory(Some("b44_as_const/literal_retention.ts"), None),
+        "case from a disabled corpus must fail",
+    );
+    assert!(
+        disabled_case.contains("disabled case"),
+        "disabled-case error must be explicit: {disabled_case}"
+    );
+
+    let unknown_case = focused_selection_error(
+        select_focused_inventory(Some("unknown/missing.ts"), None),
+        "unknown case must fail",
+    );
+    assert!(
+        unknown_case.contains("unknown case"),
+        "unknown-case error must be explicit: {unknown_case}"
+    );
+
+    let unknown_corpus = focused_selection_error(
+        select_focused_inventory(None, Some("unknown_corpus")),
+        "unknown corpus must fail",
+    );
+    assert!(
+        unknown_corpus.contains("unknown corpus"),
+        "unknown-corpus error must be explicit: {unknown_corpus}"
+    );
+}
+
+#[test]
+fn focused_receipt_is_explicitly_not_closure_evidence() {
+    let receipt = RunReceipt {
+        fixture_projects: 1,
+        source_files: 2,
+        shared_executions: 1,
+        cold_executions: 0,
+    };
+
+    assert_eq!(
+        format_focused_run_receipt(&receipt),
+        "focused conformance receipt: closure=false fixture_projects=1 source_files=2 shared_executions=1 cold_executions=0"
+    );
+}
+
+#[test]
+fn silent_panic_hook_section_is_serialized() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::Duration;
+
+    let thread_count = 8;
+    let start = Arc::new(Barrier::new(thread_count));
+    let active = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let mut threads = Vec::new();
+
+    for _ in 0..thread_count {
+        let start = Arc::clone(&start);
+        let active = Arc::clone(&active);
+        let maximum = Arc::clone(&maximum);
+        threads.push(std::thread::spawn(move || {
+            start.wait();
+            catch_unwind_silently(|| {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(10));
+                active.fetch_sub(1, Ordering::SeqCst);
+            })
+            .expect("non-panicking witness must succeed");
+        }));
+    }
+
+    for thread in threads {
+        thread.join().expect("witness thread must finish");
+    }
+    assert_eq!(
+        maximum.load(Ordering::SeqCst),
+        1,
+        "process-global panic-hook replacement must be serialized"
+    );
+}
+
+#[test]
+fn silent_panic_hook_is_restored_after_a_caught_panic() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let observed = Arc::new(AtomicUsize::new(0));
+    let previous = {
+        let _hook_lock = PANIC_HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::panic::take_hook();
+        let observed_by_hook = Arc::clone(&observed);
+        std::panic::set_hook(Box::new(move |_| {
+            observed_by_hook.fetch_add(1, Ordering::SeqCst);
+        }));
+        previous
+    };
+
+    let caught = catch_unwind_silently(|| panic!("suppressed witness")).is_err();
+    let hook_calls = {
+        let _hook_lock = PANIC_HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = std::panic::catch_unwind(|| panic!("restoration witness"));
+        let hook_calls = observed.load(Ordering::SeqCst);
+        let _ = std::panic::take_hook();
+        std::panic::set_hook(previous);
+        hook_calls
+    };
+
+    assert!(caught, "the helper must report the caught panic");
+    assert_eq!(
+        hook_calls, 1,
+        "the inner panic must be silent and the restored hook must observe the later panic"
     );
 }
 
