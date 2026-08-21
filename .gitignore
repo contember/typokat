@@ -1,2 +1,4 @@
 /target
 /.smellhunt/
+**/__pycache__/
+*.py[cod]

@@ -70,16 +70,17 @@ subsumptions; CI consumers run the exact binary built by the existing release-bu
   dirty-tree identity, and rejection when a command changes tracked or untracked state.
 - **Scope.** Add a small `tooling/verify/` CLI. It accepts repeated explicit gate strings, parses
   them with `shlex`, executes argv directly, prints requested and resolved commands, records HEAD
-  plus tracked/untracked content identity, and checks that identity around every gate. It removes
-  exact duplicates and only plain package `cargo test -p <workspace-package>` invocations subsumed
-  by a plain unfiltered workspace `cargo test`. It never drops ignored, filtered, visible-receipt,
-  example, feature-specific, or unknown commands. Include `--dry-run`; no profiles, resume, cache,
-  inferred scope, shell pipelines, or mutable gate registry.
+  plus Git-representable tracked/untracked content identity, and checks that identity around every
+  gate. It removes exact duplicates and only plain package
+  `cargo test -p <workspace-package>` invocations subsumed by a plain unfiltered workspace
+  `cargo test`. It never drops ignored, filtered, visible-receipt, example, feature-specific, or
+  unknown commands. Include `--dry-run`; no profiles, resume, cache, inferred scope, shell
+  pipelines, mutable gate registry, or general filesystem monitor.
 - **Acceptance / witness.** The Python suite passes in temporary Git repositories, negative
   controls prove each unsafe command remains, `--dry-run` prints the stable tree identity and exact
   resolved argv, and one local smoke invocation executes a harmless explicit command.
 - **Touch points.** New `tooling/verify/verify.py`, `tooling/verify/test_verify.py`, and
-  `tooling/verify/README.md` only.
+  `tooling/verify/README.md`; `.gitignore` for generated Python bytecode.
 
 ### WU3 — authenticated release artifact fanout in CI (effort S)
 
@@ -123,6 +124,9 @@ subsumptions; CI consumers run the exact binary built by the existing release-bu
 - No per-corpus metadata migration and no change to enabled fixture registration or frozen counts.
 - No mutable verification profiles, automatic gate selection from changed paths, result cache,
   resume mechanism, shell execution, or generic Cargo command planner.
+- No filesystem traversal or identity guarantee for FIFO, socket, and other state Git cannot
+  represent. The same-tree contract covers tracked state plus Git-discoverable untracked regular
+  files and symlinks.
 - No CI sharding, workflow trigger changes, full-parity workflow changes, deployment, push, or
   remote GitHub run.
 - No cleanup of unrelated source-text architecture guards or large test modules.
@@ -135,6 +139,9 @@ subsumptions; CI consumers run the exact binary built by the existing release-bu
   project are not separate cases.
 - The verifier is an explicit command executor with a tiny proved subsumption rule, not a profile
   authority. Visible receipt commands remain even when their test work overlaps a workspace gate.
+- Same-tree identity is intentionally bounded to Git-representable state. A filesystem monitor for
+  special objects would add traversal and ignore semantics that this explicit gate helper does not
+  need.
 - CI artifact trust uses both the workflow commit identity and SHA-256 content identity. The weekly
   tsc truth lifecycle remains independent.
 
@@ -152,3 +159,5 @@ subsumptions; CI consumers run the exact binary built by the existing release-bu
 - 2026-08-21: sprint opened from backlogs 117 and 120. No checker-semantic fixture corpus is added;
   executable tooling/config contracts are written by agents independent of implementation before
   each WU starts, while this plan is the separately committed acceptance spec.
+- 2026-08-21: WU2 review showed that Git does not discover untracked FIFO/socket objects. The user
+  chose the bounded Git-representable contract instead of adding an ignore-aware filesystem walk.
