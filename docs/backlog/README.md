@@ -76,8 +76,8 @@ numeric pass/fail gate.
 
 ## Roadmap at a glance
 
-The roadmap has **58 remaining items**: 50 release/consumer items in the existing four-track view
-and 8 non-blocking engineering-maintenance items. The release classification comes from
+The roadmap has **56 remaining items**: 50 release/consumer items in the existing four-track view
+and 6 non-blocking engineering-maintenance items. The release classification comes from
 [`completion-1.0.toml`](completion-1.0.toml) — that manifest, not this prose, decides what blocks
 checker 1.0; the grouping below is the human roadmap view. Consumer-surface items are deliberately
 absent from the manifest — they gate *consumers* of the checker, not the checker.
@@ -88,7 +88,7 @@ absent from the manifest — they gate *consumers* of the checker, not the check
 | **B — checker completeness** | 11 | M–L | Exhaust the Tier S/A/B diagnostic surface; independent items make useful sprint fillers. |
 | **C — soundness/parity tail** | 30 | S–XL | Release-blocking known gaps, safe-direction parity improvements, reporting/robustness, default-library fallout, and checker scaling. |
 | **D — scale + IDE** | 7 | M–XL | Preview, resolver breadth, parallel identity, incrementality — plus the non-blocking consumer surface (resolution queries, the resolution oracle). |
-| **Maintenance — non-blocking** | 8 | S–XL | Measured library-lifecycle simplification, safe checker seams, and faster development feedback. |
+| **Maintenance — non-blocking** | 6 | S–XL | Measured library-lifecycle simplification, safe checker seams, and faster development feedback. |
 
 Effort is a **relative planning estimate**, not a time promise:
 
@@ -229,14 +229,10 @@ parity gates merely to improve layout or speed.
 - **L** · [`116`](116-library-session-lifecycle-boundary.md) — after the lifecycle decisions,
   replace public low-level route/runtime states and compiler mode combinations with one session
   boundary; blocked by `113`, `114`.
-- **S** · [`117`](117-focused-conformance-selection.md) — exact case/corpus selection through the
-  existing marker-aware inventory, with the full gate retained as closure authority.
 - **M** · [`118`](118-module-accounting-accumulator.md) — express project module accounting as one
   owned one-scan accumulator and typed finalization product.
 - **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
   preserving one visible atomic publication facade.
-- **M** · [`120`](120-deduplicate-verification-work.md) — deduplicate provably subsumed same-tree
-  gates and reuse one pinned release artifact across PR consumers.
 
 ## Recommended order
 
@@ -268,10 +264,10 @@ parity gates merely to improve layout or speed.
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
    Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
    may be dropped on the profile.
-5. **Schedule maintenance by evidence and overlap.** `115`, `117`, and `120` are independent
-   feedback improvements. Run `113` before `114` or `116`; `114` is a killable architecture spike,
-   not a presumed frozen-base migration. Re-check `118` and `119` after active feature/layout work
-   touching the same owners, and retain only the owned-data seams pinned by their acceptance tests.
+5. **Schedule maintenance by evidence and overlap.** Run `113` before `114` or `116`; `114` is a
+   killable architecture spike, not a presumed frozen-base migration. Re-check `115`, `118`, and
+   `119` after active feature/layout work touching the same owners, and retain only the owned-data
+   seams pinned by their acceptance tests.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.

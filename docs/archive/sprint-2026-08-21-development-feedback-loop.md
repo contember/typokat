@@ -1,3 +1,24 @@
+> **OUTCOME — shipped 2026-08-21.** A separate ignored focused-conformance route now selects one
+> exact logical project or one enabled corpus without weakening the ordinary closure gate. A small
+> same-tree verifier keeps explicit gate lists visible, removes only exact duplicates and proved
+> default-workspace package-test subsumptions, executes argv without a shell, and rejects changes
+> to Git-representable state. Pull-request official-suite and differential jobs now consume one
+> commit- and SHA-256-authenticated release artifact built by the build job. Backlogs 117 and 120
+> are closed.
+>
+> Commit map: sprint plan → `0423e0e`; executable acceptance contracts → `0056d37`; focused
+> conformance → `b92ddc0`; authenticated CI artifact fanout → `ad4be18`; same-tree verifier →
+> `31de44e`.
+>
+> Final verification: three independent WU reviews PASS; verifier tests 18/18; workflow contract
+> tests 4/4; focused receipts `1/1/1/0`, `1/2/1/0`, and `3/3/3/0`, all `closure=false`; ordinary
+> conformance `580/696/580/0` in 138.92 s; full workspace `cargo test`, all-target Clippy with
+> `-D warnings`, manifest 11/11, formatting, Python compilation, YAML parsing, shell syntax, and
+> diff checks PASS. Full shared/cold parity and randomized differential were not run because no
+> checker semantics changed. GitHub remains the integration witness for the remote artifact
+> upload/download and rerun lifecycle. Same-tree identity deliberately excludes ignored files,
+> empty directories, FIFO/socket objects, and transient mutations restored between snapshots.
+
 # Sprint — development feedback loop (2026-08-21)
 
 **Goal.** Deliver backlog 117 and 120 as one bounded tooling sprint: exact marker-aware focused

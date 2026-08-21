@@ -23,11 +23,12 @@ is mandatory for all checker work. The **roadmap is the backlog** — each futur
 gap is a `backlog/NN-*.md` item, ordered by value and dependency. The **`tsc` divergence +
 deferred-check ledger** — every place typokat's output deliberately differs from `tsc`, with the
 reasons — is [`reference/divergences.md`](reference/divergences.md); the code-range boundary (which
-`TK` codes are in scope) is [`reference/scope.md`](reference/scope.md). Two READMEs stay **with the
+`TK` codes are in scope) is [`reference/scope.md`](reference/scope.md). Four READMEs stay **with the
 code**, not under `docs/` (they describe test tooling, not the system): `tests/cases/README.md` (how
 to write/read the conformance fixtures — marker conventions and type-display rules, **not** the
-divergence ledger), `tooling/official-suite/README.md` (the official-suite harness) and
-`tooling/differential/README.md` (the randomized differential harness).
+divergence ledger), `tooling/official-suite/README.md` (the official-suite harness),
+`tooling/differential/README.md` (the randomized differential harness), and
+`tooling/verify/README.md` (the explicit same-tree gate verifier).
 
 ## The folders — one purpose each
 

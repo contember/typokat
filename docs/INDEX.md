@@ -13,20 +13,18 @@ decisions → reference → archive.
 - [`sprints/`](sprints/README.md) — active thematic work-plans.
 - [`archive/`](archive/README.md) — shipped sprints + reference-worthy records.
 
-> Three code-adjacent docs stay **outside** `docs/`: [`tests/cases/README.md`](../tests/cases/README.md)
+> Four code-adjacent docs stay **outside** `docs/`: [`tests/cases/README.md`](../tests/cases/README.md)
 > (how to write/read the conformance fixtures — marker conventions, **not** the divergence ledger,
 > which lives in [`reference/divergences.md`](reference/divergences.md)),
 > [`tooling/official-suite/README.md`](../tooling/official-suite/README.md) (the official-suite
 > harness) and [`tooling/differential/README.md`](../tooling/differential/README.md) (the randomized
-> differential harness). The public [`README.md`](../README.md) and the hard-rules
+> differential harness), plus [`tooling/verify/README.md`](../tooling/verify/README.md) (the explicit
+> same-tree gate verifier). The public [`README.md`](../README.md) and the hard-rules
 > [`CLAUDE.md`](../CLAUDE.md) live at the repo root.
 
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-21-development-feedback-loop.md`](sprints/sprint-2026-08-21-development-feedback-loop.md) —
-  running backlogs 117 and 120 as one tooling sprint: focused marker-aware conformance, explicit
-  same-tree gate deduplication, and authenticated CI release-artifact fanout.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
   unblocked with WIP preserved at `996eb5a`.
@@ -53,12 +51,10 @@ decisions → reference → archive.
   [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
   12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,
   path, visibility, consumer, and source-oracle manifest before the single-writer move begins.
-- **Maintenance cleanup shipped 2026-08-15** — the
-  [`archived sprint`](archive/sprint-2026-08-14-maintenance-cleanup.md) separated fast marker
-  conformance from full route parity, removed verified binder/query duplication, and replaced the
-  obsolete namespace refactor plan with a reviewed 36-line facade split. Post-WU4 measurement
-  selected the active library-compiler sprint and graduated CLI rendering duplication to backlog
-  [`112`](backlog/112-cli-report-rendering-transaction.md).
+- **Development feedback sprint shipped 2026-08-21** — the
+  [`archived sprint`](archive/sprint-2026-08-21-development-feedback-loop.md) added exact
+  marker-aware case/corpus selection, a bounded same-tree gate verifier, and authenticated reuse of
+  one release artifact across pull-request CI consumers. Backlogs 117 and 120 are closed.
 - **Checker-scaling sprint archived partial 2026-08-14** — the dated
   [`scaling sprint`](archive/sprint-2026-07-25-checker-scaling.md) shipped its measured nonlinear
   fixes, but never recorded a final current-HEAD benchmark sweep or whole-sprint review. Its
