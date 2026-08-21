@@ -72,7 +72,7 @@ retention gap named as the reason it is impossible, so nobody re-opens it a thir
 ## Touch points
 
 `crates/typokat-library/src/compiler.rs` (the evidence pins),
-`crates/typokat-check/src/check/checker/library_compiler.rs` (`canonical_library_evidence`),
+`crates/typokat-check/src/check/checker/library_compiler/canonical_bytes.rs` (`canonical_library_evidence`),
 `docs/reference/divergences.md`.
 
 <!-- Origin: surfaced by the snapshot removal, 2026-07-26, which forced the stale pins to be

@@ -1193,7 +1193,7 @@ if (condition) {
 #[test]
 fn library_binder_checkpoint_is_unforgeable_and_resumes_only_through_the_continuation() {
     let binder = binder_source("bind.rs");
-    let private_compiler = checker_source("library_compiler.rs");
+    let private_compiler = checker_source("library_compiler/continuation.rs");
     let library_compiler = include_str!("compiler.rs");
     let checkpoint_offset = binder
         .find("pub struct LibraryBinderCheckpoint {")

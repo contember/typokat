@@ -127,7 +127,7 @@ Remaining candidates from the dated ranking, to be reordered only after the fres
    merge record per non-merging declaration. Those records cannot simply be dropped: five production
    loops iterate the record set
    (`crates/typokat-check/src/check/checker/namespace_values.rs:2875`,
-   `crates/typokat-check/src/check/checker/library_compiler.rs:5416`,
+   `crates/typokat-check/src/check/checker/library_compiler/collision_plan.rs:27`,
    `crates/typokat-binder/src/binder/namespace.rs:3933`,
    `crates/typokat-binder/src/binder/namespace.rs:5216`, and
    `crates/typokat-binder/src/binder/references.rs:797`), so synthesising them on demand is a

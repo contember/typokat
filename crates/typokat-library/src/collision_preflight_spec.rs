@@ -836,7 +836,7 @@ fn collision_free_capability_is_issued_only_for_a_shared_receipt() {
 
     let checker_owner = fs::read_to_string(
         crate::test_support::repository_root()
-            .join("crates/typokat-check/src/check/checker/library_compiler.rs"),
+            .join("crates/typokat-check/src/check/checker/library_compiler/replay_control.rs"),
     )
     .expect("checker library compiler source");
     assert_eq!(checker_owner.matches(&constructor).count(), 1);

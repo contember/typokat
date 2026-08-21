@@ -64,7 +64,7 @@ compilation on every repeated check as part of this item.
 ## Touch points
 
 `crates/typokat-library/src/base.rs`, `crates/typokat-library/src/provider.rs`,
-`crates/typokat-check/src/check/checker/library_compiler.rs`, binder/type-store layered storage,
+`crates/typokat-check/src/check/checker/library_compiler/*.rs`, binder/type-store layered storage,
 collision and replay specifications, the official-suite batch, full shared/cold parity, and a new
 superseding ADR if the selected lifecycle changes.
 

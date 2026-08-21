@@ -373,6 +373,25 @@ external guards.
   generator, complete 335-item and 93-test manifests, destination/action counts, visibility
   whitelist, 25-consumer census, and path-sensitive oracle migration contract. No HIGH or MEDIUM
   finding remains. Compilation and migrated-oracle execution intentionally remain WU1/WU2 gates.
+- **2026-08-21 — WU1 split and narrow gates PASS.** One writer moved the frozen partition into a
+  176-line facade, thirteen production children of 493–1,107 lines, and a 4,224-line test child.
+  The reconstructed receipts remain 73,657 normalized tokens / `134b61cd…ceaf92` and 120 test
+  items / 93 tests / 21,272 tokens / `396db127…a4b6`. Workspace all-target/all-feature check,
+  `typokat-check` 1,110/0/6, `typokat-library` 109/0/5 plus eight doctests, `typokat-driver` 56/0,
+  and all-target test compilation passed under serialized two-vCPU leases.
+- **2026-08-21 — WU1 manifest corrections.** Compilation exposed the minimum sibling visibility
+  omitted by WU0: two replay-control thread locals, six `CANONICAL_FRONTEND_*` thread locals,
+  `USER_DELTA_FORKS`, and `PrivateReplayScaleControlForTest` plus its `trace` field. The moved
+  source audit also requires `include_str!("../replay_index.rs")`. Cfg-split facade aliases and
+  globs keep default, test, and `test-utils` builds warning-clean without widening child modules.
+  No module-level formatter skip remains; two production item-level skips preserve frozen tokens,
+  while the eight test-item skips already present in the monolith remain unchanged.
+- **2026-08-21 — WU2 independent review PASS.** Three disjoint read-only reviews and a fourth
+  reconciler accounted for all 335 top-level items, 120 nested test items, 25 consumers, visibility
+  and cfg seams, source-audit counts, external oracles, and path-only backlog edits. An initial
+  MEDIUM finding against module-level formatter skips was fixed and re-reviewed. Final frozen
+  implementation digest `c2eb63b91007d11911ffcca1105a1f592b8f4b07903e962b1beb108561fcf3d9`
+  has no unresolved HIGH, MEDIUM, or LOW finding. Post-review format, diff, and workspace check pass.
 
 ## WU0 frozen move manifest
 
