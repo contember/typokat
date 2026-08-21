@@ -1516,6 +1516,231 @@ fn project_programs_from_accounted_imports_in_order<'ast>(
         .collect()
 }
 
+#[cfg(test)]
+struct ModuleAccountingProgramScanReceipt {
+    visited: bool,
+    statements: Vec<bool>,
+}
+
+#[cfg(test)]
+struct ModuleAccountingScanReceipt {
+    owner_started: bool,
+    programs: Vec<ModuleAccountingProgramScanReceipt>,
+    finalized: bool,
+}
+
+#[cfg(test)]
+impl ModuleAccountingScanReceipt {
+    fn new(programs: &[&Program<'_>]) -> Self {
+        Self {
+            owner_started: false,
+            programs: programs
+                .iter()
+                .map(|program| ModuleAccountingProgramScanReceipt {
+                    visited: false,
+                    statements: vec![false; program.body.len()],
+                })
+                .collect(),
+            finalized: false,
+        }
+    }
+
+    fn start_owner(&mut self) -> Result<(), ProjectInventoryError> {
+        if self.owner_started {
+            return Err(ProjectInventoryError::new(
+                "module accounting scan owner was started more than once",
+            ));
+        }
+        self.owner_started = true;
+        Ok(())
+    }
+
+    fn visit_program(
+        &mut self,
+        program_index: usize,
+        statement_count: usize,
+    ) -> Result<(), ProjectInventoryError> {
+        if !self.owner_started {
+            return Err(ProjectInventoryError::new(
+                "module accounting program scan started before its owner",
+            ));
+        }
+        let program = self.programs.get_mut(program_index).ok_or_else(|| {
+            ProjectInventoryError::new("module accounting visited an unknown program")
+        })?;
+        if program.visited {
+            return Err(ProjectInventoryError::new(
+                "module accounting revisited a program",
+            ));
+        }
+        if program.statements.len() != statement_count {
+            return Err(ProjectInventoryError::new(
+                "module accounting program statement coverage changed",
+            ));
+        }
+        program.visited = true;
+        Ok(())
+    }
+
+    fn visit_statement(
+        &mut self,
+        program_index: usize,
+        statement_index: usize,
+    ) -> Result<(), ProjectInventoryError> {
+        let program = self.programs.get_mut(program_index).ok_or_else(|| {
+            ProjectInventoryError::new(
+                "module accounting visited a statement in an unknown program",
+            )
+        })?;
+        if !program.visited {
+            return Err(ProjectInventoryError::new(
+                "module accounting visited a statement before its program",
+            ));
+        }
+        let visited = program.statements.get_mut(statement_index).ok_or_else(|| {
+            ProjectInventoryError::new("module accounting visited an unknown statement")
+        })?;
+        if *visited {
+            return Err(ProjectInventoryError::new(
+                "module accounting revisited a statement",
+            ));
+        }
+        *visited = true;
+        Ok(())
+    }
+
+    fn finalize(&mut self) -> Result<(), ProjectInventoryError> {
+        if !self.owner_started {
+            return Err(ProjectInventoryError::new(
+                "module accounting scan finalized before its owner started",
+            ));
+        }
+        if self.finalized {
+            return Err(ProjectInventoryError::new(
+                "module accounting scan was finalized more than once",
+            ));
+        }
+        self.verify_coverage()?;
+        self.finalized = true;
+        Ok(())
+    }
+
+    fn verify_complete(&self) -> Result<(), ProjectInventoryError> {
+        if !self.owner_started {
+            return Err(ProjectInventoryError::new(
+                "module accounting scan owner was not started",
+            ));
+        }
+        self.verify_coverage()?;
+        if !self.finalized {
+            return Err(ProjectInventoryError::new(
+                "module accounting scan was not finalized",
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_coverage(&self) -> Result<(), ProjectInventoryError> {
+        if self.programs.iter().any(|program| !program.visited) {
+            return Err(ProjectInventoryError::new(
+                "module accounting finalized with partial program coverage",
+            ));
+        }
+        if self
+            .programs
+            .iter()
+            .any(|program| program.statements.iter().any(|visited| !visited))
+        {
+            return Err(ProjectInventoryError::new(
+                "module accounting finalized with partial statement coverage",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static MODULE_ACCOUNTING_SCAN_CONTRACT: std::cell::RefCell<Option<ModuleAccountingScanReceipt>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn install_module_accounting_scan_contract(
+    programs: &[&Program<'_>],
+) -> Result<(), ProjectInventoryError> {
+    MODULE_ACCOUNTING_SCAN_CONTRACT.with(|contract| {
+        let mut contract = contract.try_borrow_mut().map_err(|_| {
+            ProjectInventoryError::new("module accounting scan contract was borrowed recursively")
+        })?;
+        if contract.is_some() {
+            return Err(ProjectInventoryError::new(
+                "module accounting scan contract was installed more than once",
+            ));
+        }
+        *contract = Some(ModuleAccountingScanReceipt::new(programs));
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn record_module_accounting_owner_started() -> Result<(), ProjectInventoryError> {
+    with_module_accounting_scan_contract(ModuleAccountingScanReceipt::start_owner)
+}
+
+#[cfg(test)]
+fn record_module_accounting_program_visit(
+    program_index: usize,
+    statement_count: usize,
+) -> Result<(), ProjectInventoryError> {
+    with_module_accounting_scan_contract(|contract| {
+        contract.visit_program(program_index, statement_count)
+    })
+}
+
+#[cfg(test)]
+fn record_module_accounting_statement_visit(
+    program_index: usize,
+    statement_index: usize,
+) -> Result<(), ProjectInventoryError> {
+    with_module_accounting_scan_contract(|contract| {
+        contract.visit_statement(program_index, statement_index)
+    })
+}
+
+#[cfg(test)]
+fn record_module_accounting_finalization() -> Result<(), ProjectInventoryError> {
+    with_module_accounting_scan_contract(ModuleAccountingScanReceipt::finalize)
+}
+
+#[cfg(test)]
+fn with_module_accounting_scan_contract(
+    visit: impl FnOnce(&mut ModuleAccountingScanReceipt) -> Result<(), ProjectInventoryError>,
+) -> Result<(), ProjectInventoryError> {
+    MODULE_ACCOUNTING_SCAN_CONTRACT.with(|contract| {
+        let mut contract = contract.try_borrow_mut().map_err(|_| {
+            ProjectInventoryError::new("module accounting scan contract was borrowed recursively")
+        })?;
+        if let Some(contract) = contract.as_mut() {
+            visit(contract)?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn finish_module_accounting_scan_contract() -> Result<(), ProjectInventoryError> {
+    MODULE_ACCOUNTING_SCAN_CONTRACT.with(|contract| {
+        let mut contract = contract.try_borrow_mut().map_err(|_| {
+            ProjectInventoryError::new("module accounting scan contract was borrowed recursively")
+        })?;
+        let receipt = contract.take().ok_or_else(|| {
+            ProjectInventoryError::new("module accounting scan contract was not installed")
+        })?;
+        receipt.verify_complete()
+    })
+}
+
 struct AccountedModulePlan {
     inventory: ProjectModuleInventory,
     paths: Vec<PathBuf>,
@@ -6241,5 +6466,194 @@ mod default_module_candidate_tests {
         };
         assert_eq!(before, after);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod module_accounting_scan_contract_tests {
+    use super::*;
+
+    fn assert_owned_complete_scan(
+        sources: &[(&str, &str)],
+        source_reexport_accounting: SourceReexportAccounting,
+        default_candidate_accounting: DefaultCandidateAccounting,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let inputs = sources
+            .iter()
+            .map(|(name, source)| FileInput {
+                name: (*name).to_owned(),
+                source: (*source).to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let allocators = inputs
+            .iter()
+            .map(|_| Allocator::default())
+            .collect::<Vec<_>>();
+        let parsed = inputs
+            .iter()
+            .zip(&allocators)
+            .map(|(input, allocator)| {
+                Parser::new(allocator, &input.source, SourceType::ts()).parse()
+            })
+            .collect::<Vec<_>>();
+        if parsed
+            .iter()
+            .any(|result| result.panicked || !result.diagnostics.is_empty())
+        {
+            return Err(std::io::Error::other(
+                "module accounting scan contract requires clean TypeScript input",
+            )
+            .into());
+        }
+        let programs = parsed
+            .iter()
+            .map(|result| &result.program)
+            .collect::<Vec<_>>();
+        install_module_accounting_scan_contract(&programs)?;
+        let accounting = account_project_modules(
+            &inputs,
+            &programs,
+            &ProjectResolutionMode::ExplicitFileList,
+            source_reexport_accounting,
+            default_candidate_accounting,
+        );
+        let contract = finish_module_accounting_scan_contract();
+        accounting?;
+        contract?;
+        Ok(())
+    }
+
+    fn receipt_with_statement_counts(counts: &[usize]) -> ModuleAccountingScanReceipt {
+        ModuleAccountingScanReceipt {
+            owner_started: false,
+            programs: counts
+                .iter()
+                .map(|count| ModuleAccountingProgramScanReceipt {
+                    visited: false,
+                    statements: vec![false; *count],
+                })
+                .collect(),
+            finalized: false,
+        }
+    }
+
+    #[test]
+    fn frozen_accounting_requires_one_owned_complete_scan() -> Result<(), Box<dyn std::error::Error>>
+    {
+        assert_owned_complete_scan(
+            &[
+                (
+                    "consumer.ts",
+                    "import { Value } from \"./missing.js\";\nexport const retained = 1;\n",
+                ),
+                ("source.ts", "export const source = 1;\n"),
+            ],
+            SourceReexportAccounting::FrozenUnsupported,
+            DefaultCandidateAccounting::FrozenUnsupported,
+        )
+    }
+
+    #[test]
+    fn source_reexport_accounting_requires_one_owned_complete_scan(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_owned_complete_scan(
+            &[
+                (
+                    "barrel.ts",
+                    "export { Value } from \"./missing.js\";\nexport const retained = 1;\n",
+                ),
+                ("source.ts", "export const source = 1;\n"),
+            ],
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::FrozenUnsupported,
+        )
+    }
+
+    #[test]
+    fn default_candidate_accounting_requires_one_owned_complete_scan(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        assert_owned_complete_scan(
+            &[
+                (
+                    "consumer.ts",
+                    "import Value from \"./missing.js\";\nexport default Value;\n",
+                ),
+                ("source.ts", "export default 1;\n"),
+            ],
+            SourceReexportAccounting::AdmitBundler,
+            DefaultCandidateAccounting::CollectCandidate,
+        )
+    }
+
+    #[test]
+    fn scan_receipt_rejects_statement_revisit() -> Result<(), Box<dyn std::error::Error>> {
+        let mut receipt = receipt_with_statement_counts(&[2]);
+        receipt.start_owner()?;
+        receipt.visit_program(0, 2)?;
+        receipt.visit_statement(0, 0)?;
+        let error = receipt
+            .visit_statement(0, 0)
+            .err()
+            .ok_or_else(|| std::io::Error::other("statement revisit was accepted"))?;
+        assert_eq!(error.to_string(), "module accounting revisited a statement");
+        Ok(())
+    }
+
+    #[test]
+    fn scan_receipt_rejects_partial_finalization() -> Result<(), Box<dyn std::error::Error>> {
+        let mut partial_program = receipt_with_statement_counts(&[1, 1]);
+        partial_program.start_owner()?;
+        partial_program.visit_program(0, 1)?;
+        partial_program.visit_statement(0, 0)?;
+        let error = partial_program
+            .finalize()
+            .err()
+            .ok_or_else(|| std::io::Error::other("partial program coverage was accepted"))?;
+        assert_eq!(
+            error.to_string(),
+            "module accounting finalized with partial program coverage"
+        );
+
+        let mut partial_statement = receipt_with_statement_counts(&[2]);
+        partial_statement.start_owner()?;
+        partial_statement.visit_program(0, 2)?;
+        partial_statement.visit_statement(0, 0)?;
+        let error = partial_statement
+            .finalize()
+            .err()
+            .ok_or_else(|| std::io::Error::other("partial statement coverage was accepted"))?;
+        assert_eq!(
+            error.to_string(),
+            "module accounting finalized with partial statement coverage"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scan_receipt_accepts_exact_complete_coverage() -> Result<(), Box<dyn std::error::Error>> {
+        let sources = [
+            "export const first = 1;\nexport const second = 2;\n",
+            "export {};\n",
+        ];
+        let allocators = [Allocator::default(), Allocator::default()];
+        let parsed = sources
+            .iter()
+            .zip(&allocators)
+            .map(|(source, allocator)| Parser::new(allocator, source, SourceType::ts()).parse())
+            .collect::<Vec<_>>();
+        let programs = parsed
+            .iter()
+            .map(|result| &result.program)
+            .collect::<Vec<_>>();
+        install_module_accounting_scan_contract(&programs)?;
+        record_module_accounting_owner_started()?;
+        for (program_index, program) in programs.iter().enumerate() {
+            record_module_accounting_program_visit(program_index, program.body.len())?;
+            for (statement_index, _) in program.body.iter().enumerate() {
+                record_module_accounting_statement_visit(program_index, statement_index)?;
+            }
+        }
+        record_module_accounting_finalization()?;
+        finish_module_accounting_scan_contract().map_err(Into::into)
     }
 }
