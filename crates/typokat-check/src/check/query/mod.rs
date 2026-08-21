@@ -332,6 +332,7 @@ pub struct QueryDemandMeasure {
 #[cfg(any(test, feature = "test-utils"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QuerySourceColdMeasure {
+    pub pending_enum_scan_visits: u64,
     pub publication_calls: u64,
     pub publication_query_roots: u64,
     pub publication_edge_visits: u64,
@@ -3343,6 +3344,7 @@ fn pending_enum_exhaustion<L: PublishedClassLookup + ?Sized>(
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
+        measure_query_source_cold(|measure| measure.pending_enum_scan_visits += 1);
         if !seen.insert(ty) {
             continue;
         }

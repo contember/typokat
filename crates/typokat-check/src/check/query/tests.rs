@@ -2523,6 +2523,65 @@ fn pending_enum_is_rejected_directly_and_through_nested_union_before_identity_ca
 }
 
 #[test]
+#[ignore = "RED: completed enum lifecycle must bypass pending-enum graph scans"]
+fn completed_enum_lifecycle_skips_pending_enum_graph_scans() {
+    let mut interner = Interner::with_intrinsics();
+    let mut root = interner.well_known().number;
+    for index in 0..128 {
+        root = interner.intern_object(ObjectType {
+            properties: vec![PropertyType::public(format!("level{index}"), root)],
+            ..Default::default()
+        });
+    }
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let guard = start_query_source_cold_measure();
+
+    assert!(matches!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .demand(root),
+        DemandOutcome::Ready(_)
+    ));
+    assert_eq!(
+        query_source_cold_measure()
+            .expect("measurement remains active")
+            .pending_enum_scan_visits,
+        0,
+        "a completed enum lifecycle must make the pending-enum guard O(1)"
+    );
+    drop(guard);
+}
+
+#[test]
+fn pending_enum_lifecycle_still_scans_nested_query_roots() {
+    let mut interner = Interner::with_intrinsics();
+    let shell = interner.reserve_enum(EnumId(70_005), "PendingScan");
+    let root = interner.intern_object(ObjectType {
+        properties: vec![PropertyType::public("pending", shell)],
+        ..Default::default()
+    });
+    let published = PublishedClasses::empty();
+    let mut state = SemanticQueryState::default();
+    let mut next_type_param = 0;
+    let guard = start_query_source_cold_measure();
+
+    assert_eq!(
+        SemanticQueryCoordinator::new(&mut interner, &published, &mut state, &mut next_type_param,)
+            .demand(root),
+        DemandOutcome::Exhausted(Exhaustion::EvaluationInvalidNode { ty: shell })
+    );
+    assert!(
+        query_source_cold_measure()
+            .expect("measurement remains active")
+            .pending_enum_scan_visits
+            >= 2,
+        "a pending enum must retain the nested soundness scan"
+    );
+    drop(guard);
+}
+
+#[test]
 fn demand_rejects_pending_enum_through_every_fast_path_without_durable_writes() {
     let mut interner = Interner::with_intrinsics();
     let wk = interner.well_known();
