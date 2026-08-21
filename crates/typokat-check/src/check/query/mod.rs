@@ -3340,10 +3340,14 @@ fn pending_enum_exhaustion<L: PublishedClassLookup + ?Sized>(
     roots: &[TypeId],
     published: &L,
 ) -> Option<Exhaustion> {
+    if !interner.has_reserved_enum_semantic_frontier() {
+        return None;
+    }
     let store = interner.store();
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
+        #[cfg(any(test, feature = "test-utils"))]
         measure_query_source_cold(|measure| measure.pending_enum_scan_visits += 1);
         if !seen.insert(ty) {
             continue;
@@ -3374,6 +3378,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         measure.publication_query_roots += u64::try_from(roots.len()).unwrap();
     });
     refresh_semantic_context(store, published, state);
+    let check_enum_frontier = interner.has_reserved_enum_semantic_frontier();
     let mut stack = roots.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(ty) = stack.pop() {
@@ -3382,7 +3387,7 @@ fn publication_exhaustion<L: PublishedClassLookup + ?Sized>(
         }
         // Enum shells are never safe relation operands, including through a
         // structural wrapper or an identity fast path.
-        if interner.reserved_enum_semantic_frontier(ty) {
+        if check_enum_frontier && interner.reserved_enum_semantic_frontier(ty) {
             return Some(Exhaustion::EvaluationInvalidNode { ty });
         }
         if state.publication_clean.contains(&ty) {

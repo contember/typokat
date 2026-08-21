@@ -2523,7 +2523,6 @@ fn pending_enum_is_rejected_directly_and_through_nested_union_before_identity_ca
 }
 
 #[test]
-#[ignore = "RED: completed enum lifecycle must bypass pending-enum graph scans"]
 fn completed_enum_lifecycle_skips_pending_enum_graph_scans() {
     let mut interner = Interner::with_intrinsics();
     let mut root = interner.well_known().number;

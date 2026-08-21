@@ -501,6 +501,11 @@ pub struct Interner {
     reserved_types_base: Arc<FxHashMap<TypeId, ReservedType>>,
     /// Nominal placeholder rows are mutable exactly once, as one validated batch.
     reserved_types: FxHashMap<TypeId, ReservedType>,
+    /// Enum reservations that are still unsafe semantic query operands.
+    ///
+    /// Pending enum/member shells enter this frontier. A successful fill removes
+    /// them; an unavailable member remains because queries must keep rejecting it.
+    reserved_enum_semantic_frontier_count: usize,
     next_enum_id: u32,
     well_known: WellKnown,
     #[cfg(any(test, feature = "test-utils"))]
@@ -527,6 +532,7 @@ impl Interner {
             declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::new(FxHashMap::default()),
             reserved_types: FxHashMap::default(),
+            reserved_enum_semantic_frontier_count: 0,
             next_enum_id: 0,
             // Placeholder; overwritten below before any use.
             well_known: WellKnown {
@@ -864,6 +870,7 @@ impl Interner {
             declared_recipe_local: FxHashMap::default(),
             reserved_types_base: Arc::clone(&self.reserved_types_base),
             reserved_types: FxHashMap::default(),
+            reserved_enum_semantic_frontier_count: self.reserved_enum_semantic_frontier_count,
             next_enum_id: self.next_enum_id,
             well_known: self.well_known,
             #[cfg(any(test, feature = "test-utils"))]
@@ -901,6 +908,11 @@ impl Interner {
 
     pub fn reserved_enum_semantic_frontier(&self, id: TypeId) -> bool {
         self.pending_reserved_enum(id) || self.unavailable_reserved_enum_member(id)
+    }
+
+    /// Whether any enum node still requires semantic-frontier graph validation.
+    pub fn has_reserved_enum_semantic_frontier(&self) -> bool {
+        self.reserved_enum_semantic_frontier_count != 0
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -1017,6 +1029,9 @@ impl Interner {
     }
 
     fn register_reserved_type(&mut self, id: TypeId, kind: ReservedTypeKind) -> TypeId {
+        if matches!(kind, ReservedTypeKind::Enum | ReservedTypeKind::EnumMember) {
+            self.reserved_enum_semantic_frontier_count += 1;
+        }
         let previous = self.reserved_types.insert(
             id,
             ReservedType {
@@ -1099,6 +1114,7 @@ impl Interner {
         for fill in fills {
             let id = fill.target();
             let terminal_state = fill.terminal_state();
+            let kind = fill.kind();
             match fill {
                 ReservedTypeFill::Object(_, object) => self.store.set_object(id, object),
                 ReservedTypeFill::Conditional(_, conditional) => {
@@ -1108,6 +1124,14 @@ impl Interner {
                 ReservedTypeFill::Enum(_, enumeration) => self.store.set_enum(id, enumeration),
                 ReservedTypeFill::EnumMember(_, member) => self.store.set_enum_member(id, member),
                 ReservedTypeFill::UnavailableEnumMember(_) => {}
+            }
+            if matches!(kind, ReservedTypeKind::Enum | ReservedTypeKind::EnumMember)
+                && terminal_state == ReservedTypeState::Frozen
+            {
+                self.reserved_enum_semantic_frontier_count = self
+                    .reserved_enum_semantic_frontier_count
+                    .checked_sub(1)
+                    .expect("validated enum frontier count cannot underflow");
             }
             self.reserved_types
                 .get_mut(&id)

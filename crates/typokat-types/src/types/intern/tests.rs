@@ -581,9 +581,11 @@ fn frozen_enum_rows_are_shared_and_readable_from_deltas() {
 #[test]
 fn failed_or_second_enum_fill_leaves_store_unchanged() {
     let mut interner = Interner::with_intrinsics();
+    assert!(!interner.has_reserved_enum_semantic_frontier());
     let enum_id = interner.next_enum_id();
     let reserved = interner.reserve_enum(enum_id, "Mode");
     let reserved_member = interner.reserve_enum_member(enum_id, EnumMemberId(0), "Mode", "Read");
+    assert!(interner.has_reserved_enum_semantic_frontier());
     let invalid = EnumType {
         id: EnumId(enum_id.0 + 1),
         name: "Mode".to_owned(),
@@ -596,6 +598,7 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
     };
     let before_invalid = interner.store().len();
     assert!(interner.fill_enum(reserved, invalid).is_err());
+    assert!(interner.has_reserved_enum_semantic_frontier());
     assert_eq!(interner.store().len(), before_invalid);
     assert_eq!(
         interner
@@ -619,12 +622,14 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
     interner
         .fill_enum(reserved, family.clone())
         .expect("first matching fill succeeds");
+    assert!(!interner.has_reserved_enum_semantic_frontier());
     let after_fill = interner.store().len();
     let member = interner
         .store()
         .enum_member_type_id(enum_id, EnumMemberId(0));
     assert_eq!(member, Some(reserved_member));
     assert!(interner.fill_enum(reserved, family).is_err());
+    assert!(!interner.has_reserved_enum_semantic_frontier());
     assert_eq!(interner.store().len(), after_fill);
     assert_eq!(
         interner
@@ -637,10 +642,12 @@ fn failed_or_second_enum_fill_leaves_store_unchanged() {
 #[test]
 fn enum_member_shell_batch_fills_valid_rows_and_terminalizes_invalid_rows() {
     let mut interner = Interner::with_intrinsics();
+    assert!(!interner.has_reserved_enum_semantic_frontier());
     let enum_id = interner.next_enum_id();
     let whole = interner.reserve_enum(enum_id, "Mode");
     let ready = interner.reserve_enum_member(enum_id, EnumMemberId(0), "Mode", "Ready");
     let invalid = interner.reserve_enum_member(enum_id, EnumMemberId(1), "Mode", "Invalid");
+    assert!(interner.has_reserved_enum_semantic_frontier());
     interner
         .fill_enum(
             whole,
@@ -661,6 +668,54 @@ fn enum_member_shell_batch_fills_valid_rows_and_terminalizes_invalid_rows() {
     assert!(interner.unavailable_reserved_enum_member(invalid));
     assert!(!interner.pending_reserved_enum(ready));
     assert!(!interner.pending_reserved_enum(invalid));
+    assert!(interner.has_reserved_enum_semantic_frontier());
+}
+
+#[test]
+fn enum_semantic_frontier_count_tracks_fill_poison_and_frozen_forks() {
+    let mut base = Interner::with_intrinsics();
+    let ready_enum_id = base.next_enum_id();
+    let ready_whole = base.reserve_enum(ready_enum_id, "Ready");
+    let ready_member = base.reserve_enum_member(ready_enum_id, EnumMemberId(0), "Ready", "Member");
+    assert!(base.has_reserved_enum_semantic_frontier());
+    base.fill_enum(
+        ready_whole,
+        EnumType {
+            id: ready_enum_id,
+            name: "Ready".to_owned(),
+            members: vec![EnumMemberFact {
+                id: EnumMemberId(0),
+                name: "Member".to_owned(),
+                value: EnumValue::String("member".to_owned()),
+            }],
+            numeric_open: false,
+        },
+    )
+    .expect("complete family fills");
+    assert!(base.store().enum_member_type(ready_member).is_some());
+    assert!(!base.has_reserved_enum_semantic_frontier());
+
+    let empty_enum_id = base.next_enum_id();
+    let empty_whole = base.reserve_enum(empty_enum_id, "Empty");
+    assert!(base.has_reserved_enum_semantic_frontier());
+    base.poison_reserved_enum(empty_whole)
+        .expect("memberless failed family terminalizes");
+    assert!(!base.has_reserved_enum_semantic_frontier());
+
+    let poisoned_enum_id = base.next_enum_id();
+    let poisoned_whole = base.reserve_enum(poisoned_enum_id, "Poisoned");
+    let unavailable =
+        base.reserve_enum_member(poisoned_enum_id, EnumMemberId(0), "Poisoned", "Missing");
+    base.poison_reserved_enum(poisoned_whole)
+        .expect("failed family terminalizes");
+    assert!(base.unavailable_reserved_enum_member(unavailable));
+    assert!(base.has_reserved_enum_semantic_frontier());
+
+    base.freeze_as_base().expect("terminal enum base freezes");
+    let delta = base.fork_delta().expect("terminal enum base forks");
+    assert!(base.has_reserved_enum_semantic_frontier());
+    assert!(delta.has_reserved_enum_semantic_frontier());
+    assert!(delta.unavailable_reserved_enum_member(unavailable));
 }
 
 #[test]
