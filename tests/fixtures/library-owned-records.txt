@@ -2,7 +2,7 @@
 # Regenerate: TYPOKAT_BLESS_LIBRARY_RECORDS=1 cargo test --test library_owned_records
 # Columns are tab-separated: kind, name, file:line:column, detail.
 # profile: ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d
-# diagnostics: 267, incompletes: 292, records: 559
+# diagnostics: 267, incompletes: 291, records: 558
 incomplete	annotation-lower/type-reference/default-argument	lib.decorators.d.ts:31:7	type-parameter default unavailable at application
 diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
 diagnostic	TK2430	lib.dom.d.ts:3381:11	Interface 'AbortSignal' incorrectly extends interface 'EventTarget'.
@@ -283,7 +283,6 @@ incomplete	annotation-lower/this-type/self	lib.es2015.core.d.ts:60:62	this type 
 incomplete	annotation-lower/type-predicate/self	lib.es2015.core.d.ts:350:82	type predicate not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.iterable.d.ts:24:24	unique symbol operator not lowered
 incomplete	annotation-lower/intrinsic-keyword/self	lib.es2015.iterable.d.ts:68:30	intrinsic keyword type not modeled
-incomplete	annotation-lower/type-syntax/unsupported	lib.es2015.reflect.d.ts:111:5	namespace member type syntax could not be lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:24:27	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:30:34	unique symbol operator not lowered
 incomplete	annotation-lower/type-operator/unique-operand	lib.es2015.symbol.wellknown.d.ts:36:21	unique symbol operator not lowered

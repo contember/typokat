@@ -11,9 +11,9 @@ The ordinary gate is:
 cpu-lease run -n 2 -- cargo test --test conformance conformance -- --exact --nocapture
 ```
 
-It discovers 580 fixture projects / 696 source files, checks each project once through the shared
-route, and prints receipt `580/696/580/0` (projects/sources/shared/cold). A sprint-closure run over
-this inventory took 128.04 s under `cpu-lease run -n 2 --`. The inventory and ordering authority is
+It discovers 581 fixture projects / 697 source files, checks each project once through the shared
+route, and prints receipt `581/697/581/0` (projects/sources/shared/cold). The latest closure run over
+this inventory took 64.41 s under `cpu-lease run -n 2 --`. The inventory and ordering authority is
 `cargo test --test conformance conformance_inventory_matches_frozen_receipt -- --exact --nocapture`;
 the ordinary command's printed receipt repeats the aggregate totals.
 
@@ -42,8 +42,8 @@ cpu-lease run -n 2 -- cargo test --test conformance \
   conformance_full_shared_cold_parity -- --ignored --exact --nocapture
 ```
 
-It prints receipt `580/696/580/580`; the sprint-closure run passed in 1,164.50 s
-(1,165.11 s wall). The separate
+It prints receipt `581/697/581/581`. The latest measured closure run predates the B121 addition and
+passed `580/696/580/580` in 1,164.50 s (1,165.11 s wall). The separate
 `.github/workflows/full-parity.yml` runs it weekly and on manual dispatch.
 
 This file is **test tooling**: how to write and read these fixtures. The substantive record of
@@ -466,7 +466,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b48_object_binding_publication/` | shipped flat-variable slice of backlog `48` | flat object variable binding leaves: independent types and storage, defaults, static keys, scope/order, source projection, missing-property accounting, plus explicit excluded-shape guards |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
-| `b121_symbol_namespace_surface/` | disabled backlog-121 acceptance spec | callable namespace surfaces lower the ordinary `symbol` keyword used by `Reflect.ownKeys`; blocked by the backlog-113 library lifecycle decision |
+| `b121_symbol_namespace_surface/` | shipped backlog `121` | callable namespace surfaces lower the ordinary `symbol` keyword used by `Reflect.ownKeys` through the canonical well-known identity |
 | `sr_project_local_library_candidate/` | project-local library universe WU0 (disabled) | candidate-only `tsc` truth, global-merge/order/isolation witnesses, and the immutable declaration-product ownership contract; it does not enter the frozen conformance receipt until the new session exists |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
@@ -958,8 +958,8 @@ The directory contains 74 flat fixtures. Six older fixtures, the WU6A unavailabl
 slice, so the whole directory stays disabled; the conformance harness gates the other 65 flat fixtures explicitly through
 `ENABLED_FIXTURES`, plus both two-file WU5 projects, both two-file WU6A projects, and both
 `wu6a_review_cross_space_*` projects through `ENABLED_PROJECT_FIXTURES`. The whole-flat registration
-class contains 433 one-source projects; the frozen inventory test above is the authority for the
-complete 580-project / 696-source inventory. WU6 adds
+class contains 434 one-source projects; the frozen inventory test above is the authority for the
+complete 581-project / 697-source inventory. WU6 adds
 `wu6_ambient_namespace_body_lookup.ts` and `wu6_local_array_heritage.ts`. WU5 adds
 `global_augmentation.ts`, `global_missing_declare_negative.ts`,
 `global_script_negative.ts`, `global_value_publication_deferred.ts`, `umd_export.d.ts`,

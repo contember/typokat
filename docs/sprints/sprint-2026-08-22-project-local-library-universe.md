@@ -335,10 +335,10 @@ These conditions may not be relaxed after candidate results are visible.
   remains. Update architecture, invariants, public docs, route probes, package tests, and examples.
 - **Acceptance / witness.** Production contains one library/project semantic lifecycle and no
   collision-name branch. `rg` finds no unexplained frozen/sparse/replay production residue. The
-  exact WU0 corpus, full unit/workspace suite, clippy, ordinary `580/696` conformance, complete
+  exact WU0 corpus, full unit/workspace suite, clippy, ordinary `581/697` conformance, complete
   shared/cold parity replacement, official-suite ratchet, symbol/Reflect truth, named library
   census, package verification, and WU6 benchmark evidence all pass at the same reviewed tree.
-  Backlogs 113, 115, 116, and 121 are deleted; the sprint is archived with commit map and exact
+  Backlogs 113, 115, and 116 are deleted; the sprint is archived with commit map and exact
   measurements.
 - **Touch points.** Library/checker/binder layered storage, provider/driver/CLI, all lifecycle specs,
   ADRs, `docs/reference/`, backlog/index files, and final archived evidence.
@@ -420,3 +420,11 @@ numbers are invalid without `--no-smt`.
   contract passed `3/3` with its intentional RED runner ignored, marker parsing passed, and the
   immutable ordinary receipt remained `580/696`. Independent adversarial review returned GO after
   the user-authorized second fix round.
+- **2026-08-23 — WU1 GO.** Both ordinary `TSSymbolKeyword` lowerers now use the canonical
+  project-local `well_known().symbol` identity. Real `tsc 6.0.3`, cold complete-source checks, and
+  enabled B121 agree on `2322`/`2345`; packaged Reflect and Array SCC oracles are complete. The
+  named library census removed only the obsolete Reflect incomplete: diagnostics stayed at 267,
+  incompletes moved `292 -> 291`, and records moved `559 -> 558`. Candidate tests passed `3/3`
+  with the intentional RED ignored, all-target check passed, and ordinary conformance passed
+  `581/697/581/0` in 64.41 s. Independent review caught and then cleared stale canonical-evidence
+  hashes; it found no sparse-only fix.

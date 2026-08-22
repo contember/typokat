@@ -13,7 +13,7 @@ use typokat::frontend::FileInput;
 const PROFILE_SHA256: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
 const LOCKED_SLICE_SHA256: &str =
     "1d1d96a4196ccc77f9f8d1713425f252e6c49ca7b8efe44c39d326a2b100a514";
-const ORACLE_SHA256: &str = "ebd05c48fe8e3e88ecfd77b90b9e2a6cd9d5a7bebf87016fa543123611651414";
+const ORACLE_SHA256: &str = "ffa1978769709abab7deca1905404668c9088542557bc1103904926ae3d826cf";
 const CASE_DIR: &str = "tests/cases/sr_project_local_library_candidate";
 
 struct ExpectedRun {
@@ -89,6 +89,7 @@ fn manifest_and_oracles_are_frozen() {
 
     let conformance = fs::read_to_string(root.join("tests/conformance.rs")).expect("harness");
     assert!(conformance.contains("(\"sr_project_local_library_candidate\", false)"));
+    assert!(conformance.contains("(\"b121_symbol_namespace_surface\", true)"));
     let adr = fs::read_to_string(
         root.join("docs/decisions/0023-own-default-library-semantics-per-project.md"),
     )
@@ -106,29 +107,22 @@ fn current_complete_source_divergences_are_frozen() {
         &root.join(CASE_DIR).join("reflect_packaged.ts"),
         "/candidate/reflect_packaged.ts",
     );
-    assert_eq!(diagnostic_codes(&reflect), Vec::<&str>::new());
+    assert_eq!(diagnostic_codes(&reflect), ["TK2322"]);
     assert_eq!(incomplete_ids(&reflect), Vec::<&str>::new());
 
     let array = check_fixture_once(
         &root.join(CASE_DIR).join("array_library_scc.ts"),
         "/candidate/array_library_scc.ts",
     );
-    assert_eq!(diagnostic_codes(&array), ["TK2322", "TK2322"]);
+    assert_eq!(diagnostic_codes(&array), ["TK2322", "TK2322", "TK2322"]);
     assert_eq!(incomplete_ids(&array), Vec::<&str>::new());
 
     let symbol = check_fixture_once(
         &root.join("tests/cases/b121_symbol_namespace_surface/symbol_namespace_surface.ts"),
         "/candidate/symbol_namespace_surface.ts",
     );
-    assert_eq!(diagnostic_codes(&symbol), Vec::<&str>::new());
-    assert_eq!(
-        incomplete_ids(&symbol),
-        [
-            "annotation-lower/type-syntax/unsupported",
-            "annotation-lower/type-syntax/unsupported",
-            "annotation-lower/type-syntax/unsupported"
-        ]
-    );
+    assert_eq!(diagnostic_codes(&symbol), ["TK2322", "TK2345"]);
+    assert_eq!(incomplete_ids(&symbol), Vec::<&str>::new());
 }
 
 #[test]

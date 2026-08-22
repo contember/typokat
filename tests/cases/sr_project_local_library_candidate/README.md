@@ -1,7 +1,7 @@
 # Project-local library candidate corpus
 
 This disabled corpus freezes the acceptance boundary for ADR-0023. It does not alter the ordinary
-`580/696` conformance inventory. Candidate integration tests load the projects explicitly.
+`581/697` conformance inventory. Candidate integration tests load the projects explicitly.
 
 The new fixtures cover gaps that the shipped frozen/sparse corpus does not isolate:
 
@@ -27,15 +27,13 @@ product must cover all packaged sources; the slice is only an audit witness, nev
 `oracle.toml` records the exact real-`tsc` outcomes and current typokat divergences that WU1 must
 close before enabling any candidate route.
 
-## Known current divergence
+## WU1 semantic baseline
 
-Real TypeScript 6.0.3 reports `TS2322` and `TS2345` in the disabled backlog-121 symbol fixture and
-reports the marked `TS2322` diagnostics here. Current typokat does not yet publish the real packaged
-`Reflect` terminal through ordinary symbol lowering. WU1 must correct that semantic truth before
-the candidate consumes it.
+Real TypeScript 6.0.3 and typokat now agree on `TS`/`TK2322` and `TS`/`TK2345` in the enabled
+backlog-121 symbol fixture and on the marked `TS`/`TK2322` diagnostics here. The packaged
+`Reflect.ownKeys` terminal publishes through the canonical project-local `symbol` identity.
 
 The stopped feasibility run reported 44 newly active library-owned records but retained no named
-`(code, site)` multiset. WU0 could not reproduce that movement under a consistent symbol fix or a
-controlled old-base/new-candidate symbol toggle. WU1 must derive and commit the actual named census
-delta before changing the lowering, without assuming a count. A count-only assertion is not an
-acceptable witness.
+`(code, site)` multiset. WU0 could not reproduce that movement. WU1 established the actual delta:
+one obsolete `lib.es2015.reflect.d.ts:111:5` incomplete was removed, diagnostics stayed at 267, and
+the total census moved from 559 to 558 records. A count-only assertion is not an acceptable witness.

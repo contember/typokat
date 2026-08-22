@@ -21,7 +21,7 @@ const PIN_PATH: &str = "tests/fixtures/library-owned-records.txt";
 const BLESS: &str = "TYPOKAT_BLESS_LIBRARY_RECORDS";
 
 const PINNED_DIAGNOSTICS: usize = 267;
-const PINNED_INCOMPLETES: usize = 292;
+const PINNED_INCOMPLETES: usize = 291;
 const FULL_LIBRARY_CLEAN: &str =
     include_str!("../tooling/full-lib-bench/workloads/fast-clean/main.ts");
 

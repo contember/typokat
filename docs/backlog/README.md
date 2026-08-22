@@ -225,18 +225,14 @@ and must not weaken soundness or parity gates merely to improve layout or speed.
   migration: replace public low-level route/runtime states with one session boundary.
 - **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
   preserving one visible atomic publication facade.
-- **S** · [`121`](121-symbol-bearing-namespace-surfaces.md) — WU1 of the active project-local
-  migration: establish ordinary `symbol`/Reflect semantic truth and the exact 44-owner witness
-  before the new declaration product consumes it.
-
 ## Recommended order
 
 1. **Execute the active project-local library universe sprint.** Item `113` now owns the direct
-   replacement of frozen semantics and sparse replay. Correct `121`'s symbol/Reflect and 44-owner
-   truth first; consume `115` while building the project-local binder; deliver `116` as the sole
-   session boundary; prove fair cold and repeated superiority over `tsgo`; then delete the old
-   lifecycle vertically. Do not spend an intermediate sprint repairing or benchmarking sparse
-   replay as a candidate production architecture.
+   replacement of frozen semantics and sparse replay. WU1 has established the symbol/Reflect truth;
+   build the immutable declaration product next, consume `115` while building the project-local
+   binder, deliver `116` as the sole session boundary, prove fair cold and repeated superiority
+   over `tsgo`, then delete the old lifecycle vertically. Do not spend an intermediate sprint
+   repairing or benchmarking sparse replay as a candidate production architecture.
 2. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
    archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
    removed all 22 measured binding `TK2304` identities, and the archived

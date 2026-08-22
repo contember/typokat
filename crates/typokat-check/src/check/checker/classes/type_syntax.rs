@@ -400,7 +400,7 @@ where
             TSType::TSBigIntKeyword(keyword) => Err(self.unsupported(keyword.span)),
             TSType::TSIntrinsicKeyword(keyword) => Err(self.unsupported(keyword.span)),
             TSType::TSObjectKeyword(_) => Ok(self.factory.well_known().object),
-            TSType::TSSymbolKeyword(keyword) => Err(self.unsupported(keyword.span)),
+            TSType::TSSymbolKeyword(_) => Ok(self.factory.well_known().symbol),
             TSType::TSImportType(import) => Err(self.unsupported(import.span)),
             TSType::TSNamedTupleMember(named) => Err(self.unsupported(named.span)),
             TSType::TSThisType(this_type) => Err(SurfaceTypeFailure::ThisType {

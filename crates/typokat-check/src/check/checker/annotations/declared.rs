@@ -421,6 +421,7 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
             TSType::TSBooleanKeyword(_) => Some(wk.boolean),
             TSType::TSNumberKeyword(_) => Some(wk.number),
             TSType::TSStringKeyword(_) => Some(wk.string),
+            TSType::TSSymbolKeyword(_) => Some(wk.symbol),
             _ => None,
         };
         if let Some(ty) = leaf {

@@ -431,17 +431,17 @@ mod tests {
             digest(&evidence.diagnostics),
             "640fb065d80690ba28de25430cb65b51935b9f34488d4d01a83c187bbc960ab6"
         );
-        assert_eq!(run.library_records.len() - diagnostic_count, 292);
-        assert_eq!(evidence.incompletes.len(), 45_356);
+        assert_eq!(run.library_records.len() - diagnostic_count, 291);
+        assert_eq!(evidence.incompletes.len(), 45_176);
         assert_eq!(
             digest(&evidence.incompletes),
-            "5d608971d0ff1a97e56c6616cbdb8cb2ee3cd4e5615eca7b44fa2d26df653842"
+            "82444cb52cf26954a107d520ff04c29743022678cc8d50cb81367b2f7b044773"
         );
-        assert_eq!(run.library_records.len(), 559);
-        assert_eq!(evidence.ledger.len(), 170_954);
+        assert_eq!(run.library_records.len(), 558);
+        assert_eq!(evidence.ledger.len(), 170_774);
         assert_eq!(
             digest(&evidence.ledger),
-            "1adde6c30479466ec76a9781a740f7525d3f195d1e75155fc2578bdc6bcd6db0"
+            "1c9dd0ab78d0f1e9fa5ff4eff1a24f90d1da0ef11053c6c3700552480047d302"
         );
         assert_eq!(owned_sources.len(), 82);
     }

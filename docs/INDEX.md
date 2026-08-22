@@ -40,10 +40,10 @@ decisions → reference → archive.
 - **Project-local library universe is the active research direction** — the active
   [`sprint`](sprints/sprint-2026-08-22-project-local-library-universe.md) replaces the frozen
   semantic base, collision preflight, and sparse replay with one shared immutable declaration
-  product plus project-owned eager binding and lazy semantic publication. It first corrects the
-  symbol/Reflect 44-owner oracle exposed by the archived
-  [`feasibility sprint`](archive/sprint-2026-08-22-project-local-library-index-feasibility.md), then
-  requires authenticated cold and repeated wins over `tsgo` before deleting the old lifecycle.
+  product plus project-owned eager binding and lazy semantic publication. WU1 established the
+  canonical symbol/Reflect truth and rejected the unpreserved historical 44-owner count; the next
+  unit builds the immutable full-profile declaration product. The cutover still requires
+  authenticated cold and repeated wins over `tsgo` before deleting the old lifecycle.
 - **Declaration inventory shipped; B44 unblocked** — the archived
   [`declaration-inventory sprint`](archive/sprint-2026-08-18-canonical-declaration-inventory.md)
   cut declaration reservation, publication, and class attachment over to the authenticated

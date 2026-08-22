@@ -50,9 +50,11 @@ Under `cpu-lease run -n 2 --no-smt --`, it authenticated all 687 official-suite 
 395 private, 247 shared, 42 user-parse-rejected, three complete-source fallbacks, and zero preflight
 rejections. Base initialization took 1.551 s total and peak worker RSS was 144,109,568 bytes.
 
-The symbol-bearing Reflect surface and its actual named census delta must be corrected in the
-complete-source semantic authority before the new declaration product depends on it. The sprint
-must not copy frozen fingerprints, weaken validation, or implement a sparse-specific repair.
+WU1 corrected the symbol-bearing Reflect surface in the complete-source semantic authority. The
+named census removed exactly one obsolete Reflect incomplete: diagnostics stayed at 267,
+incompletes moved from 292 to 291, and total records moved from 559 to 558. The declaration product
+must consume this truth without copying frozen fingerprints or implementing a sparse-specific
+repair.
 
 ## Approach / acceptance
 

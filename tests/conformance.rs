@@ -224,10 +224,10 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Cross-module/opposite-order class publication. Project-shaped; also
     // registered in PROJECT_DIRS below.
     ("sr_semantic_duplication_project", true),
-    // Backlog 121 keeps the symbol-keyword acceptance spec frozen but disabled.
-    ("b121_symbol_namespace_surface", false),
+    // Backlog 121 — ordinary symbol keywords lower through declared recipes.
+    ("b121_symbol_namespace_surface", true),
     // Project-local library universe WU0. This candidate-only corpus freezes the
-    // tsc truth and architecture contract without entering the frozen 580/696 gate.
+    // tsc truth and architecture contract without entering the frozen 581/697 gate.
     ("sr_project_local_library_candidate", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
@@ -576,7 +576,7 @@ const ENABLED_FIXTURES: &[(&str, &str)] = &[
     ),
 ];
 
-const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0xb0ab59a51447735a;
+const FROZEN_INVENTORY_ORDER_FINGERPRINT: u64 = 0x6f99d922f78e8e9f;
 
 /// An expectation parsed from a single inline marker.
 #[derive(Debug, Clone)]
@@ -793,9 +793,9 @@ fn conformance() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 580,
-                source_files: 696,
-                shared_executions: 580,
+                fixture_projects: 581,
+                source_files: 697,
+                shared_executions: 581,
                 cold_executions: 0,
             }
         );
@@ -836,10 +836,10 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
         assert_eq!(
             receipt,
             RunReceipt {
-                fixture_projects: 580,
-                source_files: 696,
-                shared_executions: 580,
-                cold_executions: 580,
+                fixture_projects: 581,
+                source_files: 697,
+                shared_executions: 581,
+                cold_executions: 581,
             }
         );
         print_run_receipt(&receipt);
@@ -849,12 +849,12 @@ fn conformance_full_shared_cold_parity() -> Result<(), String> {
 #[test]
 fn conformance_inventory_matches_frozen_receipt() {
     let inventory = discover_enabled_inventory();
-    assert_eq!(inventory.projects.len(), 580);
-    assert_eq!(inventory.source_files, 696);
+    assert_eq!(inventory.projects.len(), 581);
+    assert_eq!(inventory.source_files, 697);
     assert_eq!(
         inventory.discovery,
         DiscoveryReceipt {
-            whole_flat: (433, 433),
+            whole_flat: (434, 434),
             whole_project: (74, 184),
             selected_flat: (67, 67),
             selected_project: (6, 12),
