@@ -1,15 +1,15 @@
 ---
 id: 121
 title: Lower symbol-bearing callable namespace surfaces
-blocked-by: [./113-measure-sparse-collision-lifecycle.md]
+blocked-by: []
 ---
 
 # 121 — Lower symbol-bearing callable namespace surfaces
 
 **Summary.** Map ordinary `TSSymbolKeyword` annotations through the existing callable namespace
 surface authority so `Reflect.ownKeys` and equivalent namespace functions can publish complete
-terminals. Do this only after backlog
-[`113`](113-measure-sparse-collision-lifecycle.md) resolves the sparse collision lifecycle.
+terminals. This is WU1 and the semantic-oracle prerequisite of the active
+[`project-local library universe sprint`](../sprints/sprint-2026-08-22-project-local-library-universe.md).
 
 ## Problem
 
@@ -27,9 +27,10 @@ Copying those fingerprints, narrowing the authenticated replay closure without p
 
 ## Approach / acceptance
 
-After backlog 113 records the DELETE/RETAIN decision, lower `TSSymbolKeyword` through the ordinary
-surface type-syntax authority and its existing `well_known().symbol` identity. Do not add a cast,
-parallel lowerer, namespace-only semantic shim, or alternate query route.
+Lower `TSSymbolKeyword` through the ordinary surface type-syntax authority and its existing
+`well_known().symbol` identity. Establish the correct complete-source meaning before the
+project-local declaration product consumes it. Do not add a cast, parallel lowerer,
+namespace-only semantic shim, alternate query route, or sparse-specific repair.
 
 Acceptance requires:
 
@@ -37,9 +38,7 @@ Acceptance requires:
   `TK2345` witnesses;
 - the packaged `Reflect` namespace/value terminal is `Ready`, including `Reflect.ownKeys`;
 - every library-owned diagnostic/incomplete movement is reviewed and pinned exactly;
-- the lifecycle selected by backlog 113 remains explicit: either the retained sparse route passes
-  its authenticated collision/fanout receipts, or the selected complete-source collision fallback
-  reports its fixed lifecycle receipt;
+- complete-source semantic truth is established without copying frozen/sparse fingerprints;
 - the 44 activated DOM fingerprint case is an exact regression witness, not a blessed omission;
 - ordinary shared/cold parity and the surviving provider/standalone route gates pass.
 
@@ -49,4 +48,5 @@ Callable namespace surface type-syntax lowering, `WellKnownTypes`, the packaged 
 library-owned record fixtures, collision/fanout lifecycle tests, shared/cold parity, and the pinned
 backlog-121 conformance corpus.
 
-<!-- Origin: archived 2026-08-22 project-local library-index feasibility STOP. -->
+<!-- Origin: archived 2026-08-22 project-local library-index feasibility STOP; scheduled as WU1 of
+     the project-local library universe sprint. -->

@@ -25,20 +25,25 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
-  bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
-  unblocked with WIP preserved at `996eb5a`.
+- [`sprint-2026-08-22-project-local-library-universe.md`](sprints/sprint-2026-08-22-project-local-library-universe.md)
+  — current primary research sprint; one shared immutable declaration product, project-local eager
+  binding and lazy semantics, one session lifecycle, strict cold/repeated superiority over `tsgo`,
+  then vertical deletion of frozen/sparse routing.
+
+- [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — paused while the
+  lifecycle sprint owns overlapping checker seams; WIP remains preserved at `996eb5a`.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Project-local library index feasibility stopped 2026-08-22** — the
-  [`archived sprint`](archive/sprint-2026-08-22-project-local-library-index-feasibility.md) stopped
-  after Ready Reflect contradicted its frozen oracle and changed sparse collision record
-  fingerprints. The prototype was removed. Backlog
-  [`113`](backlog/113-measure-sparse-collision-lifecycle.md) resumes next for the measured
-  DELETE/RETAIN decision; [`121`](backlog/121-symbol-bearing-namespace-surfaces.md) waits on it.
+- **Project-local library universe is the active research direction** — the active
+  [`sprint`](sprints/sprint-2026-08-22-project-local-library-universe.md) replaces the frozen
+  semantic base, collision preflight, and sparse replay with one shared immutable declaration
+  product plus project-owned eager binding and lazy semantic publication. It first corrects the
+  symbol/Reflect 44-owner oracle exposed by the archived
+  [`feasibility sprint`](archive/sprint-2026-08-22-project-local-library-index-feasibility.md), then
+  requires authenticated cold and repeated wins over `tsgo` before deleting the old lifecycle.
 - **Declaration inventory shipped; B44 unblocked** — the archived
   [`declaration-inventory sprint`](archive/sprint-2026-08-18-canonical-declaration-inventory.md)
   cut declaration reservation, publication, and class attachment over to the authenticated
@@ -48,8 +53,8 @@ decisions → reference → archive.
   product boundary. The archived
   [`satisfies sprint`](archive/sprint-2026-08-17-satisfies.md) implements source-preserving
   contextual checking and records the comparison with TypeScript PR #46827. The active
-  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) may now resume from its WIP at
-  `996eb5a`.
+  [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) is unblocked but paused with its WIP
+  preserved at `996eb5a` while the library lifecycle sprint owns overlapping checker seams.
 - **Library compiler decomposition shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-15-library-compiler-decomposition.md) split the
   14,009-line root into a 176-line stable facade, thirteen bounded production owners, and one test
@@ -119,6 +124,8 @@ decisions → reference → archive.
   the complete set as a named `(code, site)` multiset
   (`tests/fixtures/library-owned-records.txt`), which narrows ADR-0011's "preserved exactly" to the
   pinned suite rather than the published base. The
+  active project-local-universe sprint is required to supersede the frozen/replay lifecycle while
+  preserving the exact source profile. The
   [`archived closure sprint`](archive/sprint-2026-08-02-default-library-cutover-closure.md) records
   final WU7 independent **PASS** with zero unresolved HIGH/MEDIUM findings and exact-`d1aa6d4`
   remote CI. The production Stage-1 cutover is shipped: the public

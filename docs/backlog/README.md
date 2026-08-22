@@ -212,27 +212,32 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
   diagnostics) · blocked by `79`. **Low priority**: an optimization, not a capability;
   profiling-gated, drop it if the relation engine does not dominate.
 
-**Engineering maintenance — non-blocking.** These items reduce standing architecture and feedback
-cost. They do not change the checker 1.0 completeness manifest and must not weaken soundness or
-parity gates merely to improve layout or speed.
+**Research architecture and engineering maintenance — non-blocking.** These items change or reduce
+standing architecture and feedback cost. They do not change the checker 1.0 completeness manifest
+and must not weaken soundness or parity gates merely to improve layout or speed.
 
-- **L** · [`113`](113-measure-sparse-collision-lifecycle.md) — next library-lifecycle work: compare
-  sparse collision replay with complete-source collision fallback using the authenticated
-  687-frame baseline and the archived 44-owner semantic movement; select DELETE or RETAIN.
+- **XL** · [`113`](113-project-local-library-universe.md) — active research migration: replace the
+  frozen/sparse lifecycle with one immutable declaration product, project-local eager binding,
+  demand-driven semantics, and a strict `tsgo` superiority gate.
 - **L** · [`115`](115-prepared-project-single-parse.md) — parse provider inputs once into a
   frontend-owned prepared product used for both routing and checking.
-- **L** · [`116`](116-library-session-lifecycle-boundary.md) — after the lifecycle decisions,
-  replace public low-level route/runtime states and compiler mode combinations with one session
-  boundary; blocked by `113`.
+- **L** · [`116`](116-library-session-lifecycle-boundary.md) — WU5 of the active project-local
+  migration: replace public low-level route/runtime states with one session boundary.
 - **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
   preserving one visible atomic publication facade.
-- **S** · [`121`](121-symbol-bearing-namespace-surfaces.md) — lower ordinary `symbol` annotations
-  in callable namespace surfaces through the existing authority; blocked by `113` because Ready
-  Reflect changes sparse record fingerprints and collision lifecycle.
+- **S** · [`121`](121-symbol-bearing-namespace-surfaces.md) — WU1 of the active project-local
+  migration: establish ordinary `symbol`/Reflect semantic truth and the exact 44-owner witness
+  before the new declaration product consumes it.
 
 ## Recommended order
 
-1. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
+1. **Execute the active project-local library universe sprint.** Item `113` now owns the direct
+   replacement of frozen semantics and sparse replay. Correct `121`'s symbol/Reflect and 44-owner
+   truth first; consume `115` while building the project-local binder; deliver `116` as the sole
+   session boundary; prove fair cold and repeated superiority over `tsgo`; then delete the old
+   lifecycle vertically. Do not spend an intermediate sprint repairing or benchmarking sparse
+   replay as a candidate production architecture.
+2. **Close the remaining general blockers exposed by the immutable `placetext` screen.** The
    archived [`object-binding sprint`](../archive/sprint-2026-08-09-object-binding-publication.md)
    removed all 22 measured binding `TK2304` identities, and the archived
    [`optional-parameter sprint`](../archive/sprint-2026-08-11-optional-parameter-undefined-arguments.md)
@@ -242,30 +247,23 @@ parity gates merely to improve layout or speed.
    diagnostics: computed keys plus their revealed `TK2741` (`75`), template interpolation (`71`),
    and predicate-bearing array diagnostics plus their revealed downstream `TK2322` (`50`/`107`).
    Re-screen only from reviewed general commits; do not patch the project.
-2. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
+3. **Close `72` only when a re-screen is genuinely zero-clean.** Preserve the
    native-versus-overlay distinction and prove target/library meaning equivalence. Only after the
    unchanged zero gate passes may the descriptor, three exact TS/TK mutations, deterministic
    fresh-cache runner, fault controls, and CI identity ratchet land. Do not relax a threshold or
    add a shim.
-3. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
+4. **Continue the full-project/scale ladder** (package/config/`.d.ts` remainder of `15` → `16` →
    `17`), finishing the A/B/C remainder along the way. After `15` ships, it and the shipped
    production work of `14` must graduate a pinned Bundler-compatible full-stack witness (deptective
    only if it qualifies); the small `72` preview is not evidence for full resolver/lib fidelity. Per
    [`ADR-0007`](../decisions/0007-bundler-resolution-via-oxc-resolver.md), `15` integrates and
    differentially validates `oxc_resolver` for the 1.0 Bundler profile; NodeNext/alternate profiles
    are deferred and physical lookup is not reimplemented locally.
-4. **Land `79` + `80` alongside the breadth climb.** The shipped project summary provides the
+5. **Land `79` + `80` alongside the breadth climb.** The shipped project summary provides the
    bounded orchestration base; the resolution oracle adds breadth without enlarging the public
    checker claim. Pavouk already holds ~138k compiler-accurate resolution assertions over a real monorepo,
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
    Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
    may be dropped on the profile.
-5. **Resume the measured library-lifecycle decision.** Run `113` next from its authenticated
-   687-frame baseline and archived project-local-index STOP. Compare DELETE versus RETAIN with the
-   44-owner symbol-bearing Reflect movement as a mandatory witness. Keep `115` as independent
-   parse-once preparation; `116` waits only for `113`. Re-check `119` after active feature work
-   touching the same owners, and start `121` only after `113` fixes the selected collision
-   lifecycle.
-
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.

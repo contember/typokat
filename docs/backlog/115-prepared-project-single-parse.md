@@ -7,8 +7,10 @@ blocked-by: []
 # 115 — Parse provider projects once through a prepared frontend product
 
 **Summary.** Replace collision preflight's second parser authority with a frontend-owned
-`PreparedProject` that routes and checks the same parsed programs. Non-blocking development and
-runtime improvement, effort L.
+`PreparedProject` consumed by the project-local binder and checker session. This is scheduled as
+WU3 of the active
+[`project-local library universe sprint`](../sprints/sprint-2026-08-22-project-local-library-universe.md).
+Non-blocking development and runtime improvement, effort L.
 
 ## Problem
 
@@ -24,24 +26,26 @@ affinity: routing and frontend work already execute inside the same scoped large
 ## Approach / acceptance
 
 Introduce a frontend-owned prepared product that remains inside one worker and owns the OXC
-allocators/programs for its lifetime. It should provide the pre-semantic facts needed to route the
-project:
+allocators/programs for its lifetime. It should provide the pre-semantic facts needed to construct
+the project:
 
 - canonical file/module inventory and source ordering;
 - parse diagnostics and panic outcome;
 - module classification and relative-import graph;
-- global source-binding census used by collision admission;
-- the existing auxiliary/frontend accounting products needed by the selected checker route.
+- global source-binding census used to assemble the project-local global scope;
+- the existing auxiliary/frontend accounting products needed by the checker session.
 
-Route only after the complete preflight receipt exists and before any binder or semantic mutation.
-Then continue the selected library/checker lifecycle with the same parsed programs. Preserve parse
-diagnostic precedence, panic precedence, report order, Bundler resolution provenance, and the rule
-that ASTs never cross their worker/lifetime boundary.
+Complete preparation before binder or semantic mutation, then pass the same programs and source
+facts into the project-local binder. The candidate route has no collision classification. During
+migration, the temporary test-only control may derive its routing receipt from the same prepared
+facts. Preserve parse diagnostic precedence, panic precedence, report order, Bundler resolution
+provenance, and the rule that ASTs never cross their worker/lifetime boundary.
 
-Corpus acceptance covers clean shared routing, collisions, parse errors, parser panic controls,
-multi-file projects, path-order determinism, and all three public provider entry points. Add a parser
-invocation receipt or equivalent test witness proving one parse per source. Compare official-batch
-wall time before and after, but do not make a performance threshold the correctness gate.
+Corpus acceptance covers ordinary and augmented global projects, parse errors, parser panic
+controls, multi-file projects, path-order determinism, and all public checker entry points. Add a
+parser invocation receipt or equivalent test witness proving one parse per source. Compare
+official-batch wall time before and after, but do not make a performance threshold the correctness
+gate.
 
 While consolidating parser ownership, extract the exact duplicated auxiliary parser-diagnostic
 conversion helper; do not unify otherwise distinct frontend lifecycles merely to remove that copy.
