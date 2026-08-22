@@ -1,14 +1,15 @@
 ---
 id: 113
 title: Measure and simplify the sparse collision lifecycle
-blocked-by: []
+blocked-by: [./114-lazy-default-library-index-spike.md]
 ---
 
 # 113 — Measure and simplify the sparse collision lifecycle
 
-**Summary.** Decide with current repeated-consumer evidence whether sparse collision replay earns
-its cross-cutting complexity; if it does not, keep the frozen fast path for collision-free checks
-and route collisions through complete-source compilation. Non-blocking architecture work, effort L.
+**Summary.** If the project-local library-index feasibility spike stops, decide with current
+repeated-consumer evidence whether sparse collision replay earns its cross-cutting complexity; if
+it does not, keep the frozen fast path for collision-free checks and route collisions through
+complete-source compilation. Non-blocking fallback architecture work, effort L.
 
 ## Problem
 
@@ -33,6 +34,12 @@ The repository does not currently pin its shared/private/fallback route frequenc
 sparse route with complete-source collision fallback at that lifecycle.
 
 ## Approach / acceptance
+
+Backlog [`114`](114-lazy-default-library-index-spike.md) now tests the cause before this item
+simplifies the workaround. Its active feasibility sprint consumes only the authenticated
+current-route baseline below. If 114 proceeds toward replacing the frozen semantic base, delete or
+rescope this item rather than optimizing sparse replay first. If 114 stops, this item resumes with
+that baseline and the original DELETE/RETAIN contract.
 
 Instrument the repeated provider route without changing its verdicts. Record at least:
 

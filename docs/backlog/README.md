@@ -216,11 +216,12 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 cost. They do not change the checker 1.0 completeness manifest and must not weaken soundness or
 parity gates merely to improve layout or speed.
 
-- **L** · [`113`](113-measure-sparse-collision-lifecycle.md) — measure whether sparse collision
-  replay still earns its cross-cutting provider complexity; delete it vertically if complete-source
-  collision fallback meets declared repeated-batch thresholds.
+- **L** · [`113`](113-measure-sparse-collision-lifecycle.md) — fallback after `114`: measure whether
+  sparse collision replay still earns its cross-cutting provider complexity; its current-route
+  baseline is folded into the active `114` spike, while DELETE/RETAIN work waits on that verdict.
 - **XL** · [`114`](114-lazy-default-library-index-spike.md) — evaluate an immutable symbolic library
-  index with project-local demand publication; blocked by `113`, `115`, and explicit kill criteria.
+  index with project-local demand publication; active as a bounded global-augmentation-first
+  feasibility spike with explicit kill criteria and no production cutover.
 - **L** · [`115`](115-prepared-project-single-parse.md) — parse provider inputs once into a
   frontend-owned prepared product used for both routing and checking.
 - **L** · [`116`](116-library-session-lifecycle-boundary.md) — after the lifecycle decisions,
@@ -259,10 +260,13 @@ parity gates merely to improve layout or speed.
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
    Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
    may be dropped on the profile.
-5. **Schedule maintenance by evidence and overlap.** Run `113` before `114` or `116`; `114` is a
-   killable architecture spike, not a presumed frozen-base migration. Re-check `115` and `119`
-   after active feature/layout work touching the same owners, and retain only the owned-data
-   seams pinned by their acceptance tests.
+5. **Test the library-lifecycle cause before its workaround.** Run the bounded `114` feasibility
+   spike first, folding in only `113`'s authenticated current-route baseline. If `114` stops,
+   resume `113`'s sparse DELETE/RETAIN decision. If it proceeds, rescope `114` to full-profile
+   implementation and delete or narrow `113` before investing in sparse cleanup. `115` remains a
+   likely production-integration prerequisite, not a feasibility blocker; `116` waits for the
+   frozen/lazy/sparse decision to settle. Re-check `119` after active feature work touching the
+   same owners.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.

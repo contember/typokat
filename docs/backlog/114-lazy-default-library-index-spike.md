@@ -1,7 +1,7 @@
 ---
 id: 114
 title: Evaluate a project-local lazy default-library index
-blocked-by: [./113-measure-sparse-collision-lifecycle.md, ./115-prepared-project-single-parse.md]
+blocked-by: []
 ---
 
 # 114 — Evaluate a project-local lazy default-library index
@@ -34,6 +34,12 @@ provide a store-independent default-library representation or a declaration-grou
 The two designs may share cycle and terminal-state rules, but neither blocks the other semantically.
 
 ## Approach / acceptance
+
+The active feasibility sprint intentionally precedes the full sparse DELETE/RETAIN decision in
+backlog [`113`](113-measure-sparse-collision-lifecycle.md). It consumes only an authenticated
+baseline of the current provider. Backlog [`115`](115-prepared-project-single-parse.md) remains a
+likely production-integration prerequisite, but the bounded test-only symbolic/materialization
+model can be falsified without first changing the production frontend lifecycle.
 
 Build a dual-path prototype beside the current provider. The shared `LibraryIndex` may contain only
 immutable symbolic facts:

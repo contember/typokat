@@ -25,17 +25,24 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
+- [`sprint-2026-08-22-project-local-library-index-feasibility.md`](sprints/sprint-2026-08-22-project-local-library-index-feasibility.md) —
+  active bounded PROCEED-or-STOP spike for a store-independent default-library index and
+  project-owned demand publication; global augmentation is the first semantic gate and production
+  routes remain unchanged.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
   unblocked with WIP preserved at `996eb5a`.
-- [`sprint-2026-08-15-library-compiler-decomposition.md`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) —
-  active move-only decomposition of the largest remaining Rust source hotspot, with a frozen
-  full-token/path manifest, one implementation writer, and complete library lifecycle gates.
 
 ## What's hot
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
+- **Project-local library index feasibility active 2026-08-22** — the
+  [`active sprint`](sprints/sprint-2026-08-22-project-local-library-index-feasibility.md) tests the
+  cause of the sparse collision lifecycle before optimizing that workaround. It shares only
+  symbolic library facts, requires each prototype project to own its binder/store/global object,
+  and gates first on `Array`, `declare global`, cross-file, and demand-order augmentation parity.
+  The bounded outcome is PROCEED or STOP; it cannot change production routing.
 - **Declaration inventory shipped; B44 unblocked** — the archived
   [`declaration-inventory sprint`](archive/sprint-2026-08-18-canonical-declaration-inventory.md)
   cut declaration reservation, publication, and class attachment over to the authenticated
@@ -47,10 +54,11 @@ decisions → reference → archive.
   contextual checking and records the comparison with TypeScript PR #46827. The active
   [`as const` sprint](sprints/sprint-2026-08-17-as-const.md) may now resume from its WIP at
   `996eb5a`.
-- **Library compiler decomposition active 2026-08-15** — the
-  [`active sprint`](sprints/sprint-2026-08-15-library-compiler-decomposition.md) targets only the
-  12,939-line `checker::library_compiler` root. Its verify-first WU must freeze a complete token,
-  path, visibility, consumer, and source-oracle manifest before the single-writer move begins.
+- **Library compiler decomposition shipped 2026-08-21** — the
+  [`archived sprint`](archive/sprint-2026-08-15-library-compiler-decomposition.md) split the
+  14,009-line root into a 176-line stable facade, thirteen bounded production owners, and one test
+  child without behavior or public-path movement. Full shared/cold parity reported
+  `580/696/580/580`; the official-suite scoreboard did not move.
 - **CLI and frontend ownership cleanup shipped 2026-08-21** — the
   [`archived sprint`](archive/sprint-2026-08-21-cli-frontend-owned-seams.md) centralized the four
   CLI report channels and status decision behind one private transaction, and made frontend module
