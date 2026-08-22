@@ -156,6 +156,9 @@ pub fn compile_complete_source_fallback_runtime(
     permit: crate::check::checker::library_compiler::PrivateCollisionReplayPermitToken,
     seeds: &[crate::check::checker::library_compiler::PrivateCollisionReplaySeed],
 ) -> Result<CompleteSourceFallbackRuntime, String> {
+    super::lifecycle_metrics::record_project_route(
+        super::lifecycle_metrics::ProjectRoute::CompleteSourceFallback,
+    );
     #[cfg(test)]
     crate::check::checker::library_compiler::record_private_replay_fallback_invocation_for_test();
     let profile =
@@ -4089,12 +4092,21 @@ impl FrozenLibraryBase {
         &self,
         inputs: &[crate::frontend::FileInput],
     ) -> Result<RoutedLibraryProject, LibraryProjectRouteError> {
+        super::lifecycle_metrics::begin_project_route(inputs);
         match super::collision_preflight::preflight_file_inputs(&self.root_names, inputs) {
-            super::collision_preflight::RoutedProjectPreflight::Shared(capability) => self
-                .runtime
-                .fork_collision_free_user_delta(capability)
-                .map(RoutedLibraryProject::Shared)
-                .map_err(LibraryProjectRouteError::SharedDeltaForkFailed),
+            super::collision_preflight::RoutedProjectPreflight::Shared(capability) => {
+                let routed = self
+                    .runtime
+                    .fork_collision_free_user_delta(capability)
+                    .map(RoutedLibraryProject::Shared)
+                    .map_err(LibraryProjectRouteError::SharedDeltaForkFailed);
+                if routed.is_ok() {
+                    super::lifecycle_metrics::record_project_route(
+                        super::lifecycle_metrics::ProjectRoute::Shared,
+                    );
+                }
+                routed
+            }
             super::collision_preflight::RoutedProjectPreflight::Private(route_receipt) => {
                 #[cfg(test)]
                 crate::check::checker::library_compiler::record_private_replay_route_invocation_for_test();
@@ -4129,7 +4141,12 @@ impl FrozenLibraryBase {
                         })
                     })();
                 match sparse {
-                    Ok(private) => Ok(RoutedLibraryProject::Private(private)),
+                    Ok(private) => {
+                        super::lifecycle_metrics::record_project_route(
+                            super::lifecycle_metrics::ProjectRoute::Private,
+                        );
+                        Ok(RoutedLibraryProject::Private(private))
+                    }
                     Err(_) => compile_complete_source_fallback_runtime(permit, &fallback_seeds)
                         .map(Box::new)
                         .map(RoutedLibraryProject::CompleteSourceFallback)
@@ -4137,9 +4154,15 @@ impl FrozenLibraryBase {
                 }
             }
             super::collision_preflight::RoutedProjectPreflight::Rejected { reasons } => {
+                super::lifecycle_metrics::record_project_route(
+                    super::lifecycle_metrics::ProjectRoute::PreflightRejected,
+                );
                 Err(LibraryProjectRouteError::PreflightRejected { reasons })
             }
             super::collision_preflight::RoutedProjectPreflight::UserParseRejected => {
+                super::lifecycle_metrics::record_project_route(
+                    super::lifecycle_metrics::ProjectRoute::UserParseRejected,
+                );
                 Err(LibraryProjectRouteError::UserParseRejected)
             }
         }

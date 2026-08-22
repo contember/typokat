@@ -252,15 +252,21 @@ impl LibraryBaseProvider {
 
     fn initialize(&self) -> Result<Arc<InitializedLibrary>, Arc<LibraryInitError>> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
+        let total = Instant::now();
         let compile = Instant::now();
         let compiled = FrozenLibraryBase::compile_packaged_profile().map_err(Arc::new)?;
-        self.compile_us
-            .store(elapsed_us(compile), Ordering::Relaxed);
+        let compile_us = elapsed_us(compile);
+        self.compile_us.store(compile_us, Ordering::Relaxed);
         let publication = Instant::now();
         let base = Arc::new(FrozenLibraryBase::publish(compiled).map_err(Arc::new)?);
-        self.publication_us
-            .store(elapsed_us(publication), Ordering::Relaxed);
+        let publication_us = elapsed_us(publication);
+        self.publication_us.store(publication_us, Ordering::Relaxed);
         self.publications.fetch_add(1, Ordering::Relaxed);
+        super::lifecycle_metrics::record_initialization(
+            compile_us,
+            publication_us,
+            elapsed_us(total),
+        );
         Ok(Arc::new(InitializedLibrary { base }))
     }
 

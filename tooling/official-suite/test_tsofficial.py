@@ -11,6 +11,7 @@ and, where noted, would have passed under the pre-fix harness (the bug it closes
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -1488,6 +1489,155 @@ print(json.dumps(response), flush=True)
             })
             with open(boots) as f:
                 self.assertEqual(f.read().splitlines(), ["boot"])
+
+    def test_lifecycle_measurement_reports_every_frame_once_without_protocol_changes(self):
+        lifecycle_loop = self.GOOD_LOOP + """
+if request["case_id"] == "private.ts":
+    route = "private"
+elif request["case_id"] == "fallback.ts":
+    route = "complete-source-fallback"
+else:
+    route = "shared"
+digest = hashlib.sha256()
+digest.update((1).to_bytes(8, "little"))
+name = request["name"].encode()
+digest.update(len(name).to_bytes(8, "little"))
+digest.update(name)
+with open(os.environ["TYPOKAT_LIBRARY_LIFECYCLE_METRICS"], "a") as metrics:
+    nonce = os.environ["TYPOKAT_LIBRARY_LIFECYCLE_NONCE"]
+    sequence = {"shared.ts": 1, "private.ts": 2, "fallback.ts": 3}[request["case_id"]]
+    metrics.write(f"1\\t{nonce}\\t{os.getpid()}\\tframe\\t{sequence}\\t{digest.hexdigest()}\\t0\\t0\\t0\\n")
+    if request["case_id"] == "fallback.ts":
+        metrics.write(f"1\\t{nonce}\\t{os.getpid()}\\troute\\t{sequence}\\tprivate\\t1\\t0\\t0\\n")
+    metrics.write(f"1\\t{nonce}\\t{os.getpid()}\\troute\\t{sequence}\\t{route}\\t1\\t0\\t0\\n")
+"""
+        binary = fake_batch_binary(
+            lifecycle_loop,
+            before_loop="""
+import hashlib
+nonce = os.environ["TYPOKAT_LIBRARY_LIFECYCLE_NONCE"]
+with open(os.environ["TYPOKAT_LIBRARY_LIFECYCLE_METRICS"], "a") as metrics:
+    metrics.write(f"1\\t{nonce}\\t{os.getpid()}\\tinit\\t0\\tready\\t2\\t3\\t5\\n")
+""",
+        )
+        lifecycle = ts.OfficialLifecycleMeasurement([
+            ("shared.ts", "const shared = 1;\n"),
+            ("private.ts", "interface Array<T> { local(): T }\n"),
+            ("fallback.ts", "interface Array<T> { fallback(): T }\n"),
+        ])
+        original = None
+        try:
+            original = ts.run_typokat_batch(binary, lifecycle.cases, lifecycle=lifecycle)
+            measured = lifecycle.finish()
+        finally:
+            lifecycle.close()
+            os.unlink(binary)
+
+        self.assertEqual(original, {
+            "shared.ts": ([], [], []),
+            "private.ts": ([], [], []),
+            "fallback.ts": ([], [], []),
+        })
+        self.assertEqual(measured["frames"], 3)
+        self.assertEqual(measured["route_counts"], {
+            "complete-source-fallback": 1,
+            "preflight-rejected": 0,
+            "private": 1,
+            "shared": 1,
+            "user-parse-rejected": 0,
+        })
+        self.assertEqual(measured["initialization"], {
+            "attempts": 1,
+            "publications": 1,
+            "compile_us": 2,
+            "publication_us": 3,
+            "total_us": 5,
+        })
+        self.assertGreater(measured["peak_worker_rss_bytes"], 0)
+        self.assertRegex(measured["raw_protocol_output_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(measured["cold_frame"]["name"], "shared.ts")
+        self.assertEqual(measured["steady_frames"], 2)
+
+    def test_lifecycle_measurement_rejects_missing_or_duplicate_route_coverage(self):
+        cases = [("one.ts", "const one = 1;\n")]
+        lifecycle = ts.OfficialLifecycleMeasurement(cases)
+        try:
+            nonce = lifecycle.nonce
+            pid = os.getpid()
+            digest = hashlib.sha256()
+            digest.update((1).to_bytes(8, "little"))
+            name = b"one.ts"
+            digest.update(len(name).to_bytes(8, "little"))
+            digest.update(name)
+            with open(lifecycle.sidecar_path, "a") as sidecar:
+                sidecar.write(f"1\t{nonce}\t{pid}\tinit\t0\tready\t1\t1\t2\n")
+                sidecar.write(
+                    f"1\t{nonce}\t{pid}\tframe\t1\t{digest.hexdigest()}\t0\t0\t0\n"
+                )
+            lifecycle.worker_pids.add(pid)
+            lifecycle.frame_timings_us["one.ts"] = 1
+            lifecycle.raw_frame_identities["one.ts"] = {"bytes": 1, "sha256": "0" * 64}
+            with self.assertRaisesRegex(ts.HarnessFailure, "transition keys"):
+                lifecycle.finish()
+        finally:
+            lifecycle.close()
+
+    def test_lifecycle_route_automaton_rejects_duplicate_conflict_foreign_and_order(self):
+        scenarios = [
+            ([(1, "shared", 1), (1, "shared", 2)], "invalid lifecycle route sequence"),
+            ([(1, "shared", 1), (1, "private", 2)], "invalid lifecycle route sequence"),
+            ([(1, "complete-source-fallback", 1), (1, "private", 2)],
+             "invalid lifecycle route sequence"),
+            ([(1, "shared", 1), (2, "private", 1)], "transition keys"),
+            ([(1, "private", 2), (1, "complete-source-fallback", 1)],
+             "transition time moved backwards"),
+        ]
+        for transitions, expected in scenarios:
+            with self.subTest(transitions=transitions):
+                lifecycle = ts.OfficialLifecycleMeasurement([
+                    ("one.ts", "const one = 1;\n"),
+                ])
+                try:
+                    nonce = lifecycle.nonce
+                    pid = os.getpid()
+                    digest = ts._input_name_digest(["one.ts"])
+                    with open(lifecycle.sidecar_path, "a") as sidecar:
+                        sidecar.write(
+                            f"1\t{nonce}\t{pid}\tinit\t0\tready\t1\t1\t2\n"
+                            f"1\t{nonce}\t{pid}\tframe\t1\t{digest}\t0\t0\t0\n"
+                        )
+                        for sequence, route, elapsed in transitions:
+                            sidecar.write(
+                                f"1\t{nonce}\t{pid}\troute\t{sequence}\t{route}"
+                                f"\t{elapsed}\t0\t0\n"
+                            )
+                    lifecycle.worker_pids.add(pid)
+                    lifecycle.frame_timings_us["one.ts"] = 1
+                    lifecycle.raw_frame_identities["one.ts"] = {
+                        "bytes": 1,
+                        "sha256": "0" * 64,
+                    }
+                    with self.assertRaisesRegex(ts.HarnessFailure, expected):
+                        lifecycle.finish()
+                finally:
+                    lifecycle.close()
+
+    def test_lifecycle_baseline_rejects_an_unleased_process_before_spawning_worker(self):
+        with mock.patch.object(ts, "_read_text", return_value="0::/user.slice/session.scope\n"):
+            with self.assertRaisesRegex(ts.HarnessFailure, "active cpu-lease"):
+                ts.capture_cpu_lease()
+
+    def test_lifecycle_receipt_publish_is_atomic_exclusive_and_cleans_temporary(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "receipt.json")
+            ts._atomic_publish_new(path, b"first\n")
+            with open(path, "rb") as receipt:
+                self.assertEqual(receipt.read(), b"first\n")
+            with self.assertRaisesRegex(ts.HarnessFailure, "already exists"):
+                ts._atomic_publish_new(path, b"replacement\n")
+            with open(path, "rb") as receipt:
+                self.assertEqual(receipt.read(), b"first\n")
+            self.assertEqual(os.listdir(root), ["receipt.json"])
 
     def test_initialization_failure_is_a_hard_failure_with_no_partial_result(self):
         binary = fake_batch_binary(

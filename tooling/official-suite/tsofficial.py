@@ -28,16 +28,20 @@ See README.md for the design and the gating rules.
 """
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import queue
 import re
+import secrets
 import signal
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from itertools import product
@@ -215,6 +219,13 @@ OFFICIAL_BATCH_PROFILE_SHA256 = (
     "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
 )
 
+LIFECYCLE_METRICS_PATH_ENV = "TYPOKAT_LIBRARY_LIFECYCLE_METRICS"
+LIFECYCLE_METRICS_NONCE_ENV = "TYPOKAT_LIBRARY_LIFECYCLE_NONCE"
+LIFECYCLE_ROUTE_KINDS = {
+    "shared", "private", "complete-source-fallback", "user-parse-rejected",
+    "preflight-rejected",
+}
+
 
 class HarnessFailure(Exception):
     """A checker invocation the harness cannot trust: an unexpected exit code, a
@@ -222,6 +233,310 @@ class HarnessFailure(Exception):
     inconsistent. Raised so the run aborts loudly instead of scoring the file as a
     silent zero — dropping a crash into the ``0 diagnostics`` bucket would hide
     exactly the false negatives this suite exists to catch."""
+
+
+class OfficialLifecycleMeasurement:
+    """Authenticated sidecar collector for one complete official-batch run."""
+
+    def __init__(self, cases):
+        self.cases = list(cases)
+        fd, self.sidecar_path = tempfile.mkstemp(prefix="typokat-lifecycle-", suffix=".tsv")
+        os.close(fd)
+        os.chmod(self.sidecar_path, 0o600)
+        self.nonce = secrets.token_hex(32)
+        self.worker_pids = set()
+        self.frame_timings_us = {}
+        self.peak_worker_rss_bytes = 0
+        self._raw_protocol_output = hashlib.sha256()
+        self.raw_frame_identities = {}
+        self._finished = False
+
+    def worker_environment(self):
+        environment = os.environ.copy()
+        environment[LIFECYCLE_METRICS_PATH_ENV] = self.sidecar_path
+        environment[LIFECYCLE_METRICS_NONCE_ENV] = self.nonce
+        return environment
+
+    def record_raw_response(self, name, raw):
+        if name in self.raw_frame_identities:
+            raise HarnessFailure(f"{name}: raw response frame was recorded twice")
+        self._raw_protocol_output.update(len(raw).to_bytes(8, "little"))
+        self._raw_protocol_output.update(raw)
+        self.raw_frame_identities[name] = {
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    def record_response(self, process, name, elapsed_us):
+        if name in self.frame_timings_us:
+            raise HarnessFailure(f"{name}: lifecycle frame timing was recorded twice")
+        self.worker_pids.add(process.pid)
+        self.frame_timings_us[name] = max(1, elapsed_us)
+        self.peak_worker_rss_bytes = max(
+            self.peak_worker_rss_bytes, _worker_peak_rss_bytes(process.pid)
+        )
+
+    def finish(self):
+        if self._finished:
+            raise HarnessFailure("lifecycle measurement was already finished")
+        self._finished = True
+        if len(self.worker_pids) != 1:
+            raise HarnessFailure("lifecycle baseline requires exactly one worker process")
+        try:
+            with open(self.sidecar_path, encoding="utf-8") as sidecar:
+                lines = sidecar.read().splitlines()
+        except OSError as error:
+            raise HarnessFailure(f"cannot read lifecycle sidecar: {error}") from error
+
+        initialization = []
+        frames = {}
+        transitions = defaultdict(list)
+        sidecar_pids = set()
+        for line in lines:
+            columns = line.split("\t")
+            if len(columns) != 9:
+                raise HarnessFailure("lifecycle sidecar has a malformed row")
+            schema, nonce, raw_pid, kind, raw_sequence, value, raw_first, raw_second, raw_third = columns
+            if schema != "1" or nonce != self.nonce:
+                raise HarnessFailure("lifecycle sidecar authentication failed")
+            try:
+                pid = int(raw_pid)
+                sequence = int(raw_sequence)
+                first = int(raw_first)
+                second = int(raw_second)
+                third = int(raw_third)
+            except ValueError as error:
+                raise HarnessFailure("lifecycle sidecar has a non-decimal counter") from error
+            if min(pid, sequence, first, second, third) < 0:
+                raise HarnessFailure("lifecycle sidecar has a negative counter")
+            sidecar_pids.add(pid)
+            if kind == "init":
+                if sequence != 0 or value != "ready" or min(first, second, third) <= 0:
+                    raise HarnessFailure("lifecycle sidecar has an invalid initialization row")
+                initialization.append((first, second, third))
+            elif kind == "frame":
+                if (sequence == 0 or not re.fullmatch(r"[0-9a-f]{64}", value)
+                        or first != 0 or second != 0 or third != 0):
+                    raise HarnessFailure("lifecycle sidecar has an invalid frame row")
+                if sequence in frames:
+                    raise HarnessFailure("lifecycle sidecar has a duplicate frame row")
+                frames[sequence] = value
+            elif kind == "route":
+                if (sequence == 0 or value not in LIFECYCLE_ROUTE_KINDS or first <= 0
+                        or second != 0 or third != 0):
+                    raise HarnessFailure("lifecycle sidecar has an invalid route row")
+                transitions[sequence].append((value, first))
+            else:
+                raise HarnessFailure(f"lifecycle sidecar has unknown event kind {kind!r}")
+
+        if sidecar_pids != self.worker_pids:
+            raise HarnessFailure("lifecycle sidecar worker PID does not match the protocol worker")
+        if len(initialization) != 1:
+            raise HarnessFailure("lifecycle baseline requires one initialization publication")
+        if len(frames) != len(self.cases):
+            raise HarnessFailure("lifecycle sidecar does not report every frame exactly once")
+        if len(self.frame_timings_us) != len(self.cases):
+            raise HarnessFailure("lifecycle timing does not report every frame exactly once")
+        if len(self.raw_frame_identities) != len(self.cases):
+            raise HarnessFailure("raw protocol hashing does not cover every frame exactly once")
+        if set(transitions) != set(frames):
+            raise HarnessFailure("lifecycle transition keys do not exactly match frame keys")
+
+        final_routes = []
+        accepted = {
+            ("shared",): "shared",
+            ("private",): "private",
+            ("complete-source-fallback",): "complete-source-fallback",
+            ("private", "complete-source-fallback"): "complete-source-fallback",
+            ("user-parse-rejected",): "user-parse-rejected",
+            ("preflight-rejected",): "preflight-rejected",
+        }
+        for sequence, (name, _source) in enumerate(self.cases, 1):
+            expected_digest = _input_name_digest([name])
+            if frames.get(sequence) != expected_digest:
+                raise HarnessFailure(f"{name}: lifecycle frame identity mismatch")
+            frame_transitions = transitions[sequence]
+            elapsed = [row[1] for row in frame_transitions]
+            if elapsed != sorted(elapsed):
+                raise HarnessFailure(f"{name}: lifecycle transition time moved backwards")
+            route_sequence = tuple(row[0] for row in frame_transitions)
+            final = accepted.get(route_sequence)
+            if final is None:
+                raise HarnessFailure(
+                    f"{name}: invalid lifecycle route sequence {route_sequence!r}"
+                )
+            final_routes.append({
+                "name": name,
+                "route": final,
+                "wall_us": self.frame_timings_us[name],
+                "raw_response": self.raw_frame_identities[name],
+            })
+
+        observed_counts = Counter(row["route"] for row in final_routes)
+        route_counts = {
+            route: observed_counts[route] for route in sorted(LIFECYCLE_ROUTE_KINDS)
+        }
+        total_route_time_us = {
+            route: sum(row["wall_us"] for row in final_routes if row["route"] == route)
+            for route in sorted(LIFECYCLE_ROUTE_KINDS)
+        }
+        steady_rows = final_routes[1:]
+        steady_counts = Counter(row["route"] for row in steady_rows)
+        steady_route_counts = {
+            route: steady_counts[route] for route in sorted(LIFECYCLE_ROUTE_KINDS)
+        }
+        steady_route_time_us = {
+            route: sum(row["wall_us"] for row in steady_rows if row["route"] == route)
+            for route in sorted(LIFECYCLE_ROUTE_KINDS)
+        }
+        compile_us, publication_us, total_us = initialization[0]
+        if self.peak_worker_rss_bytes <= 0:
+            raise HarnessFailure("worker peak RSS is unavailable for lifecycle baseline")
+        return {
+            "frames": len(final_routes),
+            "route_counts": route_counts,
+            "total_route_time_us": total_route_time_us,
+            "cold_frame": final_routes[0],
+            "steady_frames": len(steady_rows),
+            "steady_route_counts": steady_route_counts,
+            "steady_route_time_us": steady_route_time_us,
+            "frame_routes": final_routes,
+            "initialization": {
+                "attempts": 1,
+                "publications": 1,
+                "compile_us": compile_us,
+                "publication_us": publication_us,
+                "total_us": total_us,
+            },
+            "peak_worker_rss_bytes": self.peak_worker_rss_bytes,
+            "raw_protocol_output_sha256": self._raw_protocol_output.hexdigest(),
+        }
+
+    def close(self):
+        try:
+            os.unlink(self.sidecar_path)
+        except FileNotFoundError:
+            pass
+
+
+def _input_name_digest(names):
+    digest = hashlib.sha256()
+    digest.update(len(names).to_bytes(8, "little"))
+    for name in names:
+        encoded = name.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "little"))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _worker_peak_rss_bytes(pid):
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    fields = line.split()
+                    if len(fields) == 3 and fields[2] == "kB":
+                        return int(fields[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _read_text(path):
+    with open(path, encoding="utf-8") as source:
+        return source.read()
+
+
+def _expand_cpu_list(value):
+    cpus = set()
+    for item in value.strip().split(","):
+        if not item:
+            raise HarnessFailure("CPU list has an empty item")
+        bounds = item.split("-")
+        if len(bounds) == 1:
+            cpus.add(int(bounds[0]))
+        elif len(bounds) == 2:
+            start, end = map(int, bounds)
+            if end < start:
+                raise HarnessFailure("CPU list range is reversed")
+            cpus.update(range(start, end + 1))
+        else:
+            raise HarnessFailure("CPU list has a malformed range")
+    return cpus
+
+
+def capture_cpu_lease():
+    """Require cpu-lease -n 2 --no-smt and return its reproducible topology receipt."""
+    try:
+        cgroup = _read_text("/proc/self/cgroup").strip()
+    except OSError as error:
+        raise HarnessFailure(f"cannot read process cgroup: {error}") from error
+    match = re.fullmatch(r"0::(.*/leases\.slice/lease-([0-9]+-[0-9]+)\.scope)", cgroup)
+    if not match:
+        raise HarnessFailure(
+            "lifecycle baseline requires an active cpu-lease leases.slice scope"
+        )
+    cgroup_path, lease_id = match.groups()
+    try:
+        cpuset_text = _read_text(
+            os.path.join("/sys/fs/cgroup", cgroup_path.lstrip("/"), "cpuset.cpus.effective")
+        ).strip()
+        cpuset = _expand_cpu_list(cpuset_text)
+        affinity = set(os.sched_getaffinity(0))
+    except (OSError, ValueError) as error:
+        raise HarnessFailure(f"cannot authenticate cpu-lease cpuset: {error}") from error
+    if len(cpuset) != 2:
+        raise HarnessFailure("cpu-lease must reserve exactly 2 vCPUs")
+    if len(affinity) != 1 or not affinity < cpuset:
+        raise HarnessFailure("cpu-lease --no-smt must expose exactly one reserved sibling")
+
+    topology = {}
+    for cpu in sorted(cpuset):
+        try:
+            siblings_text = _read_text(
+                f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"
+            ).strip()
+            siblings = _expand_cpu_list(siblings_text)
+        except (OSError, ValueError) as error:
+            raise HarnessFailure(f"cannot authenticate CPU {cpu} topology: {error}") from error
+        if siblings != cpuset:
+            raise HarnessFailure("reserved cpu-lease vCPUs are not one SMT sibling pair")
+        topology[str(cpu)] = siblings_text
+
+    try:
+        status = subprocess.run(
+            ["cpu-lease", "status"], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise HarnessFailure(f"cannot inspect cpu-lease status: {error}") from error
+    if status.returncode != 0:
+        raise HarnessFailure(f"cpu-lease status failed: {status.stderr.strip()}")
+    status_row = None
+    for line in status.stdout.splitlines():
+        columns = line.split()
+        if len(columns) >= 3 and lease_id.startswith(columns[0]):
+            status_row = columns
+            break
+    if status_row is None:
+        raise HarnessFailure("active lease scope is absent from cpu-lease status")
+    try:
+        status_vcpus = int(status_row[1])
+        status_cpuset = _expand_cpu_list(status_row[2])
+    except ValueError as error:
+        raise HarnessFailure("cpu-lease status row is malformed") from error
+    if status_vcpus != 2 or status_cpuset != cpuset:
+        raise HarnessFailure("cpu-lease status does not attest the active 2-vCPU pair")
+
+    return {
+        "cgroup": cgroup_path,
+        "lease_id": lease_id,
+        "status_id": status_row[0],
+        "status_vcpus": status_vcpus,
+        "status_cpuset": status_row[2],
+        "cpuset_effective": cpuset_text,
+        "affinity": ",".join(map(str, sorted(affinity))),
+        "thread_siblings": topology,
+    }
 
 
 def run_typokat(binary, content, rel="<unknown>"):
@@ -345,13 +660,19 @@ def _run_with_timeout(operation, timeout, description):
     return value
 
 
-def _spawn_batch_worker(binary):
+def _spawn_batch_worker(binary, lifecycle=None):
+    environment = os.environ.copy()
+    environment.pop(LIFECYCLE_METRICS_PATH_ENV, None)
+    environment.pop(LIFECYCLE_METRICS_NONCE_ENV, None)
+    if lifecycle is not None:
+        environment = lifecycle.worker_environment()
     try:
         return subprocess.Popen(
             [binary, "official-batch"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=environment,
             start_new_session=(os.name == "posix"),
         )
     except OSError as error:
@@ -459,7 +780,7 @@ def _validate_batch_cases(cases):
     return frames
 
 
-def _exchange_batch_case(process, name, frame, timeout):
+def _exchange_batch_case(process, name, frame, timeout, lifecycle=None):
     if process.stdin is None or process.stdout is None:
         raise HarnessFailure(f"{name}: official-batch worker pipes are unavailable")
 
@@ -467,6 +788,7 @@ def _exchange_batch_case(process, name, frame, timeout):
         process.stdin.write(frame)
         process.stdin.flush()
 
+    started_ns = time.perf_counter_ns()
     _run_with_timeout(write_request, timeout, f"{name}: official-batch request write")
     raw = _run_with_timeout(
         lambda: process.stdout.readline(OFFICIAL_BATCH_MAX_FRAME_BYTES + 2),
@@ -481,6 +803,8 @@ def _exchange_batch_case(process, name, frame, timeout):
         raise HarnessFailure(
             f"{name}: official-batch response is oversized or not newline-framed"
         )
+    if lifecycle is not None:
+        lifecycle.record_raw_response(name, raw)
     try:
         response = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -528,10 +852,16 @@ def _exchange_batch_case(process, name, frame, timeout):
         raise HarnessFailure(f"{name}: official-batch stderr exceeds its bound")
     if stdout:
         raise HarnessFailure(f"{name}: official-batch response contaminated stdout")
+    if lifecycle is not None:
+        lifecycle.record_response(
+            process,
+            name,
+            max(1, (time.perf_counter_ns() - started_ns) // 1_000),
+        )
     return _parse_typokat_output(stderr + stdout, exit_code, name, name)
 
 
-def run_typokat_batch(binary, cases, timeout=30):
+def run_typokat_batch(binary, cases, timeout=30, lifecycle=None):
     """Check isolated cases through persistent JSONL workers, resuming after one failure.
 
     A failed case is never retried. If a trustworthy prefix exists, one replacement
@@ -542,7 +872,7 @@ def run_typokat_batch(binary, cases, timeout=30):
     if not frames:
         return {}
 
-    process = _spawn_batch_worker(binary)
+    process = _spawn_batch_worker(binary, lifecycle)
     observed = {}
     first_failure = None
     successful_cases = 0
@@ -555,7 +885,7 @@ def run_typokat_batch(binary, cases, timeout=30):
             # caller's per-case timeout exact after that one bounded startup grace.
             response_timeout = timeout + 0.1 if worker_fresh else timeout
             observed[name] = _exchange_batch_case(
-                process, name, frame, response_timeout
+                process, name, frame, response_timeout, lifecycle
             )
             successful_cases += 1
             worker_fresh = False
@@ -566,7 +896,7 @@ def run_typokat_batch(binary, cases, timeout=30):
                 first_failure = detail
             if successful_cases == 0 or replacement_started or index + 1 == len(frames):
                 raise HarnessFailure(first_failure) from error
-            process = _spawn_batch_worker(binary)
+            process = _spawn_batch_worker(binary, lifecycle)
             replacement_started = True
             worker_fresh = True
 
@@ -1386,6 +1716,10 @@ def cmd_run(args):
         sys.exit("--check/--save require the full corpus (they enforce scoreboard "
                  "completeness in both directions); drop --limit.")
 
+    lifecycle_path = getattr(args, "lifecycle_baseline", None)
+    if lifecycle_path and (not args.check or args.limit or args.save or rebaseline):
+        sys.exit("--lifecycle-baseline requires one full `run --check` without other modes")
+
     try:
         if rebaseline:
             manifest = validate_full_default_manifest()
@@ -1440,10 +1774,36 @@ def cmd_run(args):
         prepared.append((rec, expected, content))
         batch_cases.append((rel, content))
 
+    if lifecycle_path:
+        try:
+            lease_before = capture_cpu_lease()
+            provenance_before = capture_lifecycle_provenance(binary, manifest, batch_cases)
+            if provenance_before["git"]["status_porcelain_v1_untracked_all"]:
+                raise HarnessFailure(
+                    "lifecycle baseline requires a clean worktree including untracked files"
+                )
+        except HarnessFailure as error:
+            sys.exit(f"lifecycle baseline authentication failed before worker: {error}")
+    else:
+        lease_before = None
+        provenance_before = None
+
+    lifecycle = OfficialLifecycleMeasurement(batch_cases) if lifecycle_path else None
     try:
-        batch_results = run_typokat_batch(binary, batch_cases)
+        batch_results = run_typokat_batch(binary, batch_cases, lifecycle=lifecycle)
     except HarnessFailure as e:
+        if lifecycle is not None:
+            lifecycle.close()
         sys.exit(f"\nHARNESS FAILURE (aborting — never scored as success):\n  {e}")
+    if lifecycle is not None:
+        try:
+            lifecycle_metrics = lifecycle.finish()
+        except HarnessFailure as e:
+            lifecycle.close()
+            sys.exit(f"\nHARNESS FAILURE (aborting — never scored as success):\n  {e}")
+        lifecycle.close()
+    else:
+        lifecycle_metrics = None
 
     results = []
     for rec, expected, content in prepared:
@@ -1514,6 +1874,28 @@ def cmd_run(args):
                                         "missing_from_corpus": 0, "missing_from_scoreboard": 0})
         write_report(report)
 
+    if lifecycle_path:
+        try:
+            complete_source_once = run_complete_source_once_receipt(lease_before)
+            lease_after = capture_cpu_lease()
+            assert_same_cpu_lease(lease_before, lease_after)
+            provenance_after = capture_lifecycle_provenance(binary, manifest, batch_cases)
+            if provenance_after != provenance_before:
+                raise HarnessFailure("lifecycle provenance changed during the measured run")
+            path = write_lifecycle_baseline(
+                lifecycle_path,
+                results,
+                lifecycle_metrics,
+                lease_before,
+                lease_after,
+                provenance_before,
+                provenance_after,
+                complete_source_once,
+            )
+        except HarnessFailure as error:
+            sys.exit(f"lifecycle baseline authentication failed: {error}")
+        print(f"  wrote lifecycle baseline → {path}")
+
 
 def print_dashboard(binary, results):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -1533,7 +1915,6 @@ def print_dashboard(binary, results):
     # Surface the binary's mtime — a stale prebuilt binary (not rebuilt after a
     # checker change) silently measures old behavior. Rebuild before trusting.
     try:
-        import time
         mt = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(binary)))
     except OSError:
         mt = "?"
@@ -1587,6 +1968,215 @@ def write_report(report):
     with open(os.path.join(REPORT, "latest.json"), "w") as f:
         json.dump(report, f, indent=2)
     print(f"  wrote {os.path.join(REPORT, 'latest.json')}")
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_directory(root):
+    digest = hashlib.sha256()
+    for directory, dirs, files in os.walk(root):
+        dirs.sort()
+        for filename in sorted(files):
+            path = os.path.join(directory, filename)
+            rel = os.path.relpath(path, root).replace(os.sep, "/").encode("utf-8")
+            payload_hash = _sha256_file(path).encode("ascii")
+            digest.update(len(rel).to_bytes(8, "little"))
+            digest.update(rel)
+            digest.update(payload_hash)
+    return digest.hexdigest()
+
+
+def _git_output(*args):
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    process = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=False
+    )
+    if process.returncode != 0:
+        raise HarnessFailure(f"git {' '.join(args)} failed: {process.stderr.strip()}")
+    return process.stdout.strip()
+
+
+def _sha256_bytes(payload):
+    return hashlib.sha256(payload).hexdigest()
+
+
+def capture_lifecycle_provenance(binary, manifest, batch_cases):
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    binary = os.path.abspath(binary)
+    binary_stat = os.stat(binary)
+    comparison_source = os.path.join(
+        repo, "crates", "typokat-driver", "src", "driver", "wu6_benchmark_route_spec.rs"
+    )
+    profile_manifest = os.path.join(
+        repo, "crates", "typokat-library", "src", "typescript-6.0.3", "profile.toml"
+    )
+    frame_digest = hashlib.sha256()
+    frame_sources = []
+    for name, source in batch_cases:
+        name_bytes = name.encode("utf-8")
+        source_bytes = source.encode("utf-8")
+        frame_digest.update(len(name_bytes).to_bytes(8, "little"))
+        frame_digest.update(name_bytes)
+        frame_digest.update(len(source_bytes).to_bytes(8, "little"))
+        frame_digest.update(source_bytes)
+        frame_sources.append({
+            "name": name,
+            "source_bytes": len(source_bytes),
+            "source_sha256": _sha256_bytes(source_bytes),
+        })
+    return {
+        "git": {
+            "commit": _git_output("rev-parse", "HEAD"),
+            "tree": _git_output("rev-parse", "HEAD^{tree}"),
+            "status_policy": "git status --porcelain=v1 --untracked-files=all",
+            "status_porcelain_v1_untracked_all": _git_output(
+                "status", "--porcelain=v1", "--untracked-files=all"
+            ),
+        },
+        "binary": {
+            "path": binary,
+            "sha256": _sha256_file(binary),
+            "bytes": binary_stat.st_size,
+            "mtime_ns": binary_stat.st_mtime_ns,
+            "mode": binary_stat.st_mode,
+            "device": binary_stat.st_dev,
+            "inode": binary_stat.st_ino,
+        },
+        "typescript_commit": manifest["sha"],
+        "profile_sha256": OFFICIAL_BATCH_PROFILE_SHA256,
+        "profile_manifest_sha256": _sha256_file(profile_manifest),
+        "corpus_manifest_sha256": _sha256_file(os.path.join(CORPUS, "manifest.json")),
+        "corpus_sha256": _sha256_directory(CORPUS),
+        "scoreboard_sha256": _sha256_file(SCOREBOARD),
+        "comparison_source_sha256": _sha256_file(comparison_source),
+        "frame_source_identity_sha256": frame_digest.hexdigest(),
+        "frame_sources": frame_sources,
+    }
+
+
+def assert_same_cpu_lease(before, after):
+    if before != after:
+        raise HarnessFailure("cpu-lease cgroup/cpuset/affinity/topology changed during run")
+
+
+def run_complete_source_once_receipt(lease):
+    repo = os.path.abspath(os.path.join(HERE, "..", ".."))
+    test_name = (
+        "driver::wu6_benchmark_route_spec::"
+        "clean_standalone_route_compiles_once_without_replay_or_a_frozen_base"
+    )
+    command = [
+        "cargo", "test", "-p", "typokat-driver", test_name,
+        "--", "--exact", "--nocapture",
+    ]
+    try:
+        process = subprocess.run(
+            command, cwd=repo, capture_output=True, timeout=300, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise HarnessFailure(f"complete-source-once receipt failed to execute: {error}") from error
+    stdout = process.stdout
+    stderr = process.stderr
+    output_identity = hashlib.sha256()
+    output_identity.update(len(stdout).to_bytes(8, "little"))
+    output_identity.update(stdout)
+    output_identity.update(len(stderr).to_bytes(8, "little"))
+    output_identity.update(stderr)
+    if process.returncode != 0:
+        raise HarnessFailure(
+            f"complete-source-once test exited {process.returncode}: "
+            f"{stderr.decode('utf-8', errors='replace')}"
+        )
+    expected = f"test {test_name} ... ok".encode("utf-8")
+    if expected not in stdout or b"1 passed; 0 failed" not in stdout:
+        raise HarnessFailure("complete-source-once test did not execute exactly one passing test")
+    return {
+        "command": command,
+        "lease_cgroup": lease["cgroup"],
+        "exit_code": process.returncode,
+        "stdout_bytes": len(stdout),
+        "stdout_sha256": _sha256_bytes(stdout),
+        "stderr_bytes": len(stderr),
+        "stderr_sha256": _sha256_bytes(stderr),
+        "output_identity_sha256": output_identity.hexdigest(),
+    }
+
+
+def write_lifecycle_baseline(
+    path,
+    results,
+    lifecycle_metrics,
+    lease_before,
+    lease_after,
+    provenance_before,
+    provenance_after,
+    complete_source_once,
+):
+    """Atomically publish one authenticated receipt without replacing a prior result."""
+    normalized_results = json.dumps(
+        results, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    receipt = {
+        "schema": 1,
+        "kind": "typokat-official-lifecycle-baseline",
+        "authentication": {
+            "provenance_before": provenance_before,
+            "provenance_after": provenance_after,
+            "cpu_lease_before": lease_before,
+            "cpu_lease_after": lease_after,
+            "raw_protocol_output_sha256": lifecycle_metrics[
+                "raw_protocol_output_sha256"
+            ],
+            "normalized_result_sha256": hashlib.sha256(normalized_results).hexdigest(),
+        },
+        "environment": {
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "allocator": "tikv-jemallocator",
+            "cpu_lease": "enforced: cpu-lease run -n 2 --no-smt --",
+        },
+        "official_discovery": lifecycle_metrics,
+        "complete_source_once": complete_source_once,
+    }
+    payload = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _atomic_publish_new(path, payload)
+    return path
+
+
+def _atomic_publish_new(path, payload):
+    """Publish complete bytes through a same-directory hard link without replacement."""
+    destination = os.path.abspath(path)
+    directory = os.path.dirname(destination)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{os.path.basename(destination)}.", suffix=".tmp", dir=directory
+    )
+    try:
+        with os.fdopen(fd, "wb") as temporary_file:
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+            os.fchmod(temporary_file.fileno(), 0o644)
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise HarnessFailure("lifecycle baseline path already exists") from error
+        directory_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 # --- regression scoreboard (committed, deterministic) ------------------------
@@ -1896,6 +2486,8 @@ def main():
                     help="with --save, intentionally replace a stale/missing scoreboard")
     pr.add_argument("--check", action="store_true",
                     help="compare against scoreboard.txt; exit 1 on any regression")
+    pr.add_argument("--lifecycle-baseline", metavar="PATH",
+                    help="write one authenticated lifecycle receipt; requires full --check")
     pr.set_defaults(func=cmd_run)
 
     args = p.parse_args()

@@ -1,6 +1,7 @@
 mod base;
 mod collision_preflight;
 pub mod compiler;
+mod lifecycle_metrics;
 pub mod profile;
 mod provider;
 pub mod records;

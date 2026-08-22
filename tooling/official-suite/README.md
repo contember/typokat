@@ -44,7 +44,22 @@ python3 tsofficial.py run --bin ../../target/debug/typokat
 # 3. Regression tracking against the committed baseline.
 python3 tsofficial.py run --check    # exit 1 if anything regressed vs scoreboard.txt
 python3 tsofficial.py run --save     # accept current results as the new baseline
+
+# One-off architecture baseline. Build release first and run only under this lease.
+cpu-lease run -n 2 --no-smt -- python3 tsofficial.py run --check \
+  --lifecycle-baseline report/lifecycle-baseline.json
 ```
+
+`--lifecycle-baseline` is a removable measurement mode. It requires the complete
+`run --check` route, a clean worktree including untracked files, and an authenticated
+`cpu-lease run -n 2 --no-smt --` cgroup. The worker writes library initialization and
+actual route transitions to a nonce-authenticated private sidecar. The harness enforces
+the exact route automaton, splits cold-first-frame cost from steady route totals, measures
+worker peak RSS, hashes raw response frames before parsing, and refuses missing or duplicate
+coverage. It also runs the existing exact complete-source-once driver witness under the
+same lease. The JSON receipt pins identical pre/post binary, commit/tree, corpus, profile,
+scoreboard, comparison-source, and actual frame-source identities. The normal JSONL
+response schema and worker stdout/stderr do not change.
 
 `fetch --dir` and `fetch --limit` deliberately create a **partial** corpus for
 exploration. You may use plain `run` with one, but never `run --check` or `run
