@@ -359,3 +359,13 @@ protocol during WU2-WU5. Read-only independent review starts only from a frozen 
   reverses library/source/demand order, and checks project-local ownership plus atomic SCC
   publication. Existing production witnesses also passed: the complete-source `declare global`
   oracle, Array full-scan seed, script global-object routing, and unique cross-module global type.
+- **2026-08-22 — WU1 lifecycle baseline PASS.** Removable nonce-authenticated sidecar metrics landed
+  in `58b5b1a`; the immutable receipt landed in `a877c7e` with SHA-256
+  `950d5d7b38da7e7b5a0bc87da7ed423968b151ebf731c451021216c1d1880a18`. The authenticated
+  `cpu-lease run -n 2 --no-smt --` full discovery covered all 687 worker frames: 395 private, 247
+  shared, 42 user-parse-rejected, three complete-source fallbacks, and zero preflight rejections.
+  Initialization was 1.540 s compile, 11.263 ms publication, and 1.551 s total; peak worker RSS was
+  144,109,568 bytes. The scoreboard ratchet remained `0/0/0/0`, pre/post commit/tree, binary,
+  corpus, profile, scoreboard, frame-source, and CPU-lease identities matched, and the exact
+  complete-source-once witness passed under the same lease. Independent review reproduced all
+  counts, timing totals, hashes, route coverage, and the passing ratchet from the frozen evidence.
