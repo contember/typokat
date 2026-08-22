@@ -109,6 +109,12 @@ mod user_delta_project_scale_spec;
 mod collision_preflight_spec;
 
 #[cfg(test)]
+mod project_local_materializer_spec;
+
+#[cfg(test)]
+mod project_local_materializer;
+
+#[cfg(test)]
 mod private_route_receipt_spec;
 
 #[cfg(test)]

@@ -12,16 +12,22 @@ pub fn compile_complete_combined_profile_for_test(
     sources: &[InjectedLibrarySource<'_>],
     library_count: usize,
 ) -> Result<(InjectedProfileRun, OwnedLibraryRuntimeState), InjectedProfileError> {
-    with_canonical_frontend(sources, Some(library_count), |frontend| {
-        compile_owned_injected_frontend(
-            frontend,
-            ReplayIndexPlan::None,
-            LibraryRecordRetention::Collect,
-            CanonicalLibraryEvidenceCapture::Skip,
-            OwnerSiteStorageMode::Flat,
-        )
-        .map(|(run, runtime, _)| (run, runtime))
-    })
+    with_canonical_frontend(
+        sources,
+        Some(library_count),
+        #[cfg(any(test, feature = "test-utils"))]
+        None,
+        |frontend| {
+            compile_owned_injected_frontend(
+                frontend,
+                ReplayIndexPlan::None,
+                LibraryRecordRetention::Collect,
+                CanonicalLibraryEvidenceCapture::Skip,
+                OwnerSiteStorageMode::Flat,
+            )
+            .map(|(run, runtime, _)| (run, runtime))
+        },
+    )
 }
 
 /// Compile the packaged library and one resolved user project in one semantic publication.
@@ -467,12 +473,21 @@ pub(super) fn with_canonical_library_frontend<'source, Output>(
         CanonicalLibraryFrontend<'source, 'ast>,
     ) -> Result<Output, InjectedProfileError>,
 ) -> Result<Output, InjectedProfileError> {
-    with_canonical_frontend(sources, None, consume)
+    with_canonical_frontend(
+        sources,
+        None,
+        #[cfg(any(test, feature = "test-utils"))]
+        None,
+        consume,
+    )
 }
 
 fn with_canonical_frontend<'source, Output>(
     sources: &[InjectedLibrarySource<'source>],
     user_start: Option<usize>,
+    #[cfg(any(test, feature = "test-utils"))] project_local_sources: Option<
+        &[ProjectLocalSourceAnchorPlanForTest],
+    >,
     consume: impl for<'ast> FnOnce(
         CanonicalLibraryFrontend<'source, 'ast>,
     ) -> Result<Output, InjectedProfileError>,
@@ -570,6 +585,10 @@ fn with_canonical_frontend<'source, Output>(
         claims.push(claims_unit);
     }
     let parser_export_claims = claims.into_iter().flatten().collect::<Vec<_>>();
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(selection) = project_local_sources {
+        filter_project_local_statements(&canonical, &mut parser_returns, selection)?;
+    }
     let parsed = parser_returns
         .iter()
         .map(|parsed| &parsed.program)
@@ -746,4 +765,115 @@ fn with_canonical_frontend<'source, Output>(
         #[cfg(any(test, feature = "test-utils"))]
         bind_elapsed,
     })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn materialize_project_local_profile_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+    plan: &ProjectLocalMaterializationPlanForTest,
+) -> Result<ProjectLocalMaterializationReceiptForTest, InjectedProfileError> {
+    with_canonical_frontend(sources, None, Some(&plan.sources), |frontend| {
+        match compile_owned_injected_frontend_for_route::<LegacyLibraryRoute>(
+            frontend,
+            ReplayIndexPlan::None,
+            LibraryRecordRetention::Collect,
+            CanonicalLibraryEvidenceCapture::Skip,
+            OwnerSiteStorageMode::Flat,
+            Some(plan),
+        )? {
+            CompileEngineOutcome::ProjectLocal(receipt) => Ok(receipt),
+            CompileEngineOutcome::Complete(_) => Err(InjectedProfileError::CanonicalProjection(
+                "project-local materializer returned an ordinary compiler product".to_owned(),
+            )),
+        }
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn compile_project_local_force_all_oracle_for_test(
+    sources: &[InjectedLibrarySource<'_>],
+    plan: &ProjectLocalMaterializationPlanForTest,
+) -> Result<Vec<ProjectLocalOracleTerminalForTest>, InjectedProfileError> {
+    with_canonical_frontend(sources, None, Some(&plan.sources), |frontend| {
+        let (_, runtime, replay_plan) = compile_owned_injected_frontend(
+            frontend,
+            ReplayIndexPlan::None,
+            LibraryRecordRetention::Collect,
+            CanonicalLibraryEvidenceCapture::Skip,
+            OwnerSiteStorageMode::Flat,
+        )?;
+        if replay_plan.is_some() {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "project-local oracle retained a replay plan".to_owned(),
+            ));
+        }
+        project_local_oracle_census_for_test(&runtime, plan)
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn filter_project_local_statements<'ast>(
+    canonical: &[CanonicalInput<'_>],
+    parser_returns: &mut [oxc_parser::ParserReturn<'ast>],
+    selection: &[ProjectLocalSourceAnchorPlanForTest],
+) -> Result<(), InjectedProfileError> {
+    if canonical.len() != selection.len() || parser_returns.len() != selection.len() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "project-local source census differs from the symbolic index".to_owned(),
+        ));
+    }
+    let selected = selection
+        .iter()
+        .map(|source| (source.file_ordinal, source))
+        .collect::<BTreeMap<_, _>>();
+    if selected.len() != selection.len() {
+        return Err(InjectedProfileError::CanonicalProjection(
+            "project-local source selection duplicates an ordinal".to_owned(),
+        ));
+    }
+    for (input, parsed) in canonical.iter().zip(parser_returns) {
+        let expected = selected.get(&input.file_ordinal).ok_or_else(|| {
+            InjectedProfileError::CanonicalProjection(
+                "project-local parsed source is absent from the symbolic index".to_owned(),
+            )
+        })?;
+        let digest = format!("{:x}", Sha256::digest(input.source.as_bytes()));
+        if digest != expected.source_sha256 {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "project-local source bytes differ from the symbolic index".to_owned(),
+            ));
+        }
+        let starts = expected
+            .statement_starts
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if starts.len() != expected.statement_starts.len() {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "project-local statement selection duplicates an anchor".to_owned(),
+            ));
+        }
+        let found = parsed
+            .program
+            .body
+            .iter()
+            .map(|statement| statement.span().start)
+            .filter(|start| starts.contains(start))
+            .collect::<Vec<_>>();
+        if found.len() != starts.len() {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "project-local statement anchor is missing or duplicated".to_owned(),
+            ));
+        }
+        parsed
+            .program
+            .body
+            .retain(|statement| starts.contains(&statement.span().start));
+        if parsed.program.body.len() != starts.len() {
+            return Err(InjectedProfileError::CanonicalProjection(
+                "project-local AST retained a foreign statement".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
