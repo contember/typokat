@@ -1,0 +1,194 @@
+profile_identity = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d"
+required_cycle = ["Array", "ArrayConstructor", "ConcatArray"]
+required_demands = ["Array", "ReadonlyArray", "Reflect"]
+required_special_owner = "global-object"
+global_keys = ["Array", "Reflect"]
+
+[[sources]]
+ordinal = 0
+name = "lib.es5.d.ts"
+sha256 = "bcd24271a113971ba9eb71ff8cb01bc6b0f872a85c23fdbe5d93065b375933cd"
+
+[[sources]]
+ordinal = 23
+name = "lib.es2015.reflect.d.ts"
+sha256 = "c0a4b8ac6ce74679c1da2b3795296f5896e31c38e888469a8e0f99dc3305de60"
+
+[[groups]]
+name = "PropertyKey"
+slots = ["type"]
+statement_sites = [[0, 3699]]
+
+[[groups]]
+name = "PropertyDescriptor"
+slots = ["type"]
+statement_sites = [[0, 3753]]
+
+[[groups]]
+name = "Function"
+slots = ["type"]
+statement_sites = [[0, 9886]]
+
+[[groups]]
+name = "ReadonlyArray"
+slots = ["type"]
+statement_sites = [[0, 48000]]
+
+[[groups]]
+name = "ConcatArray"
+slots = ["type"]
+statement_sites = [[0, 57473]]
+
+[[groups]]
+name = "Array"
+slots = ["type", "value"]
+statement_sites = [[0, 57645], [0, 70878]]
+
+[[groups]]
+name = "ArrayConstructor"
+slots = ["type"]
+statement_sites = [[0, 70568]]
+
+[[groups]]
+name = "TypedPropertyDescriptor"
+slots = ["type"]
+statement_sites = [[0, 70916]]
+
+[[groups]]
+name = "ArrayLike"
+slots = ["type"]
+statement_sites = [[0, 73638]]
+
+[[groups]]
+name = "Readonly"
+slots = ["type"]
+statement_sites = [[0, 73963]]
+
+[[groups]]
+name = "ThisType"
+slots = ["type"]
+statement_sites = [[0, 76011]]
+
+[[groups]]
+name = "Reflect"
+slots = ["namespace", "value"]
+statement_sites = [[23, 814]]
+
+[[edges]]
+from = "Function"
+to = "Array"
+
+[[edges]]
+from = "Function"
+to = "Function"
+
+[[edges]]
+from = "ReadonlyArray"
+to = "Array"
+
+[[edges]]
+from = "ReadonlyArray"
+to = "ConcatArray"
+
+[[edges]]
+from = "ReadonlyArray"
+to = "ReadonlyArray"
+
+[[edges]]
+from = "ConcatArray"
+to = "Array"
+
+[[edges]]
+from = "Array"
+to = "Array"
+
+[[edges]]
+from = "Array"
+to = "ArrayConstructor"
+
+[[edges]]
+from = "Array"
+to = "ConcatArray"
+
+[[edges]]
+from = "ArrayConstructor"
+to = "Array"
+
+[[edges]]
+from = "Reflect"
+to = "Array"
+
+[[edges]]
+from = "Reflect"
+to = "ArrayLike"
+
+[[edges]]
+from = "Reflect"
+to = "Function"
+
+[[edges]]
+from = "Reflect"
+to = "PropertyDescriptor"
+
+[[edges]]
+from = "Reflect"
+to = "PropertyKey"
+
+[[edges]]
+from = "Reflect"
+to = "Readonly"
+
+[[edges]]
+from = "Reflect"
+to = "ReadonlyArray"
+
+[[edges]]
+from = "Reflect"
+to = "ThisType"
+
+[[edges]]
+from = "Reflect"
+to = "TypedPropertyDescriptor"
+
+[[owner_sccs]]
+members = ["Array", "ConcatArray"]
+
+[[publication_sccs]]
+members = ["Array", "ArrayConstructor", "ConcatArray"]
+
+[[event_order]]
+source_ordinal = 0
+statement_starts = [3699, 3753, 9886, 48000, 57473, 57645, 70568, 70878, 70916, 73638, 73963, 76011]
+
+[[event_order]]
+source_ordinal = 23
+statement_starts = [814]
+member_starts = [1191, 1358, 1831, 2016, 2564, 2982, 3468, 3950, 4272, 4535, 4746, 5097, 5350, 5824, 6013, 6380]
+
+[[excluded_fragments]]
+name = "Array"
+sites = [[17, 814], [20, 2671], [25, 3080], [26, 814], [40, 2113], [57, 814], [63, 814]]
+
+[[excluded_fragments]]
+name = "ReadonlyArray"
+sites = [[17, 13042], [20, 3691], [25, 3326], [26, 1171], [40, 1093], [57, 1068], [63, 4341]]
+
+[[excluded_fragments]]
+name = "ArrayConstructor"
+sites = [[17, 3481], [20, 3093], [25, 10647]]
+
+[[excluded_fragments]]
+name = "Function"
+sites = [[17, 4312], [25, 4744]]
+
+[[excluded_fragments]]
+name = "ConcatArray"
+sites = []
+
+[[excluded_fragments]]
+name = "ArrayLike"
+sites = []
+
+[[excluded_fragments]]
+name = "Reflect"
+sites = []

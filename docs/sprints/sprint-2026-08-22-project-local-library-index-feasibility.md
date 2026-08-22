@@ -80,8 +80,8 @@ added diagnostic, false-clean global surface, partial terminal, or order-depende
 **STOP** immediately.
 
 Backlog 82 behavior is parity, not new scope: value-bearing `declare global` forms must produce the
-same explicit incomplete/diagnostic outcome as the oracle. The prototype must not make them appear
-supported merely because it has a new materializer.
+same exact outcome as the project-route oracle. The prototype must not claim support beyond that
+observable result merely because it has a new materializer.
 
 ### Ownership gate
 
@@ -129,7 +129,7 @@ profile declarations rather than a hand-written substitute:
 - the `Array<T>` / `ReadonlyArray<T>` groups and their admitted transitive type dependencies;
 - their constructor/value bridge needed to observe ordinary array expressions and global lookup;
 - one recursive interface dependency SCC;
-- one namespace/type group already supported by the checker; and
+- one namespace/value group already admitted by the checker; and
 - global-object construction for the selected roots.
 
 Synthetic user files may exercise the slice, but the library declarations and their source sites
@@ -222,8 +222,8 @@ silently dropping dependencies.
   prove all library plus user fragments are known. Fail closed if routing/publication begins first.
 - **Scope.** Route the locked prototype corpus through one project-owned materializer with no
   collision classifier. Join direct global and legal `declare global` type fragments before group
-  publication; rebuild selected global-object/bridge products from final terminals; preserve exact
-  explicit incompletes for backlog-82 value forms. Exercise consume-before-augment,
+  publication; rebuild selected global-object/bridge products from final terminals; preserve the
+  exact project-route oracle for backlog-82 value forms. Exercise consume-before-augment,
   augment-before-consume, reverse file order, reverse demand order, and two isolated projects with
   different augmentations.
 - **Acceptance / witness.** Every ordering matches the complete-source oracle exactly. Augmentation
@@ -278,7 +278,7 @@ silently dropping dependencies.
 - Full 82-file semantic materialization and production performance acceptance. A PROCEED outcome
   must schedule those with fixed gates before cutover.
 - Implementing backlog [`82`](../backlog/82-declare-global-value-space.md). Its current explicit
-  incomplete behavior must remain exact.
+  project-route behavior must remain exact.
 - The general lazy source-value/type resolver in backlog
   [`76`](../backlog/76-lazy-value-type-resolution.md); this sprint owns library declaration-group
   materialization only.
@@ -334,3 +334,28 @@ protocol during WU2-WU5. Read-only independent review starts only from a frozen 
   `docs/archive/` or `docs/decisions/`, plus the existing `docs/AGENTS.md` root-file policy finding.
   None names a changed sprint/backlog/index file. WU6 therefore requires zero new failures rather
   than broad unrelated archive cleanup.
+- **2026-08-22 — WU0 spec drafted independently.** The acceptance corpus locks ten project shapes,
+  both file orders, two demand orders, complete-source parity, the backlog-82 project-route tail,
+  and real declaration fragments from pinned `lib.es5.d.ts` plus `lib.es2015.reflect.d.ts`. The
+  library slice is the pinned source profile, never a handwritten semantic substitute. Candidate
+  code remains absent until the spec is committed and reviewed.
+- **2026-08-22 — WU0 independent review FAIL; remediation active.** The first corpus version pinned
+  correct `tsc 6.0.3` truth and source offsets but did not executable-authenticate the manifest or
+  candidate boundary. It also failed to force the Array/ConcatArray cycle, observe two-project
+  isolation, preserve native Array members beside augmentations, or pin the exact backlog-82
+  receipt. The revised spec adds those witnesses and will not commit until a second review passes.
+- **2026-08-22 — WU0 oracle corrected from executable receipts.** The project-summary route is the
+  relevant complete-source oracle. It reports the value-bearing `declare global` pair clean and
+  preserves the existing `Reflect.ownKeys` false-clean, while `tsc 6.0.3` reports `TS2322` for the
+  latter. The frozen spec records those observable results instead of the earlier inferred
+  incomplete/diagnostic outcomes. Oracle receipt: 14 runs, digest
+  `e8c41e6645c31e3d4aa084a484b5b1399cfd2c6b6451cd1cc135ae4a24ae0afa`, production tree
+  `1061e8ae0e95060560bfc39c39cb18cb6bbb5202`, and release binary SHA-256
+  `cbadd5c963c9e262418d1b267449e549ca67971a9367cbdc45ac7acf30d3093c`.
+- **2026-08-22 — WU0 independent review PASS.** After three adversarial remediation rounds, the
+  reviewer reproduced the 14-run oracle and expected RED candidate exit, then found no remaining
+  blocker. The final contract independently authenticates complete library group records and user
+  sites, carries the final fragment census on reservation, batches both project creation orders,
+  reverses library/source/demand order, and checks project-local ownership plus atomic SCC
+  publication. Existing production witnesses also passed: the complete-source `declare global`
+  oracle, Array full-scan seed, script global-object routing, and unique cross-module global type.
