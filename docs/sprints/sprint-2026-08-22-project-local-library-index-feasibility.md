@@ -369,3 +369,14 @@ protocol during WU2-WU5. Read-only independent review starts only from a frozen 
   corpus, profile, scoreboard, frame-source, and CPU-lease identities matched, and the exact
   complete-source-once witness passed under the same lease. Independent review reproduced all
   counts, timing totals, hashes, route coverage, and the passing ratchet from the frozen evidence.
+- **2026-08-22 — WU2 symbolic boundary PASS.** Commit `6675040` adds a test-only index projected
+  from one canonical `SourceDeclarationManifest` build for each of the two pinned real library
+  sources. Its 4,964-byte canonical form is stable across repeated builds, reversed source
+  enumeration, and a fresh process, with SHA-256
+  `42f62d578751ae26a5c6e0c27d551b0caeb12fdfed0ba2519b1fbc2256544343`. The index contains the
+  frozen 12 groups, 19 dependency edges, owner/publication SCCs, slots, exact sites, lexical order,
+  and lowering anchors, but no AST, universe-local ID/state, cache, semantic terminal, replay row,
+  or publisher. Independent review recomputed the publication SCC, re-authenticated the WU0
+  manifest and source hashes, reproduced the fresh-process digest, and found neither a renamed
+  replay plan nor a production API/route change. Focused tests passed 5/5 plus the spawned child;
+  the full library suite passed 114 tests and eight doc-tests, and clippy remained clean.
