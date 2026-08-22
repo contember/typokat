@@ -19,11 +19,12 @@ ordinary `symbol` keyword. The pinned acceptance fixture is
 It remains disabled until the library lifecycle can absorb the semantic movement soundly.
 
 The archived project-local index feasibility sprint proved that the syntax gap is not isolated.
-Making `Reflect` Ready changed the existing sparse collision lifecycle: one Array-collision witness
-activated 44 sealed `lib.dom.d.ts` record owners whose `TK2344` fingerprints were no longer emitted
-by the candidate replay. The sealed baseline validator correctly selected complete-source fallback.
-Copying those fingerprints, narrowing the authenticated replay closure without proof, or making
-`symbol` test-only would hide a real semantic difference.
+Its removed materializer reported 44 changed `lib.dom.d.ts` record owners but retained no named
+rows. WU0 could not reproduce that count: a consistent symbol fix left the 559-record packaged
+census unchanged, and a controlled old-base/new-candidate symbol toggle produced zero changed or
+missing DOM `TK2344` fingerprints. The historical count is therefore not an oracle. Copying frozen
+fingerprints, narrowing an authenticated closure without proof, or making `symbol` test-only would
+still hide a real semantic difference.
 
 ## Approach / acceptance
 
@@ -39,7 +40,7 @@ Acceptance requires:
 - the packaged `Reflect` namespace/value terminal is `Ready`, including `Reflect.ownKeys`;
 - every library-owned diagnostic/incomplete movement is reviewed and pinned exactly;
 - complete-source semantic truth is established without copying frozen/sparse fingerprints;
-- the 44 activated DOM fingerprint case is an exact regression witness, not a blessed omission;
+- the named census has a reviewed before/after delta, including an explicit empty delta if unchanged;
 - ordinary shared/cold parity and the surviving provider/standalone route gates pass.
 
 ## Touch points

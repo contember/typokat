@@ -39,8 +39,9 @@ The archived
 [`project-local library-index feasibility sprint`](../archive/sprint-2026-08-22-project-local-library-index-feasibility.md)
 proved that a store-independent declaration index is feasible for a real 12-group slice. It stopped
 before augmentation and performance evaluation because making `Reflect` Ready contradicted a
-false-clean oracle and activated 44 DOM record owners in the old sparse lifecycle. That result is a
-semantic prerequisite and regression witness, not evidence that project-local ownership is wrong.
+false-clean oracle. Its removed candidate also reported 44 DOM record owners without retaining
+their names. WU0 could not reproduce that historical count, so only the symbol/Reflect truth and a
+fresh named census are binding prerequisites.
 
 The immutable WU1
 [`lifecycle receipt`](../archive/project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json)
@@ -49,7 +50,7 @@ Under `cpu-lease run -n 2 --no-smt --`, it authenticated all 687 official-suite 
 395 private, 247 shared, 42 user-parse-rejected, three complete-source fallbacks, and zero preflight
 rejections. Base initialization took 1.551 s total and peak worker RSS was 144,109,568 bytes.
 
-The symbol-bearing Reflect surface and exact 44-owner movement must be corrected in the
+The symbol-bearing Reflect surface and its actual named census delta must be corrected in the
 complete-source semantic authority before the new declaration product depends on it. The sprint
 must not copy frozen fingerprints, weaken validation, or implement a sparse-specific repair.
 
@@ -63,7 +64,7 @@ The active sprint must deliver:
 - one project-local demand state machine that reserves dependency SCCs and publishes only final
   Ready or typed Unavailable terminals through `Pass`;
 - one `CheckerSession` lifecycle for standalone and repeated checks;
-- exact parity with `tsc`/complete-source oracles, including the Reflect/44-owner witness;
+- exact parity with `tsc`/complete-source oracles, including Reflect and the named library census;
 - authenticated cold and repeated comparisons that strictly beat the pinned native `tsgo`
   comparator in wall time without using more median peak RSS; and
 - vertical deletion of the frozen/sparse/collision lifecycle after cutover.

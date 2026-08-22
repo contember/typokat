@@ -467,6 +467,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
 | `b121_symbol_namespace_surface/` | disabled backlog-121 acceptance spec | callable namespace surfaces lower the ordinary `symbol` keyword used by `Reflect.ownKeys`; blocked by the backlog-113 library lifecycle decision |
+| `sr_project_local_library_candidate/` | project-local library universe WU0 (disabled) | candidate-only `tsc` truth, global-merge/order/isolation witnesses, and the immutable declaration-product ownership contract; it does not enter the frozen conformance receipt until the new session exists |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 

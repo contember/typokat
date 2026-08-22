@@ -1,0 +1,23 @@
+typescript_version = "6.0.3"
+typescript_flags = ["--strict", "--target", "es2025", "--module", "esnext", "--moduleResolution", "bundler", "--noEmit"]
+
+[[cases]]
+name = "backlog-121-symbol-namespace"
+sources = ["../b121_symbol_namespace_surface/symbol_namespace_surface.ts"]
+tsc_codes = [2322, 2345]
+current_typokat_codes = []
+current_typokat_incomplete = ["annotation-lower/type-syntax/unsupported", "annotation-lower/type-syntax/unsupported", "annotation-lower/type-syntax/unsupported"]
+
+[[cases]]
+name = "reflect-packaged"
+sources = ["reflect_packaged.ts"]
+tsc_codes = [2322]
+current_typokat_codes = []
+current_typokat_incomplete = []
+
+[[cases]]
+name = "array-library-scc"
+sources = ["array_library_scc.ts"]
+tsc_codes = [2322, 2322, 2322]
+current_typokat_codes = [2322, 2322]
+current_typokat_incomplete = []

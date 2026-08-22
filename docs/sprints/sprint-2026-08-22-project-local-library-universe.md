@@ -77,8 +77,9 @@ ship a hybrid as a workaround.
   transport semantic identities — `crates/typokat-types/src/types/hash.rs:440-451`.
 - ✔ The 2026-08-22 feasibility spike proved a 4,964-byte store-independent index for a real
   two-source/12-group slice, but it stopped before augmentation and performance gates. Making
-  `Reflect` Ready exposed a false-clean oracle and activated 44 sealed DOM record owners on an
-  Array collision; the prototype was removed —
+  `Reflect` Ready exposed a false-clean oracle. The removed prototype also reported 44 changed DOM
+  record owners without retaining their names; WU0 could not reproduce that count under either a
+  consistent symbol fix or a controlled old-base/new-candidate split, so it is not an oracle —
   `docs/archive/sprint-2026-08-22-project-local-library-index-feasibility.md:405-428`.
 - ✔ The authenticated repeated-provider receipt covers 687 official-suite frames: 395 private,
   247 shared, 42 parse-rejected, and three complete-source fallbacks. Initialization was 1.551 s
@@ -149,7 +150,7 @@ These conditions may not be relaxed after candidate results are visible.
   failure, and two-project isolation witnesses. Record every current mismatch before creating a
   candidate.
 - **Scope.** Land a fixture/spec-only commit. Enable no candidate production path. Freeze:
-  - the ordinary `symbol` callable namespace case and exact 44-owner DOM movement;
+  - the ordinary `symbol` callable namespace case and the exact named library census before any fix;
   - direct and module `declare global` augmentation in both file orders;
   - script globals and explicit `globalThis` contributions;
   - legal and illegal interface/class/function/namespace merges;
@@ -168,20 +169,22 @@ These conditions may not be relaxed after candidate results are visible.
 
 ### WU1 — establish the correct symbol and library-record truth (effort L)
 
-- **Problem.** Ordinary `symbol` annotations withhold the `Reflect` terminal today. Enabling them
-  changes 44 library-owned records, so the current frozen baseline cannot serve as the target
-  oracle.
-- **Verify first.** Run only the WU0 symbol/Reflect and 44-owner fixtures through `tsc`, the current
-  complete-source compiler, and the disabled backlog-121 case. Confirm the exact lowering authority
-  and the first semantic cause of every activated record.
+- **Problem.** Ordinary `symbol` annotations withhold the `Reflect` terminal today. The stopped
+  prototype reported a 44-owner movement but retained no named evidence, and a WU0 reconstruction
+  did not reproduce it. A historical count cannot serve as the target oracle.
+- **Verify first.** Run the WU0 symbol/Reflect fixtures through `tsc`, the current complete-source
+  compiler, and the disabled backlog-121 case. Pin the complete named library census before the
+  change, then derive any actual named delta without assuming its size or direction. Confirm the
+  exact lowering authority and the first semantic cause of every real changed record.
 - **Scope.** Lower `TSSymbolKeyword` through the ordinary type-syntax authority and project-local
   `well_known().symbol` identity. Resolve the resulting library model gaps in the complete-source
   compiler core. Do not teach sparse replay about the movement, copy fingerprints, bless new
   incompletes, or add a namespace-specific shim. Enable the backlog-121 conformance fixture only
   when the complete-source oracle is correct.
 - **Acceptance / witness.** `Reflect` is Ready with the exact `Reflect.ownKeys` surface; the fixture
-  emits the expected `TK2322`/`TK2345`; the pinned library census is reviewed and exact; the 44
-  owners have the same clean meaning as `tsc`; ordinary complete-source and cold CLI gates pass.
+  emits the expected `TK2322`/`TK2345`; the pinned library census is reviewed and exact; the named
+  census has a reviewed before/after delta (including an explicit empty delta if unchanged);
+  ordinary complete-source and cold CLI gates pass.
   Independent review traces the symbol identity and searches for a hidden sparse-only fix.
 - **Touch points.** Callable namespace lowering, `WellKnownTypes`, library records/census,
   `tests/cases/b121_symbol_namespace_surface/`, complete-source specs, and backlog 121.
@@ -333,9 +336,10 @@ These conditions may not be relaxed after candidate results are visible.
 - **Acceptance / witness.** Production contains one library/project semantic lifecycle and no
   collision-name branch. `rg` finds no unexplained frozen/sparse/replay production residue. The
   exact WU0 corpus, full unit/workspace suite, clippy, ordinary `580/696` conformance, complete
-  shared/cold parity replacement, official-suite ratchet, 44-owner witness, library census, package
-  verification, and WU6 benchmark evidence all pass at the same reviewed tree. Backlogs 113, 115,
-  116, and 121 are deleted; the sprint is archived with commit map and exact measurements.
+  shared/cold parity replacement, official-suite ratchet, symbol/Reflect truth, named library
+  census, package verification, and WU6 benchmark evidence all pass at the same reviewed tree.
+  Backlogs 113, 115, 116, and 121 are deleted; the sprint is archived with commit map and exact
+  measurements.
 - **Touch points.** Library/checker/binder layered storage, provider/driver/CLI, all lifecycle specs,
   ADRs, `docs/reference/`, backlog/index files, and final archived evidence.
 
@@ -368,8 +372,8 @@ These conditions may not be relaxed after candidate results are visible.
   query; semantic SCCs are project-local and lazy.
 - **One publisher and one lifecycle.** Shadow comparison is test-only and temporary. No feature flag
   or permanent hybrid ships.
-- **Correct the oracle before architecture claims.** Symbol/Reflect and the 44 DOM owners land in
-  the complete-source semantic authority before the new product consumes them.
+- **Correct the oracle before architecture claims.** Symbol/Reflect and the resulting named library
+  census delta land in the complete-source semantic authority before the new product consumes them.
 - **“Better than tsgo” is a binding gate.** It means strict semantic/control agreement, strict cold
   and repeated wall-time wins with confidence, and no greater median peak RSS under authenticated
   comparable lifecycles.
@@ -400,3 +404,19 @@ numbers are invalid without `--no-smt`.
      changed the *why* → ../decisions/NNNN ; new future work → ../backlog/NN ;
      transient → leave it (dies with the sprint on archive). After graduating,
      trim to a one-line pointer ("→ ADR-0007"). -->
+
+- **2026-08-22 — WU0 audit.** Existing B14/B43/B103 and CLI/batch tests already cover most merge,
+  order, module, parse, and observable-isolation behavior. WU0 added only the missing packaged
+  `Reflect`, Array publication-SCC, mixed direct-script + module-augmentation, and bidirectional
+  project-isolation truths. Real `tsc 6.0.3` reproduced every marked diagnostic.
+- **2026-08-22 — rejected historical count.** The stopped feasibility run retained the number 44
+  but not the named library-record delta. An isolated reconstruction kept the baseline census at
+  559 records under a consistent symbol fix and found zero missing/changed DOM TK2344 rows under a
+  controlled old-base/new-candidate symbol toggle. The removed materializer therefore contributed
+  unpreserved behavior. WU1 pins the actual named before/after census without assuming 44.
+- **2026-08-22 — target contract.** → proposed ADR-0023. The candidate runner gate remains ignored
+  RED; ordinary conformance remains on the current production lifecycle.
+- **2026-08-23 — WU0 GO.** Real `tsc 6.0.3` matched all six new fixture projects. The candidate
+  contract passed `3/3` with its intentional RED runner ignored, marker parsing passed, and the
+  immutable ordinary receipt remained `580/696`. Independent adversarial review returned GO after
+  the user-authorized second fix round.
