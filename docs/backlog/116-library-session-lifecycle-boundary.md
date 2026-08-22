@@ -1,7 +1,7 @@
 ---
 id: 116
 title: Collapse library compilation behind one session lifecycle boundary
-blocked-by: [./113-measure-sparse-collision-lifecycle.md, ./114-lazy-default-library-index-spike.md]
+blocked-by: [./113-measure-sparse-collision-lifecycle.md]
 ---
 
 # 116 — Collapse library compilation behind one session lifecycle boundary
@@ -22,9 +22,9 @@ driver can coordinate them. Several are documentation-hidden but still public Ru
 profile/package concern, semantic compiler, provider cache, route decision, fallback execution, and
 report assembly therefore have no single orchestration owner.
 
-The active library-compiler decomposition sprint is layout-only and intentionally preserves these
-semantics. Its result must be remeasured after items [`113`](113-measure-sparse-collision-lifecycle.md)
-and [`114`](114-lazy-default-library-index-spike.md); source layout alone does not resolve this item.
+The shipped library-compiler decomposition sprint was layout-only and intentionally preserved these
+semantics. Its result must be remeasured after item
+[`113`](113-measure-sparse-collision-lifecycle.md); source layout alone does not resolve this item.
 
 ## Approach / acceptance
 

@@ -1,11 +1,41 @@
-<!--
-On close, prepend the final result block here, then `git mv` this file to ../archive/:
-
-> **FINAL RESULT — PROCEED|STOP YYYY-MM-DD.** <bounded feasibility result and why.>
-> Commit map: WU0 → <sha>, WU1 → <sha>, … Verification: <exact commands + receipts>.
-> Backlog: 114 <rescope/delete>; 113 <keep/delete/rescope>; 115/116 edges updated.
-> Production lifecycle: unchanged. Deferred: <honest notes>.
--->
+> **OUTCOME — STOP (2026-08-22).** The bounded project-local materializer did not satisfy the
+> frozen semantic gate. The prototype and temporary lifecycle instrumentation were removed;
+> production routing remains unchanged.
+>
+> **Why.** WU3 could construct independently owned project runtimes and make the locked `Reflect`
+> namespace/value terminal Ready only after adding ordinary `symbol` syntax lowering. That result
+> contradicted WU0's frozen false-clean complete-source oracle. The same semantic improvement also
+> changed the production sparse lifecycle: the Array-collision route activated 44 sealed
+> `lib.dom.d.ts` `TK2344` record owners and emitted none of their expected fingerprints, so the
+> authenticated validator selected complete-source fallback. Carrying activated fingerprints or
+> weakening replay closure would have hidden a real semantic difference.
+>
+> **Independent adjudications.** The first proposed STOP was rejected because an unsupported
+> `symbol` keyword could be a bounded adjacent checker gap; the sprint therefore pinned and tried
+> that falsifier. The second STOP was confirmed after Ready Reflect both contradicted the frozen
+> oracle and changed the sparse collision lifecycle through the 44-owner fingerprint witness.
+>
+> **Commit map.** Plan → `1738824`; WU0 frozen spec → `84291a1`; WU1 instrumentation/evidence/review
+> → `58b5b1a`, `a877c7e`, `2847715`; WU2 symbolic index/review → `6675040`, `e80ae9a`; WU3 failed
+> prototype evidence → `85670e7`; symbol falsifier spec → `4a3fe33`; WU6 technical cleanup →
+> `6080a1c`; archive, backlog graduation, and disabled-fixture ownership → this closure commit.
+>
+> **Verification.** WU6 restored production and test-tooling behavior to the pre-sprint baseline,
+> retained only the disabled backlog-121 symbol fixture, and passed the narrow library/driver check
+> plus the frozen `580/696` inventory receipt. Final closure passed `cargo fmt --check`, 93
+> official-suite harness unit tests, `cargo clippy --all-targets -- -D warnings`, the full workspace
+> `cargo test`, the exact WU6 complete-source matrix (15/15 in 71.74 s), and full shared/cold parity
+> with receipt `580/696/580/580` in 386.90 s. Agent-docs lint added no finding to the authenticated
+> 21-finding baseline.
+>
+> **Backlog and skipped work.** Backlog 114 is deleted. Backlog 113 resumes unblocked with the
+> authenticated DELETE/RETAIN measurement contract; backlog 121 owns later symbol-bearing namespace
+> surfaces after that lifecycle decision. WU4 and WU5 were skipped by the hard WU3 semantic gate.
+>
+> **Evidence.** The immutable WU1
+> [`lifecycle receipt`](project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json)
+> and this archived STOP record retain the bounded result. No project-local index/materializer or
+> temporary lifecycle metric remains in production or test tooling.
 
 # Sprint — project-local default-library index feasibility (2026-08-22)
 
@@ -380,3 +410,26 @@ protocol during WU2-WU5. Read-only independent review starts only from a frozen 
   manifest and source hashes, reproduced the fresh-process digest, and found neither a renamed
   replay plan nor a production API/route change. Focused tests passed 5/5 plus the spawned child;
   the full library suite passed 114 tests and eight doc-tests, and clippy remained clean.
+- **2026-08-22 — first WU3 STOP adjudication rejected.** The initial materializer reached 11 Ready
+  type groups but left the locked Reflect namespace/value group Unavailable because ordinary
+  `TSSymbolKeyword` surface syntax was unsupported. Independent review ruled that this alone did
+  not prove the architecture infeasible and required a bounded symbol falsifier before STOP.
+- **2026-08-22 — symbol falsifier exposed the final hard gate.** Commit `4a3fe33` froze the ordinary
+  symbol-bearing callable namespace acceptance case. With the existing surface authority taught
+  that syntax locally, WU3 made all 12 locked terminals Ready, including Reflect. That semantic
+  truth contradicted WU0's frozen false-clean oracle rather than satisfying parity.
+- **2026-08-22 — second independent adjudication confirmed STOP.** Ready Reflect also changed the
+  production Array-collision route. Sparse replay activated 44 sealed `lib.dom.d.ts` `TK2344`
+  owners and completed them without their expected record fingerprints; baseline validation
+  failed closed and invoked complete-source fallback. The reviewer rejected fingerprint carry,
+  closure weakening, and test-only symbol lowering as unsound workarounds. WU4 and WU5 were skipped.
+- **2026-08-22 — WU6 removed the experiment.** Cleanup commit `6080a1c` removed the WU0-WU3
+  prototype, WU1 metric hooks/tooling, and the temporary symbol implementation and record movement.
+  It restored the pre-sprint production/test-tooling baseline, retained the disabled falsifier for
+  backlog 121, and moved the authenticated WU1 receipt into the archive.
+- **2026-08-22 — roadmap graduated from STOP and closure passed.** Backlog 114 was deleted; backlog
+  113 resumed unblocked with the receipt and 44-owner comparison witness; backlog 121 now owns the
+  disabled symbol-bearing namespace fixture. Formatting, 93 official-suite harness unit tests,
+  clippy, the full workspace suite, the exact 15/15 WU6 matrix, and full shared/cold parity all
+  passed. The parity receipt was `580/696/580/580` in 386.90 s; docs lint added no finding to its
+  authenticated 21-finding baseline.

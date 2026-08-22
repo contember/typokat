@@ -224,8 +224,8 @@ const MILESTONE_DIRS: &[(&str, bool)] = &[
     // Cross-module/opposite-order class publication. Project-shaped; also
     // registered in PROJECT_DIRS below.
     ("sr_semantic_duplication_project", true),
-    // WU6 keeps the symbol-keyword acceptance spec frozen but disabled until graduation.
-    ("sr_project_local_library_index", false),
+    // Backlog 121 keeps the symbol-keyword acceptance spec frozen but disabled.
+    ("b121_symbol_namespace_surface", false),
     // Completeness-accounting sprint (2026-07-10) — surface-accounting corpus
     // (backlog 73). ENABLED by WU3 (expression child slots), WU4 (statement
     // containers), and WU5 (annotation / signature / class-member accounting): the

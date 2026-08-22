@@ -1,15 +1,15 @@
 ---
 id: 113
 title: Measure and simplify the sparse collision lifecycle
-blocked-by: [./114-lazy-default-library-index-spike.md]
+blocked-by: []
 ---
 
 # 113 — Measure and simplify the sparse collision lifecycle
 
-**Summary.** If the project-local library-index feasibility spike stops, decide with current
-repeated-consumer evidence whether sparse collision replay earns its cross-cutting complexity; if
-it does not, keep the frozen fast path for collision-free checks and route collisions through
-complete-source compilation. Non-blocking fallback architecture work, effort L.
+**Summary.** Decide from authenticated repeated-consumer evidence whether sparse collision replay
+earns its cross-cutting complexity. If it does not, keep the frozen fast path for collision-free
+checks and route collisions through complete-source compilation. This item is unblocked and is the
+next library-lifecycle decision. Non-blocking architecture work, effort L.
 
 ## Problem
 
@@ -33,13 +33,29 @@ production consumer that benefits from repeated shared-base checks is the offici
 The repository does not currently pin its shared/private/fallback route frequencies or compare the
 sparse route with complete-source collision fallback at that lifecycle.
 
-## Approach / acceptance
+## Authenticated baseline and STOP evidence
 
-Backlog [`114`](114-lazy-default-library-index-spike.md) now tests the cause before this item
-simplifies the workaround. Its active feasibility sprint consumes only the authenticated
-current-route baseline below. If 114 proceeds toward replacing the frozen semantic base, delete or
-rescope this item rather than optimizing sparse replay first. If 114 stops, this item resumes with
-that baseline and the original DELETE/RETAIN contract.
+The archived
+[`project-local library-index feasibility sprint`](../archive/sprint-2026-08-22-project-local-library-index-feasibility.md)
+selected **STOP** and removed its prototype. It did not establish a replacement for the frozen
+semantic base, so this original DELETE/RETAIN decision resumes without a blocker.
+
+The immutable WU1
+[`lifecycle receipt`](../archive/project-local-library-index-feasibility-2026-08-22/lifecycle-baseline.json)
+has SHA-256 `950d5d7b38da7e7b5a0bc87da7ed423968b151ebf731c451021216c1d1880a18`.
+Under `cpu-lease run -n 2 --no-smt --`, it authenticated all 687 official-suite worker frames:
+395 private, 247 shared, 42 user-parse-rejected, three complete-source fallbacks, and zero preflight
+rejections. Base initialization took 1.551 s total and peak worker RSS was 144,109,568 bytes.
+
+The STOP also exposed a mandatory comparison witness. Enabling an ordinary symbol-bearing Reflect
+surface made `Reflect` Ready, then an Array collision activated 44 sealed `lib.dom.d.ts` `TK2344`
+record owners whose fingerprints were absent after sparse replay. The current validator correctly
+fell back instead of carrying activated baselines forward. Any DELETE/RETAIN candidate must include
+that exact semantic movement: DELETE must show the selected complete-source collision lifecycle;
+RETAIN must reproduce or otherwise soundly account for all 44 activated owners without weakening
+baseline validation or replay closure.
+
+## Approach / acceptance
 
 Instrument the repeated provider route without changing its verdicts. Record at least:
 
@@ -53,7 +69,7 @@ Build a bounded comparison route that retains `FrozenLibraryBase` for collision-
 sends every colliding provider project through the existing complete-source compiler. Declare the
 acceptable batch-time and RSS thresholds before running the comparison. Use collision, fanout,
 global augmentation, class/namespace, record-order, randomized file-order, and shared/cold parity
-witnesses.
+witnesses, including the 44-owner symbol-bearing Reflect movement above.
 
 This item has two acceptable outcomes:
 

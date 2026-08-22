@@ -49,16 +49,15 @@ value types, accessors, static members, nested owner payloads, and the cycles be
 is keyed by the project's authenticated declaration identity and publishes terminal project-local
 types.
 
-It does **not** own lazy loading or materialization of the pinned default library. That separate
-architecture experiment is backlog [`114`](114-lazy-default-library-index-spike.md), which would
-need a store-independent symbolic library index, a project-local binder/store, declaration-group
-dependency edges, and atomic SCC publication. The current `DeclaredTypeRecipe` and this item's
-planned `DeclId` query are not assumed to provide that product.
+It does **not** own lazy loading or materialization of the pinned default library. The archived
+[`project-local library-index feasibility sprint`](../archive/sprint-2026-08-22-project-local-library-index-feasibility.md)
+tested that separate architecture and selected STOP at its semantic gate. Its symbolic-index and
+materializer prototype was removed. The current `DeclaredTypeRecipe` and this item's planned
+`DeclId` query are not a replacement default-library product.
 
-The two items may converge on shared state vocabulary and invariants—cycle guards, terminal-only
-publication, no provisional cache entries, and demand-order-independent effects—but implementation
-reuse must be proved after both boundaries are explicit. Neither item is a semantic prerequisite
-for the other.
+The archived experiment shares useful state vocabulary—cycle guards, terminal-only publication,
+no provisional cache entries, and demand-order-independent effects—but it establishes no
+implementation dependency for this source-declaration query.
 
 Class accessors and static methods are the same declaration-type demand, not a separate callability
 bug. The official-suite witnesses are exact: the static getters in

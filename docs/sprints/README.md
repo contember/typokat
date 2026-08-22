@@ -20,10 +20,6 @@ Lifecycle (full detail in [`../CLAUDE.md`](../CLAUDE.md)):
 ## Active
 
 <!-- one line per active sprint; empty between sprints -->
-- [`sprint-2026-08-22-project-local-library-index-feasibility.md`](sprint-2026-08-22-project-local-library-index-feasibility.md) —
-  active bounded PROCEED-or-STOP spike for backlog 114; tests whether a store-independent symbolic
-  index plus project-owned publication can replace the frozen semantic base, with global
-  augmentation as the first gate.
 - [`sprint-2026-08-17-as-const.md`](sprint-2026-08-17-as-const.md) — next/resuming; resolve the
   approved bounded parity slice, implement AST-directed const contexts, and compare with PR #29510;
   unblocked after the declaration-inventory sprint, with WIP preserved at `996eb5a`.

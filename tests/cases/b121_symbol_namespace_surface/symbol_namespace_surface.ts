@@ -1,5 +1,5 @@
-// Project-local library-index sprint: callable namespace surfaces must lower the
-// ordinary `symbol` keyword used by Reflect.ownKeys.
+// Backlog 121: callable namespace surfaces must lower the ordinary `symbol`
+// keyword used by Reflect.ownKeys.
 declare namespace SymbolNamespaceSurface {
   function ownKeys(target: object): (string | symbol)[];
   function echo(value: symbol): symbol;

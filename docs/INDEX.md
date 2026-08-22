@@ -25,10 +25,6 @@ decisions → reference → archive.
 ## Active sprints
 
 <!-- list the sprint files currently in sprints/ ; empty between sprints -->
-- [`sprint-2026-08-22-project-local-library-index-feasibility.md`](sprints/sprint-2026-08-22-project-local-library-index-feasibility.md) —
-  active bounded PROCEED-or-STOP spike for a store-independent default-library index and
-  project-owned demand publication; global augmentation is the first semantic gate and production
-  routes remain unchanged.
 - [`sprint-2026-08-17-as-const.md`](sprints/sprint-2026-08-17-as-const.md) — next/resuming;
   bounded AST-directed const contexts and an explicit comparison with the broader PR #29510;
   unblocked with WIP preserved at `996eb5a`.
@@ -37,12 +33,12 @@ decisions → reference → archive.
 
 <!-- hand-maintained, keep short: the few things actually in motion + what's next.
      If everything is "hot", nothing is. -->
-- **Project-local library index feasibility active 2026-08-22** — the
-  [`active sprint`](sprints/sprint-2026-08-22-project-local-library-index-feasibility.md) tests the
-  cause of the sparse collision lifecycle before optimizing that workaround. It shares only
-  symbolic library facts, requires each prototype project to own its binder/store/global object,
-  and gates first on `Array`, `declare global`, cross-file, and demand-order augmentation parity.
-  The bounded outcome is PROCEED or STOP; it cannot change production routing.
+- **Project-local library index feasibility stopped 2026-08-22** — the
+  [`archived sprint`](archive/sprint-2026-08-22-project-local-library-index-feasibility.md) stopped
+  after Ready Reflect contradicted its frozen oracle and changed sparse collision record
+  fingerprints. The prototype was removed. Backlog
+  [`113`](backlog/113-measure-sparse-collision-lifecycle.md) resumes next for the measured
+  DELETE/RETAIN decision; [`121`](backlog/121-symbol-bearing-namespace-surfaces.md) waits on it.
 - **Declaration inventory shipped; B44 unblocked** — the archived
   [`declaration-inventory sprint`](archive/sprint-2026-08-18-canonical-declaration-inventory.md)
   cut declaration reservation, publication, and class attachment over to the authenticated

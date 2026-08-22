@@ -216,19 +216,19 @@ Consumer surface (non-blocking — these gate consumers of the checker, not chec
 cost. They do not change the checker 1.0 completeness manifest and must not weaken soundness or
 parity gates merely to improve layout or speed.
 
-- **L** · [`113`](113-measure-sparse-collision-lifecycle.md) — fallback after `114`: measure whether
-  sparse collision replay still earns its cross-cutting provider complexity; its current-route
-  baseline is folded into the active `114` spike, while DELETE/RETAIN work waits on that verdict.
-- **XL** · [`114`](114-lazy-default-library-index-spike.md) — evaluate an immutable symbolic library
-  index with project-local demand publication; active as a bounded global-augmentation-first
-  feasibility spike with explicit kill criteria and no production cutover.
+- **L** · [`113`](113-measure-sparse-collision-lifecycle.md) — next library-lifecycle work: compare
+  sparse collision replay with complete-source collision fallback using the authenticated
+  687-frame baseline and the archived 44-owner semantic movement; select DELETE or RETAIN.
 - **L** · [`115`](115-prepared-project-single-parse.md) — parse provider inputs once into a
   frontend-owned prepared product used for both routing and checking.
 - **L** · [`116`](116-library-session-lifecycle-boundary.md) — after the lifecycle decisions,
   replace public low-level route/runtime states and compiler mode combinations with one session
-  boundary; blocked by `113`, `114`.
+  boundary; blocked by `113`.
 - **M** · [`119`](119-class-publication-preparation.md) — extract owned class preparation while
   preserving one visible atomic publication facade.
+- **S** · [`121`](121-symbol-bearing-namespace-surfaces.md) — lower ordinary `symbol` annotations
+  in callable namespace surfaces through the existing authority; blocked by `113` because Ready
+  Reflect changes sparse record fingerprints and collision lifecycle.
 
 ## Recommended order
 
@@ -260,13 +260,12 @@ parity gates merely to improve layout or speed.
    so `80` turns `14`/`15` into a measured coverage derivative — including ~16.5k member-call edges.
    Expect the first run to be mostly `incomplete`; that baseline is the point. `81` stays last and
    may be dropped on the profile.
-5. **Test the library-lifecycle cause before its workaround.** Run the bounded `114` feasibility
-   spike first, folding in only `113`'s authenticated current-route baseline. If `114` stops,
-   resume `113`'s sparse DELETE/RETAIN decision. If it proceeds, rescope `114` to full-profile
-   implementation and delete or narrow `113` before investing in sparse cleanup. `115` remains a
-   likely production-integration prerequisite, not a feasibility blocker; `116` waits for the
-   frozen/lazy/sparse decision to settle. Re-check `119` after active feature work touching the
-   same owners.
+5. **Resume the measured library-lifecycle decision.** Run `113` next from its authenticated
+   687-frame baseline and archived project-local-index STOP. Compare DELETE versus RETAIN with the
+   44-owner symbol-bearing Reflect movement as a mandatory witness. Keep `115` as independent
+   parse-once preparation; `116` waits only for `113`. Re-check `119` after active feature work
+   touching the same owners, and start `121` only after `113` fixes the selected collision
+   lifecycle.
 
 Add scope sub-folders (`security/`, `perf/`, …) only once the flat list gets
 unwieldy; numbers stay folder-local.
