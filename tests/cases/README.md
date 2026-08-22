@@ -466,7 +466,7 @@ finding ID (`fN_…`) or the backlog item ID (`bNN_…`). Each corpus's **scope*
 | `b48_object_binding_publication/` | shipped flat-variable slice of backlog `48` | flat object variable binding leaves: independent types and storage, defaults, static keys, scope/order, source projection, missing-property accounting, plus explicit excluded-shape guards |
 | `sr_semantic_duplication/` | shipped semantic-duplication/class-application cutover | class callable surfaces are lowered once; immutable recursive class applications publish complete SCC projections before demand, preserving diagnostics, overloads, parameter properties, structural relation, and nominal origin |
 | `sr_semantic_duplication_project/` | shipped project-mode semantic-duplication gate | dependency-first class publication and heritage poison remain deterministic across module/input order |
-| `sr_project_local_library_index/` | project-local library-index sprint | the callable namespace surface lowerer accepts the ordinary `symbol` keyword used by `Reflect.ownKeys` instead of withholding the complete namespace terminal |
+| `sr_project_local_library_index/` | disabled project-local library-index acceptance spec | callable namespace surfaces lower the ordinary `symbol` keyword used by `Reflect.ownKeys`; WU6 keeps this frozen until graduation |
 
 A few corpora need **construction** notes so they stay editable (the *why* of their marker choices):
 

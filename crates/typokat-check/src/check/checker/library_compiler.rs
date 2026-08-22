@@ -110,8 +110,6 @@ use crate::types::Interner;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
 use oxc_parser::Parser;
-#[cfg(any(test, feature = "test-utils"))]
-use oxc_span::GetSpan;
 use oxc_span::SourceType;
 #[cfg(any(test, feature = "test-utils"))]
 use sha2::{Digest, Sha256};
@@ -147,8 +145,6 @@ mod complete_source;
 mod continuation;
 mod probes;
 mod profile;
-#[cfg(any(test, feature = "test-utils"))]
-mod project_local_materializer;
 mod replay_control;
 mod runtime_model;
 mod runtime_state;
@@ -171,8 +167,6 @@ pub use probes::*;
 #[cfg(not(any(test, feature = "test-utils")))]
 use probes::*;
 pub use profile::*;
-#[cfg(any(test, feature = "test-utils"))]
-pub use project_local_materializer::*;
 pub use replay_control::*;
 pub use runtime_model::*;
 #[cfg(any(test, feature = "test-utils"))]

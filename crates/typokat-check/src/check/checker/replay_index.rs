@@ -4228,7 +4228,6 @@ mod raw_access_audit {
         "crates/typokat-check/src/check/checker/lexical_events/completion_slot_spec.rs",
         "crates/typokat-check/src/check/checker/lexical_events/owner_lookup_spec.rs",
         "crates/typokat-check/src/check/checker/library_compiler/tests.rs",
-        "crates/typokat-check/src/check/checker/library_compiler/project_local_materializer.rs",
         "crates/typokat-check/src/check/checker/surface_lowering_copy_spec.rs",
         "crates/typokat-check/src/check/query/deferred_indexed_lazy_spec.rs",
         "crates/typokat-check/src/check/query/demand_identity_spec.rs",

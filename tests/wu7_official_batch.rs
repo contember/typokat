@@ -6,14 +6,12 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_typokat");
 const BATCH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BATCH_FRAME_BYTES: usize = 2 * 1024 * 1024;
 const PROFILE_SHA256: &str = "ea59b3e150195f6cfe843661c0bcb006cffb04dd988861778a188be9441c579d";
-const METRICS_PATH_ENV: &str = "TYPOKAT_LIBRARY_LIFECYCLE_METRICS";
-const METRICS_NONCE_ENV: &str = "TYPOKAT_LIBRARY_LIFECYCLE_NONCE";
 
 #[test]
 fn official_batch_cases_share_the_worker_process_but_not_user_state() {
@@ -143,57 +141,6 @@ fn official_batch_reports_unchecked_class_static_blocks_without_inventory_failur
         !stderr.contains("bound project module has no canonical declaration inventory"),
         "{stderr}"
     );
-}
-
-#[test]
-fn lifecycle_sidecar_does_not_change_real_official_batch_protocol() {
-    let request = serde_json::json!({
-        "schema": 1,
-        "case_id": "sidecar-protocol",
-        "name": "sidecar-protocol.ts",
-        "source": "const value: number = 1;\n"
-    });
-    let input = request.to_string() + "\n";
-    let (_, disabled) = run_official_batch(&input);
-
-    let nonce = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock after epoch")
-        .as_nanos();
-    let sidecar = std::env::temp_dir().join(format!(
-        "typokat-lifecycle-protocol-{}-{unique}.tsv",
-        std::process::id()
-    ));
-    fs::File::options()
-        .create_new(true)
-        .write(true)
-        .open(&sidecar)
-        .expect("exclusive lifecycle sidecar");
-    let (_, enabled) = run_official_batch_with_metrics(&input, &sidecar, nonce);
-    let metrics = fs::read_to_string(&sidecar).expect("lifecycle sidecar rows");
-    fs::remove_file(&sidecar).expect("remove lifecycle sidecar");
-
-    assert_eq!(disabled.status, enabled.status);
-    assert_eq!(disabled.stderr, enabled.stderr);
-    let normalize = |output: Output| {
-        let mut response: Value =
-            serde_json::from_slice(&output.stdout).expect("one official-batch response frame");
-        response
-            .as_object_mut()
-            .expect("response object")
-            .remove("worker_pid");
-        response
-    };
-    assert_eq!(normalize(disabled), normalize(enabled));
-    assert_eq!(metrics.lines().count(), 3, "{metrics}");
-    assert!(
-        metrics.lines().all(|line| line.contains(nonce)),
-        "{metrics}"
-    );
-    assert!(metrics.contains("\tinit\t0\tready\t"), "{metrics}");
-    assert!(metrics.contains("\tframe\t1\t"), "{metrics}");
-    assert!(metrics.contains("\troute\t1\tshared\t"), "{metrics}");
 }
 
 #[test]
@@ -340,28 +287,13 @@ fn production_batch_worker_cannot_delegate_cases_to_child_processes() {
 }
 
 fn run_official_batch(input: &str) -> (u32, Output) {
-    run_official_batch_command(input, None)
-}
-
-fn run_official_batch_with_metrics(input: &str, path: &Path, nonce: &str) -> (u32, Output) {
-    run_official_batch_command(input, Some((path, nonce)))
-}
-
-fn run_official_batch_command(input: &str, metrics: Option<(&Path, &str)>) -> (u32, Output) {
-    let mut command = Command::new(BIN);
-    command
+    let mut child = Command::new(BIN)
         .arg("official-batch")
-        .env_remove(METRICS_PATH_ENV)
-        .env_remove(METRICS_NONCE_ENV)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some((path, nonce)) = metrics {
-        command
-            .env(METRICS_PATH_ENV, path)
-            .env(METRICS_NONCE_ENV, nonce);
-    }
-    let mut child = command.spawn().expect("spawn official batch worker");
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn official batch worker");
     let worker_pid = child.id();
     let mut stdin = child.stdin.take().expect("batch stdin");
     // An oversized-frame rejection may close the reader before the writer drains.

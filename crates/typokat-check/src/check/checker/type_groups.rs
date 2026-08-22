@@ -685,23 +685,6 @@ impl TypeGroupConstruction {
             .is_some_and(|slot| matches!(slot, TypeGroupConstructionSlot::Frozen(_)))
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    fn frozen_terminal(&self, group: TypeGroupId) -> Option<&PublishedTypeGroupTerminal> {
-        if group.index() < self.base_len {
-            return match self.replacements.get(&group.index()) {
-                Some(TypeGroupConstructionSlot::Frozen(terminal)) => Some(terminal),
-                Some(TypeGroupConstructionSlot::Pending | TypeGroupConstructionSlot::Building) => {
-                    None
-                }
-                None => self.base.as_ref()?.get(group),
-            };
-        }
-        match self.slots.get(group.index().checked_sub(self.base_len)?)? {
-            TypeGroupConstructionSlot::Frozen(terminal) => Some(terminal),
-            TypeGroupConstructionSlot::Pending | TypeGroupConstructionSlot::Building => None,
-        }
-    }
-
     fn consume(self, expected: usize) -> Option<(PublishedTypeGroups, usize)> {
         if self.expected != expected || self.base_len + self.slots.len() != expected {
             return None;
@@ -996,16 +979,6 @@ impl<'a, 'ast, Ticket: Copy + PartialEq> Pass<'a, 'ast, Ticket> {
                     construction.is_frozen(group)
                 }
             })
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(in crate::check::checker) fn project_local_frozen_terminal_for_test(
-        &self,
-        group: TypeGroupId,
-    ) -> Option<&PublishedTypeGroupTerminal> {
-        self.type_group_construction
-            .as_ref()?
-            .frozen_terminal(group)
     }
 
     pub(in crate::check::checker) fn freeze_type_group(&mut self, group: TypeGroupId) {

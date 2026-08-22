@@ -1,27 +1,19 @@
 use super::*;
 
-pub(super) enum CompileEngineOutcome {
-    Complete(
-        Box<(
-            InjectedProfileRun,
-            OwnedLibraryRuntimeState,
-            Option<std::sync::Arc<CollisionReplayPlan>>,
-        )>,
-    ),
-    #[cfg(any(test, feature = "test-utils"))]
-    ProjectLocal(ProjectLocalMaterializationReceiptForTest),
-}
-
 pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRoute>(
     frontend: CanonicalLibraryFrontend<'_, '_>,
     replay_index_plan: ReplayIndexPlan,
     record_retention: LibraryRecordRetention,
     evidence_capture: CanonicalLibraryEvidenceCapture,
     owner_site_storage_mode: OwnerSiteStorageMode,
-    #[cfg(any(test, feature = "test-utils"))] project_local_plan: Option<
-        &ProjectLocalMaterializationPlanForTest,
-    >,
-) -> Result<CompileEngineOutcome, InjectedProfileError> {
+) -> Result<
+    (
+        InjectedProfileRun,
+        OwnedLibraryRuntimeState,
+        Option<std::sync::Arc<CollisionReplayPlan>>,
+    ),
+    InjectedProfileError,
+> {
     let collision_plan_work_scope = CollisionPlanForbiddenWorkScope::start();
     record_collision_plan_forbidden_work(|work| {
         work.library_source_compiles = work.library_source_compiles.saturating_add(1);
@@ -428,19 +420,6 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
     pass.capture_compact_replay_dependencies = replay_index_plan != ReplayIndexPlan::None;
 
     let declaration_count = pass.type_decls.len();
-    #[cfg(any(test, feature = "test-utils"))]
-    let mut project_local_receipt = if let Some(plan) = project_local_plan {
-        match run_project_local_demands_for_test(&mut pass, plan)? {
-            ProjectLocalMaterializationControlForTest::Partial(receipt) => {
-                return Ok(CompileEngineOutcome::ProjectLocal(receipt));
-            }
-            ProjectLocalMaterializationControlForTest::ForceAll(receipt) => Some(receipt),
-        }
-    } else {
-        pass.fill_type_decls_range(binder.module, 0, declaration_count);
-        None
-    };
-    #[cfg(not(any(test, feature = "test-utils")))]
     pass.fill_type_decls_range(binder.module, 0, declaration_count);
     let module_programs = module_scopes
         .iter()
@@ -521,11 +500,6 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         return Err(InjectedProfileError::LibraryIdentitySelectionPending);
     }
     let publication_validations = publication.publication_validations();
-    #[cfg(any(test, feature = "test-utils"))]
-    if let Some(receipt) = project_local_receipt.as_mut() {
-        receipt.atomic_publication = true;
-        receipt.publication_validations = publication_validations;
-    }
     pass.validate_published_class_surfaces();
     #[cfg(any(test, feature = "test-utils"))]
     let lexical_source_units = pass
@@ -760,15 +734,6 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         .namespace_values
         .try_freeze_terminals()
         .map_err(|message| InjectedProfileError::CanonicalProjection(message.to_owned()))?;
-    #[cfg(any(test, feature = "test-utils"))]
-    if let (Some(receipt), Some(plan)) = (project_local_receipt.as_mut(), project_local_plan) {
-        finalize_deferred_project_local_groups_for_test(
-            receipt,
-            plan,
-            &pass,
-            &namespace_terminals,
-        )?;
-    }
     let mut replay_trace = pass.replay_trace.take();
     if replay_index_plan != ReplayIndexPlan::None && replay_trace.is_none() {
         return Err(InjectedProfileError::CanonicalProjection(
@@ -1026,13 +991,5 @@ pub(super) fn compile_owned_injected_frontend_for_route<Route: InjectedCompileRo
         #[cfg(any(test, feature = "test-utils"))]
         semantic_identities,
     };
-    #[cfg(any(test, feature = "test-utils"))]
-    if let Some(receipt) = project_local_receipt {
-        return Ok(CompileEngineOutcome::ProjectLocal(receipt));
-    }
-    Ok(CompileEngineOutcome::Complete(Box::new((
-        run,
-        runtime_state,
-        collision_plan,
-    ))))
+    Ok((run, runtime_state, collision_plan))
 }

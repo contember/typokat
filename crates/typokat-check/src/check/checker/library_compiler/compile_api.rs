@@ -342,7 +342,7 @@ pub(super) trait InjectedCompileRoute {
     ) -> Result<(), InjectedProfileError>;
 }
 
-pub(super) struct LegacyLibraryRoute;
+struct LegacyLibraryRoute;
 
 impl InjectedCompileRoute for LegacyLibraryRoute {
     type Ticket = LibraryRecordTicket;
@@ -574,8 +574,6 @@ pub(super) fn compile_owned_injected_frontend(
             record_retention,
             evidence_capture,
             owner_site_storage_mode,
-            #[cfg(any(test, feature = "test-utils"))]
-            None,
         )
     } else {
         compile_owned_injected_frontend_for_route::<LegacyLibraryRoute>(
@@ -584,17 +582,8 @@ pub(super) fn compile_owned_injected_frontend(
             record_retention,
             evidence_capture,
             owner_site_storage_mode,
-            #[cfg(any(test, feature = "test-utils"))]
-            None,
         )
     }
-    .and_then(|outcome| match outcome {
-        CompileEngineOutcome::Complete(complete) => Ok(*complete),
-        #[cfg(any(test, feature = "test-utils"))]
-        CompileEngineOutcome::ProjectLocal(_) => Err(InjectedProfileError::CanonicalProjection(
-            "ordinary compiler returned a project-local materialization receipt".to_owned(),
-        )),
-    })
 }
 
 pub(super) fn validate_complete_source_user_units(

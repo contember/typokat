@@ -1,7 +1,6 @@
 mod base;
 mod collision_preflight;
 pub mod compiler;
-mod lifecycle_metrics;
 pub mod profile;
 mod provider;
 pub mod records;
@@ -109,12 +108,6 @@ mod user_delta_project_scale_spec;
 mod collision_preflight_spec;
 
 #[cfg(test)]
-mod project_local_materializer_spec;
-
-#[cfg(test)]
-mod project_local_materializer;
-
-#[cfg(test)]
 mod private_route_receipt_spec;
 
 #[cfg(test)]
@@ -137,9 +130,3 @@ mod private_replay_scale_spec;
 
 #[cfg(test)]
 mod source_compiled_collision_plan_spec;
-
-#[cfg(test)]
-mod project_local_symbolic_index;
-
-#[cfg(test)]
-mod project_local_symbolic_index_spec;
