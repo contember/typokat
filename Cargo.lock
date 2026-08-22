@@ -1197,6 +1197,7 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "sha2",
+ "toml",
  "typokat-binder",
  "typokat-check",
  "typokat-core",

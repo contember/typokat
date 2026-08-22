@@ -131,3 +131,9 @@ mod private_replay_scale_spec;
 
 #[cfg(test)]
 mod source_compiled_collision_plan_spec;
+
+#[cfg(test)]
+mod project_local_symbolic_index;
+
+#[cfg(test)]
+mod project_local_symbolic_index_spec;
