@@ -8,6 +8,7 @@ pub struct ProductAuditReceipt {
     pub declaration_count: usize,
     pub group_count: usize,
     pub region_count: usize,
+    pub callable_scope_count: usize,
     pub type_parameter_count: usize,
     pub type_recipe_count: usize,
     pub signature_count: usize,
@@ -33,6 +34,7 @@ pub struct ProductAuditReceipt {
     pub dependency_edge_digest: String,
     pub dependency_scc_digest: String,
     pub lexical_order_digest: String,
+    pub callable_scope_digest: String,
     pub namespace_attachment_digest: String,
     pub value_attachment_digest: String,
 }
@@ -47,6 +49,7 @@ impl LibraryDeclarationProduct {
         render_rows(&mut output, "source", &self.sources);
         render_rows(&mut output, "container", &self.containers);
         render_rows(&mut output, "region", &self.regions);
+        render_rows(&mut output, "callable_scope", &self.callable_scopes);
         render_rows(&mut output, "declaration", &self.declarations);
         render_rows(&mut output, "group", &self.groups);
         render_rows(&mut output, "namespace", &self.namespaces);
@@ -68,6 +71,7 @@ impl LibraryDeclarationProduct {
             declaration_count: self.declarations.len(),
             group_count: self.groups.len(),
             region_count: self.regions.len(),
+            callable_scope_count: self.callable_scopes.len(),
             type_parameter_count: self.type_parameters.len(),
             type_recipe_count: self.types.len(),
             signature_count: self.signatures.len(),
@@ -179,6 +183,7 @@ impl LibraryDeclarationProduct {
             dependency_edge_digest: digest_rows(&self.dependencies),
             dependency_scc_digest: sha256_hex(dependency_scc_rows(self).as_bytes()),
             lexical_order_digest: digest_rows(&self.lexical_steps),
+            callable_scope_digest: digest_rows(&self.callable_scopes),
             namespace_attachment_digest: digest_rows(&self.namespaces),
             value_attachment_digest: digest_rows(&self.values),
         }

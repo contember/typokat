@@ -26,6 +26,7 @@ impl LibraryDeclarationProduct {
             sources,
             containers,
             regions,
+            callable_scopes,
             declarations,
             groups,
             namespaces,
@@ -61,6 +62,26 @@ impl LibraryDeclarationProduct {
         }
         for (row, region) in regions.iter().enumerate() {
             walk_region(visitor, row, region);
+        }
+        for (row, scope) in callable_scopes.iter().enumerate() {
+            let CallableScopeRecipe { site, parent } = scope;
+            walk_site(visitor, "callable_scopes", row, *site);
+            match parent {
+                LexicalScopeParent::Region(_region) => field(
+                    visitor,
+                    ProductFieldClass::ProductKey,
+                    "callable_scopes",
+                    row,
+                    "parent.region",
+                ),
+                LexicalScopeParent::Callable(_callable) => field(
+                    visitor,
+                    ProductFieldClass::ProductKey,
+                    "callable_scopes",
+                    row,
+                    "parent.callable",
+                ),
+            }
         }
         for (row, declaration) in declarations.iter().enumerate() {
             walk_declaration(visitor, row, declaration);
@@ -242,6 +263,7 @@ fn walk_declaration<V: ProductFieldVisitor>(
         site,
         binding_site,
         region: _region,
+        lexical_scope,
         name: _name,
         spaces,
         flags,
@@ -258,6 +280,29 @@ fn walk_declaration<V: ProductFieldVisitor>(
             (ProductFieldClass::ProductKey, "name"),
         ],
     );
+    match lexical_scope {
+        DeclarationLexicalScope::None => field(
+            visitor,
+            ProductFieldClass::Scalar,
+            "declarations",
+            row,
+            "lexical_scope.none",
+        ),
+        DeclarationLexicalScope::Region(_region) => field(
+            visitor,
+            ProductFieldClass::ProductKey,
+            "declarations",
+            row,
+            "lexical_scope.region",
+        ),
+        DeclarationLexicalScope::Callable(_callable) => field(
+            visitor,
+            ProductFieldClass::ProductKey,
+            "declarations",
+            row,
+            "lexical_scope.callable",
+        ),
+    }
     walk_declaration_slots(visitor, "declarations", row, spaces);
     walk_declaration_flags(visitor, row, flags);
     walk_declaration_payload(visitor, row, payload);

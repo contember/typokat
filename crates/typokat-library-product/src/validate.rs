@@ -1,7 +1,8 @@
 use crate::schema::{
-    DeclarationPayload, DependencyKind, DependencyTarget, LibraryDeclarationProduct, LiteralRecipe,
-    ParameterPattern, PropertyNameRecipe, SymbolicValueNameRecipe, TypeRecipeNode,
-    TypeReferenceResolution, ValueReferenceResolution,
+    DeclarationLexicalScope, DeclarationPayload, DependencyKind, DependencyTarget,
+    LexicalScopeParent, LibraryDeclarationProduct, LiteralRecipe, ParameterPattern,
+    PropertyNameRecipe, SymbolicValueNameRecipe, TypeRecipeNode, TypeReferenceResolution,
+    ValueReferenceResolution,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +50,11 @@ pub enum ProductValidationError {
     InvalidRegionContainment {
         row: usize,
     },
+    CallableScopeSourceOutOfBounds,
+    CallableScopeParentOutOfBounds,
+    CallableScopeParentCycle,
+    DeclarationLexicalScopeOutOfBounds,
+    DeclarationLexicalScopeRegionMismatch,
     DuplicateAttachment {
         table: &'static str,
         row: usize,
@@ -318,6 +324,14 @@ impl LibraryDeclarationProduct {
                 parent = owner.parent;
             }
         }
+        for (row, scope) in self.callable_scopes.iter().enumerate() {
+            if valid_site(self, scope.site, "callable_scopes", row).is_err() {
+                return Err(ProductValidationError::CallableScopeSourceOutOfBounds);
+            }
+            let key = crate::keys::CallableScopeKey::new(row)
+                .ok_or(ProductValidationError::CallableScopeParentOutOfBounds)?;
+            callable_terminal_region(self, key)?;
+        }
         for (row, declaration) in self.declarations.iter().enumerate() {
             valid_site(self, declaration.site, "declarations", row)?;
             valid_site(self, declaration.binding_site, "declarations", row)?;
@@ -336,6 +350,29 @@ impl LibraryDeclarationProduct {
                 || declaration.site.end < declaration.binding_site.end
             {
                 return Err(ProductValidationError::InvalidRegionContainment { row });
+            }
+            match declaration.lexical_scope {
+                DeclarationLexicalScope::None => {}
+                DeclarationLexicalScope::Region(key) => {
+                    if key.index() >= self.regions.len() {
+                        return Err(ProductValidationError::DeclarationLexicalScopeOutOfBounds);
+                    }
+                    if key != declaration.region {
+                        return Err(ProductValidationError::DeclarationLexicalScopeRegionMismatch);
+                    }
+                }
+                DeclarationLexicalScope::Callable(key) => {
+                    let Some(scope) = self.callable_scopes.get(key.index()) else {
+                        return Err(ProductValidationError::DeclarationLexicalScopeOutOfBounds);
+                    };
+                    if scope.site.source != declaration.site.source
+                        || scope.site.start > declaration.site.start
+                        || declaration.site.end > scope.site.end
+                        || callable_terminal_region(self, key)? != declaration.region
+                    {
+                        return Err(ProductValidationError::DeclarationLexicalScopeRegionMismatch);
+                    }
+                }
             }
             if declaration.name.index() >= self.strings.len() {
                 return Err(ProductValidationError::InvalidString {
@@ -465,6 +502,9 @@ impl LibraryDeclarationProduct {
                 | DeclarationPayload::CatchParameter { annotation: _ }
                 | DeclarationPayload::DefaultExportExpression => {}
             }
+        }
+        for row in 0..self.callable_scopes.len() {
+            validate_exact_callable_parent(self, row)?;
         }
         for (row, group) in self.groups.iter().enumerate() {
             if group.container.index() >= self.containers.len() {
@@ -803,6 +843,225 @@ impl LibraryDeclarationProduct {
         }
         Ok(())
     }
+}
+
+#[cfg(feature = "test-utils")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LexicalScopeCorruptionReceipt {
+    pub validation_errors: Vec<ProductValidationError>,
+}
+
+#[cfg(feature = "test-utils")]
+pub fn with_changed_callable_site_for_test(
+    product: &LibraryDeclarationProduct,
+) -> Result<LibraryDeclarationProduct, &'static str> {
+    let mut referenced = product
+        .declarations
+        .iter()
+        .filter_map(|declaration| match declaration.lexical_scope {
+            DeclarationLexicalScope::Callable(key) => Some(key),
+            DeclarationLexicalScope::None | DeclarationLexicalScope::Region(_) => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    referenced.extend(
+        product
+            .callable_scopes
+            .iter()
+            .filter_map(|scope| match scope.parent {
+                LexicalScopeParent::Callable(key) => Some(key),
+                LexicalScopeParent::Region(_) => None,
+            }),
+    );
+    let mut changed = product.clone();
+    let Some((row, _)) = changed
+        .callable_scopes
+        .iter()
+        .enumerate()
+        .find(|(row, scope)| {
+            crate::keys::CallableScopeKey::new(*row).is_some_and(|key| !referenced.contains(&key))
+                && scope.site.start < scope.site.end
+        })
+    else {
+        return Err("product has no unreferenced callable scope");
+    };
+    changed.callable_scopes[row].site.start =
+        changed.callable_scopes[row].site.start.saturating_add(1);
+    changed
+        .validate()
+        .map_err(|_| "changed callable site is not structurally valid")?;
+    Ok(changed)
+}
+
+#[cfg(feature = "test-utils")]
+pub fn lexical_scope_corruption_receipt_for_test(
+    product: &LibraryDeclarationProduct,
+) -> Result<LexicalScopeCorruptionReceipt, &'static str> {
+    let mut validation_errors = Vec::new();
+
+    let mut changed = product.clone();
+    changed.callable_scopes[0].site.source = crate::keys::SourceKey::new(product.sources.len())
+        .ok_or("source corruption key overflow")?;
+    validation_errors.push(changed.validate().expect_err("callable source corruption"));
+
+    let mut changed = product.clone();
+    changed.callable_scopes[0].parent = LexicalScopeParent::Callable(
+        crate::keys::CallableScopeKey::new(product.callable_scopes.len())
+            .ok_or("callable corruption key overflow")?,
+    );
+    validation_errors.push(changed.validate().expect_err("callable parent corruption"));
+
+    let mut changed = product.clone();
+    changed.callable_scopes[0].parent = LexicalScopeParent::Callable(
+        crate::keys::CallableScopeKey::new(0).ok_or("callable cycle key overflow")?,
+    );
+    validation_errors.push(changed.validate().expect_err("callable parent cycle"));
+
+    let mut changed = product.clone();
+    changed.declarations[0].lexical_scope = DeclarationLexicalScope::Callable(
+        crate::keys::CallableScopeKey::new(product.callable_scopes.len())
+            .ok_or("declaration callable corruption key overflow")?,
+    );
+    validation_errors.push(
+        changed
+            .validate()
+            .expect_err("declaration scope corruption"),
+    );
+
+    let mut changed = product.clone();
+    let (callable, wrong_region) = changed
+        .declarations
+        .iter()
+        .filter_map(|declaration| match declaration.lexical_scope {
+            DeclarationLexicalScope::Callable(callable) => Some((declaration, callable)),
+            DeclarationLexicalScope::None | DeclarationLexicalScope::Region(_) => None,
+        })
+        .find_map(|(declaration, callable)| {
+            let terminal = terminal_callable_key(&changed, callable)?;
+            let terminal_site = changed.callable_scopes[terminal.index()].site;
+            let wrong_region = (0..changed.regions.len())
+                .filter_map(crate::keys::RegionKey::new)
+                .find(|region| {
+                    *region != declaration.region
+                        && site_contains(changed.regions[region.index()].site, terminal_site)
+                })?;
+            Some((terminal, wrong_region))
+        })
+        .ok_or("product has no callable with an in-bounds wrong terminal region")?;
+    changed.callable_scopes[callable.index()].parent = LexicalScopeParent::Region(wrong_region);
+    validation_errors.push(
+        changed
+            .validate()
+            .expect_err("callable terminal region corruption"),
+    );
+
+    let expected = vec![
+        ProductValidationError::CallableScopeSourceOutOfBounds,
+        ProductValidationError::CallableScopeParentOutOfBounds,
+        ProductValidationError::CallableScopeParentCycle,
+        ProductValidationError::DeclarationLexicalScopeOutOfBounds,
+        ProductValidationError::DeclarationLexicalScopeRegionMismatch,
+    ];
+    if validation_errors != expected {
+        return Err("lexical scope corruptions did not reach exact validator failures");
+    }
+
+    Ok(LexicalScopeCorruptionReceipt { validation_errors })
+}
+
+#[cfg(feature = "test-utils")]
+fn terminal_callable_key(
+    product: &LibraryDeclarationProduct,
+    mut key: crate::keys::CallableScopeKey,
+) -> Option<crate::keys::CallableScopeKey> {
+    let mut remaining = product.callable_scopes.len();
+    while remaining > 0 {
+        remaining -= 1;
+        match product.callable_scopes.get(key.index())?.parent {
+            LexicalScopeParent::Region(_) => return Some(key),
+            LexicalScopeParent::Callable(parent) => key = parent,
+        }
+    }
+    None
+}
+
+fn callable_terminal_region(
+    product: &LibraryDeclarationProduct,
+    key: crate::keys::CallableScopeKey,
+) -> Result<crate::keys::RegionKey, ProductValidationError> {
+    let mut current = key;
+    let mut visited = vec![false; product.callable_scopes.len()];
+    loop {
+        let Some(scope) = product.callable_scopes.get(current.index()) else {
+            return Err(ProductValidationError::CallableScopeParentOutOfBounds);
+        };
+        if visited[current.index()] {
+            return Err(ProductValidationError::CallableScopeParentCycle);
+        }
+        visited[current.index()] = true;
+        match scope.parent {
+            LexicalScopeParent::Region(region) => {
+                let Some(parent) = product.regions.get(region.index()) else {
+                    return Err(ProductValidationError::CallableScopeParentOutOfBounds);
+                };
+                if !site_contains(parent.site, scope.site) {
+                    return Err(ProductValidationError::CallableScopeParentOutOfBounds);
+                }
+                return Ok(region);
+            }
+            LexicalScopeParent::Callable(parent) => {
+                let Some(parent_scope) = product.callable_scopes.get(parent.index()) else {
+                    return Err(ProductValidationError::CallableScopeParentOutOfBounds);
+                };
+                if !site_contains(parent_scope.site, scope.site) {
+                    return Err(ProductValidationError::CallableScopeParentOutOfBounds);
+                }
+                current = parent;
+            }
+        }
+    }
+}
+
+fn validate_exact_callable_parent(
+    product: &LibraryDeclarationProduct,
+    row: usize,
+) -> Result<(), ProductValidationError> {
+    let scope = &product.callable_scopes[row];
+    let enclosing_callable = product
+        .callable_scopes
+        .iter()
+        .enumerate()
+        .filter(|(candidate_row, candidate)| {
+            *candidate_row != row
+                && site_contains(candidate.site, scope.site)
+                && candidate.site != scope.site
+        })
+        .min_by_key(|(_, candidate)| candidate.site.end.saturating_sub(candidate.site.start))
+        .and_then(|(candidate_row, _)| crate::keys::CallableScopeKey::new(candidate_row));
+    if let Some(expected) = enclosing_callable {
+        return if scope.parent == LexicalScopeParent::Callable(expected) {
+            Ok(())
+        } else {
+            Err(ProductValidationError::CallableScopeParentOutOfBounds)
+        };
+    }
+
+    let expected_region = product
+        .regions
+        .iter()
+        .enumerate()
+        .filter(|(_, region)| site_contains(region.site, scope.site))
+        .min_by_key(|(_, region)| region.site.end.saturating_sub(region.site.start))
+        .and_then(|(region_row, _)| crate::keys::RegionKey::new(region_row))
+        .ok_or(ProductValidationError::CallableScopeParentOutOfBounds)?;
+    if scope.parent == LexicalScopeParent::Region(expected_region) {
+        Ok(())
+    } else {
+        Err(ProductValidationError::CallableScopeParentOutOfBounds)
+    }
+}
+
+fn site_contains(owner: crate::schema::SourceSite, child: crate::schema::SourceSite) -> bool {
+    owner.source == child.source && owner.start <= child.start && child.end <= owner.end
 }
 
 fn valid_child_region(

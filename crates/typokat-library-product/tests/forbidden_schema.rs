@@ -1,11 +1,11 @@
 use typokat_library_product::{
-    ContainerKind, ContainerRecipe, DeclarationFlags, DeclarationGroupRecipe, DeclarationPayload,
-    DeclarationRecipe, DeclarationSlots, DependencyKind, DependencyLinkRecipe, DependencyRecipe,
-    DependencyTarget, LexicalStepKind, LexicalStepRecipe, MemberKind, MemberRecipe,
-    ProductAssembly, ProductBuildError, ProductFieldClass, ProductFieldVisitor,
-    ProductValidationError, RegionKind, RegionRecipe, SourceClassification, SourceRecipe,
-    SourceSite, TypeParameterRecipe, TypeRecipe, TypeRecipeNode, TypeReferenceResolution,
-    ValueAttachmentRecipe, Variance,
+    ContainerKind, ContainerRecipe, DeclarationFlags, DeclarationGroupRecipe,
+    DeclarationLexicalScope, DeclarationPayload, DeclarationRecipe, DeclarationSlots,
+    DependencyKind, DependencyLinkRecipe, DependencyRecipe, DependencyTarget, LexicalStepKind,
+    LexicalStepRecipe, MemberKind, MemberRecipe, ProductAssembly, ProductBuildError,
+    ProductFieldClass, ProductFieldVisitor, ProductValidationError, RegionKind, RegionRecipe,
+    SourceClassification, SourceRecipe, SourceSite, TypeParameterRecipe, TypeRecipe,
+    TypeRecipeNode, TypeReferenceResolution, ValueAttachmentRecipe, Variance,
 };
 
 struct FieldCounter {
@@ -238,6 +238,7 @@ fn typed_corruption_controls_cover_owned_links() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -268,6 +269,7 @@ fn typed_corruption_controls_cover_owned_links() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -351,6 +353,7 @@ fn typed_corruption_controls_cover_owned_links() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: true,
@@ -390,6 +393,7 @@ fn relational_validation_reports_exact_owned_link_failures() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name: declaration_name,
             spaces: DeclarationSlots {
                 value: false,
@@ -463,6 +467,7 @@ fn relational_validation_reports_exact_owned_link_failures() {
                 end: 3,
             },
             region: child,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -511,6 +516,7 @@ fn relational_validation_reports_exact_owned_link_failures() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: true,
@@ -556,6 +562,7 @@ fn relational_validation_reports_exact_owned_link_failures() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -607,6 +614,7 @@ fn relational_validation_reports_exact_owned_link_failures() {
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -639,6 +647,7 @@ fn relational_validation_rejects_lexical_dependency_and_type_parameter_corruptio
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots::default(),
             flags: DeclarationFlags::default(),
@@ -699,6 +708,7 @@ fn relational_validation_rejects_lexical_dependency_and_type_parameter_corruptio
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots::default(),
             flags: DeclarationFlags::default(),
@@ -752,6 +762,7 @@ fn relational_validation_rejects_lexical_dependency_and_type_parameter_corruptio
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -860,6 +871,7 @@ fn relational_validation_rejects_lexical_dependency_and_type_parameter_corruptio
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -922,6 +934,7 @@ fn dependency_control_shell() -> (
                 end: 2,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,
@@ -961,6 +974,7 @@ fn dependency_control_shell() -> (
                 end: 4,
             },
             region: root,
+            lexical_scope: DeclarationLexicalScope::None,
             name: other_name,
             spaces: DeclarationSlots {
                 value: false,
@@ -1102,6 +1116,7 @@ fn container_validation_rejects_bad_namespace_parent_and_external_ownership() {
                 end: 3,
             },
             region: outer_region,
+            lexical_scope: DeclarationLexicalScope::None,
             name,
             spaces: DeclarationSlots {
                 value: false,

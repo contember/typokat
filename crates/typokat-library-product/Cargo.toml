@@ -3,5 +3,8 @@ name = "typokat-library-product"
 version.workspace = true
 edition.workspace = true
 
+[features]
+test-utils = []
+
 [lints]
 workspace = true

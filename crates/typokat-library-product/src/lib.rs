@@ -8,6 +8,11 @@ pub use canonical::{sha256_hex, ProductAuditReceipt};
 pub use keys::*;
 pub use schema::*;
 pub use validate::ProductValidationError;
+#[cfg(feature = "test-utils")]
+pub use validate::{
+    lexical_scope_corruption_receipt_for_test, with_changed_callable_site_for_test,
+    LexicalScopeCorruptionReceipt,
+};
 pub use walk::{ProductFieldClass, ProductFieldVisitor};
 
 #[derive(Default)]
@@ -16,6 +21,7 @@ pub struct ProductAssembly {
     sources: Vec<SourceRecipe>,
     containers: Vec<ContainerRecipe>,
     regions: Vec<RegionRecipe>,
+    callable_scopes: Vec<CallableScopeRecipe>,
     declarations: Vec<DeclarationRecipe>,
     groups: Vec<DeclarationGroupRecipe>,
     namespaces: Vec<NamespaceAttachmentRecipe>,
@@ -66,6 +72,10 @@ impl ProductAssembly {
     pub fn next_region_key(&self) -> Result<RegionKey, ProductBuildError> {
         RegionKey::new(self.regions.len()).ok_or(ProductBuildError::TooManyRows("regions"))
     }
+    pub fn next_callable_scope_key(&self) -> Result<CallableScopeKey, ProductBuildError> {
+        CallableScopeKey::new(self.callable_scopes.len())
+            .ok_or(ProductBuildError::TooManyRows("callable_scopes"))
+    }
     pub fn next_container_key(&self) -> Result<ContainerKey, ProductBuildError> {
         ContainerKey::new(self.containers.len()).ok_or(ProductBuildError::TooManyRows("containers"))
     }
@@ -113,6 +123,12 @@ impl ProductAssembly {
     add_row!(add_source, sources, SourceRecipe, SourceKey);
     add_row!(add_container, containers, ContainerRecipe, ContainerKey);
     add_row!(add_region, regions, RegionRecipe, RegionKey);
+    add_row!(
+        add_callable_scope,
+        callable_scopes,
+        CallableScopeRecipe,
+        CallableScopeKey
+    );
     add_row!(
         add_declaration,
         declarations,
@@ -183,6 +199,7 @@ impl ProductAssembly {
             sources: self.sources.into_boxed_slice(),
             containers: self.containers.into_boxed_slice(),
             regions: self.regions.into_boxed_slice(),
+            callable_scopes: self.callable_scopes.into_boxed_slice(),
             declarations: self.declarations.into_boxed_slice(),
             groups: self.groups.into_boxed_slice(),
             namespaces: self.namespaces.into_boxed_slice(),

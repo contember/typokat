@@ -22,6 +22,7 @@ typokat-binder = { workspace = true, features = ["test-utils"] }
 typokat-check = { workspace = true, features = ["test-utils"] }
 typokat-core = { workspace = true, features = ["test-utils"] }
 typokat-diagnostics.workspace = true
+typokat-library-product = { workspace = true, features = ["test-utils"] }
 typokat-relate = { workspace = true, features = ["test-utils"] }
 typokat-types = { workspace = true, features = ["test-utils"] }
 

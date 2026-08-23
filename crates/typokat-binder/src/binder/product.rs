@@ -41,6 +41,10 @@ pub enum LibraryProductProjectionError {
         source: u32,
         binding_start: u32,
     },
+    AmbiguousAuthenticatedScope {
+        source: u32,
+        scope: u32,
+    },
     MissingDependencyOwner {
         source: u32,
         start: u32,
@@ -325,6 +329,7 @@ pub fn project_library_declaration_product(
         current_group: None,
         current_scope: None,
         current_region: source_regions[0],
+        callable_scope_keys: BTreeMap::new(),
         active_type_parameters: Vec::new(),
         stable_group_anchors: BTreeMap::new(),
         stable_type_parameter_anchors: BTreeMap::new(),
@@ -433,6 +438,13 @@ pub fn project_library_declaration_product(
         context.source_ordinal = input.ordinal;
         let mut child_regions = BTreeMap::new();
         let mut region_ranges = Vec::new();
+        let mut lexical_regions = BTreeMap::new();
+        insert_lexical_region(
+            &mut lexical_regions,
+            binder.statement_lexical_root(input.module),
+            *root_region,
+            input.ordinal,
+        )?;
         for occurrence in input.manifest.declarations() {
             let (kind, span, child_container) = match occurrence.product_payload {
                 Some(SourceDeclarationProductPayload::Namespace(value)) => {
@@ -509,6 +521,113 @@ pub fn project_library_declaration_product(
             child_regions.insert(occurrence.binding_span.start, key);
             context.region_containers.insert(key, child_container);
             region_ranges.push((span.start, span.end, occurrence.binding_span.start, key));
+            match kind {
+                product::RegionKind::Namespace | product::RegionKind::AmbientExternalModule => {
+                    let private_scope = binder
+                        .namespace_fragment_private_scope(
+                            input.module,
+                            occurrence.declaration_span.start,
+                        )
+                        .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
+                            source: input.ordinal,
+                            binding_start: occurrence.binding_span.start,
+                        })?;
+                    insert_lexical_region(&mut lexical_regions, private_scope, key, input.ordinal)?;
+                }
+                product::RegionKind::GlobalAugmentation => {
+                    let overlay_scope = binder
+                        .global_augmentation_scope(input.module, occurrence.binding_span.start)
+                        .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
+                            source: input.ordinal,
+                            binding_start: occurrence.binding_span.start,
+                        })?;
+                    let body_scope = binder
+                        .global_augmentation_body_scope(input.module, occurrence.binding_span.start)
+                        .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
+                            source: input.ordinal,
+                            binding_start: occurrence.binding_span.start,
+                        })?;
+                    insert_lexical_region(&mut lexical_regions, overlay_scope, key, input.ordinal)?;
+                    insert_lexical_region(&mut lexical_regions, body_scope, key, input.ordinal)?;
+                }
+                product::RegionKind::Source => {}
+            }
+        }
+        let mut callable_facts = Vec::new();
+        for occurrence in input.manifest.declarations() {
+            let bound = binder
+                .declarations
+                .declaration_at_site(input.module, occurrence.binding_span.start, occurrence.kind)
+                .ok_or(
+                    LibraryProductProjectionError::MissingAuthenticatedDeclaration {
+                        source: input.ordinal,
+                        binding_start: occurrence.binding_span.start,
+                    },
+                )?;
+            match occurrence.product_payload {
+                Some(SourceDeclarationProductPayload::Function(function)) => {
+                    callable_facts.push((function.span, bound.site.scope));
+                }
+                Some(SourceDeclarationProductPayload::Class(class)) => {
+                    for element in &class.body.body {
+                        if let oxc_ast::ast::ClassElement::MethodDefinition(method) = element {
+                            callable_facts.push((method.value.span, bound.site.scope));
+                        }
+                    }
+                }
+                Some(SourceDeclarationProductPayload::Variable(_))
+                | Some(SourceDeclarationProductPayload::Catch(_))
+                | Some(SourceDeclarationProductPayload::Parameter(_))
+                | Some(SourceDeclarationProductPayload::RestParameter(_))
+                | Some(SourceDeclarationProductPayload::TypeAlias(_))
+                | Some(SourceDeclarationProductPayload::Interface(_))
+                | Some(SourceDeclarationProductPayload::Enum(_))
+                | Some(SourceDeclarationProductPayload::Namespace(_))
+                | Some(SourceDeclarationProductPayload::Global(_))
+                | None => {}
+            }
+        }
+        callable_facts.sort_by_key(|(span, _)| (span.start, span.end));
+        callable_facts.dedup_by_key(|(span, _)| *span);
+        for (span, expected_parent_scope) in callable_facts {
+            let scope = binder
+                .fn_scopes
+                .get(&(input.module, span.start))
+                .copied()
+                .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
+                    source: input.ordinal,
+                    binding_start: span.start,
+                })?;
+            let parent_scope = binder.graph.get(scope).and_then(|row| row.parent).ok_or(
+                LibraryProductProjectionError::MissingAuthenticatedScope {
+                    source: input.ordinal,
+                    binding_start: span.start,
+                },
+            )?;
+            if expected_parent_scope != Some(parent_scope) {
+                return Err(LibraryProductProjectionError::AuthenticatedSiteMismatch {
+                    source: input.ordinal,
+                    binding_start: span.start,
+                });
+            }
+            let parent = if let Some(parent) = context.callable_scope_keys.get(&parent_scope.0) {
+                product::LexicalScopeParent::Callable(*parent)
+            } else {
+                let region = lexical_regions.get(&parent_scope.0).copied().ok_or(
+                    LibraryProductProjectionError::MissingAuthenticatedScope {
+                        source: input.ordinal,
+                        binding_start: span.start,
+                    },
+                )?;
+                product::LexicalScopeParent::Region(region)
+            };
+            let key = context
+                .assembly
+                .add_callable_scope(product::CallableScopeRecipe {
+                    site: context.oxc_site(span),
+                    parent,
+                })?;
+            context.callable_scope_keys.insert(scope.0, key);
         }
         for occurrence in input.manifest.declarations() {
             let Some(bound) = binder.declarations.declaration_at_site(
@@ -560,6 +679,24 @@ pub fn project_library_declaration_product(
                 .unwrap_or(*root_region);
             context.current_scope = bound.site.scope;
             context.current_region = region;
+            let lexical_scope = match bound.site.scope {
+                None => product::DeclarationLexicalScope::None,
+                Some(scope) => context
+                    .callable_scope_keys
+                    .get(&scope.0)
+                    .copied()
+                    .map(product::DeclarationLexicalScope::Callable)
+                    .or_else(|| {
+                        lexical_regions
+                            .get(&scope.0)
+                            .copied()
+                            .map(product::DeclarationLexicalScope::Region)
+                    })
+                    .ok_or(LibraryProductProjectionError::MissingAuthenticatedScope {
+                        source: input.ordinal,
+                        binding_start: occurrence.binding_span.start,
+                    })?,
+            };
             let payload = lower_declaration_payload(
                 &mut context,
                 occurrence.product_payload,
@@ -572,6 +709,7 @@ pub fn project_library_declaration_product(
                     site: context.site(occurrence.declaration_span),
                     binding_site: context.site(occurrence.binding_span),
                     region,
+                    lexical_scope,
                     name,
                     spaces: product::DeclarationSlots {
                         value: bound.value_storage.is_some(),
@@ -872,6 +1010,7 @@ struct ProjectionContext<'binder> {
     current_group: Option<product::GroupKey>,
     current_scope: Option<ScopeId>,
     current_region: product::RegionKey,
+    callable_scope_keys: BTreeMap<u32, product::CallableScopeKey>,
     active_type_parameters: Vec<ActiveTypeParameterFrame>,
     stable_group_anchors: BTreeMap<product::GroupKey, StableGroupAnchor>,
     stable_type_parameter_anchors: BTreeMap<product::TypeParameterKey, StableTypeParameterAnchor>,
@@ -955,6 +1094,24 @@ fn container_for_scope(
         }
         scope = record.parent?;
     }
+}
+
+fn insert_lexical_region(
+    regions: &mut BTreeMap<u32, product::RegionKey>,
+    scope: ScopeId,
+    region: product::RegionKey,
+    source: u32,
+) -> Result<(), LibraryProductProjectionError> {
+    if regions
+        .insert(scope.0, region)
+        .is_some_and(|existing| existing != region)
+    {
+        return Err(LibraryProductProjectionError::AmbiguousAuthenticatedScope {
+            source,
+            scope: scope.0,
+        });
+    }
+    Ok(())
 }
 
 struct PendingDependency {

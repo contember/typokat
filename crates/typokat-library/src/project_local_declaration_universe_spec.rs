@@ -69,7 +69,6 @@ fn complete_source_oracle_freezes_library_lexical_scope_product_inputs() {
 }
 
 #[test]
-#[ignore = "RED until the immutable product retains exact lexical scope recipes"]
 fn declaration_product_retains_exact_library_lexical_scope_inputs() {
     let product = LibraryBaseProvider::new()
         .declaration_product()
@@ -146,7 +145,7 @@ fn declaration_product_retains_exact_library_lexical_scope_inputs() {
     }
     let spec = include_str!("project_local_declaration_universe_spec.rs");
     let start = spec
-        .find("fn product_lexical_scope_projection_for_test")
+        .rfind("fn product_lexical_scope_projection_for_test")
         .expect("raw product projection helper exists");
     let body = rust_function_body(spec, start);
     for forbidden in [
@@ -175,12 +174,222 @@ fn declaration_product_retains_exact_library_lexical_scope_inputs() {
             "product projection did not dereference raw field: {required}"
         );
     }
+
+    let projector = include_str!("../../typokat-binder/src/binder/product.rs");
+    let callable_start = projector
+        .find("let mut callable_facts")
+        .expect("callable projection exists");
+    let callable_end = projector[callable_start..]
+        .find("for occurrence in input.manifest.declarations() {\n            let Some(bound)")
+        .map(|offset| callable_start + offset)
+        .expect("declaration projection follows callable projection");
+    let callable_projection = &projector[callable_start..callable_end];
+    assert!(callable_projection.contains("lexical_regions.get(&parent_scope.0)"));
+    assert!(!callable_projection.contains("region_ranges"));
+
+    let declaration_start = projector
+        .find("let lexical_scope = match bound.site.scope")
+        .expect("declaration lexical projection exists");
+    let declaration_end = projector[declaration_start..]
+        .find("let payload = lower_declaration_payload")
+        .map(|offset| declaration_start + offset)
+        .expect("payload projection follows lexical scope projection");
+    let declaration_projection = &projector[declaration_start..declaration_end];
+    assert!(declaration_projection.contains("lexical_regions"));
+    assert!(!declaration_projection.contains("region_ranges"));
 }
 
 fn product_lexical_scope_projection_for_test(
-    _product: &typokat_library_product::LibraryDeclarationProduct,
+    product: &typokat_library_product::LibraryDeclarationProduct,
 ) -> Result<(Vec<String>, Vec<String>), &'static str> {
-    Err("immutable product lexical scope recipes are not implemented")
+    let _strings = product.strings();
+    let _sources = product.sources();
+    let _regions = product.regions();
+    let _declarations = product.declarations();
+    let _callable_scopes = product.callable_scopes();
+    fn source_name(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        source: typokat_library_product::SourceKey,
+    ) -> Result<String, &'static str> {
+        let source = product
+            .sources()
+            .get(source.index())
+            .ok_or("invalid source")?;
+        Ok(format!("library:{:02}", source.ordinal))
+    }
+
+    fn container_scope(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        container: typokat_library_product::ContainerKey,
+    ) -> Result<String, &'static str> {
+        let recipe = product
+            .containers()
+            .get(container.index())
+            .ok_or("invalid container")?;
+        match recipe.kind {
+            typokat_library_product::ContainerKind::CompilationGlobal => {
+                Ok("scope:compilation-global".to_owned())
+            }
+            typokat_library_product::ContainerKind::ExternalModule => {
+                let anchor = recipe.anchor.ok_or("external module lacks anchor")?;
+                Ok(format!(
+                    "scope:module:{}",
+                    source_name(product, anchor.source)?
+                ))
+            }
+            typokat_library_product::ContainerKind::Namespace
+            | typokat_library_product::ContainerKind::AmbientExternalModule => {
+                let parent =
+                    container_scope(product, recipe.parent.ok_or("namespace lacks parent")?)?;
+                let name = product
+                    .strings()
+                    .get(recipe.name.ok_or("namespace lacks name")?.index())
+                    .ok_or("invalid namespace name")?;
+                Ok(format!("{parent}::{name}"))
+            }
+        }
+    }
+
+    fn region_scope(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        region: typokat_library_product::RegionKey,
+    ) -> Result<String, &'static str> {
+        let recipe = product
+            .regions()
+            .get(region.index())
+            .ok_or("invalid region")?;
+        let source = source_name(product, recipe.site.source)?;
+        match recipe.kind {
+            typokat_library_product::RegionKind::Source => {
+                match product.sources()[recipe.site.source.index()].classification {
+                    typokat_library_product::SourceClassification::Script => {
+                        Ok("scope:compilation-global".to_owned())
+                    }
+                    typokat_library_product::SourceClassification::ExternalModule => {
+                        Ok(format!("scope:module:{source}"))
+                    }
+                }
+            }
+            typokat_library_product::RegionKind::Namespace
+            | typokat_library_product::RegionKind::AmbientExternalModule => {
+                let fragment_start = product
+                    .declarations()
+                    .iter()
+                    .find_map(|declaration| match declaration.payload {
+                        typokat_library_product::DeclarationPayload::Namespace { child_region }
+                            if child_region == region =>
+                        {
+                            Some(declaration.site.start)
+                        }
+                        typokat_library_product::DeclarationPayload::Variable { .. }
+                        | typokat_library_product::DeclarationPayload::Function { .. }
+                        | typokat_library_product::DeclarationPayload::Class { .. }
+                        | typokat_library_product::DeclarationPayload::Interface { .. }
+                        | typokat_library_product::DeclarationPayload::TypeAlias { .. }
+                        | typokat_library_product::DeclarationPayload::Enum { .. }
+                        | typokat_library_product::DeclarationPayload::Namespace { .. }
+                        | typokat_library_product::DeclarationPayload::Import
+                        | typokat_library_product::DeclarationPayload::ImportEquals
+                        | typokat_library_product::DeclarationPayload::NamespaceExport
+                        | typokat_library_product::DeclarationPayload::Global { .. }
+                        | typokat_library_product::DeclarationPayload::Parameter { .. }
+                        | typokat_library_product::DeclarationPayload::CatchParameter { .. }
+                        | typokat_library_product::DeclarationPayload::DefaultExportExpression => {
+                            None
+                        }
+                    })
+                    .ok_or("namespace region lacks declaration")?;
+                Ok(format!(
+                    "scope:namespace-private:{}:{source}:{fragment_start}",
+                    container_scope(product, recipe.container)?
+                ))
+            }
+            typokat_library_product::RegionKind::GlobalAugmentation => {
+                Ok("scope:compilation-global".to_owned())
+            }
+        }
+    }
+
+    fn callable_scope(
+        product: &typokat_library_product::LibraryDeclarationProduct,
+        key: typokat_library_product::CallableScopeKey,
+    ) -> Result<String, &'static str> {
+        let scope = product
+            .callable_scopes()
+            .get(key.index())
+            .ok_or("invalid callable scope")?;
+        Ok(format!(
+            "scope:function:scope:module:{}:{}",
+            source_name(product, scope.site.source)?,
+            scope.site.start
+        ))
+    }
+
+    fn declaration_kind(payload: &typokat_library_product::DeclarationPayload) -> &'static str {
+        match payload {
+            typokat_library_product::DeclarationPayload::Variable { .. } => "Variable",
+            typokat_library_product::DeclarationPayload::Function { .. } => "Function",
+            typokat_library_product::DeclarationPayload::Class { .. } => "Class",
+            typokat_library_product::DeclarationPayload::Interface { .. } => "Interface",
+            typokat_library_product::DeclarationPayload::TypeAlias { .. } => "TypeAlias",
+            typokat_library_product::DeclarationPayload::Enum { .. } => "Enum",
+            typokat_library_product::DeclarationPayload::Namespace { .. } => "Namespace",
+            typokat_library_product::DeclarationPayload::Import => "Import",
+            typokat_library_product::DeclarationPayload::ImportEquals => "ImportEquals",
+            typokat_library_product::DeclarationPayload::NamespaceExport => "NamespaceExport",
+            typokat_library_product::DeclarationPayload::Global { .. } => "Global",
+            typokat_library_product::DeclarationPayload::Parameter { .. } => "Parameter",
+            typokat_library_product::DeclarationPayload::CatchParameter { .. } => "CatchParameter",
+            typokat_library_product::DeclarationPayload::DefaultExportExpression => {
+                "DefaultExportExpression"
+            }
+        }
+    }
+
+    let mut callable_scopes = Vec::new();
+    for scope in product.callable_scopes() {
+        let parent = match scope.parent {
+            typokat_library_product::LexicalScopeParent::Region(region) => {
+                region_scope(product, region)?
+            }
+            typokat_library_product::LexicalScopeParent::Callable(callable) => {
+                callable_scope(product, callable)?
+            }
+        };
+        let callable = format!(
+            "scope:function:scope:module:{}:{}",
+            source_name(product, scope.site.source)?,
+            scope.site.start
+        );
+        callable_scopes.push(format!(
+            "{callable}|kind=Function|parent={parent}|public=none"
+        ));
+    }
+    callable_scopes.sort();
+
+    let mut declaration_scopes = Vec::new();
+    for declaration in product.declarations() {
+        let source = source_name(product, declaration.site.source)?;
+        let scope = match declaration.lexical_scope {
+            typokat_library_product::DeclarationLexicalScope::None => "none".to_owned(),
+            typokat_library_product::DeclarationLexicalScope::Region(region) => {
+                region_scope(product, region)?
+            }
+            typokat_library_product::DeclarationLexicalScope::Callable(callable) => {
+                callable_scope(product, callable)?
+            }
+        };
+        declaration_scopes.push(format!(
+            "{source}|{}|{}:{}|{}:{}|scope={scope}",
+            declaration_kind(&declaration.payload),
+            declaration.site.start,
+            declaration.site.end,
+            declaration.binding_site.start,
+            declaration.binding_site.end
+        ));
+    }
+    declaration_scopes.sort();
+    Ok((callable_scopes, declaration_scopes))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,7 +398,6 @@ struct ProductLexicalScopeCorruptionReceipt {
 }
 
 #[test]
-#[ignore = "RED until lexical-scope corruption controls exercise the real product validator"]
 fn declaration_product_lexical_scope_corruption_controls_are_live() {
     let product = LibraryBaseProvider::new()
         .declaration_product()
@@ -307,7 +515,7 @@ fn declaration_product_lexical_scope_corruption_controls_are_live() {
             "typokat_library_product::lexical_scope_corruption_receipt_for_test(product)",
         ),
     ] {
-        let start = spec.find(wrapper).expect("spec wrapper exists");
+        let start = spec.rfind(wrapper).expect("spec wrapper exists");
         let body = rust_function_body(spec, start);
         assert!(
             body.contains(required),
@@ -329,15 +537,22 @@ fn declaration_product_lexical_scope_corruption_controls_are_live() {
 }
 
 fn product_with_changed_callable_site_for_test(
-    _product: &typokat_library_product::LibraryDeclarationProduct,
+    product: &typokat_library_product::LibraryDeclarationProduct,
 ) -> Result<typokat_library_product::LibraryDeclarationProduct, &'static str> {
-    Err("callable-site falsifier is not implemented")
+    typokat_library_product::with_changed_callable_site_for_test(product)
 }
 
 fn product_lexical_scope_corruption_receipt_for_test(
-    _product: &typokat_library_product::LibraryDeclarationProduct,
+    product: &typokat_library_product::LibraryDeclarationProduct,
 ) -> Result<ProductLexicalScopeCorruptionReceipt, &'static str> {
-    Err("lexical-scope corruption receipt is not implemented")
+    let receipt = typokat_library_product::lexical_scope_corruption_receipt_for_test(product)?;
+    Ok(ProductLexicalScopeCorruptionReceipt {
+        validation_errors: receipt
+            .validation_errors
+            .into_iter()
+            .map(|error| format!("{error:?}"))
+            .collect(),
+    })
 }
 
 fn rust_function_body(source: &str, start: usize) -> &str {

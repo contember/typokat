@@ -1,6 +1,6 @@
 use crate::keys::{
-    ContainerKey, DeclarationKey, GroupKey, MemberKey, RegionKey, SignatureKey, SourceKey,
-    StringKey, TypeParameterKey, TypeRecipeKey,
+    CallableScopeKey, ContainerKey, DeclarationKey, GroupKey, MemberKey, RegionKey, SignatureKey,
+    SourceKey, StringKey, TypeParameterKey, TypeRecipeKey,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +56,25 @@ pub struct RegionRecipe {
     pub container: ContainerKey,
     pub kind: RegionKind,
     pub site: SourceSite,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LexicalScopeParent {
+    Region(RegionKey),
+    Callable(CallableScopeKey),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallableScopeRecipe {
+    pub site: SourceSite,
+    pub parent: LexicalScopeParent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeclarationLexicalScope {
+    None,
+    Region(RegionKey),
+    Callable(CallableScopeKey),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +153,7 @@ pub struct DeclarationRecipe {
     pub site: SourceSite,
     pub binding_site: SourceSite,
     pub region: RegionKey,
+    pub lexical_scope: DeclarationLexicalScope,
     pub name: StringKey,
     pub spaces: DeclarationSlots,
     pub flags: DeclarationFlags,
@@ -452,6 +472,7 @@ pub struct LibraryDeclarationProduct {
     pub(crate) sources: Box<[SourceRecipe]>,
     pub(crate) containers: Box<[ContainerRecipe]>,
     pub(crate) regions: Box<[RegionRecipe]>,
+    pub(crate) callable_scopes: Box<[CallableScopeRecipe]>,
     pub(crate) declarations: Box<[DeclarationRecipe]>,
     pub(crate) groups: Box<[DeclarationGroupRecipe]>,
     pub(crate) namespaces: Box<[NamespaceAttachmentRecipe]>,
@@ -494,6 +515,9 @@ impl LibraryDeclarationProduct {
     }
     pub fn regions(&self) -> &[RegionRecipe] {
         &self.regions
+    }
+    pub fn callable_scopes(&self) -> &[CallableScopeRecipe] {
+        &self.callable_scopes
     }
     pub fn declarations(&self) -> &[DeclarationRecipe] {
         &self.declarations

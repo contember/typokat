@@ -138,6 +138,7 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(receipt.declaration_count, 13_958);
     assert_eq!(receipt.group_count, 3_406);
     assert_eq!(receipt.region_count, 97);
+    assert_eq!(receipt.callable_scope_count, 153);
     assert_eq!(receipt.type_parameter_count, 1_044);
     assert_eq!(receipt.type_recipe_count, 41_853);
     assert_eq!(receipt.signature_count, 6_683);
@@ -158,10 +159,10 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(receipt.resolved_group_dependency_count, 14_235);
     assert_eq!(receipt.type_parameter_dependency_count, 2_207);
     assert_eq!(receipt.unresolved_dependency_count, 3);
-    assert_eq!(receipt.canonical_bytes, 30_307_565);
+    assert_eq!(receipt.canonical_bytes, 30_688_072);
     assert_eq!(
         receipt.canonical_digest,
-        "330f7a20ccf42950568f62514e3db38fb0940cded8deac98ad36cebe158074f0"
+        "a3e543680440ed88755d4d43f5a5a02c071052a061705e378d29d03a313d6c82"
     );
     assert_eq!(
         receipt.dependency_edge_digest,
@@ -174,6 +175,10 @@ fn product_receipt_matches_authenticated_edge_and_attachment_oracles() {
     assert_eq!(
         receipt.lexical_order_digest,
         "a622952bc63c20ebf7243543051fb0a899fd83d4875cb922af1f14eecf813917"
+    );
+    assert_eq!(
+        receipt.callable_scope_digest,
+        "34820efc0bdc8e3ff7e9a004b8b00c01715ca8331f789da6e3582c42c3b77c6c"
     );
     assert_eq!(
         receipt.namespace_attachment_digest,
