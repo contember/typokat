@@ -783,6 +783,30 @@ pub enum QualifiedTypePathResolution {
     },
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum QualifiedValuePathResolution {
+    Value(ValueStorageId),
+    MissingRoot {
+        segment: usize,
+    },
+    TypeOnlyRoot {
+        segment: usize,
+    },
+    MissingMember {
+        segment: usize,
+    },
+    NamespaceOnlyLeaf {
+        segment: usize,
+    },
+    Unavailable {
+        segment: usize,
+    },
+    Deferred {
+        segment: usize,
+        reason: QualifiedTypePathDeferredReason,
+    },
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LocalAmbientExportAliasFailure {
     pub origin: CompilationOrigin,

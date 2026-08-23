@@ -1539,6 +1539,56 @@ enum BuilderUseMode {
 }
 
 impl<'ast> ProjectBinderBuilder<'ast> {
+    pub fn new_empty_library_prelude(prelude: &'ast Program<'ast>) -> Self {
+        let manifest = SourceDeclarationManifest::empty_for_program(prelude);
+        Self::new_with_declaration_manifest(prelude, &manifest)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn perturb_product_allocations_for_test(&mut self, rows: usize) {
+        for index in 0..rows {
+            self.state
+                .graph
+                .push(Scope::new(ScopeKind::Block, Some(self.compilation_global)));
+            self.state.fresh_value_storage();
+            let site = DeclarationSite {
+                module: self.prelude_module,
+                scope: Some(self.prelude_module),
+                declaration_span: Span::new(
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                ),
+                binding_span: Span::new(
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                    u32::try_from(index).unwrap_or(u32::MAX),
+                ),
+            };
+            let declaration = self
+                .state
+                .declarations
+                .push(DeclarationKind::TypeAlias, site);
+            let group = self
+                .state
+                .type_groups
+                .append_fragment(
+                    None,
+                    "__product_allocation_prefix",
+                    TypeGroupFragment {
+                        declaration,
+                        source: SourceUnitKey::PRELUDE,
+                        scope: self.prelude_module,
+                        site,
+                        kind: TypeFragmentKind::TypeAlias,
+                    },
+                )
+                .group;
+            let mut symbol = Symbol::new("__product_allocation_prefix");
+            symbol.ty = Some(group);
+            symbol.owns_type_group = true;
+            self.state.symbols.push(symbol);
+        }
+    }
+
     /// Bind the prelude first so its checker storage keeps the low id ranges.
     pub fn new(prelude: &Program<'_>) -> Self {
         let manifest = SourceDeclarationManifest::build(prelude);

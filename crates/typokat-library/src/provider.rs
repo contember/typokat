@@ -62,6 +62,13 @@ impl std::error::Error for LibraryInitError {}
 
 pub struct LibraryBaseProvider {
     result: OnceLock<Result<Arc<InitializedLibrary>, Arc<LibraryInitError>>>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    declaration_product: OnceLock<
+        Result<
+            Arc<typokat_library_product::LibraryDeclarationProduct>,
+            Arc<super::declaration_product::LibraryDeclarationProductBuildError>,
+        >,
+    >,
     attempts: AtomicU64,
     publications: AtomicU64,
     compile_us: AtomicU64,
@@ -140,6 +147,7 @@ impl LibraryBaseProvider {
     pub const fn new() -> Self {
         Self {
             result: OnceLock::new(),
+            declaration_product: OnceLock::new(),
             attempts: AtomicU64::new(0),
             publications: AtomicU64::new(0),
             compile_us: AtomicU64::new(0),
@@ -150,6 +158,20 @@ impl LibraryBaseProvider {
     pub fn get(&self) -> Result<Arc<FrozenLibraryBase>, Arc<LibraryInitError>> {
         self.initialized()
             .map(|initialized| initialized.base.clone())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn declaration_product(
+        &self,
+    ) -> Result<
+        Arc<typokat_library_product::LibraryDeclarationProduct>,
+        Arc<super::declaration_product::LibraryDeclarationProductBuildError>,
+    > {
+        self.declaration_product
+            .get_or_init(|| {
+                super::declaration_product::build_packaged_declaration_product().map_err(Arc::new)
+            })
+            .clone()
     }
 
     /// Continue a compiled library binder checkpoint through the project's own files.
@@ -270,6 +292,11 @@ impl LibraryBaseProvider {
             attempts: self.attempts.load(Ordering::Relaxed),
             publications: self.publications.load(Ordering::Relaxed),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn declaration_product_initialized_for_test(&self) -> bool {
+        self.declaration_product.get().is_some()
     }
 }
 

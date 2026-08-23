@@ -13,6 +13,7 @@ oxc_span.workspace = true
 rustc-hash.workspace = true
 typokat-core.workspace = true
 typokat-types.workspace = true
+typokat-library-product.workspace = true
 
 [dev-dependencies]
 oxc_allocator.workspace = true

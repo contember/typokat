@@ -12,6 +12,7 @@ typokat-binder.workspace = true
 typokat-check.workspace = true
 typokat-core.workspace = true
 typokat-frontend.workspace = true
+typokat-library-product.workspace = true
 
 [dev-dependencies]
 oxc_ast.workspace = true

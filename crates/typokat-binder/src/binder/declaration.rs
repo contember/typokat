@@ -102,11 +102,39 @@ pub struct DeclarationSite {
 }
 
 /// Source-only declaration occurrence found independently of semantic support.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct SourceDeclarationOccurrence {
+#[derive(Copy, Clone, Debug)]
+pub struct SourceDeclarationOccurrence<'ast> {
     pub kind: DeclarationKind,
     pub declaration_span: Span,
     pub binding_span: Span,
+    pub variable_constant: bool,
+    pub product_payload: Option<SourceDeclarationProductPayload<'ast>>,
+}
+
+impl PartialEq for SourceDeclarationOccurrence<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.declaration_span == other.declaration_span
+            && self.binding_span == other.binding_span
+            && self.variable_constant == other.variable_constant
+    }
+}
+
+impl Eq for SourceDeclarationOccurrence<'_> {}
+
+#[derive(Copy, Clone, Debug)]
+pub enum SourceDeclarationProductPayload<'ast> {
+    Variable(&'ast oxc_ast::ast::VariableDeclarator<'ast>),
+    Catch(&'ast oxc_ast::ast::CatchParameter<'ast>),
+    Parameter(&'ast oxc_ast::ast::FormalParameter<'ast>),
+    RestParameter(&'ast oxc_ast::ast::FormalParameterRest<'ast>),
+    Function(&'ast oxc_ast::ast::Function<'ast>),
+    Class(&'ast Class<'ast>),
+    TypeAlias(&'ast TSTypeAliasDeclaration<'ast>),
+    Interface(&'ast TSInterfaceDeclaration<'ast>),
+    Enum(&'ast TSEnumDeclaration<'ast>),
+    Namespace(&'ast TSModuleDeclaration<'ast>),
+    Global(&'ast TSGlobalDeclaration<'ast>),
 }
 
 /// Source placement of one type-fragment AST payload.
@@ -170,12 +198,21 @@ pub struct SourceTypeFragmentOccurrence<'ast> {
 #[derive(Clone, Debug)]
 pub struct SourceDeclarationManifest<'ast> {
     program: &'ast Program<'ast>,
-    declarations: Box<[SourceDeclarationOccurrence]>,
+    declarations: Box<[SourceDeclarationOccurrence<'ast>]>,
     type_fragments: Box<[SourceTypeFragmentOccurrence<'ast>]>,
     interface_occurrences: Box<[SourceInterfaceOccurrence]>,
 }
 
 impl<'ast> SourceDeclarationManifest<'ast> {
+    pub(crate) fn empty_for_program(program: &'ast Program<'ast>) -> Self {
+        Self {
+            program,
+            declarations: Box::new([]),
+            type_fragments: Box::new([]),
+            interface_occurrences: Box::new([]),
+        }
+    }
+
     pub fn build(program: &'ast Program<'ast>) -> Self {
         #[cfg(any(test, feature = "test-utils"))]
         SOURCE_DECLARATION_MANIFEST_BUILDS_FOR_TEST.set(
@@ -199,7 +236,7 @@ impl<'ast> SourceDeclarationManifest<'ast> {
         }
     }
 
-    pub fn declarations(&self) -> &[SourceDeclarationOccurrence] {
+    pub fn declarations(&self) -> &[SourceDeclarationOccurrence<'ast>] {
         &self.declarations
     }
 
@@ -263,7 +300,9 @@ pub fn source_global_binding_census_with_provenance(
     }
 }
 
-pub fn source_declaration_occurrences(program: &Program<'_>) -> Vec<SourceDeclarationOccurrence> {
+pub fn source_declaration_occurrences<'ast>(
+    program: &'ast Program<'ast>,
+) -> Vec<SourceDeclarationOccurrence<'ast>> {
     let mut visitor = SourceDeclarationVisitor::occurrences_only();
     visitor.visit_program(program);
     visitor
@@ -323,7 +362,7 @@ pub struct SourceGlobalContributorSite {
 }
 
 struct SourceDeclarationVisitor<'ast> {
-    occurrences: Option<Vec<SourceDeclarationOccurrence>>,
+    occurrences: Option<Vec<SourceDeclarationOccurrence<'ast>>>,
     type_fragments: Option<Vec<SourceTypeFragmentOccurrence<'ast>>>,
     interface_occurrences: Vec<SourceInterfaceOccurrence>,
     global_census: Option<SourceGlobalCensusProjection>,
@@ -331,6 +370,7 @@ struct SourceDeclarationVisitor<'ast> {
     class_static_block_depth: u32,
     ambient_external_module_depth: u32,
     global_augmentation_start: Option<u32>,
+    variable_kinds: Vec<VariableDeclarationKind>,
 }
 
 struct SourceGlobalCensusProjection {
@@ -365,6 +405,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             class_static_block_depth: 0,
             ambient_external_module_depth: 0,
             global_augmentation_start: None,
+            variable_kinds: Vec::new(),
         }
     }
 
@@ -378,6 +419,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             class_static_block_depth: 0,
             ambient_external_module_depth: 0,
             global_augmentation_start: None,
+            variable_kinds: Vec::new(),
         }
     }
 
@@ -403,6 +445,7 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
             class_static_block_depth: 0,
             ambient_external_module_depth: 0,
             global_augmentation_start: None,
+            variable_kinds: Vec::new(),
         }
     }
 
@@ -429,24 +472,89 @@ impl<'ast> SourceDeclarationVisitor<'ast> {
                 kind,
                 declaration_span: Span::from_oxc(declaration_span),
                 binding_span: Span::from_oxc(binding_span),
+                variable_constant: false,
+                product_payload: None,
             });
         }
     }
 
-    fn push_pattern(
+    fn push_with_payload(
         &mut self,
         kind: DeclarationKind,
         declaration_span: oxc_span::Span,
-        pattern: &oxc_ast::ast::BindingPattern<'_>,
+        binding_span: oxc_span::Span,
+        product_payload: SourceDeclarationProductPayload<'ast>,
     ) {
-        let Some(occurrences) = self.occurrences.as_mut() else {
-            return;
-        };
-        for identifier in pattern.get_binding_identifiers() {
+        if let Some(occurrences) = self.occurrences.as_mut() {
             occurrences.push(SourceDeclarationOccurrence {
                 kind,
                 declaration_span: Span::from_oxc(declaration_span),
+                binding_span: Span::from_oxc(binding_span),
+                variable_constant: false,
+                product_payload: Some(product_payload),
+            });
+        }
+    }
+
+    fn push_parameter(&mut self, parameter: &'ast oxc_ast::ast::FormalParameter<'ast>) {
+        let Some(occurrences) = self.occurrences.as_mut() else {
+            return;
+        };
+        for identifier in parameter.pattern.get_binding_identifiers() {
+            occurrences.push(SourceDeclarationOccurrence {
+                kind: DeclarationKind::Parameter,
+                declaration_span: Span::from_oxc(parameter.span),
                 binding_span: Span::from_oxc(identifier.span),
+                variable_constant: false,
+                product_payload: Some(SourceDeclarationProductPayload::Parameter(parameter)),
+            });
+        }
+    }
+
+    fn push_variable(&mut self, declaration: &'ast oxc_ast::ast::VariableDeclarator<'ast>) {
+        let Some(occurrences) = self.occurrences.as_mut() else {
+            return;
+        };
+        for identifier in declaration.id.get_binding_identifiers() {
+            occurrences.push(SourceDeclarationOccurrence {
+                kind: DeclarationKind::Variable,
+                declaration_span: Span::from_oxc(declaration.span),
+                binding_span: Span::from_oxc(identifier.span),
+                variable_constant: self
+                    .variable_kinds
+                    .last()
+                    .is_some_and(|kind| *kind == VariableDeclarationKind::Const),
+                product_payload: Some(SourceDeclarationProductPayload::Variable(declaration)),
+            });
+        }
+    }
+
+    fn push_catch(&mut self, parameter: &'ast oxc_ast::ast::CatchParameter<'ast>) {
+        let Some(occurrences) = self.occurrences.as_mut() else {
+            return;
+        };
+        for identifier in parameter.pattern.get_binding_identifiers() {
+            occurrences.push(SourceDeclarationOccurrence {
+                kind: DeclarationKind::CatchParameter,
+                declaration_span: Span::from_oxc(parameter.span),
+                binding_span: Span::from_oxc(identifier.span),
+                variable_constant: false,
+                product_payload: Some(SourceDeclarationProductPayload::Catch(parameter)),
+            });
+        }
+    }
+
+    fn push_rest_parameter(&mut self, parameter: &'ast oxc_ast::ast::FormalParameterRest<'ast>) {
+        let Some(occurrences) = self.occurrences.as_mut() else {
+            return;
+        };
+        for identifier in parameter.rest.argument.get_binding_identifiers() {
+            occurrences.push(SourceDeclarationOccurrence {
+                kind: DeclarationKind::Parameter,
+                declaration_span: Span::from_oxc(parameter.span),
+                binding_span: Span::from_oxc(identifier.span),
+                variable_constant: false,
+                product_payload: Some(SourceDeclarationProductPayload::RestParameter(parameter)),
             });
         }
     }
@@ -775,12 +883,13 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
         }
         match kind {
             AstKind::VariableDeclaration(declaration) => {
+                self.variable_kinds.push(declaration.kind);
                 if let Some(census) = self.global_census.as_mut() {
                     census.variable_kinds.push(declaration.kind);
                 }
             }
             AstKind::VariableDeclarator(declaration) => {
-                self.push_pattern(DeclarationKind::Variable, declaration.span, &declaration.id);
+                self.push_variable(declaration);
                 if let Some(root) = self.root_placement() {
                     let kind = self
                         .global_census
@@ -796,7 +905,12 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
             }
             AstKind::Function(function) => {
                 if let Some(identifier) = &function.id {
-                    self.push(DeclarationKind::Function, function.span, identifier.span);
+                    self.push_with_payload(
+                        DeclarationKind::Function,
+                        function.span,
+                        identifier.span,
+                        SourceDeclarationProductPayload::Function(function),
+                    );
                     if function.is_declaration()
                         && self
                             .root_placement()
@@ -816,7 +930,12 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
             }
             AstKind::Class(class) => {
                 if let Some(identifier) = &class.id {
-                    self.push(DeclarationKind::Class, class.span, identifier.span);
+                    self.push_with_payload(
+                        DeclarationKind::Class,
+                        class.span,
+                        identifier.span,
+                        SourceDeclarationProductPayload::Class(class),
+                    );
                     if class.r#type == ClassType::ClassDeclaration
                         && self
                             .root_placement()
@@ -851,23 +970,11 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
                     census.class_depth = census.class_depth.saturating_add(1);
                 }
             }
-            AstKind::FormalParameter(parameter) => self.push_pattern(
-                DeclarationKind::Parameter,
-                parameter.span,
-                &parameter.pattern,
-            ),
-            AstKind::FormalParameterRest(parameter) => self.push_pattern(
-                DeclarationKind::Parameter,
-                parameter.span,
-                &parameter.rest.argument,
-            ),
+            AstKind::FormalParameter(parameter) => self.push_parameter(parameter),
+            AstKind::FormalParameterRest(parameter) => self.push_rest_parameter(parameter),
             AstKind::CatchClause(clause) => {
                 if let Some(parameter) = &clause.param {
-                    self.push_pattern(
-                        DeclarationKind::CatchParameter,
-                        parameter.span,
-                        &parameter.pattern,
-                    );
+                    self.push_catch(parameter);
                 }
             }
             AstKind::ImportDeclaration(declaration) => {
@@ -882,10 +989,11 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
                 }
             }
             AstKind::TSTypeAliasDeclaration(declaration) => {
-                self.push(
+                self.push_with_payload(
                     DeclarationKind::TypeAlias,
                     declaration.span,
                     declaration.id.span,
+                    SourceDeclarationProductPayload::TypeAlias(declaration),
                 );
                 self.push_type_fragment(
                     DeclarationKind::TypeAlias,
@@ -907,10 +1015,11 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
                 }
             }
             AstKind::TSInterfaceDeclaration(declaration) => {
-                self.push(
+                self.push_with_payload(
                     DeclarationKind::Interface,
                     declaration.span,
                     declaration.id.span,
+                    SourceDeclarationProductPayload::Interface(declaration),
                 );
                 self.push_type_fragment(
                     DeclarationKind::Interface,
@@ -932,7 +1041,12 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
                 }
             }
             AstKind::TSEnumDeclaration(declaration) => {
-                self.push(DeclarationKind::Enum, declaration.span, declaration.id.span);
+                self.push_with_payload(
+                    DeclarationKind::Enum,
+                    declaration.span,
+                    declaration.id.span,
+                    SourceDeclarationProductPayload::Enum(declaration),
+                );
                 self.push_type_fragment(
                     DeclarationKind::Enum,
                     declaration.span,
@@ -957,7 +1071,12 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
                     TSModuleDeclarationName::Identifier(identifier) => identifier.span,
                     TSModuleDeclarationName::StringLiteral(literal) => literal.span,
                 };
-                self.push(DeclarationKind::Namespace, declaration.span, binding_span);
+                self.push_with_payload(
+                    DeclarationKind::Namespace,
+                    declaration.span,
+                    binding_span,
+                    SourceDeclarationProductPayload::Namespace(declaration),
+                );
                 if let TSModuleDeclarationName::Identifier(identifier) = &declaration.id {
                     if let Some(placement) = self.root_placement() {
                         if placement.direct_lexical {
@@ -1021,10 +1140,11 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
                 }
             }
             AstKind::TSGlobalDeclaration(declaration) => {
-                self.push(
+                self.push_with_payload(
                     DeclarationKind::Global,
                     declaration.span,
                     declaration.global_span,
+                    SourceDeclarationProductPayload::Global(declaration),
                 );
                 let placement_is_legal = self.global_placement_is_legal();
                 let direct_script_rejected = self.direct_script_global_is_rejected();
@@ -1060,6 +1180,9 @@ impl<'ast> Visit<'ast> for SourceDeclarationVisitor<'ast> {
     }
 
     fn leave_node(&mut self, kind: AstKind<'ast>) {
+        if matches!(kind, AstKind::VariableDeclaration(_)) {
+            self.variable_kinds.pop();
+        }
         let Some(census) = self.global_census.as_mut() else {
             return;
         };

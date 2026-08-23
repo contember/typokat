@@ -1,6 +1,7 @@
 mod base;
 mod collision_preflight;
 pub mod compiler;
+mod declaration_product;
 pub mod profile;
 mod provider;
 pub mod records;
@@ -124,6 +125,9 @@ mod compiler_profile_spec;
 
 #[cfg(test)]
 mod library_declaration_product_spec;
+
+#[cfg(test)]
+mod library_declaration_product_integration_spec;
 
 #[cfg(test)]
 mod type_group_ordering_spec;

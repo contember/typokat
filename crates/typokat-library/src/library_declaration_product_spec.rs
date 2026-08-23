@@ -486,7 +486,6 @@ fn ownership_source_audit_rejects_the_known_broken_control() {
 }
 
 #[test]
-#[ignore = "RED until typokat-library-product and its closed walker exist"]
 fn candidate_product_crate_has_the_closed_dependency_free_boundary() {
     let root = workspace_root();
     let crate_root = root.join("crates/typokat-library-product");

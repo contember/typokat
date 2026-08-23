@@ -1114,6 +1114,7 @@ dependencies = [
  "oxc_span",
  "rustc-hash",
  "typokat-core",
+ "typokat-library-product",
  "typokat-types",
 ]
 
@@ -1205,9 +1206,14 @@ dependencies = [
  "typokat-core",
  "typokat-diagnostics",
  "typokat-frontend",
+ "typokat-library-product",
  "typokat-relate",
  "typokat-types",
 ]
+
+[[package]]
+name = "typokat-library-product"
+version = "0.1.0"
 
 [[package]]
 name = "typokat-relate"

@@ -48,7 +48,7 @@ pub(super) fn global_this_namespace_is_type_only(
 struct QualifiedSymbolView {
     namespace: Option<NamespaceId>,
     type_group: Option<TypeGroupId>,
-    value: bool,
+    value: Option<ValueStorageId>,
     unavailable: bool,
     deferred: Option<QualifiedTypePathDeferredReason>,
 }
@@ -653,7 +653,7 @@ impl Binder {
             if let Some(group) = view.type_group {
                 return QualifiedTypePathResolution::TypeGroup(group);
             }
-            return if view.value {
+            return if view.value.is_some() {
                 QualifiedTypePathResolution::ValueOnlyLeaf { segment }
             } else {
                 QualifiedTypePathResolution::MissingMember { segment }
@@ -661,6 +661,90 @@ impl Binder {
         }
 
         QualifiedTypePathResolution::MissingMember {
+            segment: segments.len() - 1,
+        }
+    }
+
+    pub fn resolve_qualified_value_path(
+        &self,
+        scope: ScopeId,
+        segments: &[&str],
+    ) -> QualifiedValuePathResolution {
+        if segments.len() < 2 {
+            return QualifiedValuePathResolution::MissingRoot { segment: 0 };
+        }
+        let (root_value, root_namespace) = match self.resolve_value_binding(scope, segments[0]) {
+            crate::binder::bind::ValueResolution::Resolved { symbol, kind } => {
+                let Some(symbol_row) = self.symbols.get(symbol) else {
+                    return QualifiedValuePathResolution::MissingRoot { segment: 0 };
+                };
+                let value = match kind {
+                    crate::binder::bind::ResolvedValueKind::Ordinary => symbol_row.value,
+                    crate::binder::bind::ResolvedValueKind::StandaloneNamespace {
+                        storage, ..
+                    } => Some(storage),
+                };
+                let Some(value) = value else {
+                    return QualifiedValuePathResolution::TypeOnlyRoot { segment: 0 };
+                };
+                let namespace = match kind {
+                    crate::binder::bind::ResolvedValueKind::Ordinary => symbol_row.ns,
+                    crate::binder::bind::ResolvedValueKind::StandaloneNamespace {
+                        namespace,
+                        ..
+                    } => Some(namespace),
+                };
+                (value, namespace)
+            }
+            crate::binder::bind::ValueResolution::TypeOnlyNamespace { .. } => {
+                return QualifiedValuePathResolution::TypeOnlyRoot { segment: 0 };
+            }
+            crate::binder::bind::ValueResolution::Missing => {
+                return QualifiedValuePathResolution::MissingRoot { segment: 0 };
+            }
+        };
+        let Some(mut namespace) = root_namespace else {
+            // Object-valued globals are authenticated by their root value storage;
+            // property typing belongs to semantic lowering, not the binder.
+            return QualifiedValuePathResolution::Value(root_value);
+        };
+        for (segment, name) in segments.iter().enumerate().skip(1) {
+            let public_scope = match self.namespaces.get(namespace) {
+                Some(namespace) => namespace.public_scope,
+                None => return QualifiedValuePathResolution::MissingMember { segment },
+            };
+            let Some(symbol) = self
+                .graph
+                .get(public_scope)
+                .and_then(|scope| scope.lookup_local(name))
+            else {
+                return QualifiedValuePathResolution::MissingMember { segment };
+            };
+            let view = self.qualified_symbol_view(Some(namespace), symbol, &mut Vec::new());
+            if view.unavailable {
+                return QualifiedValuePathResolution::Unavailable { segment };
+            }
+            if let Some(reason) = view.deferred {
+                return QualifiedValuePathResolution::Deferred { segment, reason };
+            }
+            let leaf = segment + 1 == segments.len();
+            if !leaf {
+                let Some(next) = view.namespace else {
+                    return QualifiedValuePathResolution::MissingMember { segment };
+                };
+                namespace = next;
+                continue;
+            }
+            if let Some(value) = view.value {
+                return QualifiedValuePathResolution::Value(value);
+            }
+            return if view.namespace.is_some() {
+                QualifiedValuePathResolution::NamespaceOnlyLeaf { segment }
+            } else {
+                QualifiedValuePathResolution::MissingMember { segment }
+            };
+        }
+        QualifiedValuePathResolution::MissingMember {
             segment: segments.len() - 1,
         }
     }
@@ -750,7 +834,7 @@ impl Binder {
             .map(|symbol| QualifiedSymbolView {
                 namespace: symbol.ns,
                 type_group: symbol.ty,
-                value: symbol.value.is_some(),
+                value: symbol.value,
                 unavailable: false,
                 deferred: None,
             })
@@ -779,13 +863,18 @@ impl Binder {
                         let mut target_view =
                             self.qualified_symbol_view(Some(owner), target, visited);
                         if member.alias_space_intent == Some(AliasSpaceIntent::Type) {
-                            target_view.value = false;
+                            target_view.value = None;
                         }
                         view = target_view;
                         break;
                     }
                     _ => {
-                        view.value |= member.spaces.value;
+                        if view.value.is_none() && member.spaces.value {
+                            view.value = member
+                                .declaration
+                                .and_then(|declaration| self.declarations.get(declaration))
+                                .and_then(|declaration| declaration.value_storage);
+                        }
                     }
                 }
             }

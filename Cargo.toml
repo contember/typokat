@@ -19,6 +19,7 @@ default-members = [
     "crates/typokat-frontend",
     "crates/typokat-check",
     "crates/typokat-library",
+    "crates/typokat-library-product",
     "crates/typokat-driver",
 ]
 resolver = "2"
@@ -55,6 +56,7 @@ typokat-surface = { version = "0.1.0", path = "crates/typokat-surface" }
 typokat-frontend = { version = "0.1.0", path = "crates/typokat-frontend" }
 typokat-check = { version = "0.1.0", path = "crates/typokat-check" }
 typokat-library = { version = "0.1.0", path = "crates/typokat-library" }
+typokat-library-product = { version = "0.1.0", path = "crates/typokat-library-product" }
 typokat-driver = { version = "0.1.0", path = "crates/typokat-driver" }
 
 [workspace.lints.rust]
