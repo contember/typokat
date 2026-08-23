@@ -35,6 +35,387 @@ const ORACLE_DIGESTS: [&str; 10] = [
     "d1dd33f7a1b5899e057c002c55e6be4e4aa7965f7efb8512d350a4e98b1370bd",
 ];
 
+#[test]
+fn complete_source_oracle_freezes_library_lexical_scope_product_inputs() {
+    let projection =
+        complete_source_oracle(&[input("/candidate/lexical_scope_oracle.ts", "export {};\n")])
+            .projection;
+    let callable_scopes = projection
+        .scopes
+        .iter()
+        .filter(|row| row.contains("library:") && row.contains("|kind=Function|"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let declaration_scopes = projection
+        .declarations
+        .iter()
+        .filter(|row| row.starts_with("library:"))
+        .filter_map(|row| row.split_once("|v=").map(|(scope, _)| scope.to_owned()))
+        .collect::<Vec<_>>();
+    let scope_classes = declaration_scope_classes(&declaration_scopes);
+    let parent_classes = callable_parent_classes(&callable_scopes);
+    assert_eq!(callable_scopes.len(), 153);
+    assert_eq!(
+        rows_digest(&callable_scopes),
+        "09bab36a21adae1235dd2cb33289fb588e668db0f78f3f403d86d45a26dfe351"
+    );
+    assert_eq!(declaration_scopes.len(), 13_958);
+    assert_eq!(scope_classes, (10_228, 3_521, 209));
+    assert_eq!(parent_classes, (153, 0));
+    assert_eq!(
+        rows_digest(&declaration_scopes),
+        "25fcd4c7e7e521032582e145aa4b379246fd5f166f6362cf58a01d208ec6f04a"
+    );
+}
+
+#[test]
+#[ignore = "RED until the immutable product retains exact lexical scope recipes"]
+fn declaration_product_retains_exact_library_lexical_scope_inputs() {
+    let product = LibraryBaseProvider::new()
+        .declaration_product()
+        .expect("immutable declaration product");
+    let compiler_work = LibraryCompilerWorkScopeForTest::start();
+    let frontend_work = CanonicalLibraryFrontendWorkScopeForTest::start();
+    let (callable_scopes, declaration_scopes) = product_lexical_scope_projection_for_test(&product)
+        .expect("product exposes raw store-independent lexical scope facts");
+    let compiler_work = compiler_work.finish();
+    let frontend_work = frontend_work.finish();
+    assert_eq!(
+        (
+            compiler_work.compiles,
+            compiler_work.parses,
+            compiler_work.binds,
+            compiler_work.checks,
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(
+        (
+            frontend_work.entries,
+            frontend_work.parse_units,
+            frontend_work.bind_batches,
+            frontend_work.bind_units,
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(callable_scopes.len(), 153);
+    assert_eq!(
+        rows_digest(&callable_scopes),
+        "09bab36a21adae1235dd2cb33289fb588e668db0f78f3f403d86d45a26dfe351"
+    );
+    assert_eq!(declaration_scopes.len(), 13_958);
+    assert_eq!(
+        declaration_scope_classes(&declaration_scopes),
+        (10_228, 3_521, 209)
+    );
+    assert_eq!(callable_parent_classes(&callable_scopes), (153, 0));
+    assert_eq!(
+        rows_digest(&declaration_scopes),
+        "25fcd4c7e7e521032582e145aa4b379246fd5f166f6362cf58a01d208ec6f04a"
+    );
+
+    let schema = include_str!("../../typokat-library-product/src/schema.rs");
+    let keys = include_str!("../../typokat-library-product/src/keys.rs");
+    for required in [
+        "pub struct CallableScopeRecipe {\n    pub site: SourceSite,\n    pub parent: LexicalScopeParent,\n}",
+        "pub enum LexicalScopeParent {\n    Region(RegionKey),\n    Callable(CallableScopeKey),\n}",
+        "pub enum DeclarationLexicalScope {\n    None,\n    Region(RegionKey),\n    Callable(CallableScopeKey),\n}",
+        "pub lexical_scope: DeclarationLexicalScope",
+        "callable_scopes: Box<[CallableScopeRecipe]>",
+    ] {
+        assert!(
+            schema.contains(required),
+            "missing product field: {required}"
+        );
+    }
+    assert!(keys.contains("pub struct CallableScopeKey"));
+    for forbidden in [
+        "ScopeId",
+        "SymbolId",
+        "DeclId",
+        "TypeGroupId",
+        "ValueStorageId",
+        "Binder",
+        "Program<'",
+        "Allocator",
+    ] {
+        assert!(
+            !schema.contains(forbidden),
+            "lexical scope product retained local identity: {forbidden}"
+        );
+    }
+    let spec = include_str!("project_local_declaration_universe_spec.rs");
+    let start = spec
+        .find("fn product_lexical_scope_projection_for_test")
+        .expect("raw product projection helper exists");
+    let body = rust_function_body(spec, start);
+    for forbidden in [
+        "complete_source_oracle",
+        "LibraryCompiler",
+        "compile_library",
+        "checkpoint",
+        "FrozenLibraryBase",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "product scope projection used an external oracle: {forbidden}"
+        );
+    }
+    for required in [
+        "product.callable_scopes()",
+        "product.declarations()",
+        "product.regions()",
+        "product.sources()",
+        "product.strings()",
+        "for scope in product.callable_scopes()",
+        "for declaration in product.declarations()",
+    ] {
+        assert!(
+            body.contains(required),
+            "product projection did not dereference raw field: {required}"
+        );
+    }
+}
+
+fn product_lexical_scope_projection_for_test(
+    _product: &typokat_library_product::LibraryDeclarationProduct,
+) -> Result<(Vec<String>, Vec<String>), &'static str> {
+    Err("immutable product lexical scope recipes are not implemented")
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProductLexicalScopeCorruptionReceipt {
+    validation_errors: Vec<String>,
+}
+
+#[test]
+#[ignore = "RED until lexical-scope corruption controls exercise the real product validator"]
+fn declaration_product_lexical_scope_corruption_controls_are_live() {
+    let product = LibraryBaseProvider::new()
+        .declaration_product()
+        .expect("immutable declaration product");
+    let compiler_work = LibraryCompilerWorkScopeForTest::start();
+    let frontend_work = CanonicalLibraryFrontendWorkScopeForTest::start();
+    let ordinary = product_lexical_scope_projection_for_test(&product)
+        .expect("ordinary raw product scope projection");
+    let changed = product_with_changed_callable_site_for_test(&product)
+        .expect("in-bounds callable-site falsifier");
+    changed
+        .validate()
+        .expect("in-bounds callable-site falsifier remains structurally valid");
+    assert_eq!(changed.profile_identity(), product.profile_identity());
+    assert_eq!(changed.strings(), product.strings());
+    assert_eq!(changed.sources(), product.sources());
+    assert_eq!(changed.containers(), product.containers());
+    assert_eq!(changed.regions(), product.regions());
+    assert_eq!(changed.declarations(), product.declarations());
+    assert_eq!(changed.groups(), product.groups());
+    assert_eq!(changed.type_parameters(), product.type_parameters());
+    assert_eq!(changed.types(), product.types());
+    assert_eq!(changed.members(), product.members());
+    assert_eq!(changed.dependency_rows(), product.dependency_rows());
+    assert_eq!(
+        changed.namespace_attachment_rows(),
+        product.namespace_attachment_rows()
+    );
+    assert_eq!(
+        changed.value_attachment_rows(),
+        product.value_attachment_rows()
+    );
+    let changed = product_lexical_scope_projection_for_test(&changed)
+        .expect("changed raw product scope projection");
+    assert_eq!(ordinary.0.len(), changed.0.len());
+    assert_eq!(ordinary.1, changed.1);
+    let ordinary_scopes = ordinary.0.iter().collect::<BTreeSet<_>>();
+    let changed_scopes = changed.0.iter().collect::<BTreeSet<_>>();
+    assert_eq!(
+        ordinary_scopes
+            .symmetric_difference(&changed_scopes)
+            .count(),
+        2
+    );
+
+    let receipt = product_lexical_scope_corruption_receipt_for_test(&product)
+        .expect("five real product mutations reach typed validator failures");
+    assert_eq!(
+        receipt.validation_errors,
+        [
+            "CallableScopeSourceOutOfBounds",
+            "CallableScopeParentOutOfBounds",
+            "CallableScopeParentCycle",
+            "DeclarationLexicalScopeOutOfBounds",
+            "DeclarationLexicalScopeRegionMismatch",
+        ]
+    );
+    let mut distinct = receipt.validation_errors.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 5);
+    let compiler_work = compiler_work.finish();
+    let frontend_work = frontend_work.finish();
+    assert_eq!(
+        (
+            compiler_work.compiles,
+            compiler_work.parses,
+            compiler_work.binds,
+            compiler_work.checks,
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(
+        (
+            frontend_work.entries,
+            frontend_work.parse_units,
+            frontend_work.bind_batches,
+            frontend_work.bind_units,
+        ),
+        (0, 0, 0, 0)
+    );
+
+    let validation = include_str!("../../typokat-library-product/src/validate.rs");
+    let start = validation
+        .find("pub fn lexical_scope_corruption_receipt_for_test")
+        .expect("product-owned corruption helper exists");
+    let body = rust_function_body(validation, start);
+    for required in [
+        "callable_scopes[",
+        ".site",
+        ".parent",
+        "declarations[",
+        ".lexical_scope",
+        ".validate()",
+        "CallableScopeSourceOutOfBounds",
+        "CallableScopeParentOutOfBounds",
+        "CallableScopeParentCycle",
+        "DeclarationLexicalScopeOutOfBounds",
+        "DeclarationLexicalScopeRegionMismatch",
+    ] {
+        assert!(
+            body.contains(required),
+            "corruption helper lacks live mutation/validation evidence: {required}"
+        );
+    }
+
+    let spec = include_str!("project_local_declaration_universe_spec.rs");
+    for (wrapper, required) in [
+        (
+            "fn product_with_changed_callable_site_for_test",
+            "typokat_library_product::with_changed_callable_site_for_test(product)",
+        ),
+        (
+            "fn product_lexical_scope_corruption_receipt_for_test",
+            "typokat_library_product::lexical_scope_corruption_receipt_for_test(product)",
+        ),
+    ] {
+        let start = spec.find(wrapper).expect("spec wrapper exists");
+        let body = rust_function_body(spec, start);
+        assert!(
+            body.contains(required),
+            "wrapper bypassed product API: {wrapper}"
+        );
+        for forbidden in [
+            "complete_source_oracle",
+            "LibraryCompiler",
+            "checkpoint",
+            "FrozenLibraryBase",
+            "build_packaged_declaration_product",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "wrapper used external construction path: {forbidden}"
+            );
+        }
+    }
+}
+
+fn product_with_changed_callable_site_for_test(
+    _product: &typokat_library_product::LibraryDeclarationProduct,
+) -> Result<typokat_library_product::LibraryDeclarationProduct, &'static str> {
+    Err("callable-site falsifier is not implemented")
+}
+
+fn product_lexical_scope_corruption_receipt_for_test(
+    _product: &typokat_library_product::LibraryDeclarationProduct,
+) -> Result<ProductLexicalScopeCorruptionReceipt, &'static str> {
+    Err("lexical-scope corruption receipt is not implemented")
+}
+
+fn rust_function_body(source: &str, start: usize) -> &str {
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .expect("function body opens");
+    let mut depth = 0usize;
+    for (offset, byte) in source.as_bytes()[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1).expect("balanced function braces");
+                if depth == 0 {
+                    return &source[start..=open + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("function body closes")
+}
+
+fn declaration_scope_classes(rows: &[String]) -> (usize, usize, usize) {
+    let mut none = 0;
+    let mut region = 0;
+    let mut callable = 0;
+    for row in rows {
+        let scope = row
+            .split_once("|scope=")
+            .map(|(_, suffix)| suffix.split('|').next().unwrap_or(suffix))
+            .expect("declaration row carries lexical scope");
+        if scope == "none" {
+            none += 1;
+        } else if scope.starts_with("scope:function:") {
+            callable += 1;
+        } else if is_region_scope(scope) {
+            region += 1;
+        } else {
+            panic!("unclassified declaration lexical scope: {scope}");
+        }
+    }
+    (none, region, callable)
+}
+
+fn callable_parent_classes(rows: &[String]) -> (usize, usize) {
+    let mut region = 0;
+    let mut callable = 0;
+    for row in rows {
+        let parent = row
+            .split_once("|parent=")
+            .map(|(_, suffix)| suffix.split('|').next().unwrap_or(suffix))
+            .expect("callable scope row carries parent");
+        if parent.starts_with("scope:function:") {
+            callable += 1;
+        } else if is_region_scope(parent) {
+            region += 1;
+        } else {
+            panic!("unclassified callable parent scope: {parent}");
+        }
+    }
+    (region, callable)
+}
+
+fn is_region_scope(scope: &str) -> bool {
+    matches!(
+        scope,
+        "scope:prelude" | "scope:compilation-global" | "scope:script-namespace-root"
+    ) || [
+        "scope:module:library:",
+        "scope:namespace-public:",
+        "scope:namespace-private:",
+        "scope:global-overlay:",
+    ]
+    .iter()
+    .any(|prefix| scope.starts_with(prefix))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DeclarationProjection {
     scopes: Vec<String>,
