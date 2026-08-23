@@ -428,3 +428,10 @@ numbers are invalid without `--no-smt`.
   with the intentional RED ignored, all-target check passed, and ordinary conformance passed
   `581/697/581/0` in 64.41 s. Independent review caught and then cleared stale canonical-evidence
   hashes; it found no sparse-only fix.
+- **2026-08-23 — WU2 spec GO.** The full-profile oracle pins all 82 sources / 2,936,611 bytes,
+  13,958 declaration sites, 2,099 current-binder groups, 2,400 canonical group fragments, exact
+  type/member/form counts with explicit zeros, and canonical site/lexical/attachment digests.
+  Current-binder endpoints are labeled allocation-local and forbidden from the product schema.
+  The future std-only product crate has an intentional RED dependency/ownership/walker contract;
+  full-profile one-pass, AST-drop, perturbation, edge/SCC, and determinism witnesses remain in the
+  library-owned integration layer. Independent spec review returned GO after three fix rounds.

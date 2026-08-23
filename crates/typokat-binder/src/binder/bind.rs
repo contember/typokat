@@ -279,6 +279,18 @@ pub struct LibraryBinderCheckpointInspectionForTest<'checkpoint> {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryDeclarationAttachmentRowForTest {
+    pub library_ordinal: LibraryFileOrdinal,
+    pub kind: DeclarationKind,
+    pub declaration_start: u32,
+    pub binding_start: u32,
+    pub has_value_storage: bool,
+    pub type_group_name: Option<String>,
+    pub has_namespace: bool,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 pub struct TypeGroupFragmentOrderingUnitForTest {
     pub library_ordinal: LibraryFileOrdinal,
     pub source_key: SourceUnitKey,
@@ -416,6 +428,52 @@ impl LibraryBinderCheckpoint {
             .collect();
 
         TypeGroupFragmentOrderingForTest { units, groups }
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn declaration_attachment_rows_for_test(
+        &self,
+    ) -> Vec<LibraryDeclarationAttachmentRowForTest> {
+        let ordinals = self
+            .library_units
+            .iter()
+            .map(|unit| (unit.module, unit.ordinal))
+            .collect::<FxHashMap<_, _>>();
+        let mut rows = self
+            .binder
+            .declarations
+            .iter()
+            .filter_map(|declaration| {
+                let library_ordinal = ordinals.get(&declaration.site.module).copied()?;
+                let type_group_name = declaration
+                    .type_group
+                    .and_then(|group| self.binder.type_groups.get(group))
+                    .map(|group| group.name.clone());
+                if declaration.value_storage.is_none()
+                    && type_group_name.is_none()
+                    && declaration.namespace.is_none()
+                {
+                    return None;
+                }
+                Some(LibraryDeclarationAttachmentRowForTest {
+                    library_ordinal,
+                    kind: declaration.kind,
+                    declaration_start: declaration.site.declaration_span.start,
+                    binding_start: declaration.site.binding_span.start,
+                    has_value_storage: declaration.value_storage.is_some(),
+                    type_group_name,
+                    has_namespace: declaration.namespace.is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|row| {
+            (
+                row.library_ordinal,
+                row.declaration_start,
+                row.binding_start,
+            )
+        });
+        rows
     }
 
     pub fn checkpoint_ends(&self) -> LibraryBinderCheckpointEnds {

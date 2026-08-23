@@ -14,6 +14,9 @@ typokat-core.workspace = true
 typokat-frontend.workspace = true
 
 [dev-dependencies]
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+serde_json.workspace = true
 typokat-binder = { workspace = true, features = ["test-utils"] }
 typokat-check = { workspace = true, features = ["test-utils"] }
 typokat-core = { workspace = true, features = ["test-utils"] }

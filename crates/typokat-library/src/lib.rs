@@ -123,6 +123,9 @@ mod collision_epoch_scheduler_spec;
 mod compiler_profile_spec;
 
 #[cfg(test)]
+mod library_declaration_product_spec;
+
+#[cfg(test)]
 mod type_group_ordering_spec;
 
 #[cfg(test)]
