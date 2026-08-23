@@ -130,6 +130,9 @@ mod library_declaration_product_spec;
 mod library_declaration_product_integration_spec;
 
 #[cfg(test)]
+mod project_local_declaration_universe_spec;
+
+#[cfg(test)]
 mod type_group_ordering_spec;
 
 #[cfg(test)]

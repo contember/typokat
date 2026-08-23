@@ -85,6 +85,12 @@ pub struct LibraryProjectBinderContinuation {
     bound: crate::check::checker::BoundProjectBinder,
 }
 
+#[cfg(test)]
+pub(super) struct CompleteSourceDeclarationOracleForTest {
+    pub(super) library_units: Vec<crate::binder::bind::LibraryBinderUnit>,
+    pub(super) bound: crate::check::checker::BoundProjectBinder,
+}
+
 impl LibraryProjectBinderContinuation {
     #[doc(hidden)]
     pub const fn library_unit_count(&self) -> usize {
@@ -191,6 +197,42 @@ impl LibraryBaseProvider {
         .map_err(compilation_failed)?;
         Ok(LibraryProjectBinderContinuation {
             library_unit_count,
+            bound,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete_source_declaration_oracle_for_test(
+        &self,
+        inputs: &[super::base::UserDeltaProjectInputForTest<'_>],
+    ) -> Result<CompleteSourceDeclarationOracleForTest, LibraryInitError> {
+        let profile = super::profile::ExactLibraryProfile::load_packaged().map_err(|error| {
+            LibraryInitError::new(
+                LibraryInitStage::ProfileLoad,
+                LibraryInitCause::ProfileRejected {
+                    message: error.to_string(),
+                },
+            )
+        })?;
+        let checkpoint = super::compiler::LibraryCompiler::new()
+            .compile_binder_checkpoint(&profile)
+            .map_err(|error| compilation_failed(error.to_string()))?;
+        let library_units = checkpoint.inspection_for_test().library_units.to_vec();
+        let compiler_inputs = inputs
+            .iter()
+            .map(|input| crate::frontend::FileInput {
+                name: input.path.to_owned(),
+                source: input.source.to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let bound =
+            crate::check::checker::library_compiler::continue_library_project_binder_clean_for_test(
+                checkpoint,
+                compiler_inputs,
+            )
+            .map_err(compilation_failed)?;
+        Ok(CompleteSourceDeclarationOracleForTest {
+            library_units,
             bound,
         })
     }

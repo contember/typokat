@@ -200,6 +200,22 @@ pub fn continue_library_project_binder(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+pub fn continue_library_project_binder_clean_for_test(
+    checkpoint: LibraryBinderCheckpoint,
+    inputs: Vec<crate::frontend::FileInput>,
+) -> Result<super::BoundProjectBinder, String> {
+    crate::frontend::run_clean_project_frontend_with_auxiliary(inputs, Vec::new(), |_, _, units| {
+        record_user_source_parses_for_test(units.len());
+        let bound = super::bind_library_checkpoint_project_programs(checkpoint, units)?;
+        record_user_source_binds_for_test(units.len());
+        super::record_continuation_project_binding_consumed_for_test();
+        Ok(bound)
+    })
+    .into_product()
+    .ok_or_else(|| "user source parse failed before project binding".to_owned())?
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 pub fn continuation_receipt_for_test(
     checkpoint_ends: LibraryBinderCheckpointEnds,
     array_symbol_before_augmentation: SymbolId,
