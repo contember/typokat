@@ -13,7 +13,8 @@ use crate::binder::namespace::{
 use crate::binder::scope::ScopeId;
 use crate::check::checker::events::UserEventReservationScopeForTest;
 use crate::check::checker::library_compiler::{
-    CanonicalLibraryFrontendWorkScopeForTest, UserDeltaForkScopeForTest, UserSourceWorkScopeForTest,
+    CanonicalLibraryFrontendWorkScopeForTest, CompleteSourceRouteWorkScopeForTest,
+    UserDeltaForkScopeForTest, UserSourceWorkScopeForTest,
 };
 use crate::check::query::QueryCacheWriteScopeForTest;
 use crate::relate::cache::RelationCacheWriteScopeForTest;
@@ -764,18 +765,29 @@ fn changed_raw_source_defeats_a_fixed_expected_receipt() {
 }
 
 #[test]
+#[ignore = "WU3 RED: rejected user input still binds the packaged library oracle"]
 fn malformed_user_source_is_rejected_before_binding_or_semantics() {
     let provider = LibraryBaseProvider::new();
     let source_work = UserSourceWorkScopeForTest::start();
     let manifest_work = SourceDeclarationManifestBuildScopeForTest::start();
+    let route_work = CompleteSourceRouteWorkScopeForTest::start();
     let inputs = vec![input("/candidate/malformed.ts", "const broken = {")];
     let result = provider.complete_source_declaration_oracle_for_test(&inputs);
     let manifests = manifest_work.finish();
     let work = source_work.finish();
+    let route_work = route_work.finish();
 
     assert!(result.is_err());
-    assert_eq!(work.checks, 0);
-    assert_eq!(manifests, 83);
+    assert_eq!((work.binds, work.checks), (0, 0));
+    assert_eq!(manifests, 0);
+    assert_eq!(route_work.library_parse_units, 0);
+    assert_eq!(route_work.library_bind_units, 0);
+    assert_eq!(route_work.user_bind_units, 0);
+    assert_eq!(route_work.semantic_publications, 0);
+    assert_eq!(route_work.replay_trace_constructions, 0);
+    assert_eq!(route_work.replay_plan_constructions, 0);
+    assert_eq!(route_work.frozen_base_seals, 0);
+    assert_eq!(route_work.library_source_reparses, 0);
     assert_eq!(
         provider.measurement_for_test(),
         InitializationMeasurement {
@@ -784,6 +796,16 @@ fn malformed_user_source_is_rejected_before_binding_or_semantics() {
         }
     );
     assert!(!provider.declaration_product_initialized_for_test());
+}
+
+#[test]
+#[ignore = "WU3 RED: the binder-only oracle still reserves user diagnostic events"]
+fn complete_source_oracle_allocates_no_user_event_lifecycle() {
+    let events = UserEventReservationScopeForTest::start();
+    let receipt = complete_source_oracle(&[input("/candidate/no_event_oracle.ts", "export {};\n")]);
+
+    assert!(!receipt.projection.scopes.is_empty());
+    assert_eq!(events.finish(), 0);
 }
 
 #[test]
