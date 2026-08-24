@@ -809,6 +809,22 @@ fn complete_source_oracle_allocates_no_user_event_lifecycle() {
 }
 
 #[test]
+#[ignore = "WU3 RED: the auxiliary parser does not calibrate its lifecycle receipt"]
+fn complete_source_oracle_calibrates_library_parse_and_bind_work() {
+    let route_work = CompleteSourceRouteWorkScopeForTest::start();
+    let receipt =
+        complete_source_oracle(&[input("/candidate/calibrated_oracle.ts", "export {};\n")]);
+    let route_work = route_work.finish();
+
+    assert!(!receipt.projection.scopes.is_empty());
+    assert_eq!(route_work.library_parse_units, 82);
+    assert_eq!(route_work.library_bind_units, 82);
+    assert_eq!(route_work.user_bind_units, 1);
+    assert_eq!(route_work.semantic_publications, 0);
+    assert_eq!(route_work.library_source_reparses, 0);
+}
+
+#[test]
 fn oracle_does_not_initialize_the_product_or_the_frozen_semantic_base() {
     let provider = LibraryBaseProvider::new();
     let inputs = vec![input("/candidate/empty.ts", "export {};\n")];
