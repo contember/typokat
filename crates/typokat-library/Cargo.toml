@@ -3,6 +3,17 @@ name = "typokat-library"
 version.workspace = true
 edition.workspace = true
 
+[features]
+project-binder-probe = [
+    "dep:typokat-relate",
+    "dep:typokat-types",
+    "typokat-binder/test-utils",
+    "typokat-check/test-utils",
+    "typokat-frontend/test-utils",
+    "typokat-relate/test-utils",
+    "typokat-types/test-utils",
+]
+
 [dependencies]
 oxc_allocator.workspace = true
 oxc_parser.workspace = true
@@ -13,6 +24,8 @@ typokat-check.workspace = true
 typokat-core.workspace = true
 typokat-frontend.workspace = true
 typokat-library-product.workspace = true
+typokat-relate = { workspace = true, optional = true }
+typokat-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 oxc_ast.workspace = true

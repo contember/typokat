@@ -3,6 +3,8 @@ mod collision_preflight;
 pub mod compiler;
 mod declaration_product;
 pub mod profile;
+#[cfg(feature = "project-binder-probe")]
+pub mod project_binder_probe;
 mod provider;
 pub mod records;
 

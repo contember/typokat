@@ -1,0 +1,19 @@
+[package]
+name = "typokat-project-binder-probe"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+default = ["jemalloc-wall"]
+jemalloc-wall = ["dep:tikv-jemallocator"]
+dhat-heap = ["dep:dhat"]
+
+[dependencies]
+dhat = { version = "0.3.3", optional = true }
+serde_json.workspace = true
+tikv-jemallocator = { workspace = true, optional = true }
+typokat-library = { workspace = true, features = ["project-binder-probe"] }
+
+[lints]
+workspace = true
